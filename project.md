@@ -27,17 +27,19 @@ Current status:
 * Outline generation
 * Chapter outline generation
 * Chapter writing
+* Chapter review
 * Memory update
 * DeepSeek API integration
+* Configurable OpenAI-compatible model endpoint
+* Structured review status output
+* Safer memory update validation
 * Streamlit UI
-
-Future versions will introduce:
-
-* RAG
-* LangGraph workflow
-* Multi-Agent architecture
-* Evaluation system
-* Consistency checking
+* Configurable temperature and system message for LLM calls
+* Form-based memory editing (no raw JSON required)
+* Configurable target word count per chapter
+* Memory compaction for long-running projects
+* Pipeline with per-step error isolation and partial result recovery
+* Configurable recent summary count (default 5)
 
 ---
 
@@ -85,7 +87,7 @@ Prompt Layer
 LLM Interface
 (llm.py)
 ↓
-DeepSeek API
+OpenAI-compatible API endpoint
 ↓
 Memory Layer
 (memory.py)
@@ -112,7 +114,9 @@ novelforge/
 
 ├── .env
 
-├── PROJECT.md
+├── .env.example
+
+├── project.md
 
 └── data/
 
@@ -148,6 +152,14 @@ Responsibilities:
 * Calling skills
 * Managing UI state
 
+UI features:
+
+* Memory editing via structured form (title, genre, world, characters, etc.)
+  with raw JSON fallback in collapsible section
+* Word count configuration per chapter
+* Pipeline page shows per-step success/error status with partial results
+* One-click memory compaction button
+
 Business logic should remain minimal.
 
 ---
@@ -161,10 +173,25 @@ Responsibilities:
 * Model connection
 * API configuration
 * Model switching
+* API key validation
+* Support for temperature and system message per call
 
 Current model:
 
 * DeepSeek Chat
+
+Current configuration:
+
+* `LLM_API_KEY` or `DEEPSEEK_API_KEY`
+* `LLM_BASE_URL` (optional)
+* `LLM_MODEL` (optional)
+
+Interface:
+
+`call_llm(prompt, system_message="", temperature=0.7)`
+
+* `system_message` — optional system role instruction
+* `temperature` — per-call temperature control (default 0.7)
 
 Future models:
 
@@ -192,6 +219,10 @@ Responsibilities:
 * Saving chapter outlines
 * Loading chapters
 * Saving chapters
+* Loading reviews
+* Saving reviews
+* Fetching recent chapter summaries (configurable limit, default 5)
+* Counting total written chapters
 
 No LLM logic should exist here.
 
@@ -205,8 +236,17 @@ Responsibilities:
 
 * Outline generation prompts
 * Chapter outline prompts
-* Chapter writing prompts
+* Chapter writing prompts (supports configurable word count)
+* Chapter review prompts
 * Memory update prompts
+* Memory compaction prompts
+
+Current prompt design notes:
+
+* Chapter review prompt requests strict JSON for later workflow automation
+* Memory update prompt requests strict JSON for safer persistence
+* Chapter writing prompt accepts `word_count` parameter (default 2500-3500)
+* Memory compaction prompt compresses old character/world/timeline/foreshadowing entries to control prompt length
 
 Prompt engineering should be isolated here.
 
@@ -220,16 +260,22 @@ Responsibilities:
 
 * Generate outline
 * Generate chapter outline
-* Write chapter
-* Update memory
-
-Future skills:
-
+* Write chapter (with configurable word count)
 * Review chapter
+* Update memory
+* Compact memory (compress old entries to control prompt length)
 * Consistency check
 * Character analysis
 * Timeline analysis
 * Foreshadowing analysis
+
+Current skill design notes:
+
+* Review results are normalized into structured status and saved as Markdown reports
+* Memory updates are validated before being written into project storage
+* All LLM-calling functions check for empty responses and raise explicit errors
+* `pipeline_plan_write_review_update` executes steps independently — if one fails,
+  remaining steps are skipped and partial results are still returned
 
 ---
 
@@ -248,6 +294,8 @@ outline.md
 Chapter Planning
 
 Outline
+
+Recent Chapter Summaries
 ↓
 generate_chapter_outline
 ↓
@@ -274,6 +322,28 @@ Chapter
 update_memory_from_chapter
 ↓
 memory.json
+
+If JSON validation fails:
+↓
+return rejected result without modifying memory.json
+
+---
+
+Chapter Review
+
+Chapter Outline
++
+Chapter
++
+Memory
+↓
+review_chapter
+↓
+structured review status
+↓
+reviews/chapter_xxx.md
+↓
+reviews/chapter_xxx.json
 
 ---
 
@@ -340,17 +410,59 @@ Future versions may introduce:
 
 # Future Roadmap
 
+## Near-Term Design Improvements
+
+The following design improvements are the most valuable next steps for the current architecture:
+
+1. Stronger chapter planning context
+
+Chapter planning currently combines global outline, memory, and recent chapter summaries — this is already implemented and working.
+
+2. Structured review outputs
+
+Chapter reviews now output structured status fields (pass/revise/blocked) in both Markdown and JSON format. The UI displays status metrics and issue/strength counts.
+
+3. Safer memory updates
+
+Memory update logic validates LLM JSON output strictly and rejects malformed updates. Validation covers field types and array element types.
+
+4. Pipeline automation
+
+The UI now supports a one-click pipeline (Plan → Write → Review → Update Memory) with per-step error isolation. If a step fails, partial results from earlier steps are preserved and displayed.
+
+5. Better model abstraction
+
+The LLM layer remains OpenAI-compatible while supporting configuration-based switching. Per-call temperature and system message are now available.
+
+---
+
 ## V1.1
 
 Persistence improvements
 
 Features:
 
-* Save chapter outlines
-* Load chapter outlines
-* Save chapters
-* Load chapters
+* Auto-save generated outlines
+* Auto-save generated chapter outlines
+* Save and load chapter outlines
+* Save and load chapters
+* Save and load reviews
 * Better memory updates
+* Use outline and recent summaries during chapter planning
+
+Current implementation status:
+
+* Implemented: auto-save for outline generation
+* Implemented: auto-save for chapter outline generation
+* Implemented: chapter review persistence
+* Implemented: recent chapter summaries as planning context
+* Implemented: structured review status normalization
+* Implemented: reject invalid memory update payloads before persistence
+* Implemented: expose structured review status directly in UI controls
+* Implemented: configurable word count target per chapter
+* Implemented: memory compaction for long-running projects
+* Implemented: per-step error isolation in pipeline
+* Implemented: form-based memory editing (non-JSON users)
 
 ---
 
@@ -445,6 +557,12 @@ Metrics:
 
 7. Maintain backward compatibility with existing project data
 
+8. Chapter planning should use both long-term context and recent progress when available
+
+9. Memory updates should fail closed when structured output validation fails
+
+10. Review results should remain machine-readable before being formatted for human reading
+
 ---
 
 # Instructions For Future LLMs
@@ -453,7 +571,7 @@ Before modifying the project:
 
 Read files in the following order:
 
-1. PROJECT.md
+1. project.md
 
 2. app.py
 

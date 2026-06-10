@@ -107,3 +107,53 @@ def load_chapter(project_name: str, chapter_no: int) -> str:
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
+
+
+def save_review(project_name: str, chapter_no: int, content: str):
+    path = project_path(project_name) / "reviews"
+    path.mkdir(exist_ok=True)
+    file = path / f"chapter_{chapter_no:03d}.md"
+    file.write_text(content, encoding="utf-8")
+
+
+def load_review(project_name: str, chapter_no: int) -> str:
+    file = project_path(project_name) / "reviews" / f"chapter_{chapter_no:03d}.md"
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
+DEFAULT_SUMMARY_LIMIT = 5
+
+def get_recent_chapter_summaries(project_name: str, limit: int = DEFAULT_SUMMARY_LIMIT) -> list[dict]:
+    memory = load_memory(project_name)
+    summaries = [
+        item for item in memory.get("chapter_summaries", [])
+        if isinstance(item, dict) and item.get("summary")
+    ]
+    summaries.sort(key=lambda item: item.get("chapter_no", 0))
+    return summaries[-limit:]
+
+
+def save_review_json(project_name: str, chapter_no: int, data: dict):
+    path = project_path(project_name) / "reviews"
+    path.mkdir(exist_ok=True)
+    file = path / f"chapter_{chapter_no:03d}.json"
+    file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_review_json(project_name: str, chapter_no: int) -> dict | None:
+    file = project_path(project_name) / "reviews" / f"chapter_{chapter_no:03d}.json"
+    if not file.exists():
+        return None
+    try:
+        return json.loads(file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def chapter_count(project_name: str) -> int:
+    chapters_dir = project_path(project_name) / "chapters"
+    if not chapters_dir.exists():
+        return 0
+    return len([f for f in chapters_dir.iterdir() if f.suffix == ".md"])

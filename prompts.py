@@ -17,12 +17,28 @@ def outline_prompt(memory: dict, user_idea: str) -> str:
 6. 前20章大致剧情
 """
 
-def chapter_outline_prompt(memory: dict, chapter_no: int, user_requirement: str) -> str:
+def chapter_outline_prompt(
+    memory: dict,
+    outline: str,
+    recent_summaries: list[dict],
+    chapter_no: int,
+    user_requirement: str,
+) -> str:
+    recent_summary_text = "\n".join(
+        [f"- 第{item.get('chapter_no', '?')}章：{item.get('summary', '')}" for item in recent_summaries]
+    ) or "暂无已记录的章节摘要。"
+
     return f"""
 你是章节策划 Agent。
 
 小说设定：
 {memory}
+
+全书大纲：
+{outline or '暂无全书大纲，请尽量根据当前设定与用户要求规划。'}
+
+最近章节摘要：
+{recent_summary_text}
 
 当前要设计第 {chapter_no} 章。
 
@@ -37,9 +53,16 @@ def chapter_outline_prompt(memory: dict, chapter_no: int, user_requirement: str)
 5. 情绪节奏
 6. 结尾钩子
 7. 详细分场景细纲
+
+要求补充：
+1. 尽量与全书大纲保持一致
+2. 尽量承接最近章节摘要中的剧情状态
+3. 如果用户要求与大纲冲突，明确给出折中处理方式
+4. 所有场景按字数分配规划，不要按时间（分钟/秒）划分
+5. 每个场景标注预计占用字数
 """
 
-def write_chapter_prompt(memory: dict, chapter_outline: str) -> str:
+def write_chapter_prompt(memory: dict, chapter_outline: str, word_count: str = "2500-3500") -> str:
     return f"""
 你是网文写作 Agent。
 
@@ -57,7 +80,9 @@ def write_chapter_prompt(memory: dict, chapter_outline: str) -> str:
 3. 有网文节奏感
 4. 对话自然
 5. 结尾留下推进感
-6. 字数约2500-3500字
+6. 字数约{word_count}字
+7. 正文为连续自然段落，不要出现"场景一"、"场景二"之类的标记，不要出现小标题
+8. 场景切换用空行分隔，不要用显式的场景标题或编号
 """
 
 def update_memory_prompt(memory: dict, chapter: str) -> str:
@@ -70,7 +95,7 @@ def update_memory_prompt(memory: dict, chapter: str) -> str:
 新章节：
 {chapter}
 
-请提取本章新增或变化的设定，按 JSON 输出：
+请提取本章新增或变化的设定，按 JSON 输出，不要附带额外解释：
 {{
   "new_characters": [],
   "world_updates": [],
@@ -78,4 +103,67 @@ def update_memory_prompt(memory: dict, chapter: str) -> str:
   "foreshadowing_updates": [],
   "chapter_summary": ""
 }}
+
+要求：
+1. `new_characters` 必须是数组，元素为字符串或对象
+2. `world_updates` 必须是数组
+3. `timeline_updates` 必须是数组
+4. `foreshadowing_updates` 必须是数组
+5. `chapter_summary` 必须是字符串
+"""
+
+
+def compact_memory_prompt(memory: dict, chapter_count: int) -> str:
+    return f"""
+你是设定管理员，负责压缩小说设定库以节省上下文空间。
+
+当前设定库：
+{memory}
+
+已写章节数：{chapter_count}
+
+请执行以下压缩策略：
+1. characters：合并同一个角色的多条描述，删除已退场或无后续作用角色的细节
+2. world：合并世界观条目，保留"仍活跃"的设定
+3. timeline：只保留最近 20 条最重要的时间线条目，较早的合并为摘要
+4. foreshadowing：标记已回收的伏笔，删除已回收条目（除非对后续仍有意义）
+
+按原 JSON 结构输出压缩后的设定库，不要改变字段名，不要附带额外解释。
+"""
+
+
+def review_chapter_prompt(memory: dict, chapter_outline: str, chapter: str) -> str:
+    return f"""
+你是小说审稿 Agent。
+
+当前设定：
+{memory}
+
+章节细纲：
+{chapter_outline}
+
+章节正文：
+{chapter}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "status": "pass|revise|blocked",
+  "summary": "",
+  "strengths": [],
+  "issues": [],
+  "consistency_checks": {{
+    "characters": "",
+    "world": "",
+    "timeline": "",
+    "foreshadowing": ""
+  }},
+  "pacing": "",
+  "next_action": ""
+}}
+
+要求：
+1. 优先指出角色一致性、世界设定、时间线、伏笔回收方面的问题
+2. 如果没有明显问题，也要明确说明通过项
+3. `status` 只能是 `pass`、`revise`、`blocked` 之一
+4. `strengths` 和 `issues` 必须是字符串数组
 """
