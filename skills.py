@@ -24,7 +24,6 @@ from memory import (
     load_memory,
     load_outline,
     load_project_rules,
-    load_review_json,
     save_chapter,
     save_chapter_outline,
     save_global_rules,
@@ -36,12 +35,17 @@ from memory import (
     save_review_json,
 )
 from schemas import (
+    ChapterPipelineState,
     CharacterAnalysisResult,
     ConsistencyAnalysisResult,
     ForeshadowingAnalysisResult,
+    WorkflowError,
+    WorkflowPipelineResult,
+    WorkflowStepResult,
     RetrievalConflict,
     ReviewResult,
     TimelineAnalysisResult,
+    ValidationStatus,
     format_schema_validation_error,
     render_character_analysis_markdown,
     render_consistency_analysis_markdown,
@@ -64,6 +68,79 @@ def _set_retrieval_trace(trace_key: str | None, hits: list) -> None:
 
 def get_retrieval_trace(trace_key: str) -> list[dict]:
     return list(_LAST_RETRIEVAL_TRACES.get(trace_key, []))
+
+
+def _make_validation_status(
+    status: str = "not_applicable",
+    schema_name: str = "",
+    message: str = "",
+    errors: list[str] | None = None,
+) -> ValidationStatus:
+    return ValidationStatus(
+        status=status,
+        schema_name=schema_name,
+        message=message,
+        errors=errors or [],
+    )
+
+
+def _make_step_result(
+    step_name: str,
+    *,
+    success: bool,
+    status: str,
+    data: dict | None = None,
+    error: str = "",
+    warnings: list[str] | None = None,
+    retrieval_hits: list[dict] | None = None,
+    validation: ValidationStatus | None = None,
+    artifacts: dict | None = None,
+) -> WorkflowStepResult:
+    return WorkflowStepResult(
+        step_name=step_name,
+        success=success,
+        status=status,
+        data=data or {},
+        error=error,
+        warnings=warnings or [],
+        retrieval_hits=retrieval_hits or [],
+        validation=validation or _make_validation_status(),
+        artifacts=artifacts or {},
+    )
+
+
+def _record_pipeline_step(state: ChapterPipelineState, step_result: WorkflowStepResult) -> None:
+    state.steps[step_result.step_name] = step_result
+    if step_result.status == "completed":
+        if step_result.step_name not in state.completed_steps:
+            state.completed_steps.append(step_result.step_name)
+    elif step_result.status in {"failed", "rejected"}:
+        if step_result.step_name not in state.failed_steps:
+            state.failed_steps.append(step_result.step_name)
+    elif step_result.status == "skipped":
+        warning = step_result.warnings[0] if step_result.warnings else f"{step_result.step_name} skipped."
+        state.warnings.append(warning)
+
+
+def _record_pipeline_error(
+    state: ChapterPipelineState,
+    *,
+    step_name: str,
+    message: str,
+    error_type: str = "unknown",
+    recoverable: bool = True,
+) -> None:
+    state.errors.append(WorkflowError(
+        step_name=step_name,
+        error_type=error_type,
+        message=message,
+        recoverable=recoverable,
+    ))
+
+
+def _halt_pipeline(state: ChapterPipelineState, reason: str) -> None:
+    state.halted = True
+    state.halt_reason = reason
 
 
 def _group_hits_by_scope_and_type(hits: list[dict]) -> dict[str, dict[str, list[dict]]]:
@@ -397,14 +474,15 @@ Status: `{review['status']}`
 {review['next_action'] or '无'}
 """
 
-def generate_outline(project_name: str, user_idea: str) -> str:
+def generate_outline(project_name: str, user_idea: str) -> dict:
     memory = load_memory(project_name)
+    trace_key = f"outline:{project_name}"
     retrieval_context = _build_retrieval_context(
         project_name,
         user_idea,
         allowed_source_types=["outline", "memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"outline:{project_name}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline")),
@@ -414,15 +492,23 @@ def generate_outline(project_name: str, user_idea: str) -> str:
     if not outline.strip():
         raise RuntimeError("LLM returned empty outline.")
     save_outline(project_name, outline)
-    return outline
+    return _make_step_result(
+        "outline",
+        success=True,
+        status="completed",
+        data={"outline": outline},
+        retrieval_hits=get_retrieval_trace(trace_key),
+        artifacts={"saved_path": f"data/projects/{project_name}/outline.md"},
+    ).model_dump()
 
 def generate_chapter_outline(
     project_name: str,
     chapter_no: int,
     user_requirement: str
-) -> str:
+) -> dict:
     memory = load_memory(project_name)
     outline = load_outline(project_name)
+    trace_key = f"chapter_outline:{project_name}:{chapter_no}"
     recent_summaries = get_recent_chapter_summaries(project_name)
     retrieval_context = _build_retrieval_context(
         project_name,
@@ -438,7 +524,7 @@ def generate_chapter_outline(
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"chapter_outline:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(chapter_outline_prompt(
         memory,
@@ -452,15 +538,23 @@ def generate_chapter_outline(
     if not outline.strip():
         raise RuntimeError("LLM returned empty chapter outline.")
     save_chapter_outline(project_name, chapter_no, outline)
-    return outline
+    return _make_step_result(
+        "chapter_outline",
+        success=True,
+        status="completed",
+        data={"chapter_outline": outline},
+        retrieval_hits=get_retrieval_trace(trace_key),
+        artifacts={"saved_path": f"data/projects/{project_name}/chapter_outlines/chapter_{chapter_no:03d}.md"},
+    ).model_dump()
 
 def write_chapter(
     project_name: str,
     chapter_no: int,
     chapter_outline: str,
     word_count: str = "2000-2500"
-) -> str:
+) -> dict:
     memory = load_memory(project_name)
+    trace_key = f"write:{project_name}:{chapter_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章 {chapter_outline}",
@@ -480,7 +574,7 @@ def write_chapter(
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"write:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         write_chapter_prompt(memory, chapter_outline, word_count, _build_rules_text(project_name, "write")),
@@ -490,41 +584,69 @@ def write_chapter(
     if not chapter.strip():
         raise RuntimeError("LLM returned empty chapter content.")
     save_chapter(project_name, chapter_no, chapter)
-    return chapter
+    return _make_step_result(
+        "write_chapter",
+        success=True,
+        status="completed",
+        data={"chapter": chapter},
+        retrieval_hits=get_retrieval_trace(trace_key),
+        artifacts={"saved_path": f"data/projects/{project_name}/chapters/chapter_{chapter_no:03d}.md"},
+    ).model_dump()
 
 def update_memory_from_chapter(
     project_name: str,
     chapter_no: int,
     chapter: str
-) -> str:
+) -> dict:
     memory = load_memory(project_name)
+    trace_key = f"memory_update:{project_name}:{chapter_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章设定更新 {chapter}",
         allowed_source_types=["memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "chapter_summary", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"memory_update:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         update_memory_prompt(memory, chapter, _build_rules_text(project_name, "memory_update")),
         retrieval_context,
     )
     result = call_llm(prompt)
+    retrieval_hits = get_retrieval_trace(trace_key)
 
     try:
         updates = validate_memory_update_result(_extract_json_object(result), chapter_no)
     except ValidationError as exc:
-        return json.dumps({
-            "status": "rejected",
-            "reason": format_schema_validation_error(exc),
-            "raw_response": result,
-        }, ensure_ascii=False, indent=2)
+        reason = format_schema_validation_error(exc)
+        return _make_step_result(
+            "memory_update",
+            success=False,
+            status="rejected",
+            error=reason,
+            retrieval_hits=retrieval_hits,
+            validation=_make_validation_status(
+                status="failed",
+                schema_name="MemoryUpdateResult",
+                message="Memory update payload validation failed.",
+                errors=[reason],
+            ),
+            artifacts={"raw_response": result},
+        ).model_dump()
     except Exception as exc:
-        return json.dumps({
-            "status": "rejected",
-            "reason": str(exc),
-            "raw_response": result,
-        }, ensure_ascii=False, indent=2)
+        return _make_step_result(
+            "memory_update",
+            success=False,
+            status="rejected",
+            error=str(exc),
+            retrieval_hits=retrieval_hits,
+            validation=_make_validation_status(
+                status="failed",
+                schema_name="MemoryUpdateResult",
+                message="Memory update payload extraction failed.",
+                errors=[str(exc)],
+            ),
+            artifacts={"raw_response": result},
+        ).model_dump()
 
     update_data = updates.model_dump()
 
@@ -547,15 +669,25 @@ def update_memory_from_chapter(
     })
 
     save_memory(project_name, memory)
-    return json.dumps({
-        "status": "accepted",
-        "applied_updates": update_data,
-    }, ensure_ascii=False, indent=2)
+    return _make_step_result(
+        "memory_update",
+        success=True,
+        status="completed",
+        data={"applied_updates": update_data},
+        retrieval_hits=retrieval_hits,
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="MemoryUpdateResult",
+            message="Memory update payload validated and applied.",
+        ),
+        artifacts={"memory_saved": True},
+    ).model_dump()
 
 
-def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
+def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
     memory = load_memory(project_name)
     chapter_outline = load_chapter_outline(project_name, chapter_no)
+    trace_key = f"review:{project_name}:{chapter_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章审阅 {chapter_outline} {chapter}",
@@ -577,27 +709,29 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"review:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review")),
         retrieval_context,
     )
     result = call_llm(prompt)
+    retrieval_hits = get_retrieval_trace(trace_key)
 
     try:
         review = validate_review_result(_extract_json_object(result))
     except ValidationError as exc:
+        reason = format_schema_validation_error(exc)
         fallback_review = ReviewResult(
             status="blocked",
-            summary=f"审阅结果解析失败：{format_schema_validation_error(exc)}",
+            summary=f"审阅结果解析失败：{reason}",
             strengths=[],
             issues=["模型未按要求返回合法 Schema 的审阅结果。"],
             pacing="未知",
             next_action="检查原始审阅结果并重新生成。",
         )
-        sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
-        conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+        sources_md = _format_supporting_sources_markdown(retrieval_hits)
+        conflict_md = _format_potential_conflicts_markdown(retrieval_hits)
         markdown = _format_review_markdown(fallback_review)
         if sources_md:
             markdown += f"\n\n{sources_md}"
@@ -606,7 +740,25 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
         markdown += f"\n\n## Raw Response\n\n```text\n{result}\n```"
         save_review_json(project_name, chapter_no, fallback_review.model_dump())
         save_review(project_name, chapter_no, markdown)
-        return markdown
+        return _make_step_result(
+            "review_chapter",
+            success=False,
+            status="rejected",
+            data={
+                "review": fallback_review.model_dump(),
+                "review_markdown": markdown,
+            },
+            error=reason,
+            warnings=["Review markdown fallback was generated and persisted."],
+            retrieval_hits=retrieval_hits,
+            validation=_make_validation_status(
+                status="failed",
+                schema_name="ReviewResult",
+                message="Review payload schema validation failed.",
+                errors=[reason],
+            ),
+            artifacts={"review_saved": True, "raw_response": result},
+        ).model_dump()
     except Exception as exc:
         fallback_review = ReviewResult(
             status="blocked",
@@ -616,8 +768,8 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
             pacing="未知",
             next_action="检查原始审阅结果并重新生成。",
         )
-        sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
-        conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+        sources_md = _format_supporting_sources_markdown(retrieval_hits)
+        conflict_md = _format_potential_conflicts_markdown(retrieval_hits)
         markdown = _format_review_markdown(fallback_review)
         if sources_md:
             markdown += f"\n\n{sources_md}"
@@ -626,10 +778,28 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
         markdown += f"\n\n## Raw Response\n\n```text\n{result}\n```"
         save_review_json(project_name, chapter_no, fallback_review.model_dump())
         save_review(project_name, chapter_no, markdown)
-        return markdown
+        return _make_step_result(
+            "review_chapter",
+            success=False,
+            status="rejected",
+            data={
+                "review": fallback_review.model_dump(),
+                "review_markdown": markdown,
+            },
+            error=str(exc),
+            warnings=["Review markdown fallback was generated and persisted."],
+            retrieval_hits=retrieval_hits,
+            validation=_make_validation_status(
+                status="failed",
+                schema_name="ReviewResult",
+                message="Review payload extraction failed.",
+                errors=[str(exc)],
+            ),
+            artifacts={"review_saved": True, "raw_response": result},
+        ).model_dump()
 
-    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
-    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+    sources_md = _format_supporting_sources_markdown(retrieval_hits)
+    conflict_md = _format_potential_conflicts_markdown(retrieval_hits)
     markdown = _format_review_markdown(review)
     if sources_md:
         markdown += f"\n\n{sources_md}"
@@ -637,7 +807,22 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
         markdown += f"\n\n{conflict_md}"
     save_review_json(project_name, chapter_no, review.model_dump())
     save_review(project_name, chapter_no, markdown)
-    return markdown
+    return _make_step_result(
+        "review_chapter",
+        success=True,
+        status="completed",
+        data={
+            "review": review.model_dump(),
+            "review_markdown": markdown,
+        },
+        retrieval_hits=retrieval_hits,
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="ReviewResult",
+            message="Review payload validated and persisted.",
+        ),
+        artifacts={"review_saved": True},
+    ).model_dump()
 
 
 def compact_memory(project_name: str) -> dict:
@@ -659,104 +844,156 @@ def _run_analysis(
     empty_error: str,
     schema,
     renderer,
-) -> str:
+) -> tuple[object, str]:
     payload = _call_json_llm(prompt, empty_error)
     try:
         result = schema.model_validate(payload)
     except ValidationError as exc:
         raise RuntimeError(f"Analysis schema validation failed: {format_schema_validation_error(exc)}") from exc
-    return renderer(result)
+    return result, renderer(result)
 
 
-def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> str:
+def _finalize_analysis_step(
+    step_name: str,
+    analysis_type: str,
+    project_name: str,
+    chapter_no: int,
+    result_model,
+    markdown: str,
+    trace_key: str,
+    schema_name: str,
+) -> dict:
+    retrieval_hits = get_retrieval_trace(trace_key)
+    sources_md = _format_supporting_sources_markdown(retrieval_hits)
+    conflict_md = _format_potential_conflicts_markdown(retrieval_hits)
+    report_markdown = markdown
+    if sources_md:
+        report_markdown = f"{report_markdown}\n\n{sources_md}"
+    if conflict_md:
+        report_markdown = f"{report_markdown}\n\n{conflict_md}"
+
+    save_analysis_report(project_name, analysis_type, chapter_no, report_markdown)
+    return _make_step_result(
+        step_name,
+        success=True,
+        status="completed",
+        data={
+            "analysis": result_model.model_dump(),
+            "report_markdown": report_markdown,
+            "analysis_type": analysis_type,
+        },
+        retrieval_hits=retrieval_hits,
+        validation=_make_validation_status(
+            status="passed",
+            schema_name=schema_name,
+            message="Analysis payload validated and report persisted.",
+        ),
+        artifacts={
+            "report_saved": True,
+            "saved_path": f"data/projects/{project_name}/analysis/{analysis_type}_chapter_{chapter_no:03d}.md",
+        },
+    ).model_dump()
+
+
+def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> dict:
     memory = load_memory(project_name)
+    trace_key = f"analysis:characters:{project_name}:{chapter_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章角色分析 {chapter}",
         allowed_source_types=["chapter_summary", "chapter_content", "memory_character", "review_issue", "analysis_characters", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"analysis:characters:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         character_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
         retrieval_context,
     )
-    result = _run_analysis(
+    result_model, markdown = _run_analysis(
         prompt,
         "LLM returned empty character analysis.",
         CharacterAnalysisResult,
         render_character_analysis_markdown,
     )
-    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:characters:{project_name}:{chapter_no}"))
-    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:characters:{project_name}:{chapter_no}"))
-    if sources_md:
-        result = f"{result}\n\n{sources_md}"
-    if conflict_md:
-        result = f"{result}\n\n{conflict_md}"
-    save_analysis_report(project_name, "characters", chapter_no, result)
-    return result
+    return _finalize_analysis_step(
+        "analysis_characters",
+        "characters",
+        project_name,
+        chapter_no,
+        result_model,
+        markdown,
+        trace_key,
+        "CharacterAnalysisResult",
+    )
 
 
-def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> str:
+def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> dict:
     memory = load_memory(project_name)
+    trace_key = f"analysis:timeline:{project_name}:{chapter_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章时间线分析 {chapter}",
         allowed_source_types=["chapter_summary", "chapter_content", "memory_timeline", "review_timeline_check", "analysis_timeline", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"analysis:timeline:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         timeline_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
         retrieval_context,
     )
-    result = _run_analysis(
+    result_model, markdown = _run_analysis(
         prompt,
         "LLM returned empty timeline analysis.",
         TimelineAnalysisResult,
         render_timeline_analysis_markdown,
     )
-    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:timeline:{project_name}:{chapter_no}"))
-    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:timeline:{project_name}:{chapter_no}"))
-    if sources_md:
-        result = f"{result}\n\n{sources_md}"
-    if conflict_md:
-        result = f"{result}\n\n{conflict_md}"
-    save_analysis_report(project_name, "timeline", chapter_no, result)
-    return result
+    return _finalize_analysis_step(
+        "analysis_timeline",
+        "timeline",
+        project_name,
+        chapter_no,
+        result_model,
+        markdown,
+        trace_key,
+        "TimelineAnalysisResult",
+    )
 
 
-def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> str:
+def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> dict:
     memory = load_memory(project_name)
+    trace_key = f"analysis:foreshadowing:{project_name}:{chapter_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章伏笔分析 {chapter}",
         allowed_source_types=["chapter_summary", "chapter_content", "memory_foreshadowing", "review_foreshadowing_check", "analysis_foreshadowing", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"analysis:foreshadowing:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         foreshadowing_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
         retrieval_context,
     )
-    result = _run_analysis(
+    result_model, markdown = _run_analysis(
         prompt,
         "LLM returned empty foreshadowing analysis.",
         ForeshadowingAnalysisResult,
         render_foreshadowing_analysis_markdown,
     )
-    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:foreshadowing:{project_name}:{chapter_no}"))
-    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:foreshadowing:{project_name}:{chapter_no}"))
-    if sources_md:
-        result = f"{result}\n\n{sources_md}"
-    if conflict_md:
-        result = f"{result}\n\n{conflict_md}"
-    save_analysis_report(project_name, "foreshadowing", chapter_no, result)
-    return result
+    return _finalize_analysis_step(
+        "analysis_foreshadowing",
+        "foreshadowing",
+        project_name,
+        chapter_no,
+        result_model,
+        markdown,
+        trace_key,
+        "ForeshadowingAnalysisResult",
+    )
 
 
-def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> str:
+def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> dict:
     memory = load_memory(project_name)
+    trace_key = f"analysis:consistency:{project_name}:{chapter_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章一致性检查 {chapter}",
@@ -774,26 +1011,28 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> s
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
-        trace_key=f"analysis:consistency:{project_name}:{chapter_no}",
+        trace_key=trace_key,
     )
     prompt = merge_retrieval_context(
         consistency_check_prompt(memory, chapter, _build_rules_text(project_name, "review")),
         retrieval_context,
     )
-    result = _run_analysis(
+    result_model, markdown = _run_analysis(
         prompt,
         "LLM returned empty consistency check.",
         ConsistencyAnalysisResult,
         render_consistency_analysis_markdown,
     )
-    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:consistency:{project_name}:{chapter_no}"))
-    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:consistency:{project_name}:{chapter_no}"))
-    if sources_md:
-        result = f"{result}\n\n{sources_md}"
-    if conflict_md:
-        result = f"{result}\n\n{conflict_md}"
-    save_analysis_report(project_name, "consistency", chapter_no, result)
-    return result
+    return _finalize_analysis_step(
+        "analysis_consistency",
+        "consistency",
+        project_name,
+        chapter_no,
+        result_model,
+        markdown,
+        trace_key,
+        "ConsistencyAnalysisResult",
+    )
 
 
 def pipeline_plan_write_review_update(
@@ -802,60 +1041,122 @@ def pipeline_plan_write_review_update(
     user_requirement: str,
     word_count: str = "2000-2500"
 ) -> dict:
-    result = {
-        "chapter_outline": None,
-        "chapter": None,
-        "review_markdown": None,
-        "review": None,
-        "memory_update_result": None,
-        "retrieval_traces": {},
-        "errors": {},
-    }
+    state = ChapterPipelineState(
+        project_name=project_name,
+        chapter_no=chapter_no,
+        user_requirement=user_requirement,
+        word_count=word_count,
+        current_step="chapter_outline",
+    )
 
     try:
         outline = generate_chapter_outline(project_name, chapter_no, user_requirement)
-        result["chapter_outline"] = outline
+        outline_step = WorkflowStepResult.model_validate(outline)
     except Exception as exc:
-        result["errors"]["chapter_outline"] = str(exc)
+        outline_step = _make_step_result(
+            "chapter_outline",
+            success=False,
+            status="failed",
+            error=str(exc),
+            retrieval_hits=get_retrieval_trace(f"chapter_outline:{project_name}:{chapter_no}"),
+        )
+        _record_pipeline_error(state, step_name="chapter_outline", message=str(exc), error_type="llm")
 
-    result["retrieval_traces"]["chapter_outline"] = get_retrieval_trace(
-        f"chapter_outline:{project_name}:{chapter_no}"
-    )
+    _record_pipeline_step(state, outline_step)
+    state.chapter_outline = outline_step.data.get("chapter_outline", "")
 
-    if result["chapter_outline"] and "chapter_outline" not in result["errors"]:
+    if outline_step.success:
+        state.current_step = "write_chapter"
         try:
-            chapter = write_chapter(project_name, chapter_no, result["chapter_outline"], word_count)
-            result["chapter"] = chapter
+            chapter = write_chapter(project_name, chapter_no, state.chapter_outline, word_count)
+            chapter_step = WorkflowStepResult.model_validate(chapter)
         except Exception as exc:
-            result["errors"]["write_chapter"] = str(exc)
+            chapter_step = _make_step_result(
+                "write_chapter",
+                success=False,
+                status="failed",
+                error=str(exc),
+                retrieval_hits=get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
+            )
+            _record_pipeline_error(state, step_name="write_chapter", message=str(exc), error_type="llm")
+    else:
+        chapter_step = _make_step_result(
+            "write_chapter",
+            success=False,
+            status="skipped",
+            warnings=["Skipped because chapter outline step did not complete successfully."],
+            retrieval_hits=get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
+        )
+        _halt_pipeline(state, "chapter_outline_failed")
 
-    result["retrieval_traces"]["write_chapter"] = get_retrieval_trace(
-        f"write:{project_name}:{chapter_no}"
-    )
+    _record_pipeline_step(state, chapter_step)
+    state.chapter = chapter_step.data.get("chapter", "")
 
-    if result["chapter"] and "write_chapter" not in result["errors"]:
+    if chapter_step.success:
+        state.current_step = "review_chapter"
         try:
-            review_md = review_chapter(project_name, chapter_no, result["chapter"])
-            result["review_markdown"] = review_md
-            review_json = load_review_json(project_name, chapter_no)
-            result["review"] = review_json if review_json else None
+            review_step_data = review_chapter(project_name, chapter_no, state.chapter)
+            review_step = WorkflowStepResult.model_validate(review_step_data)
         except Exception as exc:
-            result["errors"]["review_chapter"] = str(exc)
+            review_step = _make_step_result(
+                "review_chapter",
+                success=False,
+                status="failed",
+                error=str(exc),
+                retrieval_hits=get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
+            )
+            _record_pipeline_error(state, step_name="review_chapter", message=str(exc), error_type="llm")
+    else:
+        review_step = _make_step_result(
+            "review_chapter",
+            success=False,
+            status="skipped",
+            warnings=["Skipped because chapter writing step did not complete successfully."],
+            retrieval_hits=get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
+        )
+        if not state.halted:
+            _halt_pipeline(state, "write_chapter_failed")
 
-    result["retrieval_traces"]["review_chapter"] = get_retrieval_trace(
-        f"review:{project_name}:{chapter_no}"
-    )
+    _record_pipeline_step(state, review_step)
+    state.review = review_step.data.get("review", {})
+    state.review_markdown = review_step.data.get("review_markdown", "")
 
-    if result["chapter"] and "write_chapter" not in result["errors"]:
+    if chapter_step.success:
+        state.current_step = "memory_update"
         try:
-            memory_update = update_memory_from_chapter(project_name, chapter_no, result["chapter"])
-            memory_update_data = json.loads(memory_update) if isinstance(memory_update, str) else memory_update
-            result["memory_update_result"] = memory_update_data
+            memory_step_data = update_memory_from_chapter(project_name, chapter_no, state.chapter)
+            memory_step = WorkflowStepResult.model_validate(memory_step_data)
         except Exception as exc:
-            result["errors"]["memory_update"] = str(exc)
+            memory_step = _make_step_result(
+                "memory_update",
+                success=False,
+                status="failed",
+                error=str(exc),
+                retrieval_hits=get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
+            )
+            _record_pipeline_error(state, step_name="memory_update", message=str(exc), error_type="llm")
+    else:
+        memory_step = _make_step_result(
+            "memory_update",
+            success=False,
+            status="skipped",
+            warnings=["Skipped because chapter writing step did not complete successfully."],
+            retrieval_hits=get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
+        )
+        if not state.halted:
+            _halt_pipeline(state, "write_chapter_failed")
 
-    result["retrieval_traces"]["memory_update"] = get_retrieval_trace(
-        f"memory_update:{project_name}:{chapter_no}"
+    _record_pipeline_step(state, memory_step)
+    state.memory_update = memory_step.data.get("applied_updates", {})
+
+    state.current_step = "completed" if not state.halted else state.current_step
+    state.success = all(step.success for step in state.steps.values() if step.status != "skipped")
+
+    pipeline_result = WorkflowPipelineResult(
+        success=state.success,
+        steps=state.steps,
+        warnings=state.warnings,
     )
-
+    result = state.model_dump()
+    result["pipeline"] = pipeline_result.model_dump()
     return result

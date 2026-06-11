@@ -184,6 +184,7 @@ Responsibilities:
 * Calling skills
 * Managing UI state
 * Consuming structured review/update results produced by the schema layer
+* Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
 * Managing retrieval sources, index rebuilds, and retrieval preview
 * Exposing retrieval mode and score breakdown for debugging/learning
 
@@ -199,8 +200,13 @@ UI features:
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
+* Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 
 Business logic should remain minimal.
+
+Current UI design note:
+
+* `app.py` now includes lightweight reusable render helpers so pages consume `WorkflowStepResult` objects consistently instead of hand-formatting each skill result independently
 
 ---
 
@@ -285,6 +291,7 @@ Pydantic schema layer.
 Responsibilities:
 
 * Define machine-readable output contracts for LLM steps
+* Define machine-readable output contracts for workflow steps and pipeline state
 * Validate review payloads
 * Validate memory update payloads
 * Define structured analysis result models
@@ -297,6 +304,8 @@ Design purpose:
 * Move from ad-hoc JSON parsing to schema-first validation
 * Provide stable typed data for future retrieval/workflow/evaluation upgrades
 * Allow tolerant input normalization where LLMs return object-shaped list items instead of plain strings
+* Standardize `WorkflowStepResult` / `WorkflowPipelineResult` so UI and future workflow engines consume the same result contract
+* Define explicit chapter workflow state objects before introducing an external workflow runtime
 
 ---
 
@@ -383,19 +392,25 @@ Responsibilities:
 * Timeline analysis
 * Foreshadowing analysis
 * Retrieve relevant internal/external context before major LLM calls
+* Return normalized workflow step objects for key execution paths
 
 Current skill design notes:
 
 * Review results are validated through Pydantic schemas before persistence
 * Analysis skills validate JSON through Pydantic schemas, normalize object-shaped list items into strings when needed, then render Markdown reports under the project `analysis/` directory
+* Analysis skills now return the same workflow step contract as generation/review/memory-update steps, including validated structured payloads and persisted Markdown reports
 * Memory updates are validated through Pydantic schemas before being written into project storage
 * All LLM-calling functions check for empty responses and raise explicit errors
 * `pipeline_plan_write_review_update` executes steps independently — if one fails,
   remaining steps are skipped and partial results are still returned
+* Key workflow steps now return a common structure containing `success`, `status`, `data`, `error`, `warnings`, `retrieval_hits`, `validation`, and `artifacts`
+* The same step-result contract now covers outline generation, chapter planning, chapter writing, chapter review, memory update, and the combined pipeline
+* The chapter pipeline now maintains an explicit state object with current step, step history, warnings, halt reason, and structured error records
 * Rule injection order is: global common rules -> project common rules -> global scoped rules -> project scoped rules
 * Retrieval is task-aware: different generation steps query different source types and scopes
 * Retrieval traces are now surfaced to the UI so prompt context provenance can be inspected step by step
 * Review and analysis reports now include citation-style supporting source sections for better explainability
+* Analysis results now expose both `data.analysis` (structured payload) and `data.report_markdown` (rendered report) to the UI
 * Retrieval evidence is grouped by scope and source type to make trust boundaries and source provenance easier to inspect
 * External-source trust metadata is now visible and participates in ranking, making authority boundaries explicit during retrieval review
 * Potential conflicts are now surfaced when project evidence and external evidence overlap, giving the user an early warning before trusting a generated diagnosis
@@ -414,6 +429,12 @@ generate_outline
 ↓
 outline.md
 
+The step now returns a structured result object with:
+
+* `data.outline`
+* `retrieval_hits`
+* `artifacts.saved_path`
+
 ---
 
 Chapter Planning
@@ -430,6 +451,12 @@ generate_chapter_outline
 ↓
 chapter_outlines/chapter_xxx.md
 
+The step now returns a structured result object with:
+
+* `data.chapter_outline`
+* `retrieval_hits`
+* `artifacts.saved_path`
+
 ---
 
 Chapter Writing
@@ -445,6 +472,12 @@ Applicable Rules
 write_chapter
 ↓
 chapters/chapter_xxx.md
+
+The step now returns a structured result object with:
+
+* `data.chapter`
+* `retrieval_hits`
+* `artifacts.saved_path`
 
 ---
 
@@ -465,6 +498,13 @@ If JSON validation fails:
 return rejected result without modifying memory.json
 
 Validation is performed through `schemas.py`.
+
+The step now returns a structured result object:
+
+* `success` / `status` indicate whether the update completed, failed, or was rejected
+* `validation` records schema-pass or schema-fail information
+* `artifacts.raw_response` preserves the raw model output when rejection happens
+* `retrieval_hits` keeps the exact supporting context used during the update attempt
 
 ---
 
@@ -489,6 +529,51 @@ reviews/chapter_xxx.md
 reviews/chapter_xxx.json
 
 Validation is performed through `schemas.py` before save.
+
+The step now returns a structured result object:
+
+* `data.review` contains schema-validated machine-readable review fields
+* `data.review_markdown` contains the persisted human-readable report
+* `validation` records whether review JSON matched the expected schema
+* `warnings` can note fallback behavior when blocked markdown had to be generated from invalid model output
+
+---
+
+Pipeline Result Contract
+
+`pipeline_plan_write_review_update` now returns a pipeline object shaped like:
+
+* `success` — overall pipeline status
+* `steps.chapter_outline`
+* `steps.write_chapter`
+* `steps.review_chapter`
+* `steps.memory_update`
+
+Each step uses the shared workflow step schema so the UI can render status, errors, validation state, retrieval evidence, and saved artifacts without special-case parsing.
+
+The pipeline now also returns a chapter workflow state object containing:
+
+* `current_step`
+* `chapter_outline`
+* `chapter`
+* `review`
+* `review_markdown`
+* `memory_update`
+* `completed_steps`
+* `failed_steps`
+* `errors`
+* `halted` / `halt_reason`
+
+---
+
+Analysis Result Contract
+
+Consistency, character, timeline, and foreshadowing analysis steps now return structured workflow step objects with:
+
+* `data.analysis` — schema-validated analysis payload
+* `data.report_markdown` — persisted Markdown report with supporting sources / conflict notes
+* `validation` — analysis schema validation status
+* `retrieval_hits` — exact evidence used during the analysis step
 
 ---
 
@@ -726,6 +811,8 @@ Current implementation status:
 * Implemented: conflict-aware warnings in retrieval evidence views and diagnostic outputs
 * Implemented: structured conflict objects with severity and rationale
 * Implemented: lightweight retrieval reranking after initial lexical/semantic scoring
+* Implemented: unified workflow step result contract for outline / chapter outline / writing / review / memory update / pipeline
+* Implemented: unified workflow step result contract for consistency / character / timeline / foreshadowing analysis
 
 ---
 
@@ -772,6 +859,12 @@ Features:
 * State management
 * Workflow execution
 * Automatic chapter pipeline
+
+Current design direction:
+
+* State-first workflow design before framework adoption
+* Explicit `ChapterPipelineState` schema for graph-ready node transitions
+* Structured `WorkflowError` records for future retries, branching, and resume behavior
 
 Workflow:
 

@@ -50,6 +50,47 @@ RULE_SCOPE_OPTIONS = {
 }
 
 
+NEW_PROJECT_INPUT_KEY = "new_project_name_input"
+NEW_PROJECT_DIALOG_FLAG = "show_new_project_dialog"
+
+
+def render_step_status_message(step_result: dict, success_message: str, failure_prefix: str):
+    if not step_result:
+        return
+
+    status = step_result.get("status")
+    if status == "completed":
+        st.success(success_message)
+    elif status == "skipped":
+        warnings = step_result.get("warnings") or []
+        st.info(warnings[0] if warnings else "步骤已跳过。")
+    else:
+        st.error(f"{failure_prefix}{step_result.get('error', 'unknown error')}")
+
+
+def render_step_validation(step_result: dict):
+    validation = step_result.get("validation", {})
+    if validation.get("status") == "passed":
+        st.caption(f"Schema validated: {validation.get('schema_name', '-')}")
+    elif validation.get("status") == "failed":
+        schema_name = validation.get("schema_name", "-")
+        errors = validation.get("errors") or []
+        message = errors[0] if errors else validation.get("message", "Schema validation failed.")
+        st.caption(f"Schema failed: {schema_name} / {message}")
+
+
+def render_step_json_expander(title: str, payload: dict):
+    if not payload:
+        return
+    with st.expander(title, expanded=False):
+        st.code(json.dumps(payload, ensure_ascii=False, indent=2), language="json")
+
+
+def render_step_retrieval(step_result: dict, title: str, fallback_hits: list[dict] | None = None):
+    hits = step_result.get("retrieval_hits", []) if step_result else []
+    render_retrieval_hits_block(hits or (fallback_hits or []), title)
+
+
 def _render_rule_editor(title: str, storage_key: str, rules: dict) -> dict:
     st.subheader(title)
     updated = {}
@@ -104,20 +145,45 @@ def render_rules_page(project_name: str):
             st.success("全局规则已保存")
 
 
-def init_project_state() -> str:
+@st.dialog("新建项目")
+def render_new_project_dialog(existing_projects: list[str]):
+    candidate_name = st.text_input("项目名", key=NEW_PROJECT_INPUT_KEY).strip()
+    col1, col2 = st.columns(2)
+
+    if col1.button("确认创建", use_container_width=True):
+        if not candidate_name:
+            st.error("项目名不能为空。")
+            return
+        if candidate_name in existing_projects:
+            st.error("该项目已存在，请使用项目切换。")
+            return
+
+        st.session_state["project_name"] = candidate_name
+        st.session_state[NEW_PROJECT_DIALOG_FLAG] = False
+        st.session_state[NEW_PROJECT_INPUT_KEY] = ""
+        st.rerun()
+
+    if col2.button("取消", use_container_width=True):
+        st.session_state[NEW_PROJECT_DIALOG_FLAG] = False
+        st.session_state[NEW_PROJECT_INPUT_KEY] = ""
+        st.rerun()
+
+
+def init_project_state() -> str | None:
     projects = list_projects()
-    default_project = st.session_state.get("project_name") or (projects[0] if projects else "my_fanfic")
 
-    project_name = st.sidebar.text_input("项目名", value=default_project).strip()
-    if not project_name:
-        project_name = default_project
+    project_name = st.session_state.get("project_name")
+    if project_name:
+        return project_name
 
-    st.session_state["project_name"] = project_name
-    return project_name
+    if projects:
+        st.session_state["project_name"] = projects[0]
+        return projects[0]
+
+    return None
 
 
-def render_sidebar(project_name: str):
-    projects = list_projects()
+def render_sidebar(project_name: str | None, projects: list[str]):
     if projects:
         st.sidebar.caption("已有项目")
         selected_project = st.sidebar.selectbox(
@@ -129,6 +195,12 @@ def render_sidebar(project_name: str):
         if selected_project != project_name:
             st.session_state["project_name"] = selected_project
             st.rerun()
+
+    if st.sidebar.button("新建项目", use_container_width=True):
+        st.session_state[NEW_PROJECT_DIALOG_FLAG] = True
+
+    if st.session_state.get(NEW_PROJECT_DIALOG_FLAG):
+        render_new_project_dialog(projects)
 
 
 def render_memory_page(project_name: str, memory: dict):
@@ -222,11 +294,13 @@ def render_outline_page(project_name: str):
     st.subheader("全书大纲")
 
     existing_outline = load_outline(project_name)
+    step_result = st.session_state.get("outline_step", {})
     user_idea = st.text_area("你的小说想法", height=200)
 
     if st.button("生成全书大纲"):
-        outline = generate_outline(project_name, user_idea)
-        st.session_state["outline"] = outline
+        result = generate_outline(project_name, user_idea)
+        st.session_state["outline_step"] = result
+        st.session_state["outline"] = result.get("data", {}).get("outline", "")
 
     outline_text = st.text_area(
         "大纲内容",
@@ -238,7 +312,8 @@ def render_outline_page(project_name: str):
         save_outline(project_name, outline_text)
         st.success("大纲已保存")
 
-    render_retrieval_hits_block(get_retrieval_trace(f"outline:{project_name}"), "本次大纲生成使用的检索上下文")
+    render_step_validation(step_result)
+    render_step_retrieval(step_result, "本次大纲生成使用的检索上下文", get_retrieval_trace(f"outline:{project_name}"))
 
 
 def render_chapter_outline_page(project_name: str):
@@ -246,11 +321,13 @@ def render_chapter_outline_page(project_name: str):
 
     chapter_no = st.number_input("章节编号", min_value=1, value=1)
     existing_outline = load_chapter_outline(project_name, chapter_no)
+    step_result = st.session_state.get(f"chapter_outline_step_{chapter_no}", {})
     requirement = st.text_area("本章要求", height=200)
 
     if st.button("生成章节细纲"):
-        outline = generate_chapter_outline(project_name, chapter_no, requirement)
-        st.session_state[f"chapter_outline_{chapter_no}"] = outline
+        result = generate_chapter_outline(project_name, chapter_no, requirement)
+        st.session_state[f"chapter_outline_step_{chapter_no}"] = result
+        st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
 
     outline_text = st.text_area(
         "章节细纲内容",
@@ -262,9 +339,11 @@ def render_chapter_outline_page(project_name: str):
         save_chapter_outline(project_name, chapter_no, outline_text)
         st.success(f"第 {chapter_no} 章细纲已保存")
 
-    render_retrieval_hits_block(
-        get_retrieval_trace(f"chapter_outline:{project_name}:{chapter_no}"),
-        "本次细纲生成使用的检索上下文"
+    render_step_validation(step_result)
+    render_step_retrieval(
+        step_result,
+        "本次细纲生成使用的检索上下文",
+        get_retrieval_trace(f"chapter_outline:{project_name}:{chapter_no}")
     )
 
 
@@ -274,6 +353,7 @@ def render_chapter_page(project_name: str):
     chapter_no = st.number_input("章节编号", min_value=1, value=1)
     existing_outline = load_chapter_outline(project_name, chapter_no)
     existing_chapter = load_chapter(project_name, chapter_no)
+    chapter_step = st.session_state.get(f"chapter_step_{chapter_no}", {})
 
     chapter_outline = st.text_area(
         "章节细纲",
@@ -287,8 +367,9 @@ def render_chapter_page(project_name: str):
     )
 
     if st.button("写正文"):
-        chapter = write_chapter(project_name, chapter_no, chapter_outline, word_count)
-        st.session_state[f"chapter_{chapter_no}"] = chapter
+        result = write_chapter(project_name, chapter_no, chapter_outline, word_count)
+        st.session_state[f"chapter_step_{chapter_no}"] = result
+        st.session_state[f"chapter_{chapter_no}"] = result.get("data", {}).get("chapter", "")
 
     chapter_text = st.text_area(
         "章节正文",
@@ -302,15 +383,21 @@ def render_chapter_page(project_name: str):
 
     if st.button("根据正文更新设定库"):
         result = update_memory_from_chapter(project_name, chapter_no, chapter_text)
-        st.code(result, language="json")
+        st.session_state[f"memory_update_step_{chapter_no}"] = result
+        render_step_status_message(result, "设定库更新成功", "设定库更新失败：")
+        render_step_validation(result)
+        render_step_json_expander("设定更新结果 JSON", result)
 
-    render_retrieval_hits_block(
-        get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
-        "本次正文生成使用的检索上下文"
+    render_step_validation(chapter_step)
+    render_step_retrieval(
+        chapter_step,
+        "本次正文生成使用的检索上下文",
+        get_retrieval_trace(f"write:{project_name}:{chapter_no}")
     )
-    render_retrieval_hits_block(
-        get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
-        "本次设定更新使用的检索上下文"
+    render_step_retrieval(
+        st.session_state.get(f"memory_update_step_{chapter_no}", {}),
+        "本次设定更新使用的检索上下文",
+        get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}")
     )
 
 
@@ -324,6 +411,7 @@ def render_review_page(project_name: str):
 
     existing_review = load_review(project_name, chapter_no)
     existing_review_json = load_review_json(project_name, chapter_no) or {}
+    review_step = st.session_state.get(f"review_step_{chapter_no}", {})
 
     chapter_text = st.text_area(
         "待审阅正文",
@@ -334,9 +422,11 @@ def render_review_page(project_name: str):
 
     if st.button("生成审阅意见"):
         try:
-            review = review_chapter(project_name, chapter_no, chapter_text)
-            st.session_state[f"review_{chapter_no}"] = review
-            st.session_state[review_text_key] = review
+            review_result = review_chapter(project_name, chapter_no, chapter_text)
+            review_markdown = review_result.get("data", {}).get("review_markdown", "")
+            st.session_state[f"review_{chapter_no}"] = review_markdown
+            st.session_state[review_text_key] = review_markdown
+            st.session_state[f"review_step_{chapter_no}"] = review_result
             st.rerun()
         except Exception as exc:
             st.error(f"生成审阅失败：{exc}")
@@ -360,9 +450,11 @@ def render_review_page(project_name: str):
         cols[1].metric("Issues", len(latest_review_json.get("issues", [])))
         cols[2].metric("Strengths", len(latest_review_json.get("strengths", [])))
 
-    render_retrieval_hits_block(
-        get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
-        "本次审阅使用的检索上下文"
+    render_step_validation(review_step)
+    render_step_retrieval(
+        review_step,
+        "本次审阅使用的检索上下文",
+        get_retrieval_trace(f"review:{project_name}:{chapter_no}")
     )
 
 
@@ -411,33 +503,42 @@ def render_pipeline_page(project_name: str):
             result = pipeline_plan_write_review_update(
                 project_name, chapter_no, requirement, word_count
             )
-        st.success("流水线完成")
+        pipeline = result.get("pipeline", {})
+        if result.get("success"):
+            st.success("流水线完成")
+        else:
+            st.warning("流水线已完成，但存在失败或拒绝的步骤")
+        if result.get("halted"):
+            st.caption(f"Pipeline halted: {result.get('halt_reason', '-')}")
 
-        errors = result.get("errors", {})
+        steps_result = result.get("steps", {}) or pipeline.get("steps", {})
 
         st.subheader("执行状态")
         steps = [
-            ("章节细纲", "chapter_outline", True),
-            ("写作正文", "write_chapter", result.get("chapter_outline") is not None),
-            ("审阅", "review_chapter", result.get("review_markdown") is not None),
-            ("更新记忆", "memory_update", result.get("memory_update_result") is not None),
+            ("章节细纲", "chapter_outline"),
+            ("写作正文", "write_chapter"),
+            ("审阅", "review_chapter"),
+            ("更新记忆", "memory_update"),
         ]
-        for label, key, success in steps:
-            if key in errors:
-                st.error(f"{label}：{errors[key]}")
-            elif success:
+        for label, key in steps:
+            step_result = steps_result.get(key, {})
+            step_status = step_result.get("status")
+            if step_status == "completed":
                 st.success(f"{label}：完成")
-            else:
+            elif step_status == "skipped":
                 st.info(f"{label}：已跳过（前置步骤未完成）")
+            else:
+                st.error(f"{label}：{step_result.get('error', 'unknown error')}")
+            render_step_validation(step_result)
 
         st.subheader("结果预览")
         with st.expander("章节细纲", expanded=True):
-            st.markdown(result.get("chapter_outline", "") or "（未生成）")
+            st.markdown(result.get("chapter_outline", "") or steps_result.get("chapter_outline", {}).get("data", {}).get("chapter_outline", "") or "（未生成）")
         with st.expander("章节正文", expanded=True):
-            st.markdown(result.get("chapter", "") or "（未生成）")
+            st.markdown(result.get("chapter", "") or steps_result.get("write_chapter", {}).get("data", {}).get("chapter", "") or "（未生成）")
         with st.expander("审阅报告", expanded=True):
-            st.markdown(result.get("review_markdown", "") or "（未生成）")
-        review = result.get("review") or {}
+            st.markdown(result.get("review_markdown", "") or steps_result.get("review_chapter", {}).get("data", {}).get("review_markdown", "") or "（未生成）")
+        review = result.get("review") or steps_result.get("review_chapter", {}).get("data", {}).get("review") or {}
         if review:
             st.caption("结构化审阅状态")
             cols = st.columns(3)
@@ -446,14 +547,13 @@ def render_pipeline_page(project_name: str):
             cols[2].metric("Strengths", len(review.get("strengths", [])))
             with st.expander("审阅 JSON", expanded=False):
                 st.code(json.dumps(review, ensure_ascii=False, indent=2), language="json")
-        with st.expander("记忆更新结果", expanded=True):
-            st.code(json.dumps(result.get("memory_update_result", {}), ensure_ascii=False, indent=2), language="json")
+        render_step_json_expander("记忆更新结果", result.get("memory_update") or steps_result.get("memory_update", {}))
+        render_step_json_expander("流水线状态对象", result)
 
-        retrieval_traces = result.get("retrieval_traces", {})
-        render_retrieval_hits_block(retrieval_traces.get("chapter_outline", []), "流水线：细纲步骤使用的检索上下文")
-        render_retrieval_hits_block(retrieval_traces.get("write_chapter", []), "流水线：写作步骤使用的检索上下文")
-        render_retrieval_hits_block(retrieval_traces.get("review_chapter", []), "流水线：审阅步骤使用的检索上下文")
-        render_retrieval_hits_block(retrieval_traces.get("memory_update", []), "流水线：记忆更新步骤使用的检索上下文")
+        render_step_retrieval(steps_result.get("chapter_outline", {}), "流水线：细纲步骤使用的检索上下文")
+        render_step_retrieval(steps_result.get("write_chapter", {}), "流水线：写作步骤使用的检索上下文")
+        render_step_retrieval(steps_result.get("review_chapter", {}), "流水线：审阅步骤使用的检索上下文")
+        render_step_retrieval(steps_result.get("memory_update", {}), "流水线：记忆更新步骤使用的检索上下文")
 
 
 def render_analysis_page(project_name: str):
@@ -485,14 +585,17 @@ def render_analysis_page(project_name: str):
 
     report_text_key = f"analysis_result_text_{selected_type}_{chapter_no}"
     existing_report = load_analysis_report(project_name, selected_type, chapter_no)
+    step_state_key = f"analysis_step_{selected_type}_{chapter_no}"
 
     if st.button("执行分析"):
         try:
             label, handler = analysis_options[selected_type]
             with st.spinner(f"正在生成{label}..."):
-                report = handler(project_name, chapter_no, chapter_text)
+                result = handler(project_name, chapter_no, chapter_text)
+            report = result.get("data", {}).get("report_markdown", "")
             st.session_state[f"analysis_{selected_type}_{chapter_no}"] = report
             st.session_state[report_text_key] = report
+            st.session_state[step_state_key] = result
             st.rerun()
         except Exception as exc:
             st.error(f"执行分析失败：{exc}")
@@ -507,9 +610,14 @@ def render_analysis_page(project_name: str):
     if report_text:
         st.markdown(report_text)
 
-    render_retrieval_hits_block(
-        get_retrieval_trace(f"analysis:{selected_type}:{project_name}:{chapter_no}"),
-        "本次分析使用的检索上下文"
+    analysis_step = st.session_state.get(step_state_key, {})
+    analysis_data = analysis_step.get("data", {}).get("analysis") or {}
+    render_step_json_expander("结构化分析结果", analysis_data)
+    render_step_validation(analysis_step)
+    render_step_retrieval(
+        analysis_step,
+        "本次分析使用的检索上下文",
+        get_retrieval_trace(f"analysis:{selected_type}:{project_name}:{chapter_no}")
     )
 
 
@@ -727,17 +835,24 @@ st.set_page_config(page_title="NovelForge", layout="wide")
 st.title("NovelForge：同人小说 Agent 工作台")
 
 project_name = init_project_state()
-render_sidebar(project_name)
-memory = load_memory(project_name)
+projects = list_projects()
+render_sidebar(project_name, projects)
 
-st.caption(f"当前项目：`{project_name}`")
+if project_name:
+    memory = load_memory(project_name)
+    st.caption(f"当前项目：`{project_name}`")
+else:
+    memory = None
+    st.info("当前还没有项目。点击侧边栏“新建项目”开始创建。")
 
 page = st.sidebar.radio(
     "功能",
     ["设定库", "交互规则", "RAG 检索", "生成大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
 )
 
-if page == "设定库":
+if not project_name:
+    st.stop()
+elif page == "设定库":
     render_memory_page(project_name, memory)
 elif page == "交互规则":
     render_rules_page(project_name)

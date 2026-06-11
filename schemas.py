@@ -244,6 +244,59 @@ class RetrievalConflict(NovelForgeSchema):
     rationale: str = ""
 
 
+class ValidationStatus(NovelForgeSchema):
+    status: Literal["not_applicable", "passed", "failed"] = "not_applicable"
+    schema_name: str = ""
+    message: str = ""
+    errors: list[str] = Field(default_factory=list)
+
+
+class WorkflowStepResult(NovelForgeSchema):
+    step_name: str
+    success: bool
+    status: Literal["completed", "failed", "rejected", "skipped"]
+    data: dict[str, Any] = Field(default_factory=dict)
+    error: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    retrieval_hits: list[RetrievalHit] = Field(default_factory=list)
+    validation: ValidationStatus = Field(default_factory=ValidationStatus)
+    artifacts: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowPipelineResult(NovelForgeSchema):
+    success: bool
+    steps: dict[str, WorkflowStepResult] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class WorkflowError(NovelForgeSchema):
+    step_name: str
+    error_type: Literal["llm", "validation", "persistence", "retrieval", "input", "unknown"] = "unknown"
+    message: str
+    recoverable: bool = True
+
+
+class ChapterPipelineState(NovelForgeSchema):
+    project_name: str
+    chapter_no: int
+    user_requirement: str = ""
+    word_count: str = "2000-2500"
+    current_step: str = "pending"
+    chapter_outline: str = ""
+    chapter: str = ""
+    review: dict[str, Any] = Field(default_factory=dict)
+    review_markdown: str = ""
+    memory_update: dict[str, Any] = Field(default_factory=dict)
+    steps: dict[str, WorkflowStepResult] = Field(default_factory=dict)
+    completed_steps: list[str] = Field(default_factory=list)
+    failed_steps: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[WorkflowError] = Field(default_factory=list)
+    halted: bool = False
+    halt_reason: str = ""
+    success: bool = False
+
+
 def validate_review_result(data: dict[str, Any]) -> ReviewResult:
     return ReviewResult.model_validate(data)
 
