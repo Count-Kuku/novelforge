@@ -7,6 +7,7 @@ from prompts import (
     consistency_check_prompt,
     foreshadowing_analysis_prompt,
     format_rules_for_prompt,
+    merge_retrieval_context,
     outline_prompt,
     chapter_outline_prompt,
     timeline_analysis_prompt,
@@ -48,6 +49,7 @@ from schemas import (
     validate_memory_update_result,
     validate_review_result,
 )
+from retrieval import format_retrieval_context, retrieve_context
 
 
 def _extract_json_object(text: str) -> dict:
@@ -78,6 +80,26 @@ def _build_rules_text(project_name: str, scope: str) -> str:
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
     return format_rules_for_prompt(global_rules, project_rules, scope)
+
+
+def _build_retrieval_context(
+    project_name: str,
+    query: str,
+    *,
+    allowed_source_types: list[str] | None = None,
+    allowed_scopes: list[str] | None = None,
+    top_k: int = 6,
+    retrieval_mode: str = "hybrid",
+) -> str:
+    hits = retrieve_context(
+        project_name,
+        query,
+        top_k=top_k,
+        allowed_scopes=allowed_scopes,
+        allowed_source_types=allowed_source_types,
+        retrieval_mode=retrieval_mode,
+    )
+    return format_retrieval_context(hits)
 
 
 def _call_analysis(prompt: str, empty_error: str) -> str:
@@ -192,7 +214,16 @@ Status: `{review['status']}`
 
 def generate_outline(project_name: str, user_idea: str) -> str:
     memory = load_memory(project_name)
-    prompt = outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        user_idea,
+        allowed_source_types=["outline", "memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "external_source"],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline")),
+        retrieval_context,
+    )
     outline = call_llm(prompt)
     if not outline.strip():
         raise RuntimeError("LLM returned empty outline.")
@@ -207,14 +238,29 @@ def generate_chapter_outline(
     memory = load_memory(project_name)
     outline = load_outline(project_name)
     recent_summaries = get_recent_chapter_summaries(project_name)
-    prompt = chapter_outline_prompt(
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章 {user_requirement} {outline}",
+        allowed_source_types=[
+            "outline",
+            "chapter_summary",
+            "chapter_outline",
+            "memory_character",
+            "memory_world",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "external_source",
+        ],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(chapter_outline_prompt(
         memory,
         outline,
         recent_summaries,
         chapter_no,
         user_requirement,
         _build_rules_text(project_name, "chapter_outline"),
-    )
+    ), retrieval_context)
     outline = call_llm(prompt)
     if not outline.strip():
         raise RuntimeError("LLM returned empty chapter outline.")
@@ -228,7 +274,30 @@ def write_chapter(
     word_count: str = "2000-2500"
 ) -> str:
     memory = load_memory(project_name)
-    prompt = write_chapter_prompt(memory, chapter_outline, word_count, _build_rules_text(project_name, "write"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章 {chapter_outline}",
+        allowed_source_types=[
+            "chapter_summary",
+            "chapter_outline",
+            "chapter_content",
+            "memory_character",
+            "memory_world",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "review_issue",
+            "analysis_consistency",
+            "analysis_characters",
+            "analysis_timeline",
+            "analysis_foreshadowing",
+            "external_source",
+        ],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        write_chapter_prompt(memory, chapter_outline, word_count, _build_rules_text(project_name, "write")),
+        retrieval_context,
+    )
     chapter = call_llm(prompt)
     if not chapter.strip():
         raise RuntimeError("LLM returned empty chapter content.")
@@ -241,7 +310,16 @@ def update_memory_from_chapter(
     chapter: str
 ) -> str:
     memory = load_memory(project_name)
-    prompt = update_memory_prompt(memory, chapter, _build_rules_text(project_name, "memory_update"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章设定更新 {chapter}",
+        allowed_source_types=["memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "chapter_summary", "external_source"],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        update_memory_prompt(memory, chapter, _build_rules_text(project_name, "memory_update")),
+        retrieval_context,
+    )
     result = call_llm(prompt)
 
     try:
@@ -289,7 +367,32 @@ def update_memory_from_chapter(
 def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
     memory = load_memory(project_name)
     chapter_outline = load_chapter_outline(project_name, chapter_no)
-    prompt = review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章审阅 {chapter_outline} {chapter}",
+        allowed_source_types=[
+            "chapter_summary",
+            "chapter_outline",
+            "chapter_content",
+            "memory_character",
+            "memory_world",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "review_issue",
+            "review_timeline_check",
+            "review_foreshadowing_check",
+            "analysis_consistency",
+            "analysis_characters",
+            "analysis_timeline",
+            "analysis_foreshadowing",
+            "external_source",
+        ],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review")),
+        retrieval_context,
+    )
     result = call_llm(prompt)
 
     try:
@@ -357,7 +460,16 @@ def _run_analysis(
 
 def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> str:
     memory = load_memory(project_name)
-    prompt = character_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章角色分析 {chapter}",
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_character", "review_issue", "analysis_characters", "external_source"],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        character_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
+        retrieval_context,
+    )
     result = _run_analysis(
         prompt,
         "LLM returned empty character analysis.",
@@ -370,7 +482,16 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> str:
 
 def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> str:
     memory = load_memory(project_name)
-    prompt = timeline_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章时间线分析 {chapter}",
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_timeline", "review_timeline_check", "analysis_timeline", "external_source"],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        timeline_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
+        retrieval_context,
+    )
     result = _run_analysis(
         prompt,
         "LLM returned empty timeline analysis.",
@@ -383,7 +504,16 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> str:
 
 def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> str:
     memory = load_memory(project_name)
-    prompt = foreshadowing_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章伏笔分析 {chapter}",
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_foreshadowing", "review_foreshadowing_check", "analysis_foreshadowing", "external_source"],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        foreshadowing_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
+        retrieval_context,
+    )
     result = _run_analysis(
         prompt,
         "LLM returned empty foreshadowing analysis.",
@@ -396,7 +526,28 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> s
 
 def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> str:
     memory = load_memory(project_name)
-    prompt = consistency_check_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章一致性检查 {chapter}",
+        allowed_source_types=[
+            "chapter_summary",
+            "chapter_content",
+            "memory_character",
+            "memory_world",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "review_issue",
+            "analysis_characters",
+            "analysis_timeline",
+            "analysis_foreshadowing",
+            "external_source",
+        ],
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    prompt = merge_retrieval_context(
+        consistency_check_prompt(memory, chapter, _build_rules_text(project_name, "review")),
+        retrieval_context,
+    )
     result = _run_analysis(
         prompt,
         "LLM returned empty consistency check.",

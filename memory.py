@@ -234,6 +234,42 @@ def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int)
     return file.read_text(encoding="utf-8")
 
 
+def retrieval_path(project_name: str) -> Path:
+    path = project_path(project_name) / "retrieval"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def retrieval_sources_path(project_name: str) -> Path:
+    path = retrieval_path(project_name) / "sources"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def save_retrieval_manifest(project_name: str, content: str):
+    file = retrieval_path(project_name) / "manifest.json"
+    file.write_text(content, encoding="utf-8")
+
+
+def load_retrieval_manifest(project_name: str) -> str:
+    file = retrieval_path(project_name) / "manifest.json"
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
+def save_retrieval_vectors(project_name: str, content: str):
+    file = retrieval_path(project_name) / "vectors.json"
+    file.write_text(content, encoding="utf-8")
+
+
+def load_retrieval_vectors(project_name: str) -> str:
+    file = retrieval_path(project_name) / "vectors.json"
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
 def chapter_count(project_name: str) -> int:
     chapters_dir = project_path(project_name) / "chapters"
     if not chapters_dir.exists():

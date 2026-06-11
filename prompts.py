@@ -50,6 +50,16 @@ def outline_prompt(memory: dict, user_idea: str, rules_text: str = "当前无额
 6. 前20章大致剧情
 """
 
+
+def merge_retrieval_context(prompt: str, retrieval_context: str) -> str:
+    if not retrieval_context.strip() or retrieval_context.strip() == "未检索到额外上下文。":
+        return prompt
+    return f"""{prompt}
+
+补充检索上下文：
+{retrieval_context}
+"""
+
 def chapter_outline_prompt(
     memory: dict,
     outline: str,

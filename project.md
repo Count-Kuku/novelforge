@@ -45,6 +45,9 @@ Current status:
 * Character/timeline/foreshadowing/consistency analysis
 * Persistent analysis report storage
 * Pydantic schema validation for core LLM outputs
+* Retrieval document/chunk schema for future RAG workflows
+* Searchable project/external knowledge index with scoped retrieval
+* Hybrid retrieval with lexical + semantic scoring
 
 ---
 
@@ -101,6 +104,9 @@ Project Storage
 ↓
 Prompt Rules
 (global + project scoped)
+↓
+Retrieval Layer
+(retrieval.py)
 
 ---
 
@@ -113,6 +119,8 @@ novelforge/
 ├── llm.py
 
 ├── memory.py
+
+├── retrieval.py
 
 ├── schemas.py
 
@@ -149,7 +157,15 @@ novelforge/
 
         ├── reviews/
 
-        └── analysis/
+        ├── analysis/
+
+        └── retrieval/
+
+            ├── manifest.json
+
+            ├── vectors.json
+
+            └── sources/
 ```
 
 ---
@@ -168,6 +184,8 @@ Responsibilities:
 * Calling skills
 * Managing UI state
 * Consuming structured review/update results produced by the schema layer
+* Managing retrieval sources, index rebuilds, and retrieval preview
+* Exposing retrieval mode and score breakdown for debugging/learning
 
 UI features:
 
@@ -196,6 +214,7 @@ Responsibilities:
 * Model switching
 * API key validation
 * Support for temperature and system message per call
+* Provide embedding generation for semantic retrieval
 
 Current model:
 
@@ -211,8 +230,11 @@ Interface:
 
 `call_llm(prompt, system_message="", temperature=0.7)`
 
+`get_embedding(text)`
+
 * `system_message` — optional system role instruction
 * `temperature` — per-call temperature control (default 0.7)
+* `get_embedding` — embedding lookup for retrieval indexing and semantic search
 
 Future models:
 
@@ -265,6 +287,7 @@ Responsibilities:
 * Validate review payloads
 * Validate memory update payloads
 * Define structured analysis result models
+* Define retrieval documents, chunks, hits, and index manifest models
 * Convert validated analysis objects into Markdown for UI/storage
 * Centralize schema error formatting
 
@@ -273,6 +296,32 @@ Design purpose:
 * Move from ad-hoc JSON parsing to schema-first validation
 * Provide stable typed data for future retrieval/workflow/evaluation upgrades
 * Allow tolerant input normalization where LLMs return object-shaped list items instead of plain strings
+
+---
+
+## retrieval.py
+
+Retrieval and indexing layer.
+
+Responsibilities:
+
+* Convert project storage into searchable retrieval documents
+* Ingest external canon/reference files into project-scoped retrieval storage
+* Chunk long documents into retrieval units
+* Persist a project retrieval manifest for reuse
+* Persist retrieval vectors for semantic search reuse
+* Execute scoped retrieval over project/canon/reference knowledge
+* Format retrieved context for prompt injection
+
+Current retrieval design notes:
+
+* Current retrieval supports lexical, semantic, and hybrid modes
+* Retrieval documents are separated from prompt logic so the indexing contract remains reusable
+* Scope priority currently prefers `project`, then `canon`, then `reference`
+* Retrieval is already injected into outline, chapter planning, writing, review, memory update, and analysis steps
+* Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
+* Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows
+* External materials can be ingested through typed templates such as character sheets, location sheets, canon events, and world rules
 
 ---
 
@@ -293,6 +342,7 @@ Responsibilities:
 * Memory update prompts
 * Memory compaction prompts
 * Formatting layered rule blocks for prompt injection
+* Merging retrieved context into generation prompts
 
 Current prompt design notes:
 
@@ -302,6 +352,7 @@ Current prompt design notes:
 * Chapter writing prompt accepts `word_count` parameter (default 2000-2500)
 * Memory compaction prompt compresses old character/world/timeline/foreshadowing entries to control prompt length
 * All major generation prompts can receive layered rule text assembled from global and project storage
+* Retrieved context is appended after the base prompt so retrieval remains a composable layer
 
 Prompt engineering should be isolated here.
 
@@ -325,6 +376,7 @@ Responsibilities:
 * Character analysis
 * Timeline analysis
 * Foreshadowing analysis
+* Retrieve relevant internal/external context before major LLM calls
 
 Current skill design notes:
 
@@ -335,6 +387,7 @@ Current skill design notes:
 * `pipeline_plan_write_review_update` executes steps independently — if one fails,
   remaining steps are skipped and partial results are still returned
 * Rule injection order is: global common rules -> project common rules -> global scoped rules -> project scoped rules
+* Retrieval is task-aware: different generation steps query different source types and scopes
 
 ---
 
@@ -358,6 +411,8 @@ Outline
 
 Recent Chapter Summaries
  +
+Retrieved Context
+ +
 Applicable Rules
 ↓
 generate_chapter_outline
@@ -372,6 +427,8 @@ Chapter Outline
 +
 Memory
  +
+Retrieved Context
+ +
 Applicable Rules
 ↓
 write_chapter
@@ -383,6 +440,8 @@ chapters/chapter_xxx.md
 Memory Update
 
 Chapter
+ +
+Retrieved Context
  +
 Applicable Rules
 ↓
@@ -405,6 +464,8 @@ Chapter Outline
 Chapter
 +
 Memory
+ +
+Retrieved Context
  +
 Applicable Rules
 ↓
@@ -470,6 +531,16 @@ Stores review results.
 analysis/
 
 Stores consistency, character, timeline, and foreshadowing analysis reports.
+
+retrieval/
+
+Stores retrieval index artifacts and external knowledge sources.
+
+Files:
+
+* `manifest.json` — project-scoped retrieval documents and chunks
+* `vectors.json` — chunk embedding vectors for semantic retrieval
+* `sources/` — externally added canon/reference materials
 
 Note:
 
@@ -561,6 +632,14 @@ The UI now supports persistent writing rules at both global and project scope. R
 
 Core LLM outputs now flow through a dedicated Pydantic schema layer. This reduces ad-hoc parsing logic and prepares the project for typed retrieval, workflow state, and evaluation pipelines.
 
+8. Retrieval-ready knowledge layer
+
+The project now includes a retrieval document/chunk layer, external source ingestion, scoped context retrieval, and semantic vector storage. The system is designed so retrieval backends can evolve without changing prompt/business contracts.
+
+9. Hybrid retrieval
+
+The retrieval layer now combines lexical scoring and embedding similarity. This improves recall for canon/reference materials whose wording may differ from the current draft while preserving precise keyword matches for project-specific facts.
+
 ---
 
 ## V1.1
@@ -597,6 +676,14 @@ Current implementation status:
 * Implemented: review page result refresh fix for Streamlit session state behavior
 * Implemented: `schemas.py` Pydantic schema layer for review, memory update, and analysis outputs
 * Implemented: schema-validated JSON-to-Markdown rendering pipeline for analysis results
+* Implemented: retrieval document/chunk/index manifest schemas
+* Implemented: project/external source ingestion into retrieval storage
+* Implemented: lexical scoped retrieval with prompt injection across major skills
+* Implemented: in-app retrieval center for index rebuild, source management, and retrieval preview
+* Implemented: embedding-backed `vectors.json` storage for semantic retrieval
+* Implemented: lexical / semantic / hybrid retrieval modes with score breakdown in UI
+* Implemented: source-aware smart chunking for structured records, Markdown sections, and long prose
+* Implemented: typed external source templates for better RAG ingestion quality
 
 ---
 
@@ -610,6 +697,15 @@ Features:
 * Vector database
 * Semantic retrieval
 * Context selection
+
+Current implementation status:
+
+* Implemented: project-scoped embedding generation via `llm.py`
+* Implemented: semantic vector persistence in `retrieval/vectors.json`
+* Implemented: hybrid retrieval over lexical and semantic scores
+* Implemented: source-aware chunking and typed external source ingestion
+* Pending: dedicated external vector database backend
+* Pending: reranking and citation-aware response formatting
 
 Possible technologies:
 

@@ -19,7 +19,9 @@ from memory import (
     save_memory,
     save_outline,
     save_project_rules,
+    retrieval_sources_path,
 )
+from retrieval import build_structured_external_source_payload, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
 from skills import (
     analyze_characters,
     analyze_foreshadowing,
@@ -477,6 +479,142 @@ def render_analysis_page(project_name: str):
         st.markdown(report_text)
 
 
+def render_retrieval_page(project_name: str):
+    st.subheader("RAG 检索中心")
+    st.caption("管理项目内外资料索引，并预览当前检索结果。")
+
+    source_type_options = {
+        "external_source": "通用资料",
+        "external_character_sheet": "角色资料",
+        "external_location_sheet": "地点资料",
+        "external_organization_sheet": "组织资料",
+        "external_timeline_note": "时间线资料",
+        "external_canon_event": "原作事件",
+        "external_world_rule": "世界规则",
+        "external_artifact_note": "道具资料",
+    }
+
+    try:
+        manifest = load_retrieval_index(project_name)
+        st.caption(
+            f"当前索引：{manifest.document_count} documents / {manifest.chunk_count} chunks / built at {manifest.built_at} / embedding={'on' if manifest.embedding_enabled else 'off'} / model={manifest.embedding_model or '-'}"
+        )
+    except Exception as exc:
+        manifest = None
+        st.warning(f"索引读取失败：{exc}")
+
+    col1, col2 = st.columns(2)
+    if col1.button("重建检索索引"):
+        with st.spinner("正在重建索引..."):
+            manifest = rebuild_retrieval_assets(project_name, build_vectors=True)
+        st.success(
+            f"索引已重建：{manifest.document_count} documents / {manifest.chunk_count} chunks / embedding={'on' if manifest.embedding_enabled else 'off'}"
+        )
+        st.rerun()
+
+    source_dir = retrieval_sources_path(project_name)
+    col2.caption(f"外部资料目录：`{source_dir}`")
+
+    with st.expander("添加外部资料", expanded=False):
+        source_name = st.text_input("资料名称", key="retrieval_source_name")
+        source_scope = st.selectbox("资料范围", options=["reference", "canon"], key="retrieval_source_scope")
+        source_type = st.selectbox(
+            "资料模板",
+            options=list(source_type_options.keys()),
+            format_func=lambda key: source_type_options[key],
+            key="retrieval_source_type"
+        )
+        source_title = st.text_input("显示标题（可选）", key="retrieval_source_title")
+        source_summary = st.text_area("资料摘要（可选）", height=100, key="retrieval_source_summary")
+        source_tags = st.text_input("标签（逗号分隔，可选）", key="retrieval_source_tags")
+        source_content = st.text_area("资料正文", height=220, key="retrieval_source_content")
+
+        col_a, col_b = st.columns(2)
+        extra_field_1_label = col_a.text_input("扩展字段1名称（可选）", key="retrieval_extra_label_1")
+        extra_field_1_value = col_a.text_area("扩展字段1内容", height=90, key="retrieval_extra_value_1")
+        extra_field_2_label = col_b.text_input("扩展字段2名称（可选）", key="retrieval_extra_label_2")
+        extra_field_2_value = col_b.text_area("扩展字段2内容", height=90, key="retrieval_extra_value_2")
+
+        if st.button("保存外部资料"):
+            if not source_name.strip() or not source_content.strip():
+                st.error("资料名称和资料正文不能为空。")
+            else:
+                tags = [item.strip() for item in source_tags.split(",") if item.strip()]
+                extra_fields = {}
+                if extra_field_1_label.strip() and extra_field_1_value.strip():
+                    extra_fields[extra_field_1_label.strip()] = extra_field_1_value.strip()
+                if extra_field_2_label.strip() and extra_field_2_value.strip():
+                    extra_fields[extra_field_2_label.strip()] = extra_field_2_value.strip()
+
+                payload = build_structured_external_source_payload(
+                    source_type=source_type,
+                    scope=source_scope,
+                    title=source_title.strip() or source_name.strip(),
+                    summary=source_summary,
+                    content=source_content,
+                    tags=tags,
+                    metadata={
+                        "added_from_ui": True,
+                        "template": source_type,
+                    },
+                    extra_fields=extra_fields,
+                )
+                ingest_external_source_file(project_name, source_name, json.dumps(payload, ensure_ascii=False, indent=2))
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success("外部资料已保存并重建索引。")
+                st.rerun()
+
+    if manifest and manifest.documents:
+        with st.expander("索引来源预览", expanded=False):
+            for doc in manifest.documents[:30]:
+                st.markdown(f"- `{doc.source_type}` / `{doc.scope}` / `{doc.title or doc.doc_id}`")
+            if len(manifest.documents) > 30:
+                st.caption(f"仅显示前 30 项，共 {len(manifest.documents)} 项。")
+
+    with st.expander("检索预览", expanded=True):
+        query = st.text_area("检索查询", height=120, key="retrieval_query")
+        top_k = st.slider("返回条数", min_value=1, max_value=12, value=6, key="retrieval_top_k")
+        retrieval_mode = st.selectbox(
+            "检索模式",
+            options=["hybrid", "lexical", "semantic"],
+            index=0,
+            key="retrieval_mode"
+        )
+        scope_options = st.multiselect(
+            "范围过滤",
+            options=["project", "canon", "reference"],
+            default=["project", "canon", "reference"],
+            key="retrieval_scope_filter"
+        )
+        if st.button("执行检索"):
+            try:
+                hits = retrieve_context(
+                    project_name,
+                    query,
+                    top_k=top_k,
+                    allowed_scopes=scope_options,
+                    retrieval_mode=retrieval_mode,
+                )
+                st.session_state["retrieval_hits"] = [hit.model_dump() for hit in hits]
+            except Exception as exc:
+                st.error(f"检索失败：{exc}")
+
+        for hit in st.session_state.get("retrieval_hits", []):
+            chunk = hit.get("chunk", {})
+            st.markdown(
+                f"### {chunk.get('source_type', 'unknown')} / {chunk.get('scope', 'project')} / mode={hit.get('retrieval_mode', 'lexical')} / score={hit.get('score', 0):.2f}"
+            )
+            if chunk.get("title"):
+                st.caption(chunk.get("title"))
+            st.write(chunk.get("content", ""))
+            matched_terms = hit.get("matched_terms", [])
+            if matched_terms:
+                st.caption(f"matched: {', '.join(matched_terms)}")
+            st.caption(
+                f"lexical={hit.get('lexical_score', 0):.2f} / semantic={hit.get('semantic_score', 0):.2f} / source={chunk.get('path', '-') }"
+            )
+
+
 st.set_page_config(page_title="NovelForge", layout="wide")
 st.title("NovelForge：同人小说 Agent 工作台")
 
@@ -488,13 +626,15 @@ st.caption(f"当前项目：`{project_name}`")
 
 page = st.sidebar.radio(
     "功能",
-    ["设定库", "交互规则", "生成大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
+    ["设定库", "交互规则", "RAG 检索", "生成大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
 )
 
 if page == "设定库":
     render_memory_page(project_name, memory)
 elif page == "交互规则":
     render_rules_page(project_name)
+elif page == "RAG 检索":
+    render_retrieval_page(project_name)
 elif page == "生成大纲":
     render_outline_page(project_name)
 elif page == "生成细纲":

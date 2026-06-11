@@ -6,6 +6,7 @@ load_dotenv()
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 def _get_api_key() -> str:
@@ -18,6 +19,10 @@ def _get_base_url() -> str:
 
 def _get_model_name() -> str:
     return os.getenv("LLM_MODEL") or DEFAULT_MODEL
+
+
+def _get_embedding_model_name() -> str:
+    return os.getenv("LLM_EMBEDDING_MODEL") or os.getenv("EMBEDDING_MODEL") or DEFAULT_EMBEDDING_MODEL
 
 
 client = OpenAI(
@@ -43,3 +48,18 @@ def call_llm(prompt: str, system_message: str = "", temperature: float = DEFAULT
     )
 
     return response.choices[0].message.content or ""
+
+
+def get_embedding(text: str) -> list[float]:
+    if not _get_api_key():
+        raise RuntimeError("Missing API key. Set LLM_API_KEY or DEEPSEEK_API_KEY in .env.")
+
+    cleaned = text.strip()
+    if not cleaned:
+        raise ValueError("Embedding input text cannot be empty.")
+
+    response = client.embeddings.create(
+        model=_get_embedding_model_name(),
+        input=cleaned,
+    )
+    return response.data[0].embedding

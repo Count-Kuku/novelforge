@@ -164,6 +164,76 @@ class ConsistencyAnalysisResult(NovelForgeSchema):
         return _normalize_string_list(value)
 
 
+class RetrievalDocument(NovelForgeSchema):
+    doc_id: str
+    project_name: str
+    source_type: str
+    scope: Literal["project", "canon", "reference"] = "project"
+    title: str = ""
+    content: str
+    chapter_no: int | None = None
+    path: str = ""
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _normalize_tags(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class RetrievalChunk(NovelForgeSchema):
+    chunk_id: str
+    document_id: str
+    project_name: str
+    source_type: str
+    scope: Literal["project", "canon", "reference"] = "project"
+    title: str = ""
+    content: str
+    chapter_no: int | None = None
+    path: str = ""
+    tags: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _normalize_tags(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class RetrievalHit(NovelForgeSchema):
+    chunk: RetrievalChunk
+    score: float
+    lexical_score: float = 0.0
+    semantic_score: float = 0.0
+    retrieval_mode: str = "lexical"
+    matched_terms: list[str] = Field(default_factory=list)
+
+    @field_validator("matched_terms", mode="before")
+    @classmethod
+    def _normalize_matched_terms(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class RetrievalIndexManifest(NovelForgeSchema):
+    project_name: str
+    version: int = 1
+    built_at: str
+    document_count: int = 0
+    chunk_count: int = 0
+    embedding_model: str = ""
+    embedding_enabled: bool = False
+    documents: list[RetrievalDocument] = Field(default_factory=list)
+    chunks: list[RetrievalChunk] = Field(default_factory=list)
+
+
+class RetrievalVectorStore(NovelForgeSchema):
+    project_name: str
+    built_at: str
+    embedding_model: str
+    vectors: dict[str, list[float]] = Field(default_factory=dict)
+
+
 def validate_review_result(data: dict[str, Any]) -> ReviewResult:
     return ReviewResult.model_validate(data)
 
