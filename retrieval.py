@@ -32,6 +32,13 @@ DEFAULT_CHUNK_SIZE = 900
 DEFAULT_CHUNK_OVERLAP = 150
 DEFAULT_TOP_K = 6
 DEFAULT_EMBEDDING_MODEL = os.getenv("LLM_EMBEDDING_MODEL") or os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
+AUTHORITY_WEIGHTS = {
+    "project": 2.0,
+    "official": 1.5,
+    "curated": 1.0,
+    "community": 0.5,
+    "unknown": 0.0,
+}
 STRUCTURED_SOURCE_TYPES = {
     "memory_character",
     "memory_world",
@@ -201,6 +208,16 @@ def _make_document(
     )
 
 
+def _infer_authority(scope: str, metadata: dict | None) -> str:
+    if isinstance(metadata, dict):
+        authority = str(metadata.get("authority", "")).strip().lower()
+        if authority:
+            return authority
+    if scope == "project":
+        return "project"
+    return "unknown"
+
+
 def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
     memory = load_memory(project_name)
     documents: list[RetrievalDocument] = []
@@ -213,7 +230,7 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
             f"Character {index}",
             str(item),
             tags=["character"],
-            metadata={"memory_field": "characters"},
+            metadata={"memory_field": "characters", "authority": "project"},
         )
         if doc:
             documents.append(doc)
@@ -231,7 +248,7 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
                 f"{field_name.title()} {index}",
                 str(item),
                 tags=[tag],
-                metadata={"memory_field": field_name},
+                metadata={"memory_field": field_name, "authority": "project"},
             )
             if doc:
                 documents.append(doc)
@@ -251,7 +268,7 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
             summary,
             chapter_no=chapter_no if isinstance(chapter_no, int) else None,
             tags=["summary"],
-            metadata={"memory_field": "chapter_summaries"},
+            metadata={"memory_field": "chapter_summaries", "authority": "project"},
         )
         if doc:
             documents.append(doc)
@@ -272,6 +289,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         outline,
         path=str(base_path / "outline.md"),
         tags=["outline"],
+        metadata={"authority": "project"},
     )
     if doc:
         documents.append(doc)
@@ -290,6 +308,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["chapter_outline"],
+                metadata={"authority": "project"},
             )
             if doc:
                 documents.append(doc)
@@ -309,6 +328,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["chapter"],
+                metadata={"authority": "project"},
             )
             if doc:
                 documents.append(doc)
@@ -332,7 +352,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["review", "summary", review_json.get("status", "")],
-                metadata={"status": review_json.get("status", "")},
+                metadata={"status": review_json.get("status", ""), "authority": "project"},
             )
             if summary_doc:
                 documents.append(summary_doc)
@@ -347,7 +367,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                     chapter_no=chapter_no,
                     path=str(file),
                     tags=["review", "issue"],
-                    metadata={"status": review_json.get("status", "")},
+                    metadata={"status": review_json.get("status", ""), "authority": "project"},
                 )
                 if doc:
                     documents.append(doc)
@@ -368,7 +388,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                     chapter_no=chapter_no,
                     path=str(file),
                     tags=["review", field_name],
-                    metadata={"status": review_json.get("status", "")},
+                    metadata={"status": review_json.get("status", ""), "authority": "project"},
                 )
                 if doc:
                     documents.append(doc)
@@ -386,6 +406,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["review", "markdown"],
+                metadata={"authority": "project"},
             )
             if doc:
                 documents.append(doc)
@@ -408,6 +429,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                     chapter_no=chapter_no,
                     path=str(file),
                     tags=["analysis", analysis_type],
+                    metadata={"authority": "project"},
                 )
                 if doc:
                     documents.append(doc)
@@ -453,7 +475,7 @@ def _documents_from_external_sources(project_name: str) -> list[RetrievalDocumen
             scope=scope if scope in {"project", "canon", "reference"} else "reference",
             path=str(file),
             tags=tags,
-            metadata=metadata,
+            metadata={**metadata, "authority": _infer_authority(scope, metadata)},
         )
         if doc:
             documents.append(doc)
@@ -629,6 +651,9 @@ def _score_chunk(chunk: RetrievalChunk, query_terms: list[str]) -> tuple[float, 
     if chunk.source_type in {"review_issue", "chapter_summary"}:
         score += 0.25
 
+    authority = str(chunk.metadata.get("authority", "")).strip().lower()
+    score += AUTHORITY_WEIGHTS.get(authority, 0.0)
+
     return score, matched_terms
 
 
@@ -645,6 +670,32 @@ def _semantic_scores(project_name: str, query: str, chunks: list[RetrievalChunk]
             continue
         scores[chunk.chunk_id] = _cosine_similarity(query_vector, vector)
     return scores
+
+
+def _rerank_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+    reranked = []
+    for hit in hits:
+        chunk = hit.chunk
+        authority = str(chunk.metadata.get("authority", "unknown") or "unknown").strip().lower()
+        rerank_bonus = 0.0
+
+        if hit.semantic_score >= 0.55:
+            rerank_bonus += 0.6
+        elif hit.semantic_score >= 0.35:
+            rerank_bonus += 0.3
+
+        if chunk.scope == "project":
+            rerank_bonus += 0.4
+        if authority == "official":
+            rerank_bonus += 0.3
+        elif authority == "curated":
+            rerank_bonus += 0.15
+
+        adjusted_score = hit.score + rerank_bonus
+        reranked.append(hit.model_copy(update={"score": adjusted_score}))
+
+    reranked.sort(key=lambda item: (-item.score, -item.semantic_score, -item.lexical_score, item.chunk.source_type, item.chunk.chapter_no or 0, item.chunk.chunk_id))
+    return reranked
 
 
 def retrieve_context(
@@ -703,7 +754,7 @@ def retrieve_context(
             matched_terms=matched_terms,
         ))
 
-    hits.sort(key=lambda item: (-item.score, item.chunk.source_type, item.chunk.chapter_no or 0, item.chunk.chunk_id))
+    hits = _rerank_hits(hits)
     return hits[:top_k]
 
 

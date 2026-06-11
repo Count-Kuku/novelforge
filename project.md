@@ -198,6 +198,7 @@ UI features:
 * Quick requirement capture with selectable target scope
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
 * Review and analysis result refresh via Streamlit session state synchronization
+* Retrieval hit inspection in generation, review, analysis, and pipeline result pages
 
 Business logic should remain minimal.
 
@@ -322,6 +323,11 @@ Current retrieval design notes:
 * Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
 * Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows
 * External materials can be ingested through typed templates such as character sheets, location sheets, canon events, and world rules
+* Retrieval is now observable from generation pages: major steps expose the actual hits used for prompt augmentation
+* Review and analysis outputs now append supporting source references derived from retrieval hits
+* Retrieval evidence is now grouped by `project`, `canon`, and `reference` scope so source hierarchy is explicit in both UI and outputs
+* External sources now carry authority metadata and authority-aware weighting influences retrieval ranking and evidence display
+* The system now flags potential conflicts when project-grounded evidence overlaps with canon/reference evidence under the same retrieval terms
 
 ---
 
@@ -388,6 +394,11 @@ Current skill design notes:
   remaining steps are skipped and partial results are still returned
 * Rule injection order is: global common rules -> project common rules -> global scoped rules -> project scoped rules
 * Retrieval is task-aware: different generation steps query different source types and scopes
+* Retrieval traces are now surfaced to the UI so prompt context provenance can be inspected step by step
+* Review and analysis reports now include citation-style supporting source sections for better explainability
+* Retrieval evidence is grouped by scope and source type to make trust boundaries and source provenance easier to inspect
+* External-source trust metadata is now visible and participates in ranking, making authority boundaries explicit during retrieval review
+* Potential conflicts are now surfaced when project evidence and external evidence overlap, giving the user an early warning before trusting a generated diagnosis
 
 ---
 
@@ -640,6 +651,30 @@ The project now includes a retrieval document/chunk layer, external source inges
 
 The retrieval layer now combines lexical scoring and embedding similarity. This improves recall for canon/reference materials whose wording may differ from the current draft while preserving precise keyword matches for project-specific facts.
 
+10. Retrieval observability
+
+The system now records and exposes the actual retrieval hits used by major generation steps. This makes RAG behavior inspectable, easier to debug, and much easier to learn from during prompt and retrieval tuning.
+
+11. Citation-aware retrieval outputs
+
+The system now attaches a compact supporting-sources section to review and analysis outputs. This is an explainability layer built on top of retrieval traces and makes it easier to understand why the system reached a specific diagnostic conclusion.
+
+12. Source hierarchy awareness
+
+Retrieval evidence is now grouped by `project`, `canon`, and `reference` scope before presentation. This makes it easier to reason about which conclusions are grounded in current project truth versus original-canon material or lower-priority reference notes.
+
+13. Authority-aware retrieval
+
+The retrieval layer now accepts source authority metadata such as `official`, `curated`, `community`, and `unknown`. Authority participates in retrieval weighting and is surfaced in evidence views so higher-trust sources can be distinguished from lower-trust references.
+
+14. Conflict-aware retrieval
+
+The system now derives lightweight potential-conflict warnings from retrieval hits. When project evidence overlaps on the same retrieval terms with canon or reference evidence, the output can surface this as a possible tension rather than silently blending all sources together.
+
+15. Structured conflict schema and reranking
+
+Potential conflicts are now represented as structured objects with severity and rationale fields. Retrieval results also pass through a lightweight reranking phase that rewards stronger semantic alignment, trusted authorities, and project-grounded evidence before final context selection.
+
 ---
 
 ## V1.1
@@ -684,6 +719,13 @@ Current implementation status:
 * Implemented: lexical / semantic / hybrid retrieval modes with score breakdown in UI
 * Implemented: source-aware smart chunking for structured records, Markdown sections, and long prose
 * Implemented: typed external source templates for better RAG ingestion quality
+* Implemented: per-step retrieval trace display in generation, review, analysis, and pipeline result views
+* Implemented: supporting source sections in review and analysis outputs
+* Implemented: scope-aware grouped evidence display for retrieval traces and supporting sources
+* Implemented: authority-aware metadata capture, ranking, and evidence display for external sources
+* Implemented: conflict-aware warnings in retrieval evidence views and diagnostic outputs
+* Implemented: structured conflict objects with severity and rationale
+* Implemented: lightweight retrieval reranking after initial lexical/semantic scoring
 
 ---
 
@@ -704,8 +746,14 @@ Current implementation status:
 * Implemented: semantic vector persistence in `retrieval/vectors.json`
 * Implemented: hybrid retrieval over lexical and semantic scores
 * Implemented: source-aware chunking and typed external source ingestion
+* Implemented: retrieval hit observability across major workflow steps
+* Implemented: citation-style supporting sources for review and analysis outputs
+* Implemented: grouped source hierarchy display across retrieval evidence views
+* Implemented: authority-aware trust model for external-source ranking and inspection
+* Implemented: lightweight project-vs-external conflict detection in retrieval evidence
+* Implemented: conflict schema with severity/rationale and reranked final retrieval ordering
 * Pending: dedicated external vector database backend
-* Pending: reranking and citation-aware response formatting
+* Pending: deeper fact-level conflict resolution and recommendation logic
 
 Possible technologies:
 

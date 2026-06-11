@@ -27,8 +27,10 @@ from skills import (
     analyze_foreshadowing,
     analyze_timeline,
     compact_memory,
+    detect_potential_conflicts,
     generate_chapter_outline,
     generate_outline,
+    get_retrieval_trace,
     review_chapter,
     run_consistency_check,
     pipeline_plan_write_review_update,
@@ -236,6 +238,8 @@ def render_outline_page(project_name: str):
         save_outline(project_name, outline_text)
         st.success("大纲已保存")
 
+    render_retrieval_hits_block(get_retrieval_trace(f"outline:{project_name}"), "本次大纲生成使用的检索上下文")
+
 
 def render_chapter_outline_page(project_name: str):
     st.subheader("章节细纲")
@@ -257,6 +261,11 @@ def render_chapter_outline_page(project_name: str):
     if st.button("保存章节细纲"):
         save_chapter_outline(project_name, chapter_no, outline_text)
         st.success(f"第 {chapter_no} 章细纲已保存")
+
+    render_retrieval_hits_block(
+        get_retrieval_trace(f"chapter_outline:{project_name}:{chapter_no}"),
+        "本次细纲生成使用的检索上下文"
+    )
 
 
 def render_chapter_page(project_name: str):
@@ -294,6 +303,15 @@ def render_chapter_page(project_name: str):
     if st.button("根据正文更新设定库"):
         result = update_memory_from_chapter(project_name, chapter_no, chapter_text)
         st.code(result, language="json")
+
+    render_retrieval_hits_block(
+        get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
+        "本次正文生成使用的检索上下文"
+    )
+    render_retrieval_hits_block(
+        get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
+        "本次设定更新使用的检索上下文"
+    )
 
 
 def render_review_page(project_name: str):
@@ -341,6 +359,11 @@ def render_review_page(project_name: str):
         cols[0].metric("Status", latest_review_json.get("status", "-"))
         cols[1].metric("Issues", len(latest_review_json.get("issues", [])))
         cols[2].metric("Strengths", len(latest_review_json.get("strengths", [])))
+
+    render_retrieval_hits_block(
+        get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
+        "本次审阅使用的检索上下文"
+    )
 
 
 def render_project_files_page(project_name: str):
@@ -426,6 +449,12 @@ def render_pipeline_page(project_name: str):
         with st.expander("记忆更新结果", expanded=True):
             st.code(json.dumps(result.get("memory_update_result", {}), ensure_ascii=False, indent=2), language="json")
 
+        retrieval_traces = result.get("retrieval_traces", {})
+        render_retrieval_hits_block(retrieval_traces.get("chapter_outline", []), "流水线：细纲步骤使用的检索上下文")
+        render_retrieval_hits_block(retrieval_traces.get("write_chapter", []), "流水线：写作步骤使用的检索上下文")
+        render_retrieval_hits_block(retrieval_traces.get("review_chapter", []), "流水线：审阅步骤使用的检索上下文")
+        render_retrieval_hits_block(retrieval_traces.get("memory_update", []), "流水线：记忆更新步骤使用的检索上下文")
+
 
 def render_analysis_page(project_name: str):
     st.subheader("一致性分析")
@@ -478,6 +507,76 @@ def render_analysis_page(project_name: str):
     if report_text:
         st.markdown(report_text)
 
+    render_retrieval_hits_block(
+        get_retrieval_trace(f"analysis:{selected_type}:{project_name}:{chapter_no}"),
+        "本次分析使用的检索上下文"
+    )
+
+
+def render_retrieval_hits_block(hits: list[dict], title: str):
+    if not hits:
+        return
+
+    with st.expander(title, expanded=False):
+        grouped = {"project": {}, "canon": {}, "reference": {}}
+        for hit in hits:
+            chunk = hit.get("chunk", {})
+            scope = chunk.get("scope", "project") or "project"
+            source_type = chunk.get("source_type", "unknown") or "unknown"
+            grouped.setdefault(scope, {}).setdefault(source_type, []).append(hit)
+
+        scope_labels = {
+            "project": "Project Sources",
+            "canon": "Canon Sources",
+            "reference": "Reference Sources",
+        }
+
+        hit_index = 1
+        for scope in ["project", "canon", "reference"]:
+            source_groups = grouped.get(scope, {})
+            if not source_groups:
+                continue
+            st.markdown(f"## {scope_labels.get(scope, scope.title())}")
+            for source_type, source_hits in source_groups.items():
+                st.markdown(f"### {source_type}")
+                for hit in source_hits:
+                    chunk = hit.get("chunk", {})
+                    st.markdown(
+                        f"#### [{hit_index}] mode={hit.get('retrieval_mode', 'lexical')} / score={hit.get('score', 0):.2f}"
+                    )
+                    if chunk.get("title"):
+                        st.caption(chunk.get("title"))
+                    matched_terms = hit.get("matched_terms", [])
+                    authority = chunk.get("metadata", {}).get("authority", "unknown")
+                    if matched_terms:
+                        st.caption(f"matched: {', '.join(matched_terms)}")
+                    st.caption(
+                        f"authority={authority} / lexical={hit.get('lexical_score', 0):.2f} / semantic={hit.get('semantic_score', 0):.2f} / source={chunk.get('path', '-') }"
+                    )
+                    st.write(chunk.get("content", ""))
+                    hit_index += 1
+
+        potential_conflicts = detect_potential_conflicts(hits)
+        if potential_conflicts:
+            st.markdown("## Potential Conflicts")
+            for index, conflict in enumerate(potential_conflicts, start=1):
+                shared_terms = ", ".join(conflict.get("shared_terms", [])) or "(无)"
+                project_chunk = conflict.get("project_hit", {}).get("chunk", {})
+                external_chunk = conflict.get("external_hit", {}).get("chunk", {})
+                project_authority = conflict.get("project_authority", project_chunk.get("metadata", {}).get("authority", "project"))
+                external_authority = conflict.get("external_authority", external_chunk.get("metadata", {}).get("authority", "unknown"))
+                severity = conflict.get("severity", "low")
+                rationale = conflict.get("rationale", "")
+                st.markdown(f"### [{index}] severity={severity} / shared_terms={shared_terms}")
+                st.caption(
+                    f"project: {project_chunk.get('source_type', 'unknown')} / {project_chunk.get('title', 'untitled')} / authority={project_authority}"
+                )
+                st.caption(
+                    f"external: {external_chunk.get('scope', 'reference')} / {external_chunk.get('source_type', 'unknown')} / {external_chunk.get('title', 'untitled')} / authority={external_authority}"
+                )
+                if rationale:
+                    st.caption(f"rationale: {rationale}")
+
 
 def render_retrieval_page(project_name: str):
     st.subheader("RAG 检索中心")
@@ -518,6 +617,13 @@ def render_retrieval_page(project_name: str):
     with st.expander("添加外部资料", expanded=False):
         source_name = st.text_input("资料名称", key="retrieval_source_name")
         source_scope = st.selectbox("资料范围", options=["reference", "canon"], key="retrieval_source_scope")
+        source_authority = st.selectbox(
+            "资料可信度",
+            options=["official", "curated", "community", "unknown"],
+            index=1,
+            key="retrieval_source_authority"
+        )
+        source_origin = st.text_input("来源标识/链接（可选）", key="retrieval_source_origin")
         source_type = st.selectbox(
             "资料模板",
             options=list(source_type_options.keys()),
@@ -556,6 +662,8 @@ def render_retrieval_page(project_name: str):
                     metadata={
                         "added_from_ui": True,
                         "template": source_type,
+                        "authority": source_authority,
+                        "source_origin": source_origin.strip(),
                     },
                     extra_fields=extra_fields,
                 )

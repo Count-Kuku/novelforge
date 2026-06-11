@@ -234,6 +234,16 @@ class RetrievalVectorStore(NovelForgeSchema):
     vectors: dict[str, list[float]] = Field(default_factory=dict)
 
 
+class RetrievalConflict(NovelForgeSchema):
+    shared_terms: list[str] = Field(default_factory=list)
+    project_hit: RetrievalHit
+    external_hit: RetrievalHit
+    project_authority: str = "project"
+    external_authority: str = "unknown"
+    severity: Literal["low", "medium", "high"] = "low"
+    rationale: str = ""
+
+
 def validate_review_result(data: dict[str, Any]) -> ReviewResult:
     return ReviewResult.model_validate(data)
 

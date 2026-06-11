@@ -39,6 +39,7 @@ from schemas import (
     CharacterAnalysisResult,
     ConsistencyAnalysisResult,
     ForeshadowingAnalysisResult,
+    RetrievalConflict,
     ReviewResult,
     TimelineAnalysisResult,
     format_schema_validation_error,
@@ -50,6 +51,188 @@ from schemas import (
     validate_review_result,
 )
 from retrieval import format_retrieval_context, retrieve_context
+
+
+_LAST_RETRIEVAL_TRACES: dict[str, list[dict]] = {}
+
+
+def _set_retrieval_trace(trace_key: str | None, hits: list) -> None:
+    if not trace_key:
+        return
+    _LAST_RETRIEVAL_TRACES[trace_key] = [hit.model_dump() for hit in hits]
+
+
+def get_retrieval_trace(trace_key: str) -> list[dict]:
+    return list(_LAST_RETRIEVAL_TRACES.get(trace_key, []))
+
+
+def _group_hits_by_scope_and_type(hits: list[dict]) -> dict[str, dict[str, list[dict]]]:
+    grouped: dict[str, dict[str, list[dict]]] = {}
+    for hit in hits:
+        chunk = hit.get("chunk", {})
+        scope = chunk.get("scope", "project") or "project"
+        source_type = chunk.get("source_type", "unknown") or "unknown"
+        grouped.setdefault(scope, {}).setdefault(source_type, []).append(hit)
+    return grouped
+
+
+def _conflict_severity(project_hit: dict, external_hit: dict, overlap: set[str]) -> tuple[str, str]:
+    project_chunk = project_hit.get("chunk", {})
+    external_chunk = external_hit.get("chunk", {})
+    project_authority = str(project_chunk.get("metadata", {}).get("authority", "project") or "project")
+    external_authority = str(external_chunk.get("metadata", {}).get("authority", "unknown") or "unknown")
+    project_type = project_chunk.get("source_type", "")
+    external_type = external_chunk.get("source_type", "")
+
+    if project_authority == "project" and external_authority == "official":
+        return "high", "Project truth overlaps with official external evidence on the same retrieval terms."
+    if project_type != external_type and len(overlap) >= 2:
+        return "medium", "Project and external evidence overlap across multiple retrieval terms but come from different evidence categories."
+    return "low", "Project and external evidence share retrieval terms and may need manual comparison."
+
+
+def _detect_potential_conflicts(hits: list[dict], limit: int = 4) -> list[RetrievalConflict]:
+    project_hits = []
+    external_hits = []
+    for hit in hits:
+        chunk = hit.get("chunk", {})
+        scope = chunk.get("scope", "project") or "project"
+        if scope == "project":
+            project_hits.append(hit)
+        else:
+            external_hits.append(hit)
+
+    conflicts = []
+    seen = set()
+    for project_hit in project_hits:
+        project_chunk = project_hit.get("chunk", {})
+        project_terms = set(hit_term.lower() for hit_term in project_hit.get("matched_terms", []))
+        if not project_terms:
+            continue
+        for external_hit in external_hits:
+            external_chunk = external_hit.get("chunk", {})
+            external_terms = set(hit_term.lower() for hit_term in external_hit.get("matched_terms", []))
+            if not external_terms:
+                continue
+            overlap = project_terms & external_terms
+            if not overlap:
+                continue
+
+            project_type = project_chunk.get("source_type", "")
+            external_type = external_chunk.get("source_type", "")
+            project_authority = str(project_chunk.get("metadata", {}).get("authority", "project") or "project")
+            external_authority = str(external_chunk.get("metadata", {}).get("authority", "unknown") or "unknown")
+            if project_type == external_type and project_authority == external_authority:
+                continue
+
+            key = (
+                project_chunk.get("title", project_type),
+                external_chunk.get("title", external_type),
+                tuple(sorted(overlap)),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+
+            severity, rationale = _conflict_severity(project_hit, external_hit, overlap)
+            conflicts.append(RetrievalConflict(
+                shared_terms=sorted(overlap),
+                project_hit=project_hit,
+                external_hit=external_hit,
+                project_authority=project_authority,
+                external_authority=external_authority,
+                severity=severity,
+                rationale=rationale,
+            ))
+            if len(conflicts) >= limit:
+                return conflicts
+    return conflicts
+
+
+def detect_potential_conflicts(hits: list[dict], limit: int = 4) -> list[dict]:
+    return [conflict.model_dump() for conflict in _detect_potential_conflicts(hits, limit=limit)]
+
+
+def _select_supporting_sources(hits: list[dict], limit: int = 4) -> list[dict]:
+    selected = []
+    seen = set()
+    for hit in hits:
+        chunk = hit.get("chunk", {})
+        key = (
+            chunk.get("source_type", ""),
+            chunk.get("scope", ""),
+            chunk.get("title", ""),
+            chunk.get("path", ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(hit)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _format_supporting_sources_markdown(hits: list[dict], title: str = "Supporting Sources") -> str:
+    selected = _select_supporting_sources(hits)
+    if not selected:
+        return ""
+
+    grouped = _group_hits_by_scope_and_type(selected)
+    scope_order = ["project", "canon", "reference"]
+    scope_labels = {
+        "project": "Project Sources",
+        "canon": "Canon Sources",
+        "reference": "Reference Sources",
+    }
+
+    lines = [f"## {title}", ""]
+    item_index = 1
+    for scope in scope_order:
+        source_groups = grouped.get(scope)
+        if not source_groups:
+            continue
+        lines.append(f"### {scope_labels.get(scope, scope.title())}")
+        lines.append("")
+        for source_type, source_hits in source_groups.items():
+            lines.append(f"- {source_type}")
+            for hit in source_hits:
+                chunk = hit.get("chunk", {})
+                authority = str(chunk.get("metadata", {}).get("authority", "unknown") or "unknown")
+                detail = f"  - [{item_index}]"
+                if chunk.get("title"):
+                    detail += f" {chunk.get('title')}"
+                else:
+                    detail += f" {source_type}"
+                if chunk.get("chapter_no") is not None:
+                    detail += f" / chapter {int(chunk.get('chapter_no')):03d}"
+                detail += f" / authority={authority}"
+                detail += f" / score={hit.get('score', 0):.2f}"
+                lines.append(detail)
+                item_index += 1
+            lines.append("")
+    return "\n".join(lines)
+
+
+def _format_potential_conflicts_markdown(hits: list[dict], title: str = "Potential Conflicts") -> str:
+    conflicts = _detect_potential_conflicts(hits)
+    if not conflicts:
+        return ""
+
+    lines = [f"## {title}", ""]
+    for index, conflict in enumerate(conflicts, start=1):
+        shared_terms = ", ".join(conflict.shared_terms) or "(无)"
+        project_chunk = conflict.project_hit.chunk.model_dump()
+        external_chunk = conflict.external_hit.chunk.model_dump()
+        lines.append(f"- [{index}] severity={conflict.severity} / shared_terms={shared_terms}")
+        lines.append(
+            f"  - project: {project_chunk.get('source_type', 'unknown')} / {project_chunk.get('title', 'untitled')} / authority={conflict.project_authority}"
+        )
+        lines.append(
+            f"  - external: {external_chunk.get('scope', 'reference')} / {external_chunk.get('source_type', 'unknown')} / {external_chunk.get('title', 'untitled')} / authority={conflict.external_authority}"
+        )
+        lines.append(f"  - rationale: {conflict.rationale}")
+    return "\n".join(lines)
 
 
 def _extract_json_object(text: str) -> dict:
@@ -90,6 +273,7 @@ def _build_retrieval_context(
     allowed_scopes: list[str] | None = None,
     top_k: int = 6,
     retrieval_mode: str = "hybrid",
+    trace_key: str | None = None,
 ) -> str:
     hits = retrieve_context(
         project_name,
@@ -99,6 +283,7 @@ def _build_retrieval_context(
         allowed_source_types=allowed_source_types,
         retrieval_mode=retrieval_mode,
     )
+    _set_retrieval_trace(trace_key, hits)
     return format_retrieval_context(hits)
 
 
@@ -219,6 +404,7 @@ def generate_outline(project_name: str, user_idea: str) -> str:
         user_idea,
         allowed_source_types=["outline", "memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"outline:{project_name}",
     )
     prompt = merge_retrieval_context(
         outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline")),
@@ -252,6 +438,7 @@ def generate_chapter_outline(
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"chapter_outline:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(chapter_outline_prompt(
         memory,
@@ -293,6 +480,7 @@ def write_chapter(
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"write:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(
         write_chapter_prompt(memory, chapter_outline, word_count, _build_rules_text(project_name, "write")),
@@ -315,6 +503,7 @@ def update_memory_from_chapter(
         f"第{chapter_no}章设定更新 {chapter}",
         allowed_source_types=["memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "chapter_summary", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"memory_update:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(
         update_memory_prompt(memory, chapter, _build_rules_text(project_name, "memory_update")),
@@ -388,6 +577,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"review:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(
         review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review")),
@@ -406,7 +596,14 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
             pacing="未知",
             next_action="检查原始审阅结果并重新生成。",
         )
-        markdown = _format_review_markdown(fallback_review) + f"\n\n## Raw Response\n\n```text\n{result}\n```"
+        sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+        conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+        markdown = _format_review_markdown(fallback_review)
+        if sources_md:
+            markdown += f"\n\n{sources_md}"
+        if conflict_md:
+            markdown += f"\n\n{conflict_md}"
+        markdown += f"\n\n## Raw Response\n\n```text\n{result}\n```"
         save_review_json(project_name, chapter_no, fallback_review.model_dump())
         save_review(project_name, chapter_no, markdown)
         return markdown
@@ -419,12 +616,25 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
             pacing="未知",
             next_action="检查原始审阅结果并重新生成。",
         )
-        markdown = _format_review_markdown(fallback_review) + f"\n\n## Raw Response\n\n```text\n{result}\n```"
+        sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+        conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+        markdown = _format_review_markdown(fallback_review)
+        if sources_md:
+            markdown += f"\n\n{sources_md}"
+        if conflict_md:
+            markdown += f"\n\n{conflict_md}"
+        markdown += f"\n\n## Raw Response\n\n```text\n{result}\n```"
         save_review_json(project_name, chapter_no, fallback_review.model_dump())
         save_review(project_name, chapter_no, markdown)
         return markdown
 
+    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
+    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"review:{project_name}:{chapter_no}"))
     markdown = _format_review_markdown(review)
+    if sources_md:
+        markdown += f"\n\n{sources_md}"
+    if conflict_md:
+        markdown += f"\n\n{conflict_md}"
     save_review_json(project_name, chapter_no, review.model_dump())
     save_review(project_name, chapter_no, markdown)
     return markdown
@@ -465,6 +675,7 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> str:
         f"第{chapter_no}章角色分析 {chapter}",
         allowed_source_types=["chapter_summary", "chapter_content", "memory_character", "review_issue", "analysis_characters", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"analysis:characters:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(
         character_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
@@ -476,6 +687,12 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> str:
         CharacterAnalysisResult,
         render_character_analysis_markdown,
     )
+    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:characters:{project_name}:{chapter_no}"))
+    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:characters:{project_name}:{chapter_no}"))
+    if sources_md:
+        result = f"{result}\n\n{sources_md}"
+    if conflict_md:
+        result = f"{result}\n\n{conflict_md}"
     save_analysis_report(project_name, "characters", chapter_no, result)
     return result
 
@@ -487,6 +704,7 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> str:
         f"第{chapter_no}章时间线分析 {chapter}",
         allowed_source_types=["chapter_summary", "chapter_content", "memory_timeline", "review_timeline_check", "analysis_timeline", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"analysis:timeline:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(
         timeline_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
@@ -498,6 +716,12 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> str:
         TimelineAnalysisResult,
         render_timeline_analysis_markdown,
     )
+    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:timeline:{project_name}:{chapter_no}"))
+    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:timeline:{project_name}:{chapter_no}"))
+    if sources_md:
+        result = f"{result}\n\n{sources_md}"
+    if conflict_md:
+        result = f"{result}\n\n{conflict_md}"
     save_analysis_report(project_name, "timeline", chapter_no, result)
     return result
 
@@ -509,6 +733,7 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> s
         f"第{chapter_no}章伏笔分析 {chapter}",
         allowed_source_types=["chapter_summary", "chapter_content", "memory_foreshadowing", "review_foreshadowing_check", "analysis_foreshadowing", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"analysis:foreshadowing:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(
         foreshadowing_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review")),
@@ -520,6 +745,12 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> s
         ForeshadowingAnalysisResult,
         render_foreshadowing_analysis_markdown,
     )
+    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:foreshadowing:{project_name}:{chapter_no}"))
+    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:foreshadowing:{project_name}:{chapter_no}"))
+    if sources_md:
+        result = f"{result}\n\n{sources_md}"
+    if conflict_md:
+        result = f"{result}\n\n{conflict_md}"
     save_analysis_report(project_name, "foreshadowing", chapter_no, result)
     return result
 
@@ -543,6 +774,7 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> s
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
+        trace_key=f"analysis:consistency:{project_name}:{chapter_no}",
     )
     prompt = merge_retrieval_context(
         consistency_check_prompt(memory, chapter, _build_rules_text(project_name, "review")),
@@ -554,6 +786,12 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> s
         ConsistencyAnalysisResult,
         render_consistency_analysis_markdown,
     )
+    sources_md = _format_supporting_sources_markdown(get_retrieval_trace(f"analysis:consistency:{project_name}:{chapter_no}"))
+    conflict_md = _format_potential_conflicts_markdown(get_retrieval_trace(f"analysis:consistency:{project_name}:{chapter_no}"))
+    if sources_md:
+        result = f"{result}\n\n{sources_md}"
+    if conflict_md:
+        result = f"{result}\n\n{conflict_md}"
     save_analysis_report(project_name, "consistency", chapter_no, result)
     return result
 
@@ -570,6 +808,7 @@ def pipeline_plan_write_review_update(
         "review_markdown": None,
         "review": None,
         "memory_update_result": None,
+        "retrieval_traces": {},
         "errors": {},
     }
 
@@ -579,12 +818,20 @@ def pipeline_plan_write_review_update(
     except Exception as exc:
         result["errors"]["chapter_outline"] = str(exc)
 
+    result["retrieval_traces"]["chapter_outline"] = get_retrieval_trace(
+        f"chapter_outline:{project_name}:{chapter_no}"
+    )
+
     if result["chapter_outline"] and "chapter_outline" not in result["errors"]:
         try:
             chapter = write_chapter(project_name, chapter_no, result["chapter_outline"], word_count)
             result["chapter"] = chapter
         except Exception as exc:
             result["errors"]["write_chapter"] = str(exc)
+
+    result["retrieval_traces"]["write_chapter"] = get_retrieval_trace(
+        f"write:{project_name}:{chapter_no}"
+    )
 
     if result["chapter"] and "write_chapter" not in result["errors"]:
         try:
@@ -595,6 +842,10 @@ def pipeline_plan_write_review_update(
         except Exception as exc:
             result["errors"]["review_chapter"] = str(exc)
 
+    result["retrieval_traces"]["review_chapter"] = get_retrieval_trace(
+        f"review:{project_name}:{chapter_no}"
+    )
+
     if result["chapter"] and "write_chapter" not in result["errors"]:
         try:
             memory_update = update_memory_from_chapter(project_name, chapter_no, result["chapter"])
@@ -602,5 +853,9 @@ def pipeline_plan_write_review_update(
             result["memory_update_result"] = memory_update_data
         except Exception as exc:
             result["errors"]["memory_update"] = str(exc)
+
+    result["retrieval_traces"]["memory_update"] = get_retrieval_trace(
+        f"memory_update:{project_name}:{chapter_no}"
+    )
 
     return result
