@@ -1,10 +1,15 @@
 import json
 import re
 from llm import call_llm
+from pydantic import ValidationError
 from prompts import (
+    character_analysis_prompt,
+    consistency_check_prompt,
+    foreshadowing_analysis_prompt,
     format_rules_for_prompt,
     outline_prompt,
     chapter_outline_prompt,
+    timeline_analysis_prompt,
     write_chapter_prompt,
     update_memory_prompt,
     review_chapter_prompt,
@@ -22,11 +27,26 @@ from memory import (
     save_chapter,
     save_chapter_outline,
     save_global_rules,
+    save_analysis_report,
     save_memory,
     save_outline,
     save_project_rules,
     save_review,
     save_review_json,
+)
+from schemas import (
+    CharacterAnalysisResult,
+    ConsistencyAnalysisResult,
+    ForeshadowingAnalysisResult,
+    ReviewResult,
+    TimelineAnalysisResult,
+    format_schema_validation_error,
+    render_character_analysis_markdown,
+    render_consistency_analysis_markdown,
+    render_foreshadowing_analysis_markdown,
+    render_timeline_analysis_markdown,
+    validate_memory_update_result,
+    validate_review_result,
 )
 
 
@@ -54,24 +74,24 @@ def _dedupe_list_items(items: list) -> list:
     return result
 
 
-def _coerce_list(value) -> list:
-    if isinstance(value, list):
-        return value
-    return []
-
-
-def _coerce_string(value) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
 def _build_rules_text(project_name: str, scope: str) -> str:
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
     return format_rules_for_prompt(global_rules, project_rules, scope)
+
+
+def _call_analysis(prompt: str, empty_error: str) -> str:
+    result = call_llm(prompt)
+    if not result.strip():
+        raise RuntimeError(empty_error)
+    return result
+
+
+def _call_json_llm(prompt: str, empty_error: str) -> dict:
+    result = call_llm(prompt)
+    if not result.strip():
+        raise RuntimeError(empty_error)
+    return _extract_json_object(result)
 
 
 def _extract_rule_lines(text: str) -> list[str]:
@@ -131,63 +151,10 @@ def save_rule_text(project_name: str, scope: str, target: str, rule_text: str) -
     }
 
 
-def _normalize_memory_updates(updates: dict, chapter_no: int) -> dict:
-    if not isinstance(updates, dict):
-        raise ValueError("Memory update payload must be a JSON object.")
+def _format_review_markdown(review: ReviewResult | dict) -> str:
+    if isinstance(review, ReviewResult):
+        review = review.model_dump()
 
-    for key in ["new_characters", "world_updates", "timeline_updates", "foreshadowing_updates"]:
-        if not isinstance(updates.get(key, []), list):
-            raise ValueError(f"Memory update field '{key}' must be a list.")
-
-    if not isinstance(updates.get("chapter_summary", ""), str):
-        raise ValueError("Memory update field 'chapter_summary' must be a string.")
-
-    return {
-        "new_characters": _coerce_list(updates.get("new_characters")),
-        "world_updates": _coerce_list(updates.get("world_updates")),
-        "timeline_updates": _coerce_list(updates.get("timeline_updates")),
-        "foreshadowing_updates": _coerce_list(updates.get("foreshadowing_updates")),
-        "chapter_summary": _coerce_string(updates.get("chapter_summary")),
-        "chapter_no": chapter_no,
-    }
-
-
-def _normalize_review(review: dict) -> dict:
-    if not isinstance(review, dict):
-        raise ValueError("Review payload must be a JSON object.")
-
-    status = _coerce_string(review.get("status")).lower()
-    if status not in {"pass", "revise", "blocked"}:
-        raise ValueError("Review status must be one of: pass, revise, blocked.")
-
-    consistency_checks = review.get("consistency_checks")
-    if not isinstance(consistency_checks, dict):
-        raise ValueError("Review field 'consistency_checks' must be an object.")
-
-    strengths = review.get("strengths", [])
-    issues = review.get("issues", [])
-    if not isinstance(strengths, list) or not all(isinstance(item, str) for item in strengths):
-        raise ValueError("Review field 'strengths' must be a list of strings.")
-    if not isinstance(issues, list) or not all(isinstance(item, str) for item in issues):
-        raise ValueError("Review field 'issues' must be a list of strings.")
-
-    return {
-        "status": status,
-        "summary": _coerce_string(review.get("summary")),
-        "strengths": [_coerce_string(item) for item in strengths if _coerce_string(item)],
-        "issues": [_coerce_string(item) for item in issues if _coerce_string(item)],
-        "consistency_checks": {
-            "characters": _coerce_string(consistency_checks.get("characters")),
-            "world": _coerce_string(consistency_checks.get("world")),
-            "timeline": _coerce_string(consistency_checks.get("timeline")),
-            "foreshadowing": _coerce_string(consistency_checks.get("foreshadowing")),
-        },
-        "pacing": _coerce_string(review.get("pacing")),
-        "next_action": _coerce_string(review.get("next_action")),
-    }
-
-
-def _format_review_markdown(review: dict) -> str:
     strengths = "\n".join([f"- {item}" for item in review["strengths"]]) or "- 无"
     issues = "\n".join([f"- {item}" for item in review["issues"]]) or "- 无"
 
@@ -258,7 +225,7 @@ def write_chapter(
     project_name: str,
     chapter_no: int,
     chapter_outline: str,
-    word_count: str = "2500-3500"
+    word_count: str = "2000-2500"
 ) -> str:
     memory = load_memory(project_name)
     prompt = write_chapter_prompt(memory, chapter_outline, word_count, _build_rules_text(project_name, "write"))
@@ -278,7 +245,13 @@ def update_memory_from_chapter(
     result = call_llm(prompt)
 
     try:
-        updates = _normalize_memory_updates(_extract_json_object(result), chapter_no)
+        updates = validate_memory_update_result(_extract_json_object(result), chapter_no)
+    except ValidationError as exc:
+        return json.dumps({
+            "status": "rejected",
+            "reason": format_schema_validation_error(exc),
+            "raw_response": result,
+        }, ensure_ascii=False, indent=2)
     except Exception as exc:
         return json.dumps({
             "status": "rejected",
@@ -286,10 +259,12 @@ def update_memory_from_chapter(
             "raw_response": result,
         }, ensure_ascii=False, indent=2)
 
-    memory["world"].extend(updates["world_updates"])
-    memory["characters"].extend(updates["new_characters"])
-    memory["timeline"].extend(updates["timeline_updates"])
-    memory["foreshadowing"].extend(updates["foreshadowing_updates"])
+    update_data = updates.model_dump()
+
+    memory["world"].extend(update_data["world_updates"])
+    memory["characters"].extend(update_data["new_characters"])
+    memory["timeline"].extend(update_data["timeline_updates"])
+    memory["foreshadowing"].extend(update_data["foreshadowing_updates"])
     memory["world"] = _dedupe_list_items(memory["world"])
     memory["characters"] = _dedupe_list_items(memory["characters"])
     memory["timeline"] = _dedupe_list_items(memory["timeline"])
@@ -300,14 +275,14 @@ def update_memory_from_chapter(
         if not isinstance(item, dict) or item.get("chapter_no") != chapter_no
     ]
     memory["chapter_summaries"].append({
-        "chapter_no": updates["chapter_no"],
-        "summary": updates["chapter_summary"]
+        "chapter_no": update_data["chapter_no"],
+        "summary": update_data["chapter_summary"]
     })
 
     save_memory(project_name, memory)
     return json.dumps({
         "status": "accepted",
-        "applied_updates": updates,
+        "applied_updates": update_data,
     }, ensure_ascii=False, indent=2)
 
 
@@ -318,29 +293,36 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
     result = call_llm(prompt)
 
     try:
-        review = _normalize_review(_extract_json_object(result))
-    except Exception as exc:
-        fallback_review = {
-            "status": "blocked",
-            "summary": f"审阅结果解析失败：{exc}",
-            "strengths": [],
-            "issues": ["模型未按要求返回合法 JSON 审阅结果。"],
-            "consistency_checks": {
-                "characters": "未知",
-                "world": "未知",
-                "timeline": "未知",
-                "foreshadowing": "未知",
-            },
-            "pacing": "未知",
-            "next_action": "检查原始审阅结果并重新生成。",
-        }
+        review = validate_review_result(_extract_json_object(result))
+    except ValidationError as exc:
+        fallback_review = ReviewResult(
+            status="blocked",
+            summary=f"审阅结果解析失败：{format_schema_validation_error(exc)}",
+            strengths=[],
+            issues=["模型未按要求返回合法 Schema 的审阅结果。"],
+            pacing="未知",
+            next_action="检查原始审阅结果并重新生成。",
+        )
         markdown = _format_review_markdown(fallback_review) + f"\n\n## Raw Response\n\n```text\n{result}\n```"
-        save_review_json(project_name, chapter_no, fallback_review)
+        save_review_json(project_name, chapter_no, fallback_review.model_dump())
+        save_review(project_name, chapter_no, markdown)
+        return markdown
+    except Exception as exc:
+        fallback_review = ReviewResult(
+            status="blocked",
+            summary=f"审阅结果解析失败：{exc}",
+            strengths=[],
+            issues=["模型未按要求返回合法 JSON 审阅结果。"],
+            pacing="未知",
+            next_action="检查原始审阅结果并重新生成。",
+        )
+        markdown = _format_review_markdown(fallback_review) + f"\n\n## Raw Response\n\n```text\n{result}\n```"
+        save_review_json(project_name, chapter_no, fallback_review.model_dump())
         save_review(project_name, chapter_no, markdown)
         return markdown
 
     markdown = _format_review_markdown(review)
-    save_review_json(project_name, chapter_no, review)
+    save_review_json(project_name, chapter_no, review.model_dump())
     save_review(project_name, chapter_no, markdown)
     return markdown
 
@@ -359,11 +341,77 @@ def compact_memory(project_name: str) -> dict:
         return {"status": "rejected", "reason": str(exc), "raw_response": result}
 
 
+def _run_analysis(
+    prompt: str,
+    empty_error: str,
+    schema,
+    renderer,
+) -> str:
+    payload = _call_json_llm(prompt, empty_error)
+    try:
+        result = schema.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Analysis schema validation failed: {format_schema_validation_error(exc)}") from exc
+    return renderer(result)
+
+
+def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> str:
+    memory = load_memory(project_name)
+    prompt = character_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    result = _run_analysis(
+        prompt,
+        "LLM returned empty character analysis.",
+        CharacterAnalysisResult,
+        render_character_analysis_markdown,
+    )
+    save_analysis_report(project_name, "characters", chapter_no, result)
+    return result
+
+
+def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> str:
+    memory = load_memory(project_name)
+    prompt = timeline_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    result = _run_analysis(
+        prompt,
+        "LLM returned empty timeline analysis.",
+        TimelineAnalysisResult,
+        render_timeline_analysis_markdown,
+    )
+    save_analysis_report(project_name, "timeline", chapter_no, result)
+    return result
+
+
+def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> str:
+    memory = load_memory(project_name)
+    prompt = foreshadowing_analysis_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    result = _run_analysis(
+        prompt,
+        "LLM returned empty foreshadowing analysis.",
+        ForeshadowingAnalysisResult,
+        render_foreshadowing_analysis_markdown,
+    )
+    save_analysis_report(project_name, "foreshadowing", chapter_no, result)
+    return result
+
+
+def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> str:
+    memory = load_memory(project_name)
+    prompt = consistency_check_prompt(memory, chapter, _build_rules_text(project_name, "review"))
+    result = _run_analysis(
+        prompt,
+        "LLM returned empty consistency check.",
+        ConsistencyAnalysisResult,
+        render_consistency_analysis_markdown,
+    )
+    save_analysis_report(project_name, "consistency", chapter_no, result)
+    return result
+
+
 def pipeline_plan_write_review_update(
     project_name: str,
     chapter_no: int,
     user_requirement: str,
-    word_count: str = "2500-3500"
+    word_count: str = "2000-2500"
 ) -> dict:
     result = {
         "chapter_outline": None,

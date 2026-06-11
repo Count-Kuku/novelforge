@@ -220,6 +220,20 @@ def load_review_json(project_name: str, chapter_no: int) -> dict | None:
         return None
 
 
+def save_analysis_report(project_name: str, analysis_type: str, chapter_no: int, content: str):
+    path = project_path(project_name) / "analysis"
+    path.mkdir(exist_ok=True)
+    file = path / f"{analysis_type}_chapter_{chapter_no:03d}.md"
+    file.write_text(content, encoding="utf-8")
+
+
+def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int) -> str:
+    file = project_path(project_name) / "analysis" / f"{analysis_type}_chapter_{chapter_no:03d}.md"
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
 def chapter_count(project_name: str) -> int:
     chapters_dir = project_path(project_name) / "chapters"
     if not chapters_dir.exists():

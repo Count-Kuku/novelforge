@@ -42,6 +42,9 @@ Current status:
 * Configurable recent summary count (default 5)
 * Layered prompt rules (global + project scope)
 * In-app rule management and requirement capture
+* Character/timeline/foreshadowing/consistency analysis
+* Persistent analysis report storage
+* Pydantic schema validation for core LLM outputs
 
 ---
 
@@ -111,6 +114,8 @@ novelforge/
 
 ├── memory.py
 
+├── schemas.py
+
 ├── prompts.py
 
 ├── skills.py
@@ -142,7 +147,9 @@ novelforge/
 
         ├── chapters/
 
-        └── reviews/
+        ├── reviews/
+
+        └── analysis/
 ```
 
 ---
@@ -160,6 +167,7 @@ Responsibilities:
 * Displaying outputs
 * Calling skills
 * Managing UI state
+* Consuming structured review/update results produced by the schema layer
 
 UI features:
 
@@ -170,6 +178,8 @@ UI features:
 * One-click memory compaction button
 * Rule center for managing global/project prompt constraints
 * Quick requirement capture with selectable target scope
+* Dedicated analysis page for consistency / character / timeline / foreshadowing checks
+* Review and analysis result refresh via Streamlit session state synchronization
 
 Business logic should remain minimal.
 
@@ -236,10 +246,33 @@ Responsibilities:
 * Saving chapters
 * Loading reviews
 * Saving reviews
+* Loading analysis reports
+* Saving analysis reports
 * Fetching recent chapter summaries (configurable limit, default 5)
 * Counting total written chapters
 
 No LLM logic should exist here.
+
+---
+
+## schemas.py
+
+Pydantic schema layer.
+
+Responsibilities:
+
+* Define machine-readable output contracts for LLM steps
+* Validate review payloads
+* Validate memory update payloads
+* Define structured analysis result models
+* Convert validated analysis objects into Markdown for UI/storage
+* Centralize schema error formatting
+
+Design purpose:
+
+* Move from ad-hoc JSON parsing to schema-first validation
+* Provide stable typed data for future retrieval/workflow/evaluation upgrades
+* Allow tolerant input normalization where LLMs return object-shaped list items instead of plain strings
 
 ---
 
@@ -253,6 +286,10 @@ Responsibilities:
 * Chapter outline prompts
 * Chapter writing prompts (supports configurable word count)
 * Chapter review prompts
+* Character analysis prompts
+* Timeline analysis prompts
+* Foreshadowing analysis prompts
+* Consistency check prompts
 * Memory update prompts
 * Memory compaction prompts
 * Formatting layered rule blocks for prompt injection
@@ -260,8 +297,9 @@ Responsibilities:
 Current prompt design notes:
 
 * Chapter review prompt requests strict JSON for later workflow automation
+* Analysis prompts request strict JSON, then the schema layer renders validated results into Markdown
 * Memory update prompt requests strict JSON for safer persistence
-* Chapter writing prompt accepts `word_count` parameter (default 2500-3500)
+* Chapter writing prompt accepts `word_count` parameter (default 2000-2500)
 * Memory compaction prompt compresses old character/world/timeline/foreshadowing entries to control prompt length
 * All major generation prompts can receive layered rule text assembled from global and project storage
 
@@ -290,8 +328,9 @@ Responsibilities:
 
 Current skill design notes:
 
-* Review results are normalized into structured status and saved as Markdown reports
-* Memory updates are validated before being written into project storage
+* Review results are validated through Pydantic schemas before persistence
+* Analysis skills validate JSON through Pydantic schemas, normalize object-shaped list items into strings when needed, then render Markdown reports under the project `analysis/` directory
+* Memory updates are validated through Pydantic schemas before being written into project storage
 * All LLM-calling functions check for empty responses and raise explicit errors
 * `pipeline_plan_write_review_update` executes steps independently — if one fails,
   remaining steps are skipped and partial results are still returned
@@ -355,6 +394,8 @@ If JSON validation fails:
 ↓
 return rejected result without modifying memory.json
 
+Validation is performed through `schemas.py`.
+
 ---
 
 Chapter Review
@@ -374,6 +415,8 @@ structured review status
 reviews/chapter_xxx.md
 ↓
 reviews/chapter_xxx.json
+
+Validation is performed through `schemas.py` before save.
 
 ---
 
@@ -423,6 +466,15 @@ Stores chapter content.
 reviews/
 
 Stores review results.
+
+analysis/
+
+Stores consistency, character, timeline, and foreshadowing analysis reports.
+
+Note:
+
+* Analysis reports are stored as Markdown for human reading
+* Their source LLM outputs are now expected to conform to Pydantic-backed JSON schemas before rendering
 
 global_rules.json
 
@@ -505,6 +557,10 @@ The LLM layer remains OpenAI-compatible while supporting configuration-based swi
 
 The UI now supports persistent writing rules at both global and project scope. Rules can be saved by capability and are automatically injected into matching prompts.
 
+7. Schema-first output validation
+
+Core LLM outputs now flow through a dedicated Pydantic schema layer. This reduces ad-hoc parsing logic and prepares the project for typed retrieval, workflow state, and evaluation pipelines.
+
 ---
 
 ## V1.1
@@ -536,6 +592,11 @@ Current implementation status:
 * Implemented: form-based memory editing (non-JSON users)
 * Implemented: persistent global/project rule storage
 * Implemented: in-app rule center and quick requirement capture
+* Implemented: chapter-level consistency / character / timeline / foreshadowing analysis
+* Implemented: persistent Markdown analysis reports under project storage
+* Implemented: review page result refresh fix for Streamlit session state behavior
+* Implemented: `schemas.py` Pydantic schema layer for review, memory update, and analysis outputs
+* Implemented: schema-validated JSON-to-Markdown rendering pipeline for analysis results
 
 ---
 
@@ -627,6 +688,8 @@ Metrics:
 5. Model changes should happen only in llm.py
 
 6. All generated content should be persistable
+
+6.5. Structured LLM outputs should be defined in `schemas.py` before adding custom parsing logic
 
 7. Maintain backward compatibility with existing project data
 

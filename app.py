@@ -3,6 +3,7 @@ import json
 import streamlit as st
 
 from memory import (
+    load_analysis_report,
     load_global_rules,
     list_projects,
     load_chapter,
@@ -20,10 +21,14 @@ from memory import (
     save_project_rules,
 )
 from skills import (
+    analyze_characters,
+    analyze_foreshadowing,
+    analyze_timeline,
     compact_memory,
     generate_chapter_outline,
     generate_outline,
     review_chapter,
+    run_consistency_check,
     pipeline_plan_write_review_update,
     save_rule_text,
     update_memory_from_chapter,
@@ -266,8 +271,8 @@ def render_chapter_page(project_name: str):
     )
 
     word_count = st.text_input(
-        "目标字数（如 2500-3500）",
-        value="2500-3500"
+        "目标字数（如 2000-2500）",
+        value="2000-2500"
     )
 
     if st.button("写正文"):
@@ -294,6 +299,9 @@ def render_review_page(project_name: str):
 
     chapter_no = st.number_input("章节编号", min_value=1, value=1, key="review_chapter_no")
     existing_chapter = load_chapter(project_name, chapter_no)
+    review_text_key = f"review_result_text_{chapter_no}"
+    chapter_text_key = f"review_chapter_text_{chapter_no}"
+
     existing_review = load_review(project_name, chapter_no)
     existing_review_json = load_review_json(project_name, chapter_no) or {}
 
@@ -301,29 +309,36 @@ def render_review_page(project_name: str):
         "待审阅正文",
         value=existing_chapter,
         height=450,
-        key=f"review_chapter_text_{chapter_no}"
+        key=chapter_text_key
     )
 
     if st.button("生成审阅意见"):
-        review = review_chapter(project_name, chapter_no, chapter_text)
-        st.session_state[f"review_{chapter_no}"] = review
+        try:
+            review = review_chapter(project_name, chapter_no, chapter_text)
+            st.session_state[f"review_{chapter_no}"] = review
+            st.session_state[review_text_key] = review
+            st.rerun()
+        except Exception as exc:
+            st.error(f"生成审阅失败：{exc}")
 
     review_text = st.text_area(
         "审阅结果",
         value=st.session_state.get(f"review_{chapter_no}", existing_review),
         height=450,
-        key=f"review_result_text_{chapter_no}"
+        key=review_text_key
     )
 
     if review_text:
         st.markdown(review_text)
 
-    if existing_review_json:
+    latest_review_json = load_review_json(project_name, chapter_no) or existing_review_json
+
+    if latest_review_json:
         st.caption("结构化审阅状态")
         cols = st.columns(3)
-        cols[0].metric("Status", existing_review_json.get("status", "-"))
-        cols[1].metric("Issues", len(existing_review_json.get("issues", [])))
-        cols[2].metric("Strengths", len(existing_review_json.get("strengths", [])))
+        cols[0].metric("Status", latest_review_json.get("status", "-"))
+        cols[1].metric("Issues", len(latest_review_json.get("issues", [])))
+        cols[2].metric("Strengths", len(latest_review_json.get("strengths", [])))
 
 
 def render_project_files_page(project_name: str):
@@ -410,6 +425,58 @@ def render_pipeline_page(project_name: str):
             st.code(json.dumps(result.get("memory_update_result", {}), ensure_ascii=False, indent=2), language="json")
 
 
+def render_analysis_page(project_name: str):
+    st.subheader("一致性分析")
+
+    chapter_no = st.number_input("章节编号", min_value=1, value=1, key="analysis_chapter_no")
+    existing_chapter = load_chapter(project_name, chapter_no)
+    chapter_text_key = f"analysis_chapter_text_{chapter_no}"
+    chapter_text = st.text_area(
+        "待分析正文",
+        value=existing_chapter,
+        height=400,
+        key=chapter_text_key
+    )
+
+    analysis_options = {
+        "consistency": ("总一致性检查", run_consistency_check),
+        "characters": ("角色分析", analyze_characters),
+        "timeline": ("时间线分析", analyze_timeline),
+        "foreshadowing": ("伏笔分析", analyze_foreshadowing),
+    }
+
+    selected_type = st.selectbox(
+        "分析类型",
+        options=list(analysis_options.keys()),
+        format_func=lambda key: analysis_options[key][0],
+        key="analysis_type"
+    )
+
+    report_text_key = f"analysis_result_text_{selected_type}_{chapter_no}"
+    existing_report = load_analysis_report(project_name, selected_type, chapter_no)
+
+    if st.button("执行分析"):
+        try:
+            label, handler = analysis_options[selected_type]
+            with st.spinner(f"正在生成{label}..."):
+                report = handler(project_name, chapter_no, chapter_text)
+            st.session_state[f"analysis_{selected_type}_{chapter_no}"] = report
+            st.session_state[report_text_key] = report
+            st.rerun()
+        except Exception as exc:
+            st.error(f"执行分析失败：{exc}")
+
+    report_text = st.text_area(
+        "分析结果",
+        value=st.session_state.get(f"analysis_{selected_type}_{chapter_no}", existing_report),
+        height=450,
+        key=report_text_key
+    )
+
+    if report_text:
+        st.markdown(report_text)
+
+
 st.set_page_config(page_title="NovelForge", layout="wide")
 st.title("NovelForge：同人小说 Agent 工作台")
 
@@ -421,7 +488,7 @@ st.caption(f"当前项目：`{project_name}`")
 
 page = st.sidebar.radio(
     "功能",
-    ["设定库", "交互规则", "生成大纲", "生成细纲", "写章节", "章节审阅", "一键流水线", "文件预览"]
+    ["设定库", "交互规则", "生成大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
 )
 
 if page == "设定库":
@@ -436,6 +503,8 @@ elif page == "写章节":
     render_chapter_page(project_name)
 elif page == "章节审阅":
     render_review_page(project_name)
+elif page == "一致性分析":
+    render_analysis_page(project_name)
 elif page == "一键流水线":
     render_pipeline_page(project_name)
 elif page == "文件预览":

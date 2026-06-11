@@ -223,3 +223,124 @@ def review_chapter_prompt(
 3. `status` 只能是 `pass`、`revise`、`blocked` 之一
 4. `strengths` 和 `issues` 必须是字符串数组
 """
+
+
+def character_analysis_prompt(memory: dict, chapter: str, rules_text: str = "当前无额外规则。") -> str:
+    return f"""
+你是角色一致性分析 Agent。
+
+规则约束：
+{rules_text}
+
+当前设定：
+{memory}
+
+章节正文：
+{chapter}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "title": "角色分析",
+  "character_overview": [],
+  "consistency_findings": [],
+  "relationship_progression": [],
+  "issues": [],
+  "recommendations": []
+}}
+
+要求：
+1. 优先核对角色性格、能力、目标、关系是否前后一致
+2. 如果没有明显问题，要明确说明通过项
+3. 建议必须具体到可修改的写法或情节处理
+"""
+
+
+def timeline_analysis_prompt(memory: dict, chapter: str, rules_text: str = "当前无额外规则。") -> str:
+    return f"""
+你是时间线一致性分析 Agent。
+
+规则约束：
+{rules_text}
+
+当前设定：
+{memory}
+
+章节正文：
+{chapter}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "title": "时间线分析",
+  "key_events": [],
+  "timeline_alignment": [],
+  "contradictions": [],
+  "pacing_assessment": [],
+  "recommendations": []
+}}
+
+要求：
+1. 优先识别事件先后、因果衔接、时间跨度是否合理
+2. 如果时间信息不足，也要指出缺口
+3. 建议要尽量具体
+"""
+
+
+def foreshadowing_analysis_prompt(memory: dict, chapter: str, rules_text: str = "当前无额外规则。") -> str:
+    return f"""
+你是伏笔分析 Agent。
+
+规则约束：
+{rules_text}
+
+当前设定：
+{memory}
+
+章节正文：
+{chapter}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "title": "伏笔分析",
+  "new_foreshadowing": [],
+  "callbacks_and_payoffs": [],
+  "strength_assessment": [],
+  "issues": [],
+  "recommendations": []
+}}
+
+要求：
+1. 说明伏笔是否自然、是否过于直白或过弱
+2. 指出哪些已有伏笔被延续，哪些被遗忘
+3. 没有明显伏笔时要明确说明
+"""
+
+
+def consistency_check_prompt(memory: dict, chapter: str, rules_text: str = "当前无额外规则。") -> str:
+    return f"""
+你是长篇小说一致性审校 Agent。
+
+规则约束：
+{rules_text}
+
+当前设定：
+{memory}
+
+章节正文：
+{chapter}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "title": "一致性总检查",
+  "overall_conclusion": "",
+  "character_consistency": [],
+  "world_consistency": [],
+  "timeline_consistency": [],
+  "foreshadowing_and_setup": [],
+  "priority_fixes": []
+}}
+
+要求：
+1. 以问题定位为主，但也要说明没有问题的部分
+2. 优先修改项按严重程度排序
+3. 结论尽量可执行，避免空泛评价
+"""
