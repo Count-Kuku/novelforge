@@ -40,6 +40,8 @@ Current status:
 * Memory compaction for long-running projects
 * Pipeline with per-step error isolation and partial result recovery
 * Configurable recent summary count (default 5)
+* Layered prompt rules (global + project scope)
+* In-app rule management and requirement capture
 
 ---
 
@@ -93,6 +95,9 @@ Memory Layer
 (memory.py)
 ↓
 Project Storage
+↓
+Prompt Rules
+(global + project scoped)
 
 ---
 
@@ -121,11 +126,15 @@ novelforge/
 └── data/
 
 ```
+├── global_rules.json
+
 └── projects/
 
     └── {project_name}/
 
         ├── memory.json
+
+        ├── rules.json
 
         ├── outline.md
 
@@ -159,6 +168,8 @@ UI features:
 * Word count configuration per chapter
 * Pipeline page shows per-step success/error status with partial results
 * One-click memory compaction button
+* Rule center for managing global/project prompt constraints
+* Quick requirement capture with selectable target scope
 
 Business logic should remain minimal.
 
@@ -213,6 +224,10 @@ Responsibilities:
 * Project creation
 * Loading memory
 * Saving memory
+* Loading global rules
+* Saving global rules
+* Loading project rules
+* Saving project rules
 * Loading outlines
 * Saving outlines
 * Loading chapter outlines
@@ -240,6 +255,7 @@ Responsibilities:
 * Chapter review prompts
 * Memory update prompts
 * Memory compaction prompts
+* Formatting layered rule blocks for prompt injection
 
 Current prompt design notes:
 
@@ -247,6 +263,7 @@ Current prompt design notes:
 * Memory update prompt requests strict JSON for safer persistence
 * Chapter writing prompt accepts `word_count` parameter (default 2500-3500)
 * Memory compaction prompt compresses old character/world/timeline/foreshadowing entries to control prompt length
+* All major generation prompts can receive layered rule text assembled from global and project storage
 
 Prompt engineering should be isolated here.
 
@@ -264,6 +281,8 @@ Responsibilities:
 * Review chapter
 * Update memory
 * Compact memory (compress old entries to control prompt length)
+* Merge layered rules into prompts before LLM calls
+* Save user requirements into global or project rule storage
 * Consistency check
 * Character analysis
 * Timeline analysis
@@ -276,6 +295,7 @@ Current skill design notes:
 * All LLM-calling functions check for empty responses and raise explicit errors
 * `pipeline_plan_write_review_update` executes steps independently — if one fails,
   remaining steps are skipped and partial results are still returned
+* Rule injection order is: global common rules -> project common rules -> global scoped rules -> project scoped rules
 
 ---
 
@@ -284,6 +304,8 @@ Current skill design notes:
 Outline Generation
 
 User Idea
+ +
+Applicable Rules
 ↓
 generate_outline
 ↓
@@ -296,6 +318,8 @@ Chapter Planning
 Outline
 
 Recent Chapter Summaries
+ +
+Applicable Rules
 ↓
 generate_chapter_outline
 ↓
@@ -308,6 +332,8 @@ Chapter Writing
 Chapter Outline
 +
 Memory
+ +
+Applicable Rules
 ↓
 write_chapter
 ↓
@@ -318,6 +344,8 @@ chapters/chapter_xxx.md
 Memory Update
 
 Chapter
+ +
+Applicable Rules
 ↓
 update_memory_from_chapter
 ↓
@@ -336,6 +364,8 @@ Chapter Outline
 Chapter
 +
 Memory
+ +
+Applicable Rules
 ↓
 review_chapter
 ↓
@@ -367,6 +397,17 @@ Stores:
 * foreshadowing
 * chapter summaries
 
+rules.json
+
+Stores project-scoped prompt rules by capability:
+
+* all
+* outline
+* chapter_outline
+* write
+* review
+* memory_update
+
 outline.md
 
 Stores the global story outline.
@@ -382,6 +423,32 @@ Stores chapter content.
 reviews/
 
 Stores review results.
+
+global_rules.json
+
+Stored under `data/` and shared across all projects.
+
+---
+
+# Rule Structure
+
+Current rule schema:
+
+{
+"all": [],
+"outline": [],
+"chapter_outline": [],
+"write": [],
+"review": [],
+"memory_update": []
+}
+
+Usage notes:
+
+* `all` applies to every generation step
+* Other fields apply only to their matching capability
+* Global rules are loaded from `data/global_rules.json`
+* Project rules are loaded from `data/projects/{project_name}/rules.json`
 
 ---
 
@@ -434,6 +501,10 @@ The UI now supports a one-click pipeline (Plan → Write → Review → Update M
 
 The LLM layer remains OpenAI-compatible while supporting configuration-based switching. Per-call temperature and system message are now available.
 
+6. Layered rule management
+
+The UI now supports persistent writing rules at both global and project scope. Rules can be saved by capability and are automatically injected into matching prompts.
+
 ---
 
 ## V1.1
@@ -463,6 +534,8 @@ Current implementation status:
 * Implemented: memory compaction for long-running projects
 * Implemented: per-step error isolation in pipeline
 * Implemented: form-based memory editing (non-JSON users)
+* Implemented: persistent global/project rule storage
+* Implemented: in-app rule center and quick requirement capture
 
 ---
 
@@ -562,6 +635,10 @@ Metrics:
 9. Memory updates should fail closed when structured output validation fails
 
 10. Review results should remain machine-readable before being formatted for human reading
+
+11. Reusable long-term user requirements should be stored as layered rules instead of hardcoded prompt text in the UI
+
+12. Global rules and project rules must remain inspectable and editable from persistent storage
 
 ---
 

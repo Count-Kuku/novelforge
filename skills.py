@@ -2,6 +2,7 @@ import json
 import re
 from llm import call_llm
 from prompts import (
+    format_rules_for_prompt,
     outline_prompt,
     chapter_outline_prompt,
     write_chapter_prompt,
@@ -13,13 +14,17 @@ from memory import (
     chapter_count,
     get_recent_chapter_summaries,
     load_chapter_outline,
+    load_global_rules,
     load_memory,
     load_outline,
+    load_project_rules,
     load_review_json,
     save_chapter,
     save_chapter_outline,
+    save_global_rules,
     save_memory,
     save_outline,
+    save_project_rules,
     save_review,
     save_review_json,
 )
@@ -61,6 +66,69 @@ def _coerce_string(value) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _build_rules_text(project_name: str, scope: str) -> str:
+    global_rules = load_global_rules()
+    project_rules = load_project_rules(project_name)
+    return format_rules_for_prompt(global_rules, project_rules, scope)
+
+
+def _extract_rule_lines(text: str) -> list[str]:
+    candidates = []
+    for line in text.splitlines():
+        cleaned = line.strip().lstrip("-*	 ").strip()
+        if cleaned:
+            candidates.append(cleaned)
+
+    if not candidates and text.strip():
+        candidates = [segment.strip() for segment in re.split(r"[\n;；]+", text) if segment.strip()]
+
+    seen = set()
+    result = []
+    for item in candidates:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
+def save_rule_text(project_name: str, scope: str, target: str, rule_text: str) -> dict:
+    if target not in {"global", "project"}:
+        raise ValueError("Rule target must be 'global' or 'project'.")
+
+    rules = load_global_rules() if target == "global" else load_project_rules(project_name)
+    if scope not in rules:
+        raise ValueError(f"Unknown rule scope: {scope}")
+
+    new_rules = _extract_rule_lines(rule_text)
+    if not new_rules:
+        return {"status": "ignored", "reason": "empty_rule"}
+
+    existing = rules.get(scope, [])
+    merged = []
+    seen = set()
+    for item in existing + new_rules:
+        if item in seen:
+            continue
+        seen.add(item)
+        merged.append(item)
+
+    rules[scope] = merged
+
+    if target == "global":
+        save_global_rules(rules)
+    else:
+        save_project_rules(project_name, rules)
+
+    return {
+        "status": "saved",
+        "target": target,
+        "scope": scope,
+        "saved_rules": new_rules,
+        "total_rules": len(merged),
+    }
 
 
 def _normalize_memory_updates(updates: dict, chapter_no: int) -> dict:
@@ -157,7 +225,7 @@ Status: `{review['status']}`
 
 def generate_outline(project_name: str, user_idea: str) -> str:
     memory = load_memory(project_name)
-    prompt = outline_prompt(memory, user_idea)
+    prompt = outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline"))
     outline = call_llm(prompt)
     if not outline.strip():
         raise RuntimeError("LLM returned empty outline.")
@@ -178,6 +246,7 @@ def generate_chapter_outline(
         recent_summaries,
         chapter_no,
         user_requirement,
+        _build_rules_text(project_name, "chapter_outline"),
     )
     outline = call_llm(prompt)
     if not outline.strip():
@@ -192,7 +261,7 @@ def write_chapter(
     word_count: str = "2500-3500"
 ) -> str:
     memory = load_memory(project_name)
-    prompt = write_chapter_prompt(memory, chapter_outline, word_count)
+    prompt = write_chapter_prompt(memory, chapter_outline, word_count, _build_rules_text(project_name, "write"))
     chapter = call_llm(prompt)
     if not chapter.strip():
         raise RuntimeError("LLM returned empty chapter content.")
@@ -205,7 +274,7 @@ def update_memory_from_chapter(
     chapter: str
 ) -> str:
     memory = load_memory(project_name)
-    prompt = update_memory_prompt(memory, chapter)
+    prompt = update_memory_prompt(memory, chapter, _build_rules_text(project_name, "memory_update"))
     result = call_llm(prompt)
 
     try:
@@ -245,7 +314,7 @@ def update_memory_from_chapter(
 def review_chapter(project_name: str, chapter_no: int, chapter: str) -> str:
     memory = load_memory(project_name)
     chapter_outline = load_chapter_outline(project_name, chapter_no)
-    prompt = review_chapter_prompt(memory, chapter_outline, chapter)
+    prompt = review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review"))
     result = call_llm(prompt)
 
     try:

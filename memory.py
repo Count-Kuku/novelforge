@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 
 BASE_DIR = Path("data/projects")
+GLOBAL_RULES_PATH = Path("data/global_rules.json")
+RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "memory_update"]
 DEFAULT_MEMORY = {
     "title": "",
     "genre": "",
@@ -11,6 +13,26 @@ DEFAULT_MEMORY = {
     "foreshadowing": [],
     "chapter_summaries": []
 }
+
+
+def _default_rules() -> dict:
+    return {
+        "all": [],
+        "outline": [],
+        "chapter_outline": [],
+        "write": [],
+        "review": [],
+        "memory_update": [],
+    }
+
+
+def normalize_rules(rules: dict | None) -> dict:
+    normalized = _default_rules()
+    if isinstance(rules, dict):
+        for scope in RULE_SCOPES:
+            value = rules.get(scope, [])
+            normalized[scope] = [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
+    return normalized
 
 
 def project_path(project_name: str) -> Path:
@@ -63,6 +85,52 @@ def load_memory(project_name: str) -> dict:
 def save_memory(project_name: str, memory: dict):
     path = project_path(project_name) / "memory.json"
     normalized = normalize_memory(project_name, memory)
+    path.write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def load_global_rules() -> dict:
+    GLOBAL_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not GLOBAL_RULES_PATH.exists():
+        rules = normalize_rules(None)
+        save_global_rules(rules)
+        return rules
+
+    rules = json.loads(GLOBAL_RULES_PATH.read_text(encoding="utf-8"))
+    normalized = normalize_rules(rules)
+    if normalized != rules:
+        save_global_rules(normalized)
+    return normalized
+
+
+def save_global_rules(rules: dict):
+    GLOBAL_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    normalized = normalize_rules(rules)
+    GLOBAL_RULES_PATH.write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def load_project_rules(project_name: str) -> dict:
+    path = project_path(project_name) / "rules.json"
+    if not path.exists():
+        rules = normalize_rules(None)
+        save_project_rules(project_name, rules)
+        return rules
+
+    rules = json.loads(path.read_text(encoding="utf-8"))
+    normalized = normalize_rules(rules)
+    if normalized != rules:
+        save_project_rules(project_name, normalized)
+    return normalized
+
+
+def save_project_rules(project_name: str, rules: dict):
+    path = project_path(project_name) / "rules.json"
+    normalized = normalize_rules(rules)
     path.write_text(
         json.dumps(normalized, ensure_ascii=False, indent=2),
         encoding="utf-8"

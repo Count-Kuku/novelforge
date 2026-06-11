@@ -3,17 +3,21 @@ import json
 import streamlit as st
 
 from memory import (
+    load_global_rules,
     list_projects,
     load_chapter,
     load_chapter_outline,
     load_memory,
     load_outline,
+    load_project_rules,
     load_review,
     load_review_json,
     save_chapter,
     save_chapter_outline,
+    save_global_rules,
     save_memory,
     save_outline,
+    save_project_rules,
 )
 from skills import (
     compact_memory,
@@ -21,9 +25,74 @@ from skills import (
     generate_outline,
     review_chapter,
     pipeline_plan_write_review_update,
+    save_rule_text,
     update_memory_from_chapter,
     write_chapter,
 )
+
+
+RULE_SCOPE_OPTIONS = {
+    "all": "通用",
+    "outline": "全书大纲",
+    "chapter_outline": "章节细纲",
+    "write": "正文写作",
+    "review": "章节审阅",
+    "memory_update": "设定更新",
+}
+
+
+def _render_rule_editor(title: str, storage_key: str, rules: dict) -> dict:
+    st.subheader(title)
+    updated = {}
+    for scope, label in RULE_SCOPE_OPTIONS.items():
+        updated[scope] = [line.strip() for line in st.text_area(
+            f"{label}规则（每行一条）",
+            value="\n".join(rules.get(scope, [])),
+            height=120,
+            key=f"{storage_key}_{scope}"
+        ).split("\n") if line.strip()]
+    return updated
+
+
+def render_rules_page(project_name: str):
+    st.subheader("交互规则中心")
+    st.caption("将长期要求存成全局规则或项目规则，系统会在对应能力里自动注入这些约束。")
+
+    with st.expander("快速记录新要求", expanded=True):
+        rule_text = st.text_area("输入你的要求", height=140, key="rule_capture_text")
+        col1, col2 = st.columns(2)
+        scope_label = col1.selectbox("适用能力", options=list(RULE_SCOPE_OPTIONS.values()), key="rule_capture_scope")
+        target_label = col2.selectbox("保存位置", options=["项目规则", "全局规则"], key="rule_capture_target")
+
+        if st.button("保存要求为规则"):
+            scope = next(key for key, value in RULE_SCOPE_OPTIONS.items() if value == scope_label)
+            target = "project" if target_label == "项目规则" else "global"
+            try:
+                result = save_rule_text(project_name, scope, target, rule_text)
+                if result.get("status") == "saved":
+                    st.success(f"已保存到{target_label} / {scope_label}")
+                    st.rerun()
+                else:
+                    st.warning("未提取到有效规则。")
+            except Exception as exc:
+                st.error(f"保存失败：{exc}")
+
+    global_rules = load_global_rules()
+    project_rules = load_project_rules(project_name)
+
+    tab1, tab2 = st.tabs(["项目规则", "全局规则"])
+
+    with tab1:
+        updated_project_rules = _render_rule_editor(f"项目规则：{project_name}", "project_rules", project_rules)
+        if st.button("保存项目规则"):
+            save_project_rules(project_name, updated_project_rules)
+            st.success("项目规则已保存")
+
+    with tab2:
+        updated_global_rules = _render_rule_editor("全局规则", "global_rules", global_rules)
+        if st.button("保存全局规则"):
+            save_global_rules(updated_global_rules)
+            st.success("全局规则已保存")
 
 
 def init_project_state() -> str:
@@ -352,18 +421,20 @@ st.caption(f"当前项目：`{project_name}`")
 
 page = st.sidebar.radio(
     "功能",
-    ["设定库", "生成大纲", "生成细纲", "写章节", "章节审阅", "一键流水线", "文件预览"]
+    ["设定库", "交互规则", "生成大纲", "生成细纲", "写章节", "章节审阅", "一键流水线", "文件预览"]
 )
 
 if page == "设定库":
     render_memory_page(project_name, memory)
+elif page == "交互规则":
+    render_rules_page(project_name)
 elif page == "生成大纲":
     render_outline_page(project_name)
 elif page == "生成细纲":
     render_chapter_outline_page(project_name)
 elif page == "写章节":
     render_chapter_page(project_name)
-elif page == "章节審阅":
+elif page == "章节审阅":
     render_review_page(project_name)
 elif page == "一键流水线":
     render_pipeline_page(project_name)

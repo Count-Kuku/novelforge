@@ -1,6 +1,39 @@
-def outline_prompt(memory: dict, user_idea: str) -> str:
+RULE_LABELS = {
+    "all": "通用规则",
+    "outline": "大纲生成规则",
+    "chapter_outline": "章节细纲规则",
+    "write": "正文写作规则",
+    "review": "章节审阅规则",
+    "memory_update": "设定更新规则",
+}
+
+
+def format_rules_for_prompt(global_rules: dict, project_rules: dict, scope: str) -> str:
+    lines = []
+
+    for label, rules in [
+        ("全局通用规则", global_rules.get("all", [])),
+        ("项目通用规则", project_rules.get("all", [])),
+        (f"全局{RULE_LABELS.get(scope, scope)}", global_rules.get(scope, [])),
+        (f"项目{RULE_LABELS.get(scope, scope)}", project_rules.get(scope, [])),
+    ]:
+        cleaned = [str(item).strip() for item in rules if str(item).strip()]
+        if not cleaned:
+            continue
+        lines.append(f"{label}：")
+        lines.extend([f"- {item}" for item in cleaned])
+
+    if not lines:
+        return "当前无额外规则。"
+    return "\n".join(lines)
+
+
+def outline_prompt(memory: dict, user_idea: str, rules_text: str = "当前无额外规则。") -> str:
     return f"""
 你是一个网络小说主编，擅长同人小说、长篇规划、爽点设计。
+
+规则约束：
+{rules_text}
 
 当前小说设定：
 {memory}
@@ -23,6 +56,7 @@ def chapter_outline_prompt(
     recent_summaries: list[dict],
     chapter_no: int,
     user_requirement: str,
+    rules_text: str = "当前无额外规则。",
 ) -> str:
     recent_summary_text = "\n".join(
         [f"- 第{item.get('chapter_no', '?')}章：{item.get('summary', '')}" for item in recent_summaries]
@@ -30,6 +64,9 @@ def chapter_outline_prompt(
 
     return f"""
 你是章节策划 Agent。
+
+规则约束：
+{rules_text}
 
 小说设定：
 {memory}
@@ -62,9 +99,17 @@ def chapter_outline_prompt(
 5. 每个场景标注预计占用字数
 """
 
-def write_chapter_prompt(memory: dict, chapter_outline: str, word_count: str = "2500-3500") -> str:
+def write_chapter_prompt(
+    memory: dict,
+    chapter_outline: str,
+    word_count: str = "2500-3500",
+    rules_text: str = "当前无额外规则。"
+) -> str:
     return f"""
 你是网文写作 Agent。
+
+规则约束：
+{rules_text}
 
 必须遵守以下设定：
 {memory}
@@ -85,9 +130,12 @@ def write_chapter_prompt(memory: dict, chapter_outline: str, word_count: str = "
 8. 场景切换用空行分隔，不要用显式的场景标题或编号
 """
 
-def update_memory_prompt(memory: dict, chapter: str) -> str:
+def update_memory_prompt(memory: dict, chapter: str, rules_text: str = "当前无额外规则。") -> str:
     return f"""
 你是设定维护 Agent。
+
+规则约束：
+{rules_text}
 
 已有设定：
 {memory}
@@ -132,9 +180,17 @@ def compact_memory_prompt(memory: dict, chapter_count: int) -> str:
 """
 
 
-def review_chapter_prompt(memory: dict, chapter_outline: str, chapter: str) -> str:
+def review_chapter_prompt(
+    memory: dict,
+    chapter_outline: str,
+    chapter: str,
+    rules_text: str = "当前无额外规则。"
+) -> str:
     return f"""
 你是小说审稿 Agent。
+
+规则约束：
+{rules_text}
 
 当前设定：
 {memory}
