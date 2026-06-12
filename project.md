@@ -17,11 +17,20 @@ The project is designed as a learning platform for:
 
 ---
 
-# Current Version
+# Current Stage
 
-Version: V1
+NovelForge is no longer best described as "only V1".
 
-Current status:
+The roadmap labels `V1` through `V5` still describe the long-term evolution path, but the current codebase is more accurately described by implementation maturity:
+
+* `V1` core writing workspace: implemented
+* `V1.1` persistence, validation, and UI hardening: implemented
+* `V2` RAG foundation: largely implemented
+* `V3` workflow/state foundation for graph execution: partially implemented
+* `V4` multi-agent architecture: planned
+* `V5` evaluation system: planned
+
+Current practical status:
 
 * Project-based storage
 * Outline generation
@@ -45,11 +54,19 @@ Current status:
 * Character/timeline/foreshadowing/consistency analysis
 * Persistent analysis report storage
 * Pydantic schema validation for core LLM outputs
-* Retrieval document/chunk schema for future RAG workflows
+* Retrieval document/chunk schema for RAG workflows
 * Searchable project/external knowledge index with scoped retrieval
 * Hybrid retrieval with lexical + semantic scoring
+* Retrieval evidence grouping, authority weighting, conflict warnings, and reranking
 * Structured pasted-reference organization and single-page URL reference ingestion for canon/reference knowledge
 * Discussion-first planning support for full-story outline and chapter direction before formal generation
+* Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
+* Story-state oriented memory fields for canon mode, AU rules, relationships, and active constraints
+* Multi-turn planning discussion UI with continuously updated discussion conclusions
+* Project management workspace with project overview, rename/delete, and resource CRUD
+* IDE-style resource browser for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
+
+In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
 ---
 
@@ -192,6 +209,10 @@ Responsibilities:
 * Organizing pasted reference text and URL pages into structured retrieval-ready entries before ingestion
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
 * Listing and deleting imported external source files from the retrieval center, with automatic index rebuild after removal
+* Providing a project overview page with project-level statistics, rename, and delete operations
+* Managing project resources through an IDE-style browser with unified preview/edit/save/delete behavior
+* Supporting direct CRUD for outlines, chapter files, review artifacts, analysis artifacts, run snapshots, and external sources from the UI
+* Supporting batch cleanup for chapter bundles, run snapshots, and external sources
 
 UI features:
 
@@ -207,6 +228,7 @@ UI features:
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
+* Resource browser with left-side file navigation and right-side editor/detail panel
 
 Business logic should remain minimal.
 
@@ -768,91 +790,73 @@ Future versions may introduce:
 
 ---
 
-# Future Roadmap
+# Roadmap And Stage Status
 
-## Near-Term Design Improvements
+## Current Position
 
-The following design improvements are the most valuable next steps for the current architecture:
+NovelForge should currently be understood as:
 
-1. Stronger chapter planning context
+* a complete `V1` writing workspace
+* an implemented `V1.1` persistence and validation upgrade
+* a mostly implemented `V2` retrieval layer
+* a `V3` workflow system whose state model and persistence layer already exist, but whose future graph runtime is not yet fully adopted
 
-Chapter planning currently combines global outline, memory, and recent chapter summaries — this is already implemented and working.
+This section tracks both what has already landed and what remains before each roadmap stage can be considered complete.
 
-2. Structured review outputs
+## Near-Term Focus
 
-Chapter reviews now output structured status fields (pass/revise/blocked) in both Markdown and JSON format. The UI displays status metrics and issue/strength counts.
+The highest-value next steps are no longer the original V1 items; they are the remaining gaps after the current foundation work:
 
-3. Safer memory updates
+1. Mature the retrieval backend
 
-Memory update logic validates LLM JSON output strictly and rejects malformed updates. Validation covers field types and array element types.
+Current retrieval works with embeddings, hybrid scoring, reranking, observability, and structured ingestion. The next step is moving beyond file-based vector persistence toward a dedicated vector backend and stronger fact-level conflict handling.
 
-4. Pipeline automation
+2. Finish workflow runtime adoption
 
-The UI now supports a one-click pipeline (Plan → Write → Review → Update Memory) with per-step error isolation. If a step fails, partial results from earlier steps are preserved and displayed.
+The project already has explicit workflow state, structured step contracts, persisted run snapshots, and transition logs. The next step is to map this into a graph/runtime layer with first-class retry, branching, and resume behavior.
 
-5. Better model abstraction
+3. Strengthen planning and approval loops
 
-The LLM layer remains OpenAI-compatible while supporting configuration-based switching. Per-call temperature and system message are now available.
+Structured outline discussion and chapter discussion are already implemented. The next step is turning those discussions into clearer approval checkpoints and more reusable planning artifacts.
 
-6. Layered rule management
+4. Prepare for evaluation
 
-The UI now supports persistent writing rules at both global and project scope. Rules can be saved by capability and are automatically injected into matching prompts.
+Structured outputs, retrieval traces, and workflow state now make evaluation feasible. The next step is defining stable metrics and artifact collection so future automated evaluation can measure quality over time.
 
-7. Schema-first output validation
+---
 
-Core LLM outputs now flow through a dedicated Pydantic schema layer. This reduces ad-hoc parsing logic and prepares the project for typed retrieval, workflow state, and evaluation pipelines.
+## V1
 
-8. Retrieval-ready knowledge layer
+Core Writing Workspace
 
-The project now includes a retrieval document/chunk layer, external source ingestion, scoped context retrieval, and semantic vector storage. The system is designed so retrieval backends can evolve without changing prompt/business contracts.
+Status:
 
-9. Hybrid retrieval
+* Implemented
 
-The retrieval layer now combines lexical scoring and embedding similarity. This improves recall for canon/reference materials whose wording may differ from the current draft while preserving precise keyword matches for project-specific facts.
+Delivered capabilities:
 
-10. Retrieval observability
+* Project-based storage
+* Streamlit UI
+* Outline generation
+* Chapter outline generation
+* Chapter writing
+* Chapter review
+* Memory update
+* Model abstraction through an OpenAI-compatible interface
 
-The system now records and exposes the actual retrieval hits used by major generation steps. This makes RAG behavior inspectable, easier to debug, and much easier to learn from during prompt and retrieval tuning.
+Interpretation:
 
-11. Citation-aware retrieval outputs
-
-The system now attaches a compact supporting-sources section to review and analysis outputs. This is an explainability layer built on top of retrieval traces and makes it easier to understand why the system reached a specific diagnostic conclusion.
-
-12. Source hierarchy awareness
-
-Retrieval evidence is now grouped by `project`, `canon`, and `reference` scope before presentation. This makes it easier to reason about which conclusions are grounded in current project truth versus original-canon material or lower-priority reference notes.
-
-13. Authority-aware retrieval
-
-The retrieval layer now accepts source authority metadata such as `official`, `curated`, `community`, and `unknown`. Authority participates in retrieval weighting and is surfaced in evidence views so higher-trust sources can be distinguished from lower-trust references.
-
-14. Conflict-aware retrieval
-
-The system now derives lightweight potential-conflict warnings from retrieval hits. When project evidence overlaps on the same retrieval terms with canon or reference evidence, the output can surface this as a possible tension rather than silently blending all sources together.
-
-15. Structured conflict schema and reranking
-
-Potential conflicts are now represented as structured objects with severity and rationale fields. Retrieval results also pass through a lightweight reranking phase that rewards stronger semantic alignment, trusted authorities, and project-grounded evidence before final context selection.
-
-16. Controlled reference ingestion
-
-The system can now organize pasted reference text or a fetched single web page into structured retrieval entries such as character sheets, location sheets, timeline notes, canon events, and world rules before ingestion. This keeps external knowledge ingestion reviewable and consistent with the existing retrieval schema.
+* The original V1 goal is already achieved. NovelForge is already more than a prototype chat wrapper; it is a persistent project-oriented writing workspace.
 
 ---
 
 ## V1.1
 
-Persistence improvements
+Persistence, Validation, and UX Hardening
 
-Features:
+Status:
 
-* Auto-save generated outlines
-* Auto-save generated chapter outlines
-* Save and load chapter outlines
-* Save and load chapters
-* Save and load reviews
-* Better memory updates
-* Use outline and recent summaries during chapter planning
+* Implemented
 
 Current implementation status:
 
@@ -874,10 +878,47 @@ Current implementation status:
 * Implemented: review page result refresh fix for Streamlit session state behavior
 * Implemented: `schemas.py` Pydantic schema layer for review, memory update, and analysis outputs
 * Implemented: schema-validated JSON-to-Markdown rendering pipeline for analysis results
+* Implemented: unified workflow step result contract for outline / chapter outline / writing / review / memory update / pipeline
+* Implemented: unified workflow step result contract for consistency / character / timeline / foreshadowing analysis
+* Implemented: structured outline discussion before formal outline generation
+* Implemented: structured chapter discussion before formal chapter outline generation
+* Implemented: multi-turn outline discussion with assistant replies and continuously updated discussion summaries
+* Implemented: multi-turn chapter discussion with assistant replies and continuously updated discussion summaries
+* Implemented: project overview page and project rename/delete controls
+* Implemented: project resource CRUD for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
+* Implemented: IDE-style resource browser with unified edit/save/delete flows and batch cleanup controls
+
+Interpretation:
+
+* What was originally a persistence-improvement stage has effectively been completed and expanded into a schema-first, workflow-aware product hardening phase.
+
+---
+
+## V2
+
+RAG Integration
+
+Status:
+
+* Foundation largely implemented
+* Backend maturation still pending
+
+Features:
+
+* Embeddings
+* Vector storage
+* Semantic retrieval
+* Hybrid context selection
+* Retrieval observability
+* Authority-aware and conflict-aware evidence handling
+
+Current implementation status:
+
 * Implemented: retrieval document/chunk/index manifest schemas
 * Implemented: project/external source ingestion into retrieval storage
 * Implemented: lexical scoped retrieval with prompt injection across major skills
 * Implemented: in-app retrieval center for index rebuild, source management, and retrieval preview
+* Implemented: project-scoped embedding generation via `llm.py`
 * Implemented: embedding-backed `vectors.json` storage for semantic retrieval
 * Implemented: lexical / semantic / hybrid retrieval modes with score breakdown in UI
 * Implemented: source-aware smart chunking for structured records, Markdown sections, and long prose
@@ -889,38 +930,8 @@ Current implementation status:
 * Implemented: conflict-aware warnings in retrieval evidence views and diagnostic outputs
 * Implemented: structured conflict objects with severity and rationale
 * Implemented: lightweight retrieval reranking after initial lexical/semantic scoring
-* Implemented: unified workflow step result contract for outline / chapter outline / writing / review / memory update / pipeline
-* Implemented: unified workflow step result contract for consistency / character / timeline / foreshadowing analysis
 * Implemented: pasted reference organization into structured retrieval-ready entries
 * Implemented: single-page URL fetch and organization for controlled canon/reference ingestion
-* Implemented: structured outline discussion before formal outline generation
-* Implemented: structured chapter discussion before formal chapter outline generation
-
----
-
-## V2
-
-RAG Integration
-
-Features:
-
-* Embeddings
-* Vector database
-* Semantic retrieval
-* Context selection
-
-Current implementation status:
-
-* Implemented: project-scoped embedding generation via `llm.py`
-* Implemented: semantic vector persistence in `retrieval/vectors.json`
-* Implemented: hybrid retrieval over lexical and semantic scores
-* Implemented: source-aware chunking and typed external source ingestion
-* Implemented: retrieval hit observability across major workflow steps
-* Implemented: citation-style supporting sources for review and analysis outputs
-* Implemented: grouped source hierarchy display across retrieval evidence views
-* Implemented: authority-aware trust model for external-source ranking and inspection
-* Implemented: lightweight project-vs-external conflict detection in retrieval evidence
-* Implemented: conflict schema with severity/rationale and reranked final retrieval ordering
 * Pending: dedicated external vector database backend
 * Pending: deeper fact-level conflict resolution and recommendation logic
 
@@ -930,25 +941,38 @@ Possible technologies:
 * SQLite + embeddings
 * FAISS
 
+Interpretation:
+
+* `V2` should no longer be described as future-only. Most user-facing RAG behavior already exists; the main remaining work is backend robustness and deeper retrieval reasoning.
+
 ---
 
 ## V3
 
-LangGraph Workflow
+Workflow / LangGraph Preparation
+
+Status:
+
+* Foundation partially implemented
+* External graph runtime adoption pending
 
 Features:
 
 * State management
 * Workflow execution
 * Automatic chapter pipeline
+* Resume / replay / retry groundwork
 
-Current design direction:
+Current implementation status:
 
-* State-first workflow design before framework adoption
-* Explicit `ChapterPipelineState` schema for graph-ready node transitions
-* Structured `WorkflowError` records for future retries, branching, and resume behavior
-* Persisted pipeline run snapshots as the basis for future resume, replay, and workflow history tooling
-* Transition logs and typed workflow errors as the basis for future branching, retry policy, and resume UX
+* Implemented: one-click chapter pipeline across planning, writing, review, and memory update
+* Implemented: per-step error isolation with partial result recovery
+* Implemented: explicit `ChapterPipelineState`-style workflow object
+* Implemented: structured `WorkflowError` records with typed categories
+* Implemented: persisted pipeline run snapshots for later inspection
+* Implemented: transition logs and resumable workflow hints in the UI
+* Pending: full LangGraph or equivalent workflow runtime adoption
+* Pending: first-class branching, retry policy, and resume execution
 
 Workflow:
 
@@ -960,7 +984,9 @@ Review
 ↓
 Update Memory
 
----
+Interpretation:
+
+* The project already contains much of the design work that usually comes before LangGraph adoption. What remains is replacing the current manual orchestration with a dedicated workflow runtime when the added complexity becomes worthwhile.
 
 ## V4
 

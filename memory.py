@@ -7,10 +7,14 @@ RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "memory_u
 DEFAULT_MEMORY = {
     "title": "",
     "genre": "",
+    "canon_mode": "",
+    "au_rules": [],
     "world": [],
     "characters": [],
+    "relationships": [],
     "timeline": [],
     "foreshadowing": [],
+    "active_constraints": [],
     "chapter_summaries": []
 }
 
@@ -41,6 +45,18 @@ def project_path(project_name: str) -> Path:
     return path
 
 
+def create_project(project_name: str) -> str:
+    normalized_name = project_name.strip()
+    if not normalized_name:
+        raise ValueError("Project name cannot be empty.")
+
+    project_path(normalized_name)
+    load_memory(normalized_name)
+    load_project_rules(normalized_name)
+    retrieval_sources_path(normalized_name)
+    return normalized_name
+
+
 def list_projects() -> list[str]:
     BASE_DIR.mkdir(parents=True, exist_ok=True)
     return sorted(
@@ -56,13 +72,24 @@ def normalize_memory(project_name: str, memory: dict | None) -> dict:
 
     normalized["title"] = normalized.get("title") or project_name
 
-    for key in ["world", "characters", "timeline", "foreshadowing", "chapter_summaries"]:
+    for key in ["au_rules", "world", "characters", "relationships", "timeline", "foreshadowing", "active_constraints", "chapter_summaries"]:
         value = normalized.get(key)
         normalized[key] = value if isinstance(value, list) else []
 
     genre = normalized.get("genre", "")
     normalized["genre"] = genre if isinstance(genre, str) else str(genre)
+    canon_mode = normalized.get("canon_mode", "")
+    normalized["canon_mode"] = canon_mode if isinstance(canon_mode, str) else str(canon_mode)
     return normalized
+
+
+def sync_project_retrieval_assets(project_name: str):
+    try:
+        from retrieval import rebuild_retrieval_assets
+
+        rebuild_retrieval_assets(project_name, build_vectors=False)
+    except Exception:
+        pass
 
 
 def load_memory(project_name: str) -> dict:
@@ -89,6 +116,7 @@ def save_memory(project_name: str, memory: dict):
         json.dumps(normalized, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
+    sync_project_retrieval_assets(project_name)
 
 
 def load_global_rules() -> dict:
@@ -140,6 +168,7 @@ def save_project_rules(project_name: str, rules: dict):
 def save_outline(project_name: str, outline: str):
     path = project_path(project_name) / "outline.md"
     path.write_text(outline, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
 
 
 def load_outline(project_name: str) -> str:
@@ -154,6 +183,7 @@ def save_chapter_outline(project_name: str, chapter_no: int, outline: str):
     path.mkdir(exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.md"
     file.write_text(outline, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
 
 
 def load_chapter_outline(project_name: str, chapter_no: int) -> str:
@@ -168,6 +198,7 @@ def save_chapter(project_name: str, chapter_no: int, content: str):
     path.mkdir(exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.md"
     file.write_text(content, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
 
 
 def load_chapter(project_name: str, chapter_no: int) -> str:
@@ -182,6 +213,7 @@ def save_review(project_name: str, chapter_no: int, content: str):
     path.mkdir(exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.md"
     file.write_text(content, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
 
 
 def load_review(project_name: str, chapter_no: int) -> str:
@@ -225,6 +257,7 @@ def save_analysis_report(project_name: str, analysis_type: str, chapter_no: int,
     path.mkdir(exist_ok=True)
     file = path / f"{analysis_type}_chapter_{chapter_no:03d}.md"
     file.write_text(content, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
 
 
 def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int) -> str:

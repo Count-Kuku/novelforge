@@ -7,7 +7,9 @@ from llm import call_llm
 from pydantic import ValidationError
 from prompts import (
     discuss_chapter_prompt,
+    discuss_chapter_turn_prompt,
     discuss_outline_prompt,
+    discuss_outline_turn_prompt,
     organize_reference_prompt,
     character_analysis_prompt,
     consistency_check_prompt,
@@ -608,6 +610,96 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str) -
     ).model_dump()
 
 
+def discuss_outline_turn(
+    project_name: str,
+    user_idea: str,
+    messages: list[dict],
+    current_discussion: dict | None,
+    latest_user_message: str,
+) -> dict:
+    memory = load_memory(project_name)
+    prompt = discuss_outline_turn_prompt(
+        memory,
+        user_idea,
+        messages,
+        current_discussion,
+        latest_user_message,
+        _build_rules_text(project_name, "outline"),
+    )
+    payload = _call_json_llm(prompt, "LLM returned empty outline discussion turn result.")
+    assistant_message = str(payload.get("assistant_message", "") or "").strip()
+    discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
+
+    try:
+        result = OutlineDiscussionResult.model_validate(discussion_payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Outline discussion turn schema validation failed: {format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "discuss_outline_turn",
+        success=True,
+        status="completed",
+        data={
+            "assistant_message": assistant_message,
+            "discussion": result.model_dump(),
+            "report_markdown": render_discussion_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="OutlineDiscussionResult",
+            message="Outline discussion turn result validated.",
+        ),
+    ).model_dump()
+
+
+def discuss_chapter_turn(
+    project_name: str,
+    chapter_no: int,
+    user_requirement: str,
+    messages: list[dict],
+    current_discussion: dict | None,
+    latest_user_message: str,
+) -> dict:
+    memory = load_memory(project_name)
+    outline = load_outline(project_name)
+    recent_summaries = get_recent_chapter_summaries(project_name)
+    prompt = discuss_chapter_turn_prompt(
+        memory,
+        outline,
+        recent_summaries,
+        chapter_no,
+        user_requirement,
+        messages,
+        current_discussion,
+        latest_user_message,
+        _build_rules_text(project_name, "chapter_outline"),
+    )
+    payload = _call_json_llm(prompt, "LLM returned empty chapter discussion turn result.")
+    assistant_message = str(payload.get("assistant_message", "") or "").strip()
+    discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
+
+    try:
+        result = ChapterDiscussionResult.model_validate(discussion_payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Chapter discussion turn schema validation failed: {format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "discuss_chapter_turn",
+        success=True,
+        status="completed",
+        data={
+            "assistant_message": assistant_message,
+            "discussion": result.model_dump(),
+            "report_markdown": render_discussion_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="ChapterDiscussionResult",
+            message="Chapter discussion turn result validated.",
+        ),
+    ).model_dump()
+
+
 def _format_review_markdown(review: ReviewResult | dict) -> str:
     if isinstance(review, ReviewResult):
         review = review.model_dump()
@@ -653,7 +745,7 @@ def generate_outline(project_name: str, user_idea: str) -> dict:
     retrieval_context = _build_retrieval_context(
         project_name,
         user_idea,
-        allowed_source_types=["outline", "memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "external_source"],
+        allowed_source_types=["outline", "memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -692,8 +784,11 @@ def generate_chapter_outline(
             "chapter_outline",
             "memory_character",
             "memory_world",
+            "memory_au_rule",
+            "memory_relationship",
             "memory_timeline",
             "memory_foreshadowing",
+            "memory_active_constraint",
             "external_source",
         ],
         allowed_scopes=["project", "canon", "reference"],
@@ -737,8 +832,11 @@ def write_chapter(
             "chapter_content",
             "memory_character",
             "memory_world",
+            "memory_au_rule",
+            "memory_relationship",
             "memory_timeline",
             "memory_foreshadowing",
+            "memory_active_constraint",
             "review_issue",
             "analysis_consistency",
             "analysis_characters",
@@ -776,7 +874,7 @@ def update_memory_from_chapter(
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章设定更新 {chapter}",
-        allowed_source_types=["memory_character", "memory_world", "memory_timeline", "memory_foreshadowing", "chapter_summary", "external_source"],
+        allowed_source_types=["memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "chapter_summary", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -870,8 +968,11 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
             "chapter_content",
             "memory_character",
             "memory_world",
+            "memory_au_rule",
+            "memory_relationship",
             "memory_timeline",
             "memory_foreshadowing",
+            "memory_active_constraint",
             "review_issue",
             "review_timeline_check",
             "review_foreshadowing_check",
@@ -1074,7 +1175,7 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> dict
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章角色分析 {chapter}",
-        allowed_source_types=["chapter_summary", "chapter_content", "memory_character", "review_issue", "analysis_characters", "external_source"],
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_character", "memory_relationship", "memory_active_constraint", "review_issue", "analysis_characters", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1106,7 +1207,7 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> dict:
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章时间线分析 {chapter}",
-        allowed_source_types=["chapter_summary", "chapter_content", "memory_timeline", "review_timeline_check", "analysis_timeline", "external_source"],
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_timeline", "memory_active_constraint", "review_timeline_check", "analysis_timeline", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1138,7 +1239,7 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> d
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章伏笔分析 {chapter}",
-        allowed_source_types=["chapter_summary", "chapter_content", "memory_foreshadowing", "review_foreshadowing_check", "analysis_foreshadowing", "external_source"],
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_foreshadowing", "memory_active_constraint", "review_foreshadowing_check", "analysis_foreshadowing", "external_source"],
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1175,8 +1276,11 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> d
             "chapter_content",
             "memory_character",
             "memory_world",
+            "memory_au_rule",
+            "memory_relationship",
             "memory_timeline",
             "memory_foreshadowing",
+            "memory_active_constraint",
             "review_issue",
             "analysis_characters",
             "analysis_timeline",

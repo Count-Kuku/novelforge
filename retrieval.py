@@ -42,8 +42,11 @@ AUTHORITY_WEIGHTS = {
 STRUCTURED_SOURCE_TYPES = {
     "memory_character",
     "memory_world",
+    "memory_au_rule",
+    "memory_relationship",
     "memory_timeline",
     "memory_foreshadowing",
+    "memory_active_constraint",
     "chapter_summary",
     "review_summary",
     "review_issue",
@@ -235,6 +238,46 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
         if doc:
             documents.append(doc)
 
+    canon_mode = str(memory.get("canon_mode", "")).strip()
+    if canon_mode:
+        doc = _make_document(
+            project_name,
+            "memory_world",
+            "canon_mode",
+            "Canon Mode",
+            canon_mode,
+            tags=["canon_mode", "world"],
+            metadata={"memory_field": "canon_mode", "authority": "project"},
+        )
+        if doc:
+            documents.append(doc)
+
+    for index, item in enumerate(memory.get("au_rules", []), start=1):
+        doc = _make_document(
+            project_name,
+            "memory_au_rule",
+            str(index),
+            f"AU Rule {index}",
+            str(item),
+            tags=["au_rule"],
+            metadata={"memory_field": "au_rules", "authority": "project"},
+        )
+        if doc:
+            documents.append(doc)
+
+    for index, item in enumerate(memory.get("relationships", []), start=1):
+        doc = _make_document(
+            project_name,
+            "memory_relationship",
+            str(index),
+            f"Relationship {index}",
+            str(item),
+            tags=["relationship"],
+            metadata={"memory_field": "relationships", "authority": "project"},
+        )
+        if doc:
+            documents.append(doc)
+
     for field_name, source_type, tag in [
         ("world", "memory_world", "world"),
         ("timeline", "memory_timeline", "timeline"),
@@ -269,6 +312,19 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
             chapter_no=chapter_no if isinstance(chapter_no, int) else None,
             tags=["summary"],
             metadata={"memory_field": "chapter_summaries", "authority": "project"},
+        )
+        if doc:
+            documents.append(doc)
+
+    for index, item in enumerate(memory.get("active_constraints", []), start=1):
+        doc = _make_document(
+            project_name,
+            "memory_active_constraint",
+            str(index),
+            f"Active Constraint {index}",
+            str(item),
+            tags=["constraint"],
+            metadata={"memory_field": "active_constraints", "authority": "project"},
         )
         if doc:
             documents.append(doc)

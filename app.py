@@ -4,6 +4,7 @@ import streamlit as st
 from urllib.parse import urlparse
 
 from memory import (
+    create_project,
     delete_retrieval_source_file,
     load_analysis_report,
     load_global_rules,
@@ -26,6 +27,26 @@ from memory import (
     load_pipeline_run,
     retrieval_sources_path,
 )
+from project_manager import (
+    delete_analysis_report,
+    delete_chapter_analysis_bundle,
+    delete_chapter_bundle,
+    delete_chapter_content,
+    delete_chapter_outline,
+    delete_chapter_review,
+    delete_outline,
+    delete_pipeline_run,
+    delete_project,
+    get_project_summary,
+    list_analysis_reports,
+    list_chapter_inventory,
+    list_project_runs,
+    list_retrieval_sources,
+    rename_project,
+    save_analysis_resource,
+    save_retrieval_source_content,
+    save_review_resources,
+)
 from retrieval import build_structured_external_source_payload, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
 from skills import (
     analyze_characters,
@@ -34,7 +55,9 @@ from skills import (
     compact_memory,
     detect_potential_conflicts,
     discuss_chapter,
+    discuss_chapter_turn,
     discuss_outline,
+    discuss_outline_turn,
     generate_chapter_outline,
     generate_outline,
     get_retrieval_trace,
@@ -62,6 +85,60 @@ RULE_SCOPE_OPTIONS = {
 
 NEW_PROJECT_INPUT_KEY = "new_project_name_input"
 NEW_PROJECT_DIALOG_FLAG = "show_new_project_dialog"
+
+
+def _discussion_messages_key(kind: str, suffix: str = "") -> str:
+    return f"discussion_messages:{kind}:{suffix}" if suffix else f"discussion_messages:{kind}"
+
+
+def _discussion_result_key(kind: str, suffix: str = "") -> str:
+    return f"discussion_result:{kind}:{suffix}" if suffix else f"discussion_result:{kind}"
+
+
+def _discussion_input_key(kind: str, suffix: str = "") -> str:
+    return f"discussion_input:{kind}:{suffix}" if suffix else f"discussion_input:{kind}"
+
+
+def _append_discussion_message(key: str, role: str, content: str):
+    content = str(content or "").strip()
+    if not content:
+        return
+    messages = list(st.session_state.get(key, []))
+    messages.append({"role": role, "content": content})
+    st.session_state[key] = messages
+
+
+def _render_discussion_chat(messages: list[dict]):
+    if not messages:
+        st.caption("当前还没有讨论消息。")
+        return
+    for item in messages:
+        role = "user" if item.get("role") == "user" else "assistant"
+        with st.chat_message(role):
+            st.markdown(str(item.get("content", "") or ""))
+
+
+def _render_discussion_summary(discussion_result: dict, empty_message: str):
+    discussion = discussion_result.get("data", {}).get("discussion", {}) if discussion_result else {}
+    report_markdown = discussion_result.get("data", {}).get("report_markdown", "") if discussion_result else ""
+    if not discussion:
+        st.caption(empty_message)
+        return
+    st.markdown(report_markdown)
+    render_step_validation(discussion_result)
+    render_step_json_expander("讨论结构化结果", discussion)
+
+
+def _resource_browser_selection_key(project_name: str) -> str:
+    return f"resource_browser_selection:{project_name}"
+
+
+def _set_resource_browser_selection(project_name: str, resource: dict):
+    st.session_state[_resource_browser_selection_key(project_name)] = resource
+
+
+def _get_resource_browser_selection(project_name: str) -> dict:
+    return dict(st.session_state.get(_resource_browser_selection_key(project_name), {}))
 
 
 def render_step_status_message(step_result: dict, success_message: str, failure_prefix: str):
@@ -168,14 +245,13 @@ def render_new_project_dialog(existing_projects: list[str]):
             st.error("该项目已存在，请使用项目切换。")
             return
 
-        st.session_state["project_name"] = candidate_name
+        created_project = create_project(candidate_name)
+        st.session_state["project_name"] = created_project
         st.session_state[NEW_PROJECT_DIALOG_FLAG] = False
-        st.session_state[NEW_PROJECT_INPUT_KEY] = ""
         st.rerun()
 
     if col2.button("取消", use_container_width=True):
         st.session_state[NEW_PROJECT_DIALOG_FLAG] = False
-        st.session_state[NEW_PROJECT_INPUT_KEY] = ""
         st.rerun()
 
 
@@ -184,6 +260,8 @@ def init_project_state() -> str | None:
 
     project_name = st.session_state.get("project_name")
     if project_name:
+        if project_name not in projects:
+            create_project(project_name)
         return project_name
 
     if projects:
@@ -207,6 +285,7 @@ def render_sidebar(project_name: str | None, projects: list[str]):
             st.rerun()
 
     if st.sidebar.button("新建项目", use_container_width=True):
+        st.session_state[NEW_PROJECT_INPUT_KEY] = ""
         st.session_state[NEW_PROJECT_DIALOG_FLAG] = True
 
     if st.session_state.get(NEW_PROJECT_DIALOG_FLAG):
@@ -214,7 +293,8 @@ def render_sidebar(project_name: str | None, projects: list[str]):
 
 
 def render_memory_page(project_name: str, memory: dict):
-    st.subheader("当前设定库")
+    st.subheader("当前故事状态")
+    st.caption("这里维护的是生成时始终优先注入的核心状态。长文本资料、原作证据、历史正文与分析报告仍通过检索知识库按需召回。")
 
     changed = False
     new_memory = dict(memory)
@@ -227,6 +307,24 @@ def render_memory_page(project_name: str, memory: dict):
     new_genre = st.text_input("类型", value=memory.get("genre", ""))
     if new_genre != memory.get("genre"):
         new_memory["genre"] = new_genre
+        changed = True
+
+    new_canon_mode = st.text_input(
+        "原作对齐方式（如：严格贴合 / 轻度 AU / 完全 AU）",
+        value=memory.get("canon_mode", "")
+    )
+    if new_canon_mode != memory.get("canon_mode", ""):
+        new_memory["canon_mode"] = new_canon_mode
+        changed = True
+
+    new_au_rules = st.text_area(
+        "AU 规则（每行一条）",
+        value="\n".join(memory.get("au_rules", [])),
+        height=100
+    )
+    au_rule_items = [line.strip() for line in new_au_rules.split("\n") if line.strip()]
+    if au_rule_items != memory.get("au_rules", []):
+        new_memory["au_rules"] = au_rule_items
         changed = True
 
     new_world = st.text_area(
@@ -249,6 +347,16 @@ def render_memory_page(project_name: str, memory: dict):
         new_memory["characters"] = character_items
         changed = True
 
+    new_relationships = st.text_area(
+        "角色关系（每行一条）",
+        value="\n".join(memory.get("relationships", [])),
+        height=120
+    )
+    relationship_items = [line.strip() for line in new_relationships.split("\n") if line.strip()]
+    if relationship_items != memory.get("relationships", []):
+        new_memory["relationships"] = relationship_items
+        changed = True
+
     new_timeline = st.text_area(
         "时间线（每行一条）",
         value="\n".join(memory.get("timeline", [])),
@@ -267,6 +375,16 @@ def render_memory_page(project_name: str, memory: dict):
     foreshadowing_items = [line.strip() for line in new_foreshadowing.split("\n") if line.strip()]
     if foreshadowing_items != memory.get("foreshadowing", []):
         new_memory["foreshadowing"] = foreshadowing_items
+        changed = True
+
+    new_constraints = st.text_area(
+        "当前硬性约束（每行一条）",
+        value="\n".join(memory.get("active_constraints", [])),
+        height=100
+    )
+    constraint_items = [line.strip() for line in new_constraints.split("\n") if line.strip()]
+    if constraint_items != memory.get("active_constraints", []):
+        new_memory["active_constraints"] = constraint_items
         changed = True
 
     col1, col2 = st.columns(2)
@@ -305,21 +423,64 @@ def render_outline_page(project_name: str):
 
     existing_outline = load_outline(project_name)
     step_result = st.session_state.get("outline_step", {})
-    discussion_step = st.session_state.get("outline_discussion_step", {})
     user_idea = st.text_area("你的小说想法", height=200)
 
-    if st.button("先讨论大纲方向"):
+    messages_key = _discussion_messages_key("outline")
+    result_key = _discussion_result_key("outline")
+    input_key = _discussion_input_key("outline")
+    discussion_step = st.session_state.get(result_key, {})
+
+    col_action_1, col_action_2 = st.columns(2)
+    if col_action_1.button("开始讨论大纲方向"):
         try:
             result = discuss_outline(project_name, user_idea)
-            st.session_state["outline_discussion_step"] = result
+            st.session_state[result_key] = result
+            st.session_state[messages_key] = []
+            assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、可选方向和待确认问题，我们可以继续往下细化。"
+            _append_discussion_message(messages_key, "assistant", assistant_message)
+            st.rerun()
         except Exception as exc:
             st.error(f"讨论失败：{exc}")
 
-    discussion_markdown = discussion_step.get("data", {}).get("report_markdown", "")
-    if discussion_markdown:
-        st.markdown(discussion_markdown)
-        render_step_json_expander("大纲讨论结构化结果", discussion_step.get("data", {}).get("discussion", {}))
-        render_step_validation(discussion_step)
+    if col_action_2.button("重置讨论"):
+        st.session_state[result_key] = {}
+        st.session_state[messages_key] = []
+        st.session_state[input_key] = ""
+        st.rerun()
+
+    summary_col, chat_col = st.columns([1, 1])
+    with summary_col:
+        st.markdown("### 当前讨论结论")
+        _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前收敛出的结论。")
+
+    with chat_col:
+        st.markdown("### 讨论对话")
+        messages = st.session_state.get(messages_key, [])
+        _render_discussion_chat(messages)
+        follow_up = st.text_area("继续讨论", key=input_key, height=120, placeholder="例如：我更想突出成长线，但不要太早进入主线冲突。")
+        if st.button("发送讨论消息", key="send_outline_discussion"):
+            if not follow_up.strip():
+                st.warning("讨论消息不能为空。")
+            elif not user_idea.strip():
+                st.warning("请先填写你的小说想法。")
+            else:
+                try:
+                    _append_discussion_message(messages_key, "user", follow_up)
+                    messages = st.session_state.get(messages_key, [])
+                    result = discuss_outline_turn(
+                        project_name,
+                        user_idea,
+                        messages,
+                        discussion_step.get("data", {}).get("discussion", {}),
+                        follow_up,
+                    )
+                    st.session_state[result_key] = result
+                    assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了当前讨论结论。"
+                    _append_discussion_message(messages_key, "assistant", assistant_message)
+                    st.session_state[input_key] = ""
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"继续讨论失败：{exc}")
 
     if st.button("生成全书大纲"):
         result = generate_outline(project_name, user_idea)
@@ -346,21 +507,71 @@ def render_chapter_outline_page(project_name: str):
     chapter_no = st.number_input("章节编号", min_value=1, value=1)
     existing_outline = load_chapter_outline(project_name, chapter_no)
     step_result = st.session_state.get(f"chapter_outline_step_{chapter_no}", {})
-    discussion_step = st.session_state.get(f"chapter_discussion_step_{chapter_no}", {})
     requirement = st.text_area("本章要求", height=200)
 
-    if st.button("先讨论本章方向"):
+    suffix = str(chapter_no)
+    messages_key = _discussion_messages_key("chapter", suffix)
+    result_key = _discussion_result_key("chapter", suffix)
+    input_key = _discussion_input_key("chapter", suffix)
+    discussion_step = st.session_state.get(result_key, {})
+
+    col_action_1, col_action_2 = st.columns(2)
+    if col_action_1.button("开始讨论本章方向"):
         try:
             result = discuss_chapter(project_name, chapter_no, requirement)
-            st.session_state[f"chapter_discussion_step_{chapter_no}"] = result
+            st.session_state[result_key] = result
+            st.session_state[messages_key] = []
+            assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本章目标、可选方向和待确认问题，我们可以继续细化。"
+            _append_discussion_message(messages_key, "assistant", assistant_message)
+            st.rerun()
         except Exception as exc:
             st.error(f"讨论失败：{exc}")
 
-    discussion_markdown = discussion_step.get("data", {}).get("report_markdown", "")
-    if discussion_markdown:
-        st.markdown(discussion_markdown)
-        render_step_json_expander("章节讨论结构化结果", discussion_step.get("data", {}).get("discussion", {}))
-        render_step_validation(discussion_step)
+    if col_action_2.button("重置本章讨论"):
+        st.session_state[result_key] = {}
+        st.session_state[messages_key] = []
+        st.session_state[input_key] = ""
+        st.rerun()
+
+    summary_col, chat_col = st.columns([1, 1])
+    with summary_col:
+        st.markdown("### 当前讨论结论")
+        _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示本章方向的当前结论。")
+
+    with chat_col:
+        st.markdown("### 讨论对话")
+        messages = st.session_state.get(messages_key, [])
+        _render_discussion_chat(messages)
+        follow_up = st.text_area(
+            "继续讨论本章",
+            key=input_key,
+            height=120,
+            placeholder="例如：我希望这章更偏日常拉扯，不要太快进入正面冲突。"
+        )
+        if st.button("发送本章讨论消息", key=f"send_chapter_discussion_{chapter_no}"):
+            if not follow_up.strip():
+                st.warning("讨论消息不能为空。")
+            elif not requirement.strip():
+                st.warning("请先填写本章要求。")
+            else:
+                try:
+                    _append_discussion_message(messages_key, "user", follow_up)
+                    messages = st.session_state.get(messages_key, [])
+                    result = discuss_chapter_turn(
+                        project_name,
+                        chapter_no,
+                        requirement,
+                        messages,
+                        discussion_step.get("data", {}).get("discussion", {}),
+                        follow_up,
+                    )
+                    st.session_state[result_key] = result
+                    assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本章讨论结论。"
+                    _append_discussion_message(messages_key, "assistant", assistant_message)
+                    st.session_state[input_key] = ""
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"继续讨论失败：{exc}")
 
     if st.button("生成章节细纲"):
         result = generate_chapter_outline(project_name, chapter_no, requirement)
@@ -494,6 +705,381 @@ def render_review_page(project_name: str):
         "本次审阅使用的检索上下文",
         get_retrieval_trace(f"review:{project_name}:{chapter_no}")
     )
+
+
+def render_project_overview_page(project_name: str):
+    st.subheader("项目总览")
+    summary = get_project_summary(project_name)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("正文章节", summary.get("chapter_count", 0))
+    col2.metric("细纲章节", summary.get("chapter_outline_count", 0))
+    col3.metric("审阅数量", summary.get("review_count", 0))
+    col4.metric("分析报告", summary.get("analysis_count", 0))
+
+    col5, col6, col7, col8 = st.columns(4)
+    col5.metric("流水线记录", summary.get("run_count", 0))
+    col6.metric("外部资料", summary.get("retrieval_source_count", 0))
+    col7.metric("章节摘要", summary.get("chapter_summary_count", 0))
+    col8.metric("资源文件数", summary.get("resource_file_count", 0))
+
+    st.caption(
+        f"title={summary.get('title', project_name)} / genre={summary.get('genre', '-') or '-'} / canon_mode={summary.get('canon_mode', '-') or '-'} / updated_at={summary.get('updated_at', '-') or '-'}"
+    )
+
+    with st.expander("项目设置", expanded=False):
+        new_name = st.text_input("重命名项目", value=project_name, key=f"rename_project_input_{project_name}")
+        if st.button("保存新项目名"):
+            try:
+                renamed = rename_project(project_name, new_name)
+                st.session_state["project_name"] = renamed
+                st.success(f"项目已重命名为 `{renamed}`。")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"项目重命名失败：{exc}")
+
+    with st.expander("危险操作", expanded=False):
+        st.warning("删除项目会移除该项目下的全部设定、章节、审阅、分析、检索资料和运行记录。")
+        confirm_value = st.text_input("输入项目名以确认删除", key=f"delete_project_confirm_{project_name}")
+        if st.button("删除当前项目", type="primary"):
+            if confirm_value.strip() != project_name:
+                st.error("项目名确认不匹配，已取消删除。")
+            else:
+                deleted = delete_project(project_name)
+                if deleted:
+                    st.session_state.pop("project_name", None)
+                    st.success(f"项目 `{project_name}` 已删除。")
+                    st.rerun()
+                else:
+                    st.error("项目删除失败，目标项目可能不存在。")
+
+
+def _build_resource_browser_items(project_name: str) -> list[dict]:
+    items: list[dict] = []
+
+    outline = load_outline(project_name)
+    items.append({
+        "id": "outline:root",
+        "group": "outline",
+        "label": "outline.md",
+        "path_label": "全书大纲 / outline.md",
+        "content": outline,
+        "chapter_no": None,
+        "analysis_type": "",
+        "relative_path": "outline.md",
+        "editable": True,
+        "deletable": bool(outline.strip()),
+    })
+
+    chapter_inventory = list_chapter_inventory(project_name)
+    for item in chapter_inventory:
+        chapter_no = int(item.get("chapter_no", 0))
+        if item.get("has_outline"):
+            items.append({
+                "id": f"chapter-outline:{chapter_no}",
+                "group": "chapter_outline",
+                "label": f"chapter_{chapter_no:03d}.md",
+                "path_label": f"chapter_outlines / chapter_{chapter_no:03d}.md",
+                "content": item.get("outline_preview", ""),
+                "chapter_no": chapter_no,
+                "analysis_type": "",
+                "relative_path": f"chapter_outlines/chapter_{chapter_no:03d}.md",
+                "editable": True,
+                "deletable": True,
+            })
+        if item.get("has_content"):
+            items.append({
+                "id": f"chapter-content:{chapter_no}",
+                "group": "chapter_content",
+                "label": f"chapter_{chapter_no:03d}.md",
+                "path_label": f"chapters / chapter_{chapter_no:03d}.md",
+                "content": item.get("content_preview", ""),
+                "chapter_no": chapter_no,
+                "analysis_type": "",
+                "relative_path": f"chapters/chapter_{chapter_no:03d}.md",
+                "editable": True,
+                "deletable": True,
+            })
+        if item.get("has_review_markdown") or item.get("has_review_json"):
+            items.append({
+                "id": f"review:{chapter_no}",
+                "group": "review",
+                "label": f"chapter_{chapter_no:03d}",
+                "path_label": f"reviews / chapter_{chapter_no:03d}",
+                "content": item.get("review_preview", ""),
+                "review_payload": item.get("review_payload", {}),
+                "chapter_no": chapter_no,
+                "analysis_type": "",
+                "relative_path": f"reviews/chapter_{chapter_no:03d}",
+                "editable": True,
+                "deletable": True,
+            })
+
+    for report in list_analysis_reports(project_name):
+        chapter_no = report.get("chapter_no")
+        report_path = report.get("path", "")
+        content = ""
+        if report_path:
+            try:
+                with open(report_path, "r", encoding="utf-8") as handle:
+                    content = handle.read()
+            except Exception:
+                content = ""
+        items.append({
+            "id": f"analysis:{report.get('analysis_type', 'unknown')}:{chapter_no}",
+            "group": "analysis",
+            "label": report.get("file_name", "analysis.md"),
+            "path_label": f"analysis / {report.get('file_name', 'analysis.md')}",
+            "content": content,
+            "chapter_no": chapter_no,
+            "analysis_type": report.get("analysis_type", "unknown"),
+            "relative_path": report.get("file_name", ""),
+            "editable": True,
+            "deletable": True,
+        })
+
+    for run in list_project_runs(project_name):
+        run_content = load_pipeline_run(project_name, run.get("run_id", ""))
+        items.append({
+            "id": f"run:{run.get('run_id', '')}",
+            "group": "run",
+            "label": f"{run.get('run_id', '')}.json",
+            "path_label": f"runs / {run.get('run_id', '')}.json",
+            "content": run_content,
+            "chapter_no": run.get("chapter_no"),
+            "analysis_type": "",
+            "run_id": run.get("run_id", ""),
+            "relative_path": f"runs/{run.get('run_id', '')}.json",
+            "editable": False,
+            "deletable": True,
+        })
+
+    for source in list_retrieval_sources(project_name):
+        items.append({
+            "id": f"source:{source.get('relative_path', '')}",
+            "group": "source",
+            "label": source.get("relative_path", ""),
+            "path_label": f"retrieval/sources / {source.get('relative_path', '')}",
+            "content": source.get("preview", ""),
+            "chapter_no": None,
+            "analysis_type": "",
+            "relative_path": source.get("relative_path", ""),
+            "suffix": source.get("suffix", ""),
+            "editable": True,
+            "deletable": True,
+        })
+
+    return items
+
+
+def _save_browser_resource(project_name: str, resource: dict, edited_content: str, edited_json_text: str = ""):
+    group = resource.get("group")
+    if group == "outline":
+        save_outline(project_name, edited_content)
+        return
+    if group == "chapter_outline":
+        save_chapter_outline(project_name, int(resource.get("chapter_no", 0)), edited_content)
+        return
+    if group == "chapter_content":
+        save_chapter(project_name, int(resource.get("chapter_no", 0)), edited_content)
+        return
+    if group == "review":
+        parsed = json.loads(edited_json_text) if edited_json_text.strip() else {}
+        save_review_resources(project_name, int(resource.get("chapter_no", 0)), edited_content, parsed)
+        return
+    if group == "analysis":
+        save_analysis_resource(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no", 0)), edited_content)
+        return
+    if group == "source":
+        save_retrieval_source_content(project_name, str(resource.get("relative_path", "")), edited_content)
+        rebuild_retrieval_assets(project_name, build_vectors=True)
+        return
+    raise ValueError(f"Unsupported resource group for save: {group}")
+
+
+def _delete_browser_resource(project_name: str, resource: dict):
+    group = resource.get("group")
+    if group == "outline":
+        return delete_outline(project_name)
+    if group == "chapter_outline":
+        return delete_chapter_outline(project_name, int(resource.get("chapter_no", 0)))
+    if group == "chapter_content":
+        return delete_chapter_content(project_name, int(resource.get("chapter_no", 0)))
+    if group == "review":
+        return delete_chapter_review(project_name, int(resource.get("chapter_no", 0)))
+    if group == "analysis":
+        return delete_analysis_report(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no", 0)))
+    if group == "run":
+        return delete_pipeline_run(project_name, str(resource.get("run_id", "")))
+    if group == "source":
+        deleted = delete_retrieval_source_file(project_name, str(resource.get("relative_path", "")))
+        if deleted:
+            rebuild_retrieval_assets(project_name, build_vectors=True)
+        return deleted
+    raise ValueError(f"Unsupported resource group for delete: {group}")
+
+
+def _render_resource_browser_detail(project_name: str, resource: dict):
+    if not resource:
+        st.caption("请先从左侧选择一个资源。")
+        return
+
+    st.markdown(f"### {resource.get('label', '')}")
+    st.caption(resource.get("path_label", ""))
+
+    group = resource.get("group")
+    if group == "run":
+        st.code(resource.get("content", ""), language="json")
+        if st.button("删除该运行记录", key=f"browser_delete_{resource.get('id')}"):
+            if _delete_browser_resource(project_name, resource):
+                st.success("运行记录已删除。")
+                st.session_state[_resource_browser_selection_key(project_name)] = {}
+                st.rerun()
+        return
+
+    edited_content = st.text_area(
+        "内容",
+        value=resource.get("content", ""),
+        height=520,
+        key=f"browser_editor_{resource.get('id')}"
+    )
+
+    edited_json_text = ""
+    if group == "review":
+        edited_json_text = st.text_area(
+            "审阅 JSON",
+            value=json.dumps(resource.get("review_payload", {}), ensure_ascii=False, indent=2),
+            height=220,
+            key=f"browser_json_{resource.get('id')}"
+        )
+
+    save_col, delete_col = st.columns(2)
+    if resource.get("editable") and save_col.button("保存当前资源", key=f"browser_save_{resource.get('id')}"):
+        try:
+            _save_browser_resource(project_name, resource, edited_content, edited_json_text)
+            st.success("资源已保存。")
+            st.rerun()
+        except json.JSONDecodeError as exc:
+            st.error(f"JSON 格式错误：{exc}")
+        except Exception as exc:
+            st.error(f"保存资源失败：{exc}")
+
+    if resource.get("deletable") and delete_col.button("删除当前资源", key=f"browser_delete_{resource.get('id')}"):
+        try:
+            if _delete_browser_resource(project_name, resource):
+                st.success("资源已删除。")
+                st.session_state[_resource_browser_selection_key(project_name)] = {}
+                st.rerun()
+            else:
+                st.warning("目标资源不存在。")
+        except Exception as exc:
+            st.error(f"删除资源失败：{exc}")
+
+
+def render_resource_management_page(project_name: str):
+    st.subheader("项目资源管理")
+    browser_items = _build_resource_browser_items(project_name)
+    selected = _get_resource_browser_selection(project_name)
+
+    left_col, right_col = st.columns([1, 2])
+
+    with left_col:
+        st.markdown("### 资源浏览器")
+        search_value = st.text_input("搜索资源", key=f"resource_browser_search_{project_name}")
+        search_lower = search_value.strip().lower()
+
+        chapter_inventory = list_chapter_inventory(project_name)
+        runs = list_project_runs(project_name)
+        sources = list_retrieval_sources(project_name)
+
+        if chapter_inventory:
+            chapter_numbers = [item.get("chapter_no") for item in chapter_inventory]
+            bulk_chapter_selection = st.multiselect(
+                "批量章节清理",
+                options=chapter_numbers,
+                format_func=lambda value: f"第 {int(value)} 章",
+                key=f"resource_bulk_chapters_{project_name}"
+            )
+            if bulk_chapter_selection and st.button("清理所选章节", key=f"bulk_delete_chapters_{project_name}"):
+                results = []
+                for chapter_no in bulk_chapter_selection:
+                    results.append({
+                        "chapter_no": int(chapter_no),
+                        "result": delete_chapter_bundle(project_name, int(chapter_no)),
+                    })
+                st.success(f"已批量清理章节资源：{json.dumps(results, ensure_ascii=False)}")
+                st.rerun()
+
+        if runs:
+            bulk_runs = st.multiselect(
+                "批量删除运行记录",
+                options=[run.get("run_id") for run in runs],
+                key=f"resource_bulk_runs_{project_name}"
+            )
+            if bulk_runs and st.button("删除所选运行记录", key=f"bulk_delete_runs_{project_name}"):
+                deleted_count = 0
+                for run_id in bulk_runs:
+                    if delete_pipeline_run(project_name, str(run_id)):
+                        deleted_count += 1
+                st.success(f"已删除 {deleted_count} 条运行记录。")
+                st.rerun()
+
+        if sources:
+            bulk_sources = st.multiselect(
+                "批量删除外部资料",
+                options=[source.get("relative_path") for source in sources],
+                key=f"resource_bulk_sources_{project_name}"
+            )
+            if bulk_sources and st.button("删除所选外部资料", key=f"bulk_delete_sources_{project_name}"):
+                deleted_count = 0
+                for relative_path in bulk_sources:
+                    try:
+                        if delete_retrieval_source_file(project_name, str(relative_path)):
+                            deleted_count += 1
+                    except Exception:
+                        continue
+                if deleted_count:
+                    rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success(f"已删除 {deleted_count} 份外部资料。")
+                st.rerun()
+
+        groups = [
+            ("outline", "全书大纲"),
+            ("chapter_outline", "章节细纲"),
+            ("chapter_content", "章节正文"),
+            ("review", "审阅结果"),
+            ("analysis", "分析报告"),
+            ("run", "流水线记录"),
+            ("source", "外部资料"),
+        ]
+
+        for group_key, group_label in groups:
+            group_items = [item for item in browser_items if item.get("group") == group_key]
+            if search_lower:
+                group_items = [
+                    item for item in group_items
+                    if search_lower in str(item.get("label", "")).lower()
+                    or search_lower in str(item.get("path_label", "")).lower()
+                ]
+            if not group_items:
+                continue
+            st.markdown(f"**{group_label}**")
+            for item in group_items:
+                selected_flag = selected.get("id") == item.get("id")
+                button_label = f"> {item.get('label')}" if selected_flag else item.get("label")
+                if st.button(button_label, key=f"resource_select_{item.get('id')}", use_container_width=True):
+                    _set_resource_browser_selection(project_name, item)
+                    st.rerun()
+
+    with right_col:
+        st.markdown("### 资源详情")
+        if selected and not any(item.get("id") == selected.get("id") for item in browser_items):
+            selected = {}
+            st.session_state[_resource_browser_selection_key(project_name)] = {}
+        if not selected and browser_items:
+            selected = browser_items[0]
+            _set_resource_browser_selection(project_name, selected)
+        _render_resource_browser_detail(project_name, selected)
 
 
 def render_project_files_page(project_name: str):
@@ -1064,12 +1650,16 @@ else:
     st.info("当前还没有项目。点击侧边栏“新建项目”开始创建。")
 
 page = st.sidebar.radio(
-    "功能",
-    ["设定库", "交互规则", "RAG 检索", "生成大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
+    "项目管理",
+    ["项目总览", "项目资源", "设定库", "交互规则", "RAG 检索", "生成大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
 )
 
 if not project_name:
     st.stop()
+elif page == "项目总览":
+    render_project_overview_page(project_name)
+elif page == "项目资源":
+    render_resource_management_page(project_name)
 elif page == "设定库":
     render_memory_page(project_name, memory)
 elif page == "交互规则":
