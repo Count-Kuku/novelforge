@@ -1,8 +1,14 @@
 import json
 import re
+from datetime import datetime
+from urllib.request import Request, urlopen
+from uuid import uuid4
 from llm import call_llm
 from pydantic import ValidationError
 from prompts import (
+    discuss_chapter_prompt,
+    discuss_outline_prompt,
+    organize_reference_prompt,
     character_analysis_prompt,
     consistency_check_prompt,
     foreshadowing_analysis_prompt,
@@ -30,6 +36,7 @@ from memory import (
     save_analysis_report,
     save_memory,
     save_outline,
+    save_pipeline_run,
     save_project_rules,
     save_review,
     save_review_json,
@@ -37,11 +44,15 @@ from memory import (
 from schemas import (
     ChapterPipelineState,
     CharacterAnalysisResult,
+    ChapterDiscussionResult,
     ConsistencyAnalysisResult,
     ForeshadowingAnalysisResult,
+    OutlineDiscussionResult,
+    OrganizedReferenceResult,
     WorkflowError,
     WorkflowPipelineResult,
     WorkflowStepResult,
+    WorkflowTransition,
     RetrievalConflict,
     ReviewResult,
     TimelineAnalysisResult,
@@ -50,6 +61,8 @@ from schemas import (
     render_character_analysis_markdown,
     render_consistency_analysis_markdown,
     render_foreshadowing_analysis_markdown,
+    render_discussion_markdown,
+    render_organized_reference_markdown,
     render_timeline_analysis_markdown,
     validate_memory_update_result,
     validate_review_result,
@@ -114,9 +127,19 @@ def _record_pipeline_step(state: ChapterPipelineState, step_result: WorkflowStep
     if step_result.status == "completed":
         if step_result.step_name not in state.completed_steps:
             state.completed_steps.append(step_result.step_name)
+        state.retry_counts.setdefault(step_result.step_name, 0)
     elif step_result.status in {"failed", "rejected"}:
         if step_result.step_name not in state.failed_steps:
             state.failed_steps.append(step_result.step_name)
+        state.retry_counts[step_result.step_name] = state.retry_counts.get(step_result.step_name, 0) + 1
+        if step_result.error:
+            _record_pipeline_error(
+                state,
+                step_name=step_result.step_name,
+                message=step_result.error,
+                error_type=_infer_error_type_from_step(step_result),
+                recoverable=True,
+            )
     elif step_result.status == "skipped":
         warning = step_result.warnings[0] if step_result.warnings else f"{step_result.step_name} skipped."
         state.warnings.append(warning)
@@ -130,6 +153,9 @@ def _record_pipeline_error(
     error_type: str = "unknown",
     recoverable: bool = True,
 ) -> None:
+    for existing in state.errors:
+        if existing.step_name == step_name and existing.message == message:
+            return
     state.errors.append(WorkflowError(
         step_name=step_name,
         error_type=error_type,
@@ -141,6 +167,33 @@ def _record_pipeline_error(
 def _halt_pipeline(state: ChapterPipelineState, reason: str) -> None:
     state.halted = True
     state.halt_reason = reason
+
+
+def _transition_pipeline_state(state: ChapterPipelineState, to_step: str, reason: str) -> None:
+    state.transition_log.append(WorkflowTransition(
+        from_step=state.current_step,
+        to_step=to_step,
+        reason=reason,
+        timestamp=datetime.now().isoformat(timespec="seconds"),
+    ))
+    state.current_step = to_step
+
+
+def _infer_error_type_from_step(step_result: WorkflowStepResult) -> str:
+    validation = step_result.validation
+    if validation.status == "failed":
+        return "validation"
+
+    error_text = step_result.error.lower()
+    if "retriev" in error_text:
+        return "retrieval"
+    if "save" in error_text or "persist" in error_text or "write" in error_text:
+        return "persistence"
+    if "input" in error_text or "empty" in error_text:
+        return "input"
+    if error_text:
+        return "llm"
+    return "unknown"
 
 
 def _group_hits_by_scope_and_type(hits: list[dict]) -> dict[str, dict[str, list[dict]]]:
@@ -378,6 +431,22 @@ def _call_json_llm(prompt: str, empty_error: str) -> dict:
     return _extract_json_object(result)
 
 
+def _extract_web_text_from_html(html: str) -> str:
+    # Strip scripts/styles and flatten the page to a readable text block for later structuring.
+    cleaned = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<style[\s\S]*?</style>", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"<[^>]+>", "\n", cleaned)
+    cleaned = re.sub(r"\n\s*\n+", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _fetch_web_page(url: str) -> str:
+    request = Request(url, headers={"User-Agent": "NovelForge/1.0"})
+    with urlopen(request, timeout=30) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return response.read().decode(charset, errors="ignore")
+
+
 def _extract_rule_lines(text: str) -> list[str]:
     candidates = []
     for line in text.splitlines():
@@ -433,6 +502,110 @@ def save_rule_text(project_name: str, scope: str, target: str, rule_text: str) -
         "saved_rules": new_rules,
         "total_rules": len(merged),
     }
+
+
+def organize_reference_text(project_name: str, source_title: str, raw_text: str) -> dict:
+    prompt = organize_reference_prompt(
+        source_title.strip() or "未命名资料",
+        raw_text,
+        _build_rules_text(project_name, "all"),
+    )
+    payload = _call_json_llm(prompt, "LLM returned empty organized reference result.")
+    try:
+        result = OrganizedReferenceResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Reference organization schema validation failed: {format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "organize_reference",
+        success=True,
+        status="completed",
+        data={
+            "organized_reference": result.model_dump(),
+            "report_markdown": render_organized_reference_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="OrganizedReferenceResult",
+            message="Reference text was structured successfully.",
+        ),
+    ).model_dump()
+
+
+def organize_reference_html(project_name: str, source_title: str, html: str, source_url: str) -> dict:
+    extracted_text = _extract_web_text_from_html(html)
+    if not extracted_text.strip():
+        raise RuntimeError("No readable text could be extracted from the fetched page.")
+
+    result = organize_reference_text(project_name, source_title, extracted_text)
+    result.setdefault("artifacts", {})
+    result["artifacts"]["source_url"] = source_url
+    result["artifacts"]["raw_text_excerpt"] = extracted_text[:2000]
+    return result
+
+
+def organize_reference_url(project_name: str, source_title: str, source_url: str) -> dict:
+    html = _fetch_web_page(source_url)
+    return organize_reference_html(project_name, source_title, html, source_url)
+
+
+def discuss_outline(project_name: str, user_idea: str) -> dict:
+    memory = load_memory(project_name)
+    prompt = discuss_outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline"))
+    payload = _call_json_llm(prompt, "LLM returned empty outline discussion result.")
+    try:
+        result = OutlineDiscussionResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Outline discussion schema validation failed: {format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "discuss_outline",
+        success=True,
+        status="completed",
+        data={
+            "discussion": result.model_dump(),
+            "report_markdown": render_discussion_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="OutlineDiscussionResult",
+            message="Outline discussion result validated.",
+        ),
+    ).model_dump()
+
+
+def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str) -> dict:
+    memory = load_memory(project_name)
+    outline = load_outline(project_name)
+    recent_summaries = get_recent_chapter_summaries(project_name)
+    prompt = discuss_chapter_prompt(
+        memory,
+        outline,
+        recent_summaries,
+        chapter_no,
+        user_requirement,
+        _build_rules_text(project_name, "chapter_outline"),
+    )
+    payload = _call_json_llm(prompt, "LLM returned empty chapter discussion result.")
+    try:
+        result = ChapterDiscussionResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Chapter discussion schema validation failed: {format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "discuss_chapter",
+        success=True,
+        status="completed",
+        data={
+            "discussion": result.model_dump(),
+            "report_markdown": render_discussion_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="ChapterDiscussionResult",
+            message="Chapter discussion result validated.",
+        ),
+    ).model_dump()
 
 
 def _format_review_markdown(review: ReviewResult | dict) -> str:
@@ -1041,12 +1214,17 @@ def pipeline_plan_write_review_update(
     user_requirement: str,
     word_count: str = "2000-2500"
 ) -> dict:
+    started_at = datetime.now().isoformat(timespec="seconds")
+    run_id = f"chapter_{chapter_no:03d}_{started_at.replace(':', '').replace('-', '').replace('T', '_')}"
     state = ChapterPipelineState(
+        run_id=run_id,
         project_name=project_name,
         chapter_no=chapter_no,
         user_requirement=user_requirement,
         word_count=word_count,
         current_step="chapter_outline",
+        next_step="chapter_outline",
+        started_at=started_at,
     )
 
     try:
@@ -1064,9 +1242,12 @@ def pipeline_plan_write_review_update(
 
     _record_pipeline_step(state, outline_step)
     state.chapter_outline = outline_step.data.get("chapter_outline", "")
+    if outline_step.success:
+        state.last_successful_step = "chapter_outline"
 
     if outline_step.success:
-        state.current_step = "write_chapter"
+        state.next_step = "write_chapter"
+        _transition_pipeline_state(state, "write_chapter", "chapter outline completed")
         try:
             chapter = write_chapter(project_name, chapter_no, state.chapter_outline, word_count)
             chapter_step = WorkflowStepResult.model_validate(chapter)
@@ -1091,9 +1272,12 @@ def pipeline_plan_write_review_update(
 
     _record_pipeline_step(state, chapter_step)
     state.chapter = chapter_step.data.get("chapter", "")
+    if chapter_step.success:
+        state.last_successful_step = "write_chapter"
 
     if chapter_step.success:
-        state.current_step = "review_chapter"
+        state.next_step = "review_chapter"
+        _transition_pipeline_state(state, "review_chapter", "chapter writing completed")
         try:
             review_step_data = review_chapter(project_name, chapter_no, state.chapter)
             review_step = WorkflowStepResult.model_validate(review_step_data)
@@ -1120,9 +1304,12 @@ def pipeline_plan_write_review_update(
     _record_pipeline_step(state, review_step)
     state.review = review_step.data.get("review", {})
     state.review_markdown = review_step.data.get("review_markdown", "")
+    if review_step.success:
+        state.last_successful_step = "review_chapter"
 
     if chapter_step.success:
-        state.current_step = "memory_update"
+        state.next_step = "memory_update"
+        _transition_pipeline_state(state, "memory_update", "review step completed")
         try:
             memory_step_data = update_memory_from_chapter(project_name, chapter_no, state.chapter)
             memory_step = WorkflowStepResult.model_validate(memory_step_data)
@@ -1148,9 +1335,15 @@ def pipeline_plan_write_review_update(
 
     _record_pipeline_step(state, memory_step)
     state.memory_update = memory_step.data.get("applied_updates", {})
+    if memory_step.success:
+        state.last_successful_step = "memory_update"
 
-    state.current_step = "completed" if not state.halted else state.current_step
+    if not state.halted:
+        state.next_step = ""
+        _transition_pipeline_state(state, "completed", "pipeline finished")
+    state.finished_at = datetime.now().isoformat(timespec="seconds")
     state.success = all(step.success for step in state.steps.values() if step.status != "skipped")
+    state.resumable = bool(state.halted and state.last_successful_step)
 
     pipeline_result = WorkflowPipelineResult(
         success=state.success,
@@ -1159,4 +1352,5 @@ def pipeline_plan_write_review_update(
     )
     result = state.model_dump()
     result["pipeline"] = pipeline_result.model_dump()
+    save_pipeline_run(project_name, state.run_id, json.dumps(result, ensure_ascii=False, indent=2))
     return result

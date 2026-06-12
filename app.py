@@ -1,11 +1,14 @@
 import json
 
 import streamlit as st
+from urllib.parse import urlparse
 
 from memory import (
+    delete_retrieval_source_file,
     load_analysis_report,
     load_global_rules,
     list_projects,
+    list_retrieval_source_files,
     load_chapter,
     load_chapter_outline,
     load_memory,
@@ -19,6 +22,8 @@ from memory import (
     save_memory,
     save_outline,
     save_project_rules,
+    list_pipeline_runs,
+    load_pipeline_run,
     retrieval_sources_path,
 )
 from retrieval import build_structured_external_source_payload, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
@@ -28,9 +33,14 @@ from skills import (
     analyze_timeline,
     compact_memory,
     detect_potential_conflicts,
+    discuss_chapter,
+    discuss_outline,
     generate_chapter_outline,
     generate_outline,
     get_retrieval_trace,
+    organize_reference_html,
+    organize_reference_url,
+    organize_reference_text,
     review_chapter,
     run_consistency_check,
     pipeline_plan_write_review_update,
@@ -295,7 +305,21 @@ def render_outline_page(project_name: str):
 
     existing_outline = load_outline(project_name)
     step_result = st.session_state.get("outline_step", {})
+    discussion_step = st.session_state.get("outline_discussion_step", {})
     user_idea = st.text_area("你的小说想法", height=200)
+
+    if st.button("先讨论大纲方向"):
+        try:
+            result = discuss_outline(project_name, user_idea)
+            st.session_state["outline_discussion_step"] = result
+        except Exception as exc:
+            st.error(f"讨论失败：{exc}")
+
+    discussion_markdown = discussion_step.get("data", {}).get("report_markdown", "")
+    if discussion_markdown:
+        st.markdown(discussion_markdown)
+        render_step_json_expander("大纲讨论结构化结果", discussion_step.get("data", {}).get("discussion", {}))
+        render_step_validation(discussion_step)
 
     if st.button("生成全书大纲"):
         result = generate_outline(project_name, user_idea)
@@ -322,7 +346,21 @@ def render_chapter_outline_page(project_name: str):
     chapter_no = st.number_input("章节编号", min_value=1, value=1)
     existing_outline = load_chapter_outline(project_name, chapter_no)
     step_result = st.session_state.get(f"chapter_outline_step_{chapter_no}", {})
+    discussion_step = st.session_state.get(f"chapter_discussion_step_{chapter_no}", {})
     requirement = st.text_area("本章要求", height=200)
+
+    if st.button("先讨论本章方向"):
+        try:
+            result = discuss_chapter(project_name, chapter_no, requirement)
+            st.session_state[f"chapter_discussion_step_{chapter_no}"] = result
+        except Exception as exc:
+            st.error(f"讨论失败：{exc}")
+
+    discussion_markdown = discussion_step.get("data", {}).get("report_markdown", "")
+    if discussion_markdown:
+        st.markdown(discussion_markdown)
+        render_step_json_expander("章节讨论结构化结果", discussion_step.get("data", {}).get("discussion", {}))
+        render_step_validation(discussion_step)
 
     if st.button("生成章节细纲"):
         result = generate_chapter_outline(project_name, chapter_no, requirement)
@@ -550,10 +588,67 @@ def render_pipeline_page(project_name: str):
         render_step_json_expander("记忆更新结果", result.get("memory_update") or steps_result.get("memory_update", {}))
         render_step_json_expander("流水线状态对象", result)
 
+        transitions = result.get("transition_log", [])
+        if transitions:
+            with st.expander("状态迁移记录", expanded=False):
+                for index, item in enumerate(transitions, start=1):
+                    st.markdown(
+                        f"{index}. `{item.get('from_step', '-')}` -> `{item.get('to_step', '-')}` / {item.get('timestamp', '-')}"
+                    )
+                    if item.get("reason"):
+                        st.caption(item.get("reason"))
+
+        workflow_errors = result.get("errors", [])
+        if workflow_errors:
+            with st.expander("工作流错误记录", expanded=False):
+                for index, item in enumerate(workflow_errors, start=1):
+                    st.markdown(
+                        f"{index}. step=`{item.get('step_name', '-')}` / type=`{item.get('error_type', 'unknown')}` / recoverable=`{item.get('recoverable', True)}`"
+                    )
+                    st.caption(item.get("message", ""))
+
+        if result.get("resumable"):
+            st.info(f"该运行具备恢复潜力，可从 `{result.get('last_successful_step', '-')}` 之后继续。")
+
         render_step_retrieval(steps_result.get("chapter_outline", {}), "流水线：细纲步骤使用的检索上下文")
         render_step_retrieval(steps_result.get("write_chapter", {}), "流水线：写作步骤使用的检索上下文")
         render_step_retrieval(steps_result.get("review_chapter", {}), "流水线：审阅步骤使用的检索上下文")
         render_step_retrieval(steps_result.get("memory_update", {}), "流水线：记忆更新步骤使用的检索上下文")
+
+    st.subheader("最近运行记录")
+    run_ids = list_pipeline_runs(project_name, chapter_no)
+    if not run_ids:
+        st.caption("当前章节还没有运行记录。")
+        return
+
+    selected_run = st.selectbox("选择运行记录", options=run_ids, key=f"pipeline_run_select_{chapter_no}")
+    if selected_run:
+        run_content = load_pipeline_run(project_name, selected_run)
+        if run_content.strip():
+            run_data = json.loads(run_content)
+            st.caption(
+                f"run_id={run_data.get('run_id', '-')} / started_at={run_data.get('started_at', '-')} / finished_at={run_data.get('finished_at', '-')} / resumable={run_data.get('resumable', False)}"
+            )
+            if run_data.get("halted"):
+                st.warning(f"halt_reason={run_data.get('halt_reason', '-')}")
+            transitions = run_data.get("transition_log", [])
+            if transitions:
+                with st.expander("该运行的状态迁移记录", expanded=False):
+                    for index, item in enumerate(transitions, start=1):
+                        st.markdown(
+                            f"{index}. `{item.get('from_step', '-')}` -> `{item.get('to_step', '-')}` / {item.get('timestamp', '-')}"
+                        )
+                        if item.get("reason"):
+                            st.caption(item.get("reason"))
+            workflow_errors = run_data.get("errors", [])
+            if workflow_errors:
+                with st.expander("该运行的错误记录", expanded=False):
+                    for index, item in enumerate(workflow_errors, start=1):
+                        st.markdown(
+                            f"{index}. step=`{item.get('step_name', '-')}` / type=`{item.get('error_type', 'unknown')}` / recoverable=`{item.get('recoverable', True)}`"
+                        )
+                        st.caption(item.get("message", ""))
+            render_step_json_expander("运行记录状态对象", run_data)
 
 
 def render_analysis_page(project_name: str):
@@ -701,6 +796,31 @@ def render_retrieval_page(project_name: str):
         "external_artifact_note": "道具资料",
     }
 
+    def _import_organized_reference_entries(organized_result: dict, scope: str, authority: str, origin: str):
+        entries = organized_result.get("entries", [])
+        imported = 0
+        for index, entry in enumerate(entries, start=1):
+            payload = build_structured_external_source_payload(
+                source_type=entry.get("source_type", "external_source"),
+                scope=scope,
+                title=entry.get("title", f"entry_{index}"),
+                summary=entry.get("summary", ""),
+                content=entry.get("content", ""),
+                tags=entry.get("tags", []),
+                metadata={
+                    "authority": authority,
+                    "source_origin": origin,
+                    "organized_from_reference": True,
+                },
+                extra_fields=entry.get("extra_fields", {}),
+            )
+            entry_name = f"{organized_result.get('source_title', 'reference')}_{index:02d}"
+            ingest_external_source_file(project_name, entry_name, json.dumps(payload, ensure_ascii=False, indent=2))
+            imported += 1
+        if imported:
+            rebuild_retrieval_assets(project_name, build_vectors=True)
+        return imported
+
     try:
         manifest = load_retrieval_index(project_name)
         st.caption(
@@ -721,6 +841,29 @@ def render_retrieval_page(project_name: str):
 
     source_dir = retrieval_sources_path(project_name)
     col2.caption(f"外部资料目录：`{source_dir}`")
+
+    with st.expander("管理已导入资料", expanded=False):
+        existing_source_files = list_retrieval_source_files(project_name)
+        if not existing_source_files:
+            st.caption("当前没有已导入的外部资料文件。")
+        else:
+            selected_source_file = st.selectbox(
+                "选择要删除的资料文件",
+                options=existing_source_files,
+                key="retrieval_source_delete_target"
+            )
+            st.caption("删除后会自动重建检索索引。")
+            if st.button("删除所选资料"):
+                try:
+                    deleted = delete_retrieval_source_file(project_name, selected_source_file)
+                    if deleted:
+                        rebuild_retrieval_assets(project_name, build_vectors=True)
+                        st.success(f"已删除资料：{selected_source_file}")
+                        st.rerun()
+                    else:
+                        st.warning("目标资料不存在，可能已被删除。")
+                except Exception as exc:
+                    st.error(f"删除资料失败：{exc}")
 
     with st.expander("添加外部资料", expanded=False):
         source_name = st.text_input("资料名称", key="retrieval_source_name")
@@ -778,6 +921,81 @@ def render_retrieval_page(project_name: str):
                 ingest_external_source_file(project_name, source_name, json.dumps(payload, ensure_ascii=False, indent=2))
                 rebuild_retrieval_assets(project_name, build_vectors=True)
                 st.success("外部资料已保存并重建索引。")
+                st.rerun()
+
+    with st.expander("整理粘贴资料并导入", expanded=False):
+        paste_title = st.text_input("资料标题", key="organized_reference_title")
+        paste_scope = st.selectbox("资料范围", options=["canon", "reference"], key="organized_reference_scope")
+        paste_authority = st.selectbox(
+            "资料可信度",
+            options=["official", "curated", "community", "unknown"],
+            index=1,
+            key="organized_reference_authority"
+        )
+        paste_origin = st.text_input("来源说明（可选）", key="organized_reference_origin")
+        paste_text = st.text_area("粘贴原始资料", height=240, key="organized_reference_text")
+
+        if st.button("整理粘贴资料"):
+            if not paste_text.strip():
+                st.error("请先粘贴原始资料。")
+            else:
+                try:
+                    result = organize_reference_text(project_name, paste_title, paste_text)
+                    st.session_state["organized_reference_result"] = result
+                except Exception as exc:
+                    st.error(f"整理失败：{exc}")
+
+        organized_result = st.session_state.get("organized_reference_result", {})
+        organized_payload = organized_result.get("data", {}).get("organized_reference", {})
+        if organized_payload:
+            st.markdown(organized_result.get("data", {}).get("report_markdown", ""))
+            render_step_validation(organized_result)
+            render_step_json_expander("整理结果 JSON", organized_payload)
+            if st.button("将整理结果导入检索库"):
+                imported = _import_organized_reference_entries(organized_payload, paste_scope, paste_authority, paste_origin)
+                st.success(f"已导入 {imported} 条资料并重建索引。")
+                st.rerun()
+
+    with st.expander("从 URL 抓取并整理资料", expanded=False):
+        url_value = st.text_input("页面 URL", key="reference_url_input")
+        parsed_url = urlparse(url_value.strip()) if url_value.strip() else None
+        default_url_title = parsed_url.netloc if parsed_url and parsed_url.netloc else ""
+        url_title = st.text_input("页面标题（可选）", value=default_url_title, key="reference_url_title")
+        url_scope = st.selectbox("URL 资料范围", options=["canon", "reference"], key="reference_url_scope")
+        url_authority = st.selectbox(
+            "URL 资料可信度",
+            options=["official", "curated", "community", "unknown"],
+            index=0,
+            key="reference_url_authority"
+        )
+
+        if st.button("抓取并整理 URL 资料"):
+            if not url_value.strip():
+                st.error("URL 不能为空。")
+            else:
+                try:
+                    result = organize_reference_url(project_name, url_title or default_url_title or url_value.strip(), url_value.strip())
+                    st.session_state["organized_reference_url_result"] = result
+                except Exception as exc:
+                    st.error(f"抓取或整理失败：{exc}")
+
+        organized_url_result = st.session_state.get("organized_reference_url_result", {})
+        organized_url_payload = organized_url_result.get("data", {}).get("organized_reference", {})
+        if organized_url_payload:
+            st.markdown(organized_url_result.get("data", {}).get("report_markdown", ""))
+            render_step_validation(organized_url_result)
+            render_step_json_expander("URL 整理结果 JSON", organized_url_payload)
+            artifacts = organized_url_result.get("artifacts", {})
+            if artifacts.get("source_url"):
+                st.caption(f"source_url={artifacts.get('source_url')}")
+            if st.button("将 URL 整理结果导入检索库"):
+                imported = _import_organized_reference_entries(
+                    organized_url_payload,
+                    url_scope,
+                    url_authority,
+                    artifacts.get("source_url", url_value.strip()),
+                )
+                st.success(f"已导入 {imported} 条 URL 资料并重建索引。")
                 st.rerun()
 
     if manifest and manifest.documents:

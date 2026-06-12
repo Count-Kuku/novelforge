@@ -164,6 +164,100 @@ class ConsistencyAnalysisResult(NovelForgeSchema):
         return _normalize_string_list(value)
 
 
+class OrganizedReferenceEntry(NovelForgeSchema):
+    source_type: Literal[
+        "external_source",
+        "external_character_sheet",
+        "external_location_sheet",
+        "external_organization_sheet",
+        "external_timeline_note",
+        "external_canon_event",
+        "external_world_rule",
+        "external_artifact_note",
+    ] = "external_source"
+    title: str
+    summary: str = ""
+    content: str = ""
+    tags: list[str] = Field(default_factory=list)
+    extra_fields: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _normalize_tags(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @field_validator("extra_fields", mode="before")
+    @classmethod
+    def _normalize_extra_fields(cls, value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        normalized = {}
+        for key, item in value.items():
+            cleaned_key = str(key).strip()
+            cleaned_value = _stringify_item(item)
+            if cleaned_key and cleaned_value:
+                normalized[cleaned_key] = cleaned_value
+        return normalized
+
+
+class OrganizedReferenceResult(NovelForgeSchema):
+    source_title: str = ""
+    source_summary: str = ""
+    entries: list[OrganizedReferenceEntry] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _normalize_notes(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class PlanningOption(NovelForgeSchema):
+    title: str
+    summary: str = ""
+    strengths: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+    @field_validator("strengths", "risks", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class OutlineDiscussionResult(NovelForgeSchema):
+    title: str = "全书大纲讨论"
+    current_understanding: str = ""
+    core_goals: list[str] = Field(default_factory=list)
+    key_constraints: list[str] = Field(default_factory=list)
+    options: list[PlanningOption] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommended_direction: str = ""
+    approval_ready: bool = False
+
+    @field_validator("core_goals", "key_constraints", "open_questions", "risks", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class ChapterDiscussionResult(NovelForgeSchema):
+    title: str = "章节讨论"
+    chapter_goal: str = ""
+    current_understanding: str = ""
+    key_constraints: list[str] = Field(default_factory=list)
+    options: list[PlanningOption] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommended_direction: str = ""
+    approval_ready: bool = False
+
+    @field_validator("key_constraints", "open_questions", "risks", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
 class RetrievalDocument(NovelForgeSchema):
     doc_id: str
     project_name: str
@@ -276,12 +370,22 @@ class WorkflowError(NovelForgeSchema):
     recoverable: bool = True
 
 
+class WorkflowTransition(NovelForgeSchema):
+    from_step: str
+    to_step: str
+    reason: str = ""
+    timestamp: str = ""
+
+
 class ChapterPipelineState(NovelForgeSchema):
+    run_id: str = ""
     project_name: str
     chapter_no: int
     user_requirement: str = ""
     word_count: str = "2000-2500"
     current_step: str = "pending"
+    next_step: str = ""
+    last_successful_step: str = ""
     chapter_outline: str = ""
     chapter: str = ""
     review: dict[str, Any] = Field(default_factory=dict)
@@ -290,10 +394,15 @@ class ChapterPipelineState(NovelForgeSchema):
     steps: dict[str, WorkflowStepResult] = Field(default_factory=dict)
     completed_steps: list[str] = Field(default_factory=list)
     failed_steps: list[str] = Field(default_factory=list)
+    retry_counts: dict[str, int] = Field(default_factory=dict)
+    transition_log: list[WorkflowTransition] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     errors: list[WorkflowError] = Field(default_factory=list)
+    started_at: str = ""
+    finished_at: str = ""
     halted: bool = False
     halt_reason: str = ""
+    resumable: bool = False
     success: bool = False
 
 
@@ -369,3 +478,75 @@ def render_consistency_analysis_markdown(result: ConsistencyAnalysisResult) -> s
         _markdown_section("伏笔与铺垫", result.foreshadowing_and_setup),
         _markdown_section("优先修改项", result.priority_fixes),
     ])
+
+
+def render_organized_reference_markdown(result: OrganizedReferenceResult) -> str:
+    lines = [f"# {result.source_title or '资料整理结果'}"]
+    if result.source_summary:
+        lines.extend(["", "## Source Summary", "", result.source_summary])
+    if result.notes:
+        lines.extend(["", "## Notes", ""])
+        lines.extend([f"- {item}" for item in result.notes])
+
+    for index, entry in enumerate(result.entries, start=1):
+        lines.extend(["", f"## [{index}] {entry.title}", ""])
+        lines.append(f"- type: `{entry.source_type}`")
+        if entry.tags:
+            lines.append(f"- tags: {', '.join(entry.tags)}")
+        if entry.summary:
+            lines.extend(["", "### Summary", "", entry.summary])
+        if entry.content:
+            lines.extend(["", "### Details", "", entry.content])
+        if entry.extra_fields:
+            lines.extend(["", "### Extra Fields", ""])
+            for key, value in entry.extra_fields.items():
+                lines.append(f"- {key}: {value}")
+
+    return "\n".join(lines)
+
+
+def render_discussion_markdown(result: OutlineDiscussionResult | ChapterDiscussionResult) -> str:
+    lines = [f"# {result.title}"]
+
+    chapter_goal = getattr(result, "chapter_goal", "")
+    if chapter_goal:
+        lines.extend(["", "## Chapter Goal", "", chapter_goal])
+
+    if result.current_understanding:
+        lines.extend(["", "## Current Understanding", "", result.current_understanding])
+
+    if getattr(result, "core_goals", []):
+        lines.extend(["", "## Core Goals", ""])
+        lines.extend([f"- {item}" for item in result.core_goals])
+
+    if result.key_constraints:
+        lines.extend(["", "## Key Constraints", ""])
+        lines.extend([f"- {item}" for item in result.key_constraints])
+
+    if result.options:
+        lines.extend(["", "## Options", ""])
+        for index, option in enumerate(result.options, start=1):
+            lines.append(f"### [{index}] {option.title}")
+            if option.summary:
+                lines.extend(["", option.summary, ""])
+            if option.strengths:
+                lines.append("Strengths:")
+                lines.extend([f"- {item}" for item in option.strengths])
+            if option.risks:
+                lines.append("Risks:")
+                lines.extend([f"- {item}" for item in option.risks])
+            lines.append("")
+
+    if result.open_questions:
+        lines.extend(["", "## Open Questions", ""])
+        lines.extend([f"- {item}" for item in result.open_questions])
+
+    if result.risks:
+        lines.extend(["", "## Risks", ""])
+        lines.extend([f"- {item}" for item in result.risks])
+
+    if result.recommended_direction:
+        lines.extend(["", "## Recommended Direction", "", result.recommended_direction])
+
+    lines.extend(["", f"Approval Ready: `{result.approval_ready}`"])
+    return "\n".join(lines)

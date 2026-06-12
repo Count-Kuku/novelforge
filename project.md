@@ -48,6 +48,8 @@ Current status:
 * Retrieval document/chunk schema for future RAG workflows
 * Searchable project/external knowledge index with scoped retrieval
 * Hybrid retrieval with lexical + semantic scoring
+* Structured pasted-reference organization and single-page URL reference ingestion for canon/reference knowledge
+* Discussion-first planning support for full-story outline and chapter direction before formal generation
 
 ---
 
@@ -187,6 +189,9 @@ Responsibilities:
 * Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
 * Managing retrieval sources, index rebuilds, and retrieval preview
 * Exposing retrieval mode and score breakdown for debugging/learning
+* Organizing pasted reference text and URL pages into structured retrieval-ready entries before ingestion
+* Discussing outline and chapter direction in structured form before committing to formal generation steps
+* Listing and deleting imported external source files from the retrieval center, with automatic index rebuild after removal
 
 UI features:
 
@@ -201,6 +206,7 @@ UI features:
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
+* Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
 
 Business logic should remain minimal.
 
@@ -277,6 +283,9 @@ Responsibilities:
 * Saving reviews
 * Loading analysis reports
 * Saving analysis reports
+* Saving pipeline run state snapshots
+* Loading historical pipeline runs
+* Listing pipeline runs for inspection and future resume/replay flows
 * Fetching recent chapter summaries (configurable limit, default 5)
 * Counting total written chapters
 
@@ -295,6 +304,8 @@ Responsibilities:
 * Validate review payloads
 * Validate memory update payloads
 * Define structured analysis result models
+* Define structured reference-organization result models for controlled knowledge ingestion
+* Define structured discussion result models for outline-level and chapter-level planning conversations
 * Define retrieval documents, chunks, hits, and index manifest models
 * Convert validated analysis objects into Markdown for UI/storage
 * Centralize schema error formatting
@@ -332,6 +343,8 @@ Current retrieval design notes:
 * Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
 * Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows
 * External materials can be ingested through typed templates such as character sheets, location sheets, canon events, and world rules
+* Reference ingestion now supports two controlled entry points: pasted raw text and single-page URL fetches, both normalized into structured retrieval entries before persistence
+* Imported external source files can now be removed from the retrieval center; deletion is followed by a retrieval asset rebuild so the search index stays consistent
 * Retrieval is now observable from generation pages: major steps expose the actual hits used for prompt augmentation
 * Review and analysis outputs now append supporting source references derived from retrieval hits
 * Retrieval evidence is now grouped by `project`, `canon`, and `reference` scope so source hierarchy is explicit in both UI and outputs
@@ -356,6 +369,8 @@ Responsibilities:
 * Consistency check prompts
 * Memory update prompts
 * Memory compaction prompts
+* Reference organization prompts for pasted text and fetched pages
+* Discussion prompts for outline-level and chapter-level planning
 * Formatting layered rule blocks for prompt injection
 * Merging retrieved context into generation prompts
 
@@ -393,6 +408,8 @@ Responsibilities:
 * Foreshadowing analysis
 * Retrieve relevant internal/external context before major LLM calls
 * Return normalized workflow step objects for key execution paths
+* Organize pasted or fetched reference material into structured retrieval entries before storage
+* Produce structured discussion results for outline and chapter planning before generation
 
 Current skill design notes:
 
@@ -406,11 +423,15 @@ Current skill design notes:
 * Key workflow steps now return a common structure containing `success`, `status`, `data`, `error`, `warnings`, `retrieval_hits`, `validation`, and `artifacts`
 * The same step-result contract now covers outline generation, chapter planning, chapter writing, chapter review, memory update, and the combined pipeline
 * The chapter pipeline now maintains an explicit state object with current step, step history, warnings, halt reason, and structured error records
+* Pipeline runs are now persisted under project storage so state snapshots can be inspected after execution
+* Step failures are now normalized into structured workflow errors with typed categories such as `validation`, `persistence`, `retrieval`, `input`, and `llm`
+* Reference ingestion is currently human-in-the-loop: the system organizes material first, shows a structured preview, then imports into retrieval storage only after explicit confirmation
 * Rule injection order is: global common rules -> project common rules -> global scoped rules -> project scoped rules
 * Retrieval is task-aware: different generation steps query different source types and scopes
 * Retrieval traces are now surfaced to the UI so prompt context provenance can be inspected step by step
 * Review and analysis reports now include citation-style supporting source sections for better explainability
 * Analysis results now expose both `data.analysis` (structured payload) and `data.report_markdown` (rendered report) to the UI
+* Outline and chapter planning can now be preceded by structured discussion steps that return machine-readable options, risks, open questions, and recommended directions
 * Retrieval evidence is grouped by scope and source type to make trust boundaries and source provenance easier to inspect
 * External-source trust metadata is now visible and participates in ranking, making authority boundaries explicit during retrieval review
 * Potential conflicts are now surfaced when project evidence and external evidence overlap, giving the user an early warning before trusting a generated diagnosis
@@ -420,6 +441,16 @@ Current skill design notes:
 # Current Workflow
 
 Outline Generation
+
+Discussion-first variant:
+
+User Idea
+↓
+discuss_outline
+↓
+structured discussion result
+↓
+generate_outline
 
 User Idea
  +
@@ -438,6 +469,16 @@ The step now returns a structured result object with:
 ---
 
 Chapter Planning
+
+Discussion-first variant:
+
+Requirement + Outline + Recent Summaries
+↓
+discuss_chapter
+↓
+structured discussion result
+↓
+generate_chapter_outline
 
 Outline
 
@@ -554,6 +595,8 @@ Each step uses the shared workflow step schema so the UI can render status, erro
 The pipeline now also returns a chapter workflow state object containing:
 
 * `current_step`
+* `next_step`
+* `last_successful_step`
 * `chapter_outline`
 * `chapter`
 * `review`
@@ -561,8 +604,17 @@ The pipeline now also returns a chapter workflow state object containing:
 * `memory_update`
 * `completed_steps`
 * `failed_steps`
+* `retry_counts`
+* `transition_log`
 * `errors`
+* `run_id`
+* `started_at` / `finished_at`
 * `halted` / `halt_reason`
+* `resumable`
+
+Current observability note:
+
+* The pipeline UI now shows transition logs, typed workflow errors, and resumable hints derived from persisted chapter run state
 
 ---
 
@@ -574,6 +626,23 @@ Consistency, character, timeline, and foreshadowing analysis steps now return st
 * `data.report_markdown` — persisted Markdown report with supporting sources / conflict notes
 * `validation` — analysis schema validation status
 * `retrieval_hits` — exact evidence used during the analysis step
+
+---
+
+Planning Discussion Contract
+
+The system now supports structured planning discussions for:
+
+* full-story outline direction
+* chapter direction
+
+These discussion steps return workflow step objects with:
+
+* `data.discussion` — schema-validated discussion payload
+* `data.report_markdown` — human-readable planning discussion report
+* options with strengths / risks
+* open questions and recommended direction
+* `approval_ready` — whether the current discussion is ready to move into formal generation
 
 ---
 
@@ -632,11 +701,16 @@ retrieval/
 
 Stores retrieval index artifacts and external knowledge sources.
 
+runs/
+
+Stores persisted chapter pipeline run snapshots for history inspection and future resume/replay flows.
+
 Files:
 
 * `manifest.json` — project-scoped retrieval documents and chunks
 * `vectors.json` — chunk embedding vectors for semantic retrieval
 * `sources/` — externally added canon/reference materials
+* `runs/` stores structured pipeline state snapshots keyed by run id
 
 Note:
 
@@ -760,6 +834,10 @@ The system now derives lightweight potential-conflict warnings from retrieval hi
 
 Potential conflicts are now represented as structured objects with severity and rationale fields. Retrieval results also pass through a lightweight reranking phase that rewards stronger semantic alignment, trusted authorities, and project-grounded evidence before final context selection.
 
+16. Controlled reference ingestion
+
+The system can now organize pasted reference text or a fetched single web page into structured retrieval entries such as character sheets, location sheets, timeline notes, canon events, and world rules before ingestion. This keeps external knowledge ingestion reviewable and consistent with the existing retrieval schema.
+
 ---
 
 ## V1.1
@@ -813,6 +891,10 @@ Current implementation status:
 * Implemented: lightweight retrieval reranking after initial lexical/semantic scoring
 * Implemented: unified workflow step result contract for outline / chapter outline / writing / review / memory update / pipeline
 * Implemented: unified workflow step result contract for consistency / character / timeline / foreshadowing analysis
+* Implemented: pasted reference organization into structured retrieval-ready entries
+* Implemented: single-page URL fetch and organization for controlled canon/reference ingestion
+* Implemented: structured outline discussion before formal outline generation
+* Implemented: structured chapter discussion before formal chapter outline generation
 
 ---
 
@@ -865,6 +947,8 @@ Current design direction:
 * State-first workflow design before framework adoption
 * Explicit `ChapterPipelineState` schema for graph-ready node transitions
 * Structured `WorkflowError` records for future retries, branching, and resume behavior
+* Persisted pipeline run snapshots as the basis for future resume, replay, and workflow history tooling
+* Transition logs and typed workflow errors as the basis for future branching, retry policy, and resume UX
 
 Workflow:
 

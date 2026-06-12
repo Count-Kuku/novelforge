@@ -234,6 +234,33 @@ def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int)
     return file.read_text(encoding="utf-8")
 
 
+def runs_path(project_name: str) -> Path:
+    path = project_path(project_name) / "runs"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def save_pipeline_run(project_name: str, run_id: str, content: str):
+    file = runs_path(project_name) / f"{run_id}.json"
+    file.write_text(content, encoding="utf-8")
+
+
+def load_pipeline_run(project_name: str, run_id: str) -> str:
+    file = runs_path(project_name) / f"{run_id}.json"
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
+def list_pipeline_runs(project_name: str, chapter_no: int | None = None) -> list[str]:
+    path = runs_path(project_name)
+    files = sorted(path.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+    if chapter_no is None:
+        return [file.stem for file in files]
+    chapter_prefix = f"chapter_{chapter_no:03d}_"
+    return [file.stem for file in files if file.stem.startswith(chapter_prefix)]
+
+
 def retrieval_path(project_name: str) -> Path:
     path = project_path(project_name) / "retrieval"
     path.mkdir(exist_ok=True)
@@ -244,6 +271,23 @@ def retrieval_sources_path(project_name: str) -> Path:
     path = retrieval_path(project_name) / "sources"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def list_retrieval_source_files(project_name: str) -> list[str]:
+    path = retrieval_sources_path(project_name)
+    files = [file.relative_to(path).as_posix() for file in path.rglob("*") if file.is_file()]
+    return sorted(files, key=str.lower)
+
+
+def delete_retrieval_source_file(project_name: str, relative_path: str) -> bool:
+    base_path = retrieval_sources_path(project_name).resolve()
+    target = (base_path / relative_path).resolve()
+    if base_path not in target.parents and target != base_path:
+        raise ValueError("Invalid retrieval source path.")
+    if not target.exists() or not target.is_file():
+        return False
+    target.unlink()
+    return True
 
 
 def save_retrieval_manifest(project_name: str, content: str):
