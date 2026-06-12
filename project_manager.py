@@ -7,6 +7,9 @@ from pathlib import Path
 
 from memory import (
     BASE_DIR,
+    list_arcs,
+    list_volumes,
+    load_chapter_outline_metadata,
     load_memory,
     load_outline,
     load_review,
@@ -261,6 +264,7 @@ def list_chapter_inventory(project_name: str) -> list[dict]:
 
         inventory.append({
             "chapter_no": chapter_no,
+            "metadata": load_chapter_outline_metadata(project_name, chapter_no),
             "has_outline": outline_file.exists(),
             "has_content": content_file.exists(),
             "has_review_markdown": review_md.exists(),
@@ -291,6 +295,8 @@ def get_project_summary(project_name: str) -> dict:
     retrieval_files = list(retrieval_sources_path(project_name).rglob("*"))
     retrieval_file_count = len([item for item in retrieval_files if item.is_file()])
     chapter_inventory = list_chapter_inventory(project_name)
+    volumes = list_volumes(project_name)
+    arcs = list_arcs(project_name)
 
     return {
         "project_name": project_name,
@@ -299,6 +305,8 @@ def get_project_summary(project_name: str) -> dict:
         "canon_mode": memory.get("canon_mode", ""),
         "chapter_count": len([item for item in chapter_inventory if item.get("has_content")]),
         "chapter_outline_count": len([item for item in chapter_inventory if item.get("has_outline")]),
+        "volume_count": len(volumes),
+        "arc_count": len(arcs),
         "review_count": len([item for item in chapter_inventory if item.get("has_review_markdown") or item.get("has_review_json")]),
         "analysis_count": len(analysis_reports),
         "run_count": len(runs),

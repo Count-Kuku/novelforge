@@ -27,13 +27,17 @@ from prompts import (
 from memory import (
     chapter_count,
     get_recent_chapter_summaries,
+    load_arc_outline,
     load_chapter_outline,
+    load_chapter_outline_metadata,
     load_global_rules,
     load_memory,
     load_outline,
     load_project_rules,
+    load_volume_outline,
     save_chapter,
     save_chapter_outline,
+    save_chapter_outline_metadata,
     save_global_rules,
     save_analysis_report,
     save_memory,
@@ -579,10 +583,17 @@ def discuss_outline(project_name: str, user_idea: str) -> dict:
 def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str) -> dict:
     memory = load_memory(project_name)
     outline = load_outline(project_name)
+    chapter_metadata = load_chapter_outline_metadata(project_name, chapter_no)
+    volume_no = chapter_metadata.get("volume_no")
+    arc_no = chapter_metadata.get("arc_no")
+    volume_outline = load_volume_outline(project_name, int(volume_no)) if volume_no else ""
+    arc_outline = load_arc_outline(project_name, int(arc_no)) if arc_no else ""
     recent_summaries = get_recent_chapter_summaries(project_name)
     prompt = discuss_chapter_prompt(
         memory,
         outline,
+        volume_outline,
+        arc_outline,
         recent_summaries,
         chapter_no,
         user_requirement,
@@ -662,10 +673,17 @@ def discuss_chapter_turn(
 ) -> dict:
     memory = load_memory(project_name)
     outline = load_outline(project_name)
+    chapter_metadata = load_chapter_outline_metadata(project_name, chapter_no)
+    volume_no = chapter_metadata.get("volume_no")
+    arc_no = chapter_metadata.get("arc_no")
+    volume_outline = load_volume_outline(project_name, int(volume_no)) if volume_no else ""
+    arc_outline = load_arc_outline(project_name, int(arc_no)) if arc_no else ""
     recent_summaries = get_recent_chapter_summaries(project_name)
     prompt = discuss_chapter_turn_prompt(
         memory,
         outline,
+        volume_outline,
+        arc_outline,
         recent_summaries,
         chapter_no,
         user_requirement,
@@ -769,17 +787,26 @@ def generate_outline(project_name: str, user_idea: str) -> dict:
 def generate_chapter_outline(
     project_name: str,
     chapter_no: int,
-    user_requirement: str
+    user_requirement: str,
+    volume_no: int | None = None,
+    arc_no: int | None = None,
 ) -> dict:
     memory = load_memory(project_name)
     outline = load_outline(project_name)
+    existing_metadata = load_chapter_outline_metadata(project_name, chapter_no)
+    effective_volume_no = volume_no if volume_no is not None else existing_metadata.get("volume_no")
+    effective_arc_no = arc_no if arc_no is not None else existing_metadata.get("arc_no")
+    volume_outline = load_volume_outline(project_name, int(effective_volume_no)) if effective_volume_no else ""
+    arc_outline = load_arc_outline(project_name, int(effective_arc_no)) if effective_arc_no else ""
     trace_key = f"chapter_outline:{project_name}:{chapter_no}"
     recent_summaries = get_recent_chapter_summaries(project_name)
     retrieval_context = _build_retrieval_context(
         project_name,
-        f"第{chapter_no}章 {user_requirement} {outline}",
+        f"第{chapter_no}章 {user_requirement} {outline} {volume_outline} {arc_outline}",
         allowed_source_types=[
             "outline",
+            "volume_outline",
+            "arc_outline",
             "chapter_summary",
             "chapter_outline",
             "memory_character",
@@ -797,6 +824,8 @@ def generate_chapter_outline(
     prompt = merge_retrieval_context(chapter_outline_prompt(
         memory,
         outline,
+        volume_outline,
+        arc_outline,
         recent_summaries,
         chapter_no,
         user_requirement,
@@ -806,13 +835,17 @@ def generate_chapter_outline(
     if not outline.strip():
         raise RuntimeError("LLM returned empty chapter outline.")
     save_chapter_outline(project_name, chapter_no, outline)
+    save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": effective_volume_no, "arc_no": effective_arc_no})
     return _make_step_result(
         "chapter_outline",
         success=True,
         status="completed",
-        data={"chapter_outline": outline},
+        data={"chapter_outline": outline, "chapter_outline_metadata": {"chapter_no": chapter_no, "volume_no": effective_volume_no, "arc_no": effective_arc_no}},
         retrieval_hits=get_retrieval_trace(trace_key),
-        artifacts={"saved_path": f"data/projects/{project_name}/chapter_outlines/chapter_{chapter_no:03d}.md"},
+        artifacts={
+            "saved_path": f"data/projects/{project_name}/chapter_outlines/chapter_{chapter_no:03d}.md",
+            "metadata_path": f"data/projects/{project_name}/chapter_outlines/chapter_{chapter_no:03d}.meta.json",
+        },
     ).model_dump()
 
 def write_chapter(

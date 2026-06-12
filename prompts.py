@@ -138,6 +138,8 @@ def merge_retrieval_context(prompt: str, retrieval_context: str) -> str:
 def chapter_outline_prompt(
     memory: dict,
     outline: str,
+    volume_outline: str,
+    arc_outline: str,
     recent_summaries: list[dict],
     chapter_no: int,
     user_requirement: str,
@@ -161,6 +163,12 @@ def chapter_outline_prompt(
 全书大纲：
 {outline or '暂无全书大纲，请尽量根据当前设定与用户要求规划。'}
 
+所属分卷大纲：
+{volume_outline or '当前章节未指定分卷，或该分卷尚无大纲。'}
+
+所属剧情段大纲：
+{arc_outline or '当前章节未指定剧情段，或该剧情段尚无大纲。'}
+
 最近章节摘要：
 {recent_summary_text}
 
@@ -180,16 +188,20 @@ def chapter_outline_prompt(
 
 要求补充：
 1. 尽量与全书大纲保持一致
-2. 尽量承接最近章节摘要中的剧情状态
-3. 如果用户要求与大纲冲突，明确给出折中处理方式
-4. 所有场景按字数分配规划，不要按时间（分钟/秒）划分
-5. 每个场景标注预计占用字数
+2. 如果存在分卷大纲，优先保持与当前分卷目标、冲突、阶段推进一致
+3. 如果存在剧情段大纲，优先保证本章服务于当前剧情段的关键事件与推进目标
+4. 尽量承接最近章节摘要中的剧情状态
+5. 如果用户要求与大纲冲突，明确给出折中处理方式
+6. 所有场景按字数分配规划，不要按时间（分钟/秒）划分
+7. 每个场景标注预计占用字数
 """
 
 
 def discuss_chapter_prompt(
     memory: dict,
     outline: str,
+    volume_outline: str,
+    arc_outline: str,
     recent_summaries: list[dict],
     chapter_no: int,
     user_requirement: str,
@@ -212,6 +224,12 @@ def discuss_chapter_prompt(
 
 全书大纲：
 {outline or '暂无全书大纲，请尽量根据当前设定与用户要求规划。'}
+
+所属分卷大纲：
+{volume_outline or '当前章节未指定分卷，或该分卷尚无大纲。'}
+
+所属剧情段大纲：
+{arc_outline or '当前章节未指定剧情段，或该剧情段尚无大纲。'}
 
 最近章节摘要：
 {recent_summary_text}
@@ -243,10 +261,11 @@ def discuss_chapter_prompt(
 
 要求：
 1. 明确本章目标、冲突和叙事功能
-2. 提出 2-3 个可执行的章节方向或场景组织方案
-3. 说明每个方案的节奏、风险和适配条件
-4. 列出需要用户确认的关键问题
-5. 如果信息足够，请给出推荐方向并标明 approval_ready=true
+2. 如果存在分卷大纲或剧情段大纲，讨论结论必须与这些上游规划节点保持一致或明确说明偏离原因
+3. 提出 2-3 个可执行的章节方向或场景组织方案
+4. 说明每个方案的节奏、风险和适配条件
+5. 列出需要用户确认的关键问题
+6. 如果信息足够，请给出推荐方向并标明 approval_ready=true
 """
 
 
@@ -318,6 +337,8 @@ def discuss_outline_turn_prompt(
 def discuss_chapter_turn_prompt(
     memory: dict,
     outline: str,
+    volume_outline: str,
+    arc_outline: str,
     recent_summaries: list[dict],
     chapter_no: int,
     user_requirement: str,
@@ -345,6 +366,12 @@ def discuss_chapter_turn_prompt(
 
 全书大纲：
 {outline or '暂无全书大纲，请尽量根据当前设定与用户要求规划。'}
+
+所属分卷大纲：
+{volume_outline or '当前章节未指定分卷，或该分卷尚无大纲。'}
+
+所属剧情段大纲：
+{arc_outline or '当前章节未指定剧情段，或该剧情段尚无大纲。'}
 
 最近章节摘要：
 {recent_summary_text}
@@ -389,9 +416,10 @@ def discuss_chapter_turn_prompt(
 要求：
 1. `assistant_message` 必须是自然对话式回复，而不是报告体
 2. 如果当前信息不足，优先追问会影响章节方向的关键问题
-3. `discussion` 必须随着本轮对话更新
-4. `open_questions` 只保留当前还未解决的问题
-5. 如果本章方向已经足够明确，给出收束性结论，并将 `approval_ready` 设为 true
+3. 如果存在分卷大纲或剧情段大纲，更新后的 `discussion` 必须与这些上游规划节点保持一致或明确说明偏离原因
+4. `discussion` 必须随着本轮对话更新
+5. `open_questions` 只保留当前还未解决的问题
+6. 如果本章方向已经足够明确，给出收束性结论，并将 `approval_ready` 设为 true
 """
 
 def write_chapter_prompt(

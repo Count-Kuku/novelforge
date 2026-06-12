@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, VolumeOutlineMetadata
+
 BASE_DIR = Path("data/projects")
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
 RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "memory_update"]
@@ -178,12 +180,238 @@ def load_outline(project_name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def volumes_path(project_name: str) -> Path:
+    path = project_path(project_name) / "volumes"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def _volume_markdown_path(project_name: str, volume_no: int) -> Path:
+    return volumes_path(project_name) / f"volume_{volume_no:03d}.md"
+
+
+def _volume_meta_path(project_name: str, volume_no: int) -> Path:
+    return volumes_path(project_name) / f"volume_{volume_no:03d}.meta.json"
+
+
+def arcs_path(project_name: str) -> Path:
+    path = project_path(project_name) / "arcs"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def _arc_markdown_path(project_name: str, arc_no: int) -> Path:
+    return arcs_path(project_name) / f"arc_{arc_no:03d}.md"
+
+
+def _arc_meta_path(project_name: str, arc_no: int) -> Path:
+    return arcs_path(project_name) / f"arc_{arc_no:03d}.meta.json"
+
+
+def save_volume_outline(project_name: str, volume_no: int, outline: str):
+    file = _volume_markdown_path(project_name, volume_no)
+    file.write_text(outline, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_volume_outline(project_name: str, volume_no: int) -> str:
+    file = _volume_markdown_path(project_name, volume_no)
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
+def save_volume_metadata(project_name: str, volume_no: int, metadata: dict):
+    normalized = VolumeOutlineMetadata.model_validate({**metadata, "volume_no": volume_no})
+    file = _volume_meta_path(project_name, volume_no)
+    file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_volume_metadata(project_name: str, volume_no: int) -> dict:
+    file = _volume_meta_path(project_name, volume_no)
+    fallback = VolumeOutlineMetadata(volume_no=volume_no).model_dump()
+    if not file.exists():
+        return fallback
+    try:
+        return VolumeOutlineMetadata.model_validate(json.loads(file.read_text(encoding="utf-8"))).model_dump()
+    except Exception:
+        return fallback
+
+
+def list_volumes(project_name: str) -> list[dict]:
+    path = volumes_path(project_name)
+    volume_numbers: set[int] = set()
+    for file in path.glob("volume_*.md"):
+        try:
+            volume_numbers.add(int(file.stem.split("_")[-1]))
+        except Exception:
+            continue
+    for file in path.glob("volume_*.meta.json"):
+        try:
+            volume_numbers.add(int(file.name.replace("volume_", "").replace(".meta.json", "")))
+        except Exception:
+            continue
+
+    items = []
+    for volume_no in sorted(volume_numbers):
+        metadata = load_volume_metadata(project_name, volume_no)
+        outline = load_volume_outline(project_name, volume_no)
+        items.append({
+            **metadata,
+            "outline": outline,
+            "has_outline": bool(outline.strip()),
+        })
+    return items
+
+
+def delete_volume(project_name: str, volume_no: int) -> bool:
+    deleted = False
+    markdown_path = _volume_markdown_path(project_name, volume_no)
+    meta_path = _volume_meta_path(project_name, volume_no)
+    if markdown_path.exists():
+        markdown_path.unlink()
+        deleted = True
+    if meta_path.exists():
+        meta_path.unlink()
+        deleted = True
+    if deleted:
+        chapter_outline_dir = project_path(project_name) / "chapter_outlines"
+        if chapter_outline_dir.exists():
+            for file in chapter_outline_dir.glob("chapter_*.meta.json"):
+                try:
+                    payload = json.loads(file.read_text(encoding="utf-8"))
+                    normalized = ChapterOutlineMetadata.model_validate(payload).model_dump()
+                except Exception:
+                    continue
+                if normalized.get("volume_no") != volume_no:
+                    continue
+                normalized["volume_no"] = None
+                if normalized.get("arc_no") is not None:
+                    normalized["arc_no"] = None
+                file.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    if deleted:
+        sync_project_retrieval_assets(project_name)
+    return deleted
+
+
+def save_arc_outline(project_name: str, arc_no: int, outline: str):
+    file = _arc_markdown_path(project_name, arc_no)
+    file.write_text(outline, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_arc_outline(project_name: str, arc_no: int) -> str:
+    file = _arc_markdown_path(project_name, arc_no)
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
+def save_arc_metadata(project_name: str, arc_no: int, metadata: dict):
+    normalized = ArcOutlineMetadata.model_validate({**metadata, "arc_no": arc_no})
+    file = _arc_meta_path(project_name, arc_no)
+    file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_arc_metadata(project_name: str, arc_no: int) -> dict:
+    file = _arc_meta_path(project_name, arc_no)
+    fallback = ArcOutlineMetadata(arc_no=arc_no).model_dump()
+    if not file.exists():
+        return fallback
+    try:
+        return ArcOutlineMetadata.model_validate(json.loads(file.read_text(encoding="utf-8"))).model_dump()
+    except Exception:
+        return fallback
+
+
+def list_arcs(project_name: str, volume_no: int | None = None) -> list[dict]:
+    path = arcs_path(project_name)
+    arc_numbers: set[int] = set()
+    for file in path.glob("arc_*.md"):
+        try:
+            arc_numbers.add(int(file.stem.split("_")[-1]))
+        except Exception:
+            continue
+    for file in path.glob("arc_*.meta.json"):
+        try:
+            arc_numbers.add(int(file.name.replace("arc_", "").replace(".meta.json", "")))
+        except Exception:
+            continue
+
+    items = []
+    for arc_no in sorted(arc_numbers):
+        metadata = load_arc_metadata(project_name, arc_no)
+        if volume_no is not None and metadata.get("volume_no") != volume_no:
+            continue
+        outline = load_arc_outline(project_name, arc_no)
+        items.append({
+            **metadata,
+            "outline": outline,
+            "has_outline": bool(outline.strip()),
+        })
+    return items
+
+
+def delete_arc(project_name: str, arc_no: int) -> bool:
+    deleted = False
+    markdown_path = _arc_markdown_path(project_name, arc_no)
+    meta_path = _arc_meta_path(project_name, arc_no)
+    if markdown_path.exists():
+        markdown_path.unlink()
+        deleted = True
+    if meta_path.exists():
+        meta_path.unlink()
+        deleted = True
+    if deleted:
+        chapter_outline_dir = project_path(project_name) / "chapter_outlines"
+        if chapter_outline_dir.exists():
+            for file in chapter_outline_dir.glob("chapter_*.meta.json"):
+                try:
+                    payload = json.loads(file.read_text(encoding="utf-8"))
+                    normalized = ChapterOutlineMetadata.model_validate(payload).model_dump()
+                except Exception:
+                    continue
+                if normalized.get("arc_no") != arc_no:
+                    continue
+                normalized["arc_no"] = None
+                file.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    if deleted:
+        sync_project_retrieval_assets(project_name)
+    return deleted
+
+
+def _chapter_outline_meta_path(project_name: str, chapter_no: int) -> Path:
+    path = project_path(project_name) / "chapter_outlines"
+    path.mkdir(exist_ok=True)
+    return path / f"chapter_{chapter_no:03d}.meta.json"
+
+
 def save_chapter_outline(project_name: str, chapter_no: int, outline: str):
     path = project_path(project_name) / "chapter_outlines"
     path.mkdir(exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.md"
     file.write_text(outline, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
+
+
+def save_chapter_outline_metadata(project_name: str, chapter_no: int, metadata: dict):
+    normalized = ChapterOutlineMetadata.model_validate({**metadata, "chapter_no": chapter_no})
+    file = _chapter_outline_meta_path(project_name, chapter_no)
+    file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_chapter_outline_metadata(project_name: str, chapter_no: int) -> dict:
+    file = _chapter_outline_meta_path(project_name, chapter_no)
+    fallback = ChapterOutlineMetadata(chapter_no=chapter_no).model_dump()
+    if not file.exists():
+        return fallback
+    try:
+        return ChapterOutlineMetadata.model_validate(json.loads(file.read_text(encoding="utf-8"))).model_dump()
+    except Exception:
+        return fallback
 
 
 def load_chapter_outline(project_name: str, chapter_no: int) -> str:

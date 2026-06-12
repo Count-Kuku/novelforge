@@ -65,6 +65,7 @@ Current practical status:
 * Multi-turn planning discussion UI with continuously updated discussion conclusions
 * Project management workspace with project overview, rename/delete, and resource CRUD
 * IDE-style resource browser for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
+* Hierarchical outline support with project outline + volume outlines + arc outlines + chapter assignment to volume / arc
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
@@ -170,6 +171,10 @@ novelforge/
 
         ├── outline.md
 
+        ├── volumes/
+
+        ├── arcs/
+
         ├── chapter_outlines/
 
         ├── chapters/
@@ -185,6 +190,14 @@ novelforge/
             ├── vectors.json
 
             └── sources/
+
+        Note:
+
+        * `volumes/volume_xxx.md` stores per-volume outline content
+        * `volumes/volume_xxx.meta.json` stores per-volume metadata such as title / summary / status
+        * `arcs/arc_xxx.md` stores per-arc outline content
+        * `arcs/arc_xxx.meta.json` stores per-arc metadata such as `volume_no`, title, summary, status, and planning estimates
+        * `chapter_outlines/chapter_xxx.meta.json` stores lightweight chapter outline metadata such as `volume_no` and `arc_no`
 ```
 
 ---
@@ -213,6 +226,7 @@ Responsibilities:
 * Managing project resources through an IDE-style browser with unified preview/edit/save/delete behavior
 * Supporting direct CRUD for outlines, chapter files, review artifacts, analysis artifacts, run snapshots, and external sources from the UI
 * Supporting batch cleanup for chapter bundles, run snapshots, and external sources
+* Managing volume outlines, arc outlines, and assigning chapter outlines to parent volume / arc nodes
 
 UI features:
 
@@ -228,7 +242,10 @@ UI features:
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
-* Resource browser with left-side file navigation and right-side editor/detail panel
+* Resource browser with left-side file navigation, right-side editor/detail panel, and lightweight volume / arc filtering
+* Dedicated volume outline page for editing per-volume title / summary / status / outline body
+* Dedicated arc outline page for editing per-arc parent volume, title, summary, status, estimated chapter count, target word count range, outline body, and linked chapter visibility
+* Chapter discussion and chapter-outline generation now both consume the currently selected volume / arc planning context so discussion and formal generation stay aligned
 
 Business logic should remain minimal.
 
@@ -297,8 +314,19 @@ Responsibilities:
 * Saving project rules
 * Loading outlines
 * Saving outlines
+* Loading volume outlines
+* Saving volume outlines
+* Loading volume metadata
+* Saving volume metadata
+* Loading arc outlines
+* Saving arc outlines
+* Loading arc metadata
+* Saving arc metadata
 * Loading chapter outlines
 * Saving chapter outlines
+* Loading chapter-outline metadata such as volume / arc assignment
+* Saving chapter-outline metadata such as volume / arc assignment
+* Keeping downstream chapter metadata consistent when parent volume / arc planning nodes are deleted
 * Loading chapters
 * Saving chapters
 * Loading reviews
@@ -328,6 +356,7 @@ Responsibilities:
 * Define structured analysis result models
 * Define structured reference-organization result models for controlled knowledge ingestion
 * Define structured discussion result models for outline-level and chapter-level planning conversations
+* Define structured metadata models for volume outlines, arc outlines, and chapter assignment to parent planning nodes
 * Define retrieval documents, chunks, hits, and index manifest models
 * Convert validated analysis objects into Markdown for UI/storage
 * Centralize schema error formatting
@@ -349,6 +378,7 @@ Retrieval and indexing layer.
 Responsibilities:
 
 * Convert project storage into searchable retrieval documents
+* Convert volume outlines, arc outlines, and chapter planning assignments into searchable retrieval documents / metadata
 * Ingest external canon/reference files into project-scoped retrieval storage
 * Chunk long documents into retrieval units
 * Persist a project retrieval manifest for reuse
@@ -362,6 +392,8 @@ Current retrieval design notes:
 * Retrieval documents are separated from prompt logic so the indexing contract remains reusable
 * Scope priority currently prefers `project`, then `canon`, then `reference`
 * Retrieval is already injected into outline, chapter planning, writing, review, memory update, and analysis steps
+* Project volume outlines and arc outlines are now indexed as first-class retrieval documents so chapter planning can use story-level, volume-level, and arc-level context together
+* Planning metadata saves now trigger retrieval asset refresh so hierarchy changes stay visible to later retrieval-augmented planning steps
 * Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
 * Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows
 * External materials can be ingested through typed templates such as character sheets, location sheets, canon events, and world rules
@@ -383,6 +415,7 @@ Responsibilities:
 
 * Outline generation prompts
 * Chapter outline prompts
+* Volume-aware and arc-aware chapter outline prompts
 * Chapter writing prompts (supports configurable word count)
 * Chapter review prompts
 * Character analysis prompts
@@ -395,6 +428,7 @@ Responsibilities:
 * Discussion prompts for outline-level and chapter-level planning
 * Formatting layered rule blocks for prompt injection
 * Merging retrieved context into generation prompts
+* Injecting current volume outline and arc outline context into chapter-planning prompts when available
 
 Current prompt design notes:
 
@@ -418,6 +452,7 @@ Responsibilities:
 
 * Generate outline
 * Generate chapter outline
+* Generate chapter outline with optional parent-volume and parent-arc context
 * Write chapter (with configurable word count)
 * Review chapter
 * Update memory
@@ -429,6 +464,8 @@ Responsibilities:
 * Timeline analysis
 * Foreshadowing analysis
 * Retrieve relevant internal/external context before major LLM calls
+* Persist lightweight chapter-to-volume / arc assignment metadata alongside chapter outlines
+* Keep chapter discussion context aligned with the currently selected parent volume / arc planning nodes
 * Return normalized workflow step objects for key execution paths
 * Organize pasted or fetched reference material into structured retrieval entries before storage
 * Produce structured discussion results for outline and chapter planning before generation
@@ -503,6 +540,8 @@ structured discussion result
 generate_chapter_outline
 
 Outline
+
+Relevant Volume Outline (optional)
 
 Recent Chapter Summaries
  +
@@ -707,6 +746,16 @@ chapter_outlines/
 
 Stores chapter plans.
 
+Each chapter outline can also carry lightweight metadata such as parent `volume_no` and `arc_no`.
+
+volumes/
+
+Stores per-volume outlines and metadata used for mid-level story planning.
+
+arcs/
+
+Stores per-arc outlines and metadata used for sequence-level story planning under a volume.
+
 chapters/
 
 Stores chapter content.
@@ -819,6 +868,8 @@ The project already has explicit workflow state, structured step contracts, pers
 
 Structured outline discussion and chapter discussion are already implemented. The next step is turning those discussions into clearer approval checkpoints and more reusable planning artifacts.
 
+This now also includes continuing the new hierarchy work from story outline into volume-level planning and arc-level planning, then later into chapter-allocation and word-budget planning.
+
 4. Prepare for evaluation
 
 Structured outputs, retrieval traces, and workflow state now make evaluation feasible. The next step is defining stable metrics and artifact collection so future automated evaluation can measure quality over time.
@@ -887,6 +938,8 @@ Current implementation status:
 * Implemented: project overview page and project rename/delete controls
 * Implemented: project resource CRUD for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
 * Implemented: IDE-style resource browser with unified edit/save/delete flows and batch cleanup controls
+* Implemented: project-level volume outline storage, editing UI, and chapter-to-volume assignment metadata
+* Implemented: project-level arc outline storage, editing UI, and chapter-to-arc assignment metadata
 
 Interpretation:
 
@@ -924,6 +977,7 @@ Current implementation status:
 * Implemented: source-aware smart chunking for structured records, Markdown sections, and long prose
 * Implemented: typed external source templates for better RAG ingestion quality
 * Implemented: per-step retrieval trace display in generation, review, analysis, and pipeline result views
+* Implemented: volume-outline and arc-outline retrieval indexing and prompt injection for chapter planning
 * Implemented: supporting source sections in review and analysis outputs
 * Implemented: scope-aware grouped evidence display for retrieval traces and supporting sources
 * Implemented: authority-aware metadata capture, ranking, and evidence display for external sources

@@ -258,6 +258,29 @@ class ChapterDiscussionResult(NovelForgeSchema):
         return _normalize_string_list(value)
 
 
+class VolumeOutlineMetadata(NovelForgeSchema):
+    volume_no: int
+    title: str = ""
+    summary: str = ""
+    status: Literal["draft", "approved", "archived"] = "draft"
+
+
+class ArcOutlineMetadata(NovelForgeSchema):
+    arc_no: int
+    volume_no: int | None = None
+    title: str = ""
+    summary: str = ""
+    status: Literal["draft", "approved", "archived"] = "draft"
+    estimated_chapter_count: int | None = None
+    target_word_count_range: str = ""
+
+
+class ChapterOutlineMetadata(NovelForgeSchema):
+    chapter_no: int
+    volume_no: int | None = None
+    arc_no: int | None = None
+
+
 class RetrievalDocument(NovelForgeSchema):
     doc_id: str
     project_name: str

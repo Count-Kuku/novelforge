@@ -10,13 +10,20 @@ from pathlib import Path
 
 from llm import get_embedding
 from memory import (
+    load_arc_metadata,
+    load_arc_outline,
     load_analysis_report,
     load_chapter,
     load_chapter_outline,
+    load_chapter_outline_metadata,
     load_memory,
     load_outline,
+    load_volume_outline,
+    load_volume_metadata,
     load_review,
     load_review_json,
+    list_arcs,
+    list_volumes,
     load_retrieval_manifest,
     load_retrieval_vectors,
     project_path,
@@ -350,11 +357,59 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
     if doc:
         documents.append(doc)
 
+    for volume in list_volumes(project_name):
+        volume_no = int(volume.get("volume_no", 0))
+        volume_outline = load_volume_outline(project_name, volume_no)
+        volume_meta = load_volume_metadata(project_name, volume_no)
+        doc = _make_document(
+            project_name,
+            "volume_outline",
+            f"volume_{volume_no:03d}",
+            volume_meta.get("title") or f"Volume {volume_no:03d}",
+            volume_outline,
+            path=str(base_path / "volumes" / f"volume_{volume_no:03d}.md"),
+            tags=["volume_outline", f"volume_{volume_no:03d}"],
+            metadata={
+                "authority": "project",
+                "volume_no": volume_no,
+                "status": volume_meta.get("status", "draft"),
+                "summary": volume_meta.get("summary", ""),
+            },
+        )
+        if doc:
+            documents.append(doc)
+
+    for arc in list_arcs(project_name):
+        arc_no = int(arc.get("arc_no", 0))
+        arc_outline = load_arc_outline(project_name, arc_no)
+        arc_meta = load_arc_metadata(project_name, arc_no)
+        doc = _make_document(
+            project_name,
+            "arc_outline",
+            f"arc_{arc_no:03d}",
+            arc_meta.get("title") or f"Arc {arc_no:03d}",
+            arc_outline,
+            path=str(base_path / "arcs" / f"arc_{arc_no:03d}.md"),
+            tags=["arc_outline", f"arc_{arc_no:03d}"],
+            metadata={
+                "authority": "project",
+                "arc_no": arc_no,
+                "volume_no": arc_meta.get("volume_no"),
+                "status": arc_meta.get("status", "draft"),
+                "summary": arc_meta.get("summary", ""),
+                "estimated_chapter_count": arc_meta.get("estimated_chapter_count"),
+                "target_word_count_range": arc_meta.get("target_word_count_range", ""),
+            },
+        )
+        if doc:
+            documents.append(doc)
+
     chapter_outline_dir = base_path / "chapter_outlines"
     if chapter_outline_dir.exists():
         for file in sorted(chapter_outline_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
             chapter_no = int(match.group(1)) if match else None
+            chapter_meta = load_chapter_outline_metadata(project_name, chapter_no) if chapter_no is not None else {}
             doc = _make_document(
                 project_name,
                 "chapter_outline",
@@ -364,7 +419,11 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["chapter_outline"],
-                metadata={"authority": "project"},
+                metadata={
+                    "authority": "project",
+                    "volume_no": chapter_meta.get("volume_no"),
+                    "arc_no": chapter_meta.get("arc_no"),
+                },
             )
             if doc:
                 documents.append(doc)

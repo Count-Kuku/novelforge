@@ -5,11 +5,18 @@ from urllib.parse import urlparse
 
 from memory import (
     create_project,
+    delete_arc,
     delete_retrieval_source_file,
+    delete_volume,
+    list_arcs,
     load_analysis_report,
+    load_arc_metadata,
+    load_arc_outline,
+    load_chapter_outline_metadata,
     load_global_rules,
     list_projects,
     list_retrieval_source_files,
+    list_volumes,
     load_chapter,
     load_chapter_outline,
     load_memory,
@@ -17,12 +24,19 @@ from memory import (
     load_project_rules,
     load_review,
     load_review_json,
+    load_volume_metadata,
+    load_volume_outline,
     save_chapter,
     save_chapter_outline,
+    save_chapter_outline_metadata,
     save_global_rules,
     save_memory,
     save_outline,
     save_project_rules,
+    save_arc_metadata,
+    save_arc_outline,
+    save_volume_metadata,
+    save_volume_outline,
     list_pipeline_runs,
     load_pipeline_run,
     retrieval_sources_path,
@@ -97,6 +111,16 @@ def _discussion_result_key(kind: str, suffix: str = "") -> str:
 
 def _discussion_input_key(kind: str, suffix: str = "") -> str:
     return f"discussion_input:{kind}:{suffix}" if suffix else f"discussion_input:{kind}"
+
+
+def _discussion_input_clear_flag_key(kind: str, suffix: str = "") -> str:
+    return f"discussion_input_clear:{kind}:{suffix}" if suffix else f"discussion_input_clear:{kind}"
+
+
+def _consume_discussion_input_clear(kind: str, suffix: str = ""):
+    flag_key = _discussion_input_clear_flag_key(kind, suffix)
+    if st.session_state.pop(flag_key, False):
+        st.session_state[_discussion_input_key(kind, suffix)] = ""
 
 
 def _append_discussion_message(key: str, role: str, content: str):
@@ -428,6 +452,8 @@ def render_outline_page(project_name: str):
     messages_key = _discussion_messages_key("outline")
     result_key = _discussion_result_key("outline")
     input_key = _discussion_input_key("outline")
+    clear_input_flag_key = _discussion_input_clear_flag_key("outline")
+    _consume_discussion_input_clear("outline")
     discussion_step = st.session_state.get(result_key, {})
 
     col_action_1, col_action_2 = st.columns(2)
@@ -445,7 +471,7 @@ def render_outline_page(project_name: str):
     if col_action_2.button("重置讨论"):
         st.session_state[result_key] = {}
         st.session_state[messages_key] = []
-        st.session_state[input_key] = ""
+        st.session_state[clear_input_flag_key] = True
         st.rerun()
 
     summary_col, chat_col = st.columns([1, 1])
@@ -477,7 +503,7 @@ def render_outline_page(project_name: str):
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了当前讨论结论。"
                     _append_discussion_message(messages_key, "assistant", assistant_message)
-                    st.session_state[input_key] = ""
+                    st.session_state[clear_input_flag_key] = True
                     st.rerun()
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
@@ -506,6 +532,52 @@ def render_chapter_outline_page(project_name: str):
 
     chapter_no = st.number_input("章节编号", min_value=1, value=1)
     existing_outline = load_chapter_outline(project_name, chapter_no)
+    outline_metadata = load_chapter_outline_metadata(project_name, chapter_no)
+    volumes = list_volumes(project_name)
+    volume_options = [0] + [int(item.get("volume_no", 0)) for item in volumes]
+    default_volume = int(outline_metadata.get("volume_no") or 0)
+    volume_no = st.selectbox(
+        "所属分卷",
+        options=volume_options,
+        index=volume_options.index(default_volume) if default_volume in volume_options else 0,
+        format_func=lambda value: "未指定分卷" if value == 0 else f"第 {value} 卷",
+        key=f"chapter_outline_volume_{chapter_no}",
+    )
+    if volume_no:
+        volume_meta = load_volume_metadata(project_name, volume_no)
+        st.caption(f"当前分卷：第 {volume_no} 卷 / {volume_meta.get('title', '') or '未命名分卷'}")
+    else:
+        volume_meta = {}
+    arcs = list_arcs(project_name, volume_no=volume_no or None)
+    arc_options = [0] + [int(item.get("arc_no", 0)) for item in arcs]
+    default_arc = int(outline_metadata.get("arc_no") or 0)
+    arc_no = st.selectbox(
+        "所属剧情段",
+        options=arc_options,
+        index=arc_options.index(default_arc) if default_arc in arc_options else 0,
+        format_func=lambda value: "未指定剧情段" if value == 0 else f"Arc {value:03d}",
+        key=f"chapter_outline_arc_{chapter_no}",
+    )
+    if arc_no:
+        arc_meta = load_arc_metadata(project_name, arc_no)
+        st.caption(f"当前剧情段：Arc {arc_no:03d} / {arc_meta.get('title', '') or '未命名剧情段'}")
+    else:
+        arc_meta = {}
+
+    hierarchy_parts = ["全书大纲"]
+    if volume_no:
+        hierarchy_parts.append(f"第 {volume_no} 卷")
+    if arc_no:
+        hierarchy_parts.append(f"Arc {arc_no:03d}")
+    hierarchy_parts.append(f"第 {chapter_no} 章")
+    st.info(" -> ".join(hierarchy_parts))
+
+    if volume_meta.get("summary"):
+        with st.expander("当前分卷摘要", expanded=False):
+            st.markdown(volume_meta.get("summary", ""))
+    if arc_meta.get("summary"):
+        with st.expander("当前剧情段摘要", expanded=False):
+            st.markdown(arc_meta.get("summary", ""))
     step_result = st.session_state.get(f"chapter_outline_step_{chapter_no}", {})
     requirement = st.text_area("本章要求", height=200)
 
@@ -513,11 +585,14 @@ def render_chapter_outline_page(project_name: str):
     messages_key = _discussion_messages_key("chapter", suffix)
     result_key = _discussion_result_key("chapter", suffix)
     input_key = _discussion_input_key("chapter", suffix)
+    clear_input_flag_key = _discussion_input_clear_flag_key("chapter", suffix)
+    _consume_discussion_input_clear("chapter", suffix)
     discussion_step = st.session_state.get(result_key, {})
 
     col_action_1, col_action_2 = st.columns(2)
     if col_action_1.button("开始讨论本章方向"):
         try:
+            save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": volume_no or None, "arc_no": arc_no or None})
             result = discuss_chapter(project_name, chapter_no, requirement)
             st.session_state[result_key] = result
             st.session_state[messages_key] = []
@@ -530,7 +605,7 @@ def render_chapter_outline_page(project_name: str):
     if col_action_2.button("重置本章讨论"):
         st.session_state[result_key] = {}
         st.session_state[messages_key] = []
-        st.session_state[input_key] = ""
+        st.session_state[clear_input_flag_key] = True
         st.rerun()
 
     summary_col, chat_col = st.columns([1, 1])
@@ -555,6 +630,7 @@ def render_chapter_outline_page(project_name: str):
                 st.warning("请先填写本章要求。")
             else:
                 try:
+                    save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": volume_no or None, "arc_no": arc_no or None})
                     _append_discussion_message(messages_key, "user", follow_up)
                     messages = st.session_state.get(messages_key, [])
                     result = discuss_chapter_turn(
@@ -568,13 +644,13 @@ def render_chapter_outline_page(project_name: str):
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本章讨论结论。"
                     _append_discussion_message(messages_key, "assistant", assistant_message)
-                    st.session_state[input_key] = ""
+                    st.session_state[clear_input_flag_key] = True
                     st.rerun()
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
 
     if st.button("生成章节细纲"):
-        result = generate_chapter_outline(project_name, chapter_no, requirement)
+        result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None)
         st.session_state[f"chapter_outline_step_{chapter_no}"] = result
         st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
 
@@ -586,6 +662,7 @@ def render_chapter_outline_page(project_name: str):
 
     if st.button("保存章节细纲"):
         save_chapter_outline(project_name, chapter_no, outline_text)
+        save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": volume_no or None, "arc_no": arc_no or None})
         st.success(f"第 {chapter_no} 章细纲已保存")
 
     render_step_validation(step_result)
@@ -718,10 +795,12 @@ def render_project_overview_page(project_name: str):
     col4.metric("分析报告", summary.get("analysis_count", 0))
 
     col5, col6, col7, col8 = st.columns(4)
-    col5.metric("流水线记录", summary.get("run_count", 0))
-    col6.metric("外部资料", summary.get("retrieval_source_count", 0))
-    col7.metric("章节摘要", summary.get("chapter_summary_count", 0))
-    col8.metric("资源文件数", summary.get("resource_file_count", 0))
+    col5.metric("分卷数量", summary.get("volume_count", 0))
+    col6.metric("剧情段数量", summary.get("arc_count", 0))
+    col7.metric("流水线记录", summary.get("run_count", 0))
+    col8.metric("外部资料", summary.get("retrieval_source_count", 0))
+
+    st.caption(f"章节摘要={summary.get('chapter_summary_count', 0)} / 资源文件数={summary.get('resource_file_count', 0)}")
 
     st.caption(
         f"title={summary.get('title', project_name)} / genre={summary.get('genre', '-') or '-'} / canon_mode={summary.get('canon_mode', '-') or '-'} / updated_at={summary.get('updated_at', '-') or '-'}"
@@ -771,17 +850,58 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
         "deletable": bool(outline.strip()),
     })
 
+    for volume in list_volumes(project_name):
+        volume_no = int(volume.get("volume_no", 0))
+        items.append({
+            "id": f"volume:{volume_no}",
+            "group": "volume_outline",
+            "label": f"volume_{volume_no:03d}.md",
+            "path_label": f"volumes / volume_{volume_no:03d}.md",
+            "content": volume.get("outline", ""),
+            "volume_no": volume_no,
+            "volume_metadata": volume,
+            "chapter_no": None,
+            "analysis_type": "",
+            "relative_path": f"volumes/volume_{volume_no:03d}.md",
+            "editable": True,
+            "deletable": True,
+        })
+
+    for arc in list_arcs(project_name):
+        arc_no = int(arc.get("arc_no", 0))
+        volume_no = arc.get("volume_no")
+        parent_label = f" / 第{int(volume_no)}卷" if volume_no else ""
+        items.append({
+            "id": f"arc:{arc_no}",
+            "group": "arc_outline",
+            "label": f"arc_{arc_no:03d}.md",
+            "path_label": f"arcs / arc_{arc_no:03d}.md{parent_label}",
+            "content": arc.get("outline", ""),
+            "arc_no": arc_no,
+            "arc_metadata": arc,
+            "chapter_no": None,
+            "analysis_type": "",
+            "relative_path": f"arcs/arc_{arc_no:03d}.md",
+            "editable": True,
+            "deletable": True,
+        })
+    
+
     chapter_inventory = list_chapter_inventory(project_name)
     for item in chapter_inventory:
         chapter_no = int(item.get("chapter_no", 0))
         if item.get("has_outline"):
+            chapter_meta = item.get("metadata", {}) or {}
+            volume_suffix = f" / 第{int(chapter_meta.get('volume_no'))}卷" if chapter_meta.get("volume_no") else ""
+            arc_suffix = f" / Arc {int(chapter_meta.get('arc_no')):03d}" if chapter_meta.get("arc_no") else ""
             items.append({
                 "id": f"chapter-outline:{chapter_no}",
                 "group": "chapter_outline",
                 "label": f"chapter_{chapter_no:03d}.md",
-                "path_label": f"chapter_outlines / chapter_{chapter_no:03d}.md",
+                "path_label": f"chapter_outlines / chapter_{chapter_no:03d}.md{volume_suffix}{arc_suffix}",
                 "content": item.get("outline_preview", ""),
                 "chapter_no": chapter_no,
+                "chapter_metadata": chapter_meta,
                 "analysis_type": "",
                 "relative_path": f"chapter_outlines/chapter_{chapter_no:03d}.md",
                 "editable": True,
@@ -877,6 +997,18 @@ def _save_browser_resource(project_name: str, resource: dict, edited_content: st
     if group == "outline":
         save_outline(project_name, edited_content)
         return
+    if group == "volume_outline":
+        volume_no = int(resource.get("volume_no", 0))
+        save_volume_outline(project_name, volume_no, edited_content)
+        metadata = dict(resource.get("volume_metadata", {}) or {})
+        save_volume_metadata(project_name, volume_no, metadata)
+        return
+    if group == "arc_outline":
+        arc_no = int(resource.get("arc_no", 0))
+        save_arc_outline(project_name, arc_no, edited_content)
+        metadata = dict(resource.get("arc_metadata", {}) or {})
+        save_arc_metadata(project_name, arc_no, metadata)
+        return
     if group == "chapter_outline":
         save_chapter_outline(project_name, int(resource.get("chapter_no", 0)), edited_content)
         return
@@ -901,6 +1033,10 @@ def _delete_browser_resource(project_name: str, resource: dict):
     group = resource.get("group")
     if group == "outline":
         return delete_outline(project_name)
+    if group == "volume_outline":
+        return delete_volume(project_name, int(resource.get("volume_no", 0)))
+    if group == "arc_outline":
+        return delete_arc(project_name, int(resource.get("arc_no", 0)))
     if group == "chapter_outline":
         return delete_chapter_outline(project_name, int(resource.get("chapter_no", 0)))
     if group == "chapter_content":
@@ -945,6 +1081,36 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
     )
 
     edited_json_text = ""
+    if group == "volume_outline":
+        metadata = dict(resource.get("volume_metadata", {}) or {})
+        volume_title = st.text_input("分卷标题", value=metadata.get("title", ""), key=f"browser_volume_title_{resource.get('id')}")
+        volume_summary = st.text_area("分卷摘要", value=metadata.get("summary", ""), height=120, key=f"browser_volume_summary_{resource.get('id')}")
+        volume_status = st.selectbox("分卷状态", options=["draft", "approved", "archived"], index=["draft", "approved", "archived"].index(metadata.get("status", "draft")) if metadata.get("status", "draft") in ["draft", "approved", "archived"] else 0, key=f"browser_volume_status_{resource.get('id')}")
+        resource["volume_metadata"] = {
+            "volume_no": int(resource.get("volume_no", 0)),
+            "title": volume_title,
+            "summary": volume_summary,
+            "status": volume_status,
+        }
+    if group == "arc_outline":
+        metadata = dict(resource.get("arc_metadata", {}) or {})
+        arc_title = st.text_input("剧情段标题", value=metadata.get("title", ""), key=f"browser_arc_title_{resource.get('id')}")
+        arc_summary = st.text_area("剧情段摘要", value=metadata.get("summary", ""), height=120, key=f"browser_arc_summary_{resource.get('id')}")
+        volume_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name)]
+        current_volume = int(metadata.get("volume_no") or 0)
+        arc_volume_no = st.selectbox("所属分卷", options=volume_options, index=volume_options.index(current_volume) if current_volume in volume_options else 0, format_func=lambda value: "未指定分卷" if value == 0 else f"第 {value} 卷", key=f"browser_arc_volume_{resource.get('id')}")
+        arc_status = st.selectbox("剧情段状态", options=["draft", "approved", "archived"], index=["draft", "approved", "archived"].index(metadata.get("status", "draft")) if metadata.get("status", "draft") in ["draft", "approved", "archived"] else 0, key=f"browser_arc_status_{resource.get('id')}")
+        estimated_chapter_count = st.number_input("预计章节数", min_value=0, value=int(metadata.get("estimated_chapter_count") or 0), key=f"browser_arc_estimated_chapters_{resource.get('id')}")
+        target_word_count_range = st.text_input("目标总字数范围", value=metadata.get("target_word_count_range", ""), key=f"browser_arc_word_range_{resource.get('id')}")
+        resource["arc_metadata"] = {
+            "arc_no": int(resource.get("arc_no", 0)),
+            "volume_no": arc_volume_no or None,
+            "title": arc_title,
+            "summary": arc_summary,
+            "status": arc_status,
+            "estimated_chapter_count": estimated_chapter_count or None,
+            "target_word_count_range": target_word_count_range,
+        }
     if group == "review":
         edited_json_text = st.text_area(
             "审阅 JSON",
@@ -987,6 +1153,21 @@ def render_resource_management_page(project_name: str):
         st.markdown("### 资源浏览器")
         search_value = st.text_input("搜索资源", key=f"resource_browser_search_{project_name}")
         search_lower = search_value.strip().lower()
+        volume_filter_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name)]
+        browser_volume_filter = st.selectbox(
+            "按分卷过滤",
+            options=volume_filter_options,
+            format_func=lambda value: "全部分卷" if value == 0 else f"第 {value} 卷",
+            key=f"resource_browser_volume_filter_{project_name}",
+        )
+        arc_filter_candidates = list_arcs(project_name, volume_no=browser_volume_filter or None)
+        arc_filter_options = [0] + [int(item.get("arc_no", 0)) for item in arc_filter_candidates]
+        browser_arc_filter = st.selectbox(
+            "按剧情段过滤",
+            options=arc_filter_options,
+            format_func=lambda value: "全部剧情段" if value == 0 else f"Arc {value:03d}",
+            key=f"resource_browser_arc_filter_{project_name}",
+        )
 
         chapter_inventory = list_chapter_inventory(project_name)
         runs = list_project_runs(project_name)
@@ -1045,6 +1226,8 @@ def render_resource_management_page(project_name: str):
 
         groups = [
             ("outline", "全书大纲"),
+            ("volume_outline", "分卷大纲"),
+            ("arc_outline", "剧情段大纲"),
             ("chapter_outline", "章节细纲"),
             ("chapter_content", "章节正文"),
             ("review", "审阅结果"),
@@ -1055,6 +1238,34 @@ def render_resource_management_page(project_name: str):
 
         for group_key, group_label in groups:
             group_items = [item for item in browser_items if item.get("group") == group_key]
+            if browser_volume_filter:
+                filtered_items = []
+                for item in group_items:
+                    item_volume_no = item.get("volume_no")
+                    if item_volume_no is None:
+                        item_volume_no = (item.get("volume_metadata") or {}).get("volume_no")
+                    if item_volume_no is None:
+                        item_volume_no = (item.get("arc_metadata") or {}).get("volume_no")
+                    if item_volume_no is None:
+                        item_volume_no = (item.get("chapter_metadata") or {}).get("volume_no")
+                    if item.get("group") in {"outline", "run", "analysis", "source", "review", "chapter_content"}:
+                        filtered_items.append(item)
+                    elif item_volume_no == browser_volume_filter:
+                        filtered_items.append(item)
+                group_items = filtered_items
+            if browser_arc_filter:
+                filtered_items = []
+                for item in group_items:
+                    item_arc_no = item.get("arc_no")
+                    if item_arc_no is None:
+                        item_arc_no = (item.get("arc_metadata") or {}).get("arc_no")
+                    if item_arc_no is None:
+                        item_arc_no = (item.get("chapter_metadata") or {}).get("arc_no")
+                    if item.get("group") in {"outline", "volume_outline", "run", "analysis", "source", "review", "chapter_content"}:
+                        filtered_items.append(item)
+                    elif item_arc_no == browser_arc_filter:
+                        filtered_items.append(item)
+                group_items = filtered_items
             if search_lower:
                 group_items = [
                     item for item in group_items
@@ -1090,6 +1301,27 @@ def render_project_files_page(project_name: str):
         with st.expander("outline.md", expanded=True):
             st.markdown(outline)
 
+    volumes = list_volumes(project_name)
+    for volume in volumes:
+        volume_no = int(volume.get("volume_no", 0))
+        title = volume.get("title", "") or f"volume_{volume_no:03d}.md"
+        with st.expander(f"volumes/volume_{volume_no:03d}.md / {title}", expanded=False):
+            if volume.get("summary"):
+                st.caption(volume.get("summary"))
+            st.markdown(volume.get("outline", "") or "")
+
+    arcs = list_arcs(project_name)
+    for arc in arcs:
+        arc_no = int(arc.get("arc_no", 0))
+        title = arc.get("title", "") or f"arc_{arc_no:03d}.md"
+        with st.expander(f"arcs/arc_{arc_no:03d}.md / {title}", expanded=False):
+            if arc.get("summary"):
+                st.caption(arc.get("summary"))
+            if arc.get("volume_no"):
+                st.caption(f"所属分卷：第 {int(arc.get('volume_no'))} 卷")
+            st.markdown(arc.get("outline", "") or "")
+
+
     chapter_no = st.number_input("预览章节编号", min_value=1, value=1, key="preview_chapter_no")
     chapter_outline = load_chapter_outline(project_name, chapter_no)
     chapter = load_chapter(project_name, chapter_no)
@@ -1110,6 +1342,122 @@ def render_project_files_page(project_name: str):
     if review_json:
         with st.expander(f"reviews/chapter_{chapter_no:03d}.json", expanded=False):
             st.code(json.dumps(review_json, ensure_ascii=False, indent=2), language="json")
+
+
+def render_volume_outline_page(project_name: str):
+    st.subheader("分卷大纲")
+
+    volume_no = st.number_input("分卷编号", min_value=1, value=1, key="volume_outline_no")
+    metadata = load_volume_metadata(project_name, volume_no)
+    existing_outline = load_volume_outline(project_name, volume_no)
+
+    title = st.text_input("分卷标题", value=metadata.get("title", ""), key=f"volume_title_{volume_no}")
+    summary = st.text_area("分卷摘要", value=metadata.get("summary", ""), height=120, key=f"volume_summary_{volume_no}")
+    status = st.selectbox(
+        "分卷状态",
+        options=["draft", "approved", "archived"],
+        index=["draft", "approved", "archived"].index(metadata.get("status", "draft")) if metadata.get("status", "draft") in ["draft", "approved", "archived"] else 0,
+        key=f"volume_status_{volume_no}",
+    )
+
+    outline_text = st.text_area("分卷大纲内容", value=existing_outline, height=500, key=f"volume_outline_editor_{volume_no}")
+
+    col1, col2 = st.columns(2)
+    if col1.button("保存分卷大纲", key=f"save_volume_{volume_no}"):
+        save_volume_outline(project_name, volume_no, outline_text)
+        save_volume_metadata(project_name, volume_no, {"title": title, "summary": summary, "status": status})
+        st.success(f"第 {volume_no} 卷大纲已保存")
+        st.rerun()
+    if col2.button("删除分卷", key=f"delete_volume_{volume_no}"):
+        if delete_volume(project_name, volume_no):
+            st.success(f"第 {volume_no} 卷已删除")
+            st.rerun()
+        else:
+            st.warning("目标分卷不存在。")
+
+    volumes = list_volumes(project_name)
+    if volumes:
+        st.markdown("### 现有分卷")
+        for item in volumes:
+            st.caption(f"第 {int(item.get('volume_no', 0))} 卷 / {item.get('title', '') or '未命名'} / status={item.get('status', 'draft')}")
+
+
+def render_arc_outline_page(project_name: str):
+    st.subheader("剧情段大纲")
+
+    arc_no = st.number_input("剧情段编号", min_value=1, value=1, key="arc_outline_no")
+    metadata = load_arc_metadata(project_name, arc_no)
+    existing_outline = load_arc_outline(project_name, arc_no)
+
+    volume_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name)]
+    current_volume = int(metadata.get("volume_no") or 0)
+    volume_no = st.selectbox(
+        "所属分卷",
+        options=volume_options,
+        index=volume_options.index(current_volume) if current_volume in volume_options else 0,
+        format_func=lambda value: "未指定分卷" if value == 0 else f"第 {value} 卷",
+        key=f"arc_volume_{arc_no}",
+    )
+    title = st.text_input("剧情段标题", value=metadata.get("title", ""), key=f"arc_title_{arc_no}")
+    summary = st.text_area("剧情段摘要", value=metadata.get("summary", ""), height=120, key=f"arc_summary_{arc_no}")
+    status = st.selectbox(
+        "剧情段状态",
+        options=["draft", "approved", "archived"],
+        index=["draft", "approved", "archived"].index(metadata.get("status", "draft")) if metadata.get("status", "draft") in ["draft", "approved", "archived"] else 0,
+        key=f"arc_status_{arc_no}",
+    )
+    estimated_chapter_count = st.number_input("预计章节数", min_value=0, value=int(metadata.get("estimated_chapter_count") or 0), key=f"arc_estimated_chapters_{arc_no}")
+    target_word_count_range = st.text_input("目标总字数范围", value=metadata.get("target_word_count_range", ""), key=f"arc_word_range_{arc_no}")
+
+    outline_text = st.text_area("剧情段大纲内容", value=existing_outline, height=500, key=f"arc_outline_editor_{arc_no}")
+
+    col1, col2 = st.columns(2)
+    if col1.button("保存剧情段大纲", key=f"save_arc_{arc_no}"):
+        save_arc_outline(project_name, arc_no, outline_text)
+        save_arc_metadata(project_name, arc_no, {
+            "volume_no": volume_no or None,
+            "title": title,
+            "summary": summary,
+            "status": status,
+            "estimated_chapter_count": estimated_chapter_count or None,
+            "target_word_count_range": target_word_count_range,
+        })
+        st.success(f"Arc {arc_no:03d} 已保存")
+        st.rerun()
+    if col2.button("删除剧情段", key=f"delete_arc_{arc_no}"):
+        if delete_arc(project_name, arc_no):
+            st.success(f"Arc {arc_no:03d} 已删除")
+            st.rerun()
+        else:
+            st.warning("目标剧情段不存在。")
+
+    arcs = list_arcs(project_name)
+    if arcs:
+        st.markdown("### 现有剧情段")
+        for item in arcs:
+            volume_label = f" / 第 {int(item.get('volume_no'))} 卷" if item.get("volume_no") else ""
+            st.caption(f"Arc {int(item.get('arc_no', 0)):03d}{volume_label} / {item.get('title', '') or '未命名'} / status={item.get('status', 'draft')}")
+
+    chapter_inventory = list_chapter_inventory(project_name)
+    linked_chapters = [
+        item for item in chapter_inventory
+        if ((item.get("metadata") or {}).get("arc_no") == arc_no)
+    ]
+    st.markdown("### 当前剧情段下的章节")
+    if not linked_chapters:
+        st.caption("当前剧情段下还没有归属章节。")
+    else:
+        for item in linked_chapters:
+            chapter_no = int(item.get("chapter_no", 0))
+            status_parts = []
+            if item.get("has_outline"):
+                status_parts.append("细纲")
+            if item.get("has_content"):
+                status_parts.append("正文")
+            if item.get("has_review_markdown") or item.get("has_review_json"):
+                status_parts.append("审阅")
+            status_text = " / ".join(status_parts) if status_parts else "尚无内容"
+            st.caption(f"第 {chapter_no} 章 / {status_text}")
 
 
 def render_pipeline_page(project_name: str):
@@ -1651,7 +1999,7 @@ else:
 
 page = st.sidebar.radio(
     "项目管理",
-    ["项目总览", "项目资源", "设定库", "交互规则", "RAG 检索", "生成大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
+    ["项目总览", "项目资源", "设定库", "交互规则", "RAG 检索", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
 )
 
 if not project_name:
@@ -1668,6 +2016,10 @@ elif page == "RAG 检索":
     render_retrieval_page(project_name)
 elif page == "生成大纲":
     render_outline_page(project_name)
+elif page == "分卷大纲":
+    render_volume_outline_page(project_name)
+elif page == "剧情段大纲":
+    render_arc_outline_page(project_name)
 elif page == "生成细纲":
     render_chapter_outline_page(project_name)
 elif page == "写章节":
