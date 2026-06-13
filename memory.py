@@ -180,6 +180,46 @@ def load_outline(project_name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _outline_discussion_path(project_name: str) -> Path:
+    return project_path(project_name) / "outline.discussion.json"
+
+
+def save_outline_discussion_artifact(project_name: str, discussion: dict, report_markdown: str):
+    path = _outline_discussion_path(project_name)
+    payload = {
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(report_markdown or ""),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_outline_discussion_artifact(project_name: str) -> dict:
+    path = _outline_discussion_path(project_name)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    discussion = payload.get("discussion", {})
+    return {
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(payload.get("report_markdown", "") or ""),
+    }
+
+
+def delete_outline_discussion_artifact(project_name: str) -> bool:
+    path = _outline_discussion_path(project_name)
+    if not path.exists():
+        return False
+    path.unlink()
+    sync_project_retrieval_assets(project_name)
+    return True
+
+
 def volumes_path(project_name: str) -> Path:
     path = project_path(project_name) / "volumes"
     path.mkdir(exist_ok=True)
@@ -192,6 +232,10 @@ def _volume_markdown_path(project_name: str, volume_no: int) -> Path:
 
 def _volume_meta_path(project_name: str, volume_no: int) -> Path:
     return volumes_path(project_name) / f"volume_{volume_no:03d}.meta.json"
+
+
+def _volume_discussion_path(project_name: str, volume_no: int) -> Path:
+    return volumes_path(project_name) / f"volume_{volume_no:03d}.discussion.json"
 
 
 def arcs_path(project_name: str) -> Path:
@@ -208,6 +252,10 @@ def _arc_meta_path(project_name: str, arc_no: int) -> Path:
     return arcs_path(project_name) / f"arc_{arc_no:03d}.meta.json"
 
 
+def _arc_discussion_path(project_name: str, arc_no: int) -> Path:
+    return arcs_path(project_name) / f"arc_{arc_no:03d}.discussion.json"
+
+
 def save_volume_outline(project_name: str, volume_no: int, outline: str):
     file = _volume_markdown_path(project_name, volume_no)
     file.write_text(outline, encoding="utf-8")
@@ -222,10 +270,51 @@ def load_volume_outline(project_name: str, volume_no: int) -> str:
 
 
 def save_volume_metadata(project_name: str, volume_no: int, metadata: dict):
-    normalized = VolumeOutlineMetadata.model_validate({**metadata, "volume_no": volume_no})
+    current = load_volume_metadata(project_name, volume_no)
+    normalized = VolumeOutlineMetadata.model_validate({**current, **metadata, "volume_no": volume_no})
     file = _volume_meta_path(project_name, volume_no)
     file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
+
+
+def save_volume_discussion_artifact(project_name: str, volume_no: int, discussion: dict, report_markdown: str):
+    file = _volume_discussion_path(project_name, volume_no)
+    payload = {
+        "volume_no": volume_no,
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(report_markdown or ""),
+    }
+    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_volume_metadata(project_name, volume_no, {"has_approved_discussion": bool((discussion or {}).get("approval_ready"))})
+    sync_project_retrieval_assets(project_name)
+
+
+def load_volume_discussion_artifact(project_name: str, volume_no: int) -> dict:
+    file = _volume_discussion_path(project_name, volume_no)
+    if not file.exists():
+        return {}
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    discussion = payload.get("discussion", {})
+    return {
+        "volume_no": volume_no,
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(payload.get("report_markdown", "") or ""),
+    }
+
+
+def delete_volume_discussion_artifact(project_name: str, volume_no: int) -> bool:
+    file = _volume_discussion_path(project_name, volume_no)
+    if not file.exists():
+        return False
+    file.unlink()
+    save_volume_metadata(project_name, volume_no, {"has_approved_discussion": False})
+    sync_project_retrieval_assets(project_name)
+    return True
 
 
 def load_volume_metadata(project_name: str, volume_no: int) -> dict:
@@ -269,11 +358,15 @@ def delete_volume(project_name: str, volume_no: int) -> bool:
     deleted = False
     markdown_path = _volume_markdown_path(project_name, volume_no)
     meta_path = _volume_meta_path(project_name, volume_no)
+    discussion_path = _volume_discussion_path(project_name, volume_no)
     if markdown_path.exists():
         markdown_path.unlink()
         deleted = True
     if meta_path.exists():
         meta_path.unlink()
+        deleted = True
+    if discussion_path.exists():
+        discussion_path.unlink()
         deleted = True
     if deleted:
         chapter_outline_dir = project_path(project_name) / "chapter_outlines"
@@ -309,10 +402,51 @@ def load_arc_outline(project_name: str, arc_no: int) -> str:
 
 
 def save_arc_metadata(project_name: str, arc_no: int, metadata: dict):
-    normalized = ArcOutlineMetadata.model_validate({**metadata, "arc_no": arc_no})
+    current = load_arc_metadata(project_name, arc_no)
+    normalized = ArcOutlineMetadata.model_validate({**current, **metadata, "arc_no": arc_no})
     file = _arc_meta_path(project_name, arc_no)
     file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
+
+
+def save_arc_discussion_artifact(project_name: str, arc_no: int, discussion: dict, report_markdown: str):
+    file = _arc_discussion_path(project_name, arc_no)
+    payload = {
+        "arc_no": arc_no,
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(report_markdown or ""),
+    }
+    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    save_arc_metadata(project_name, arc_no, {"has_approved_discussion": bool((discussion or {}).get("approval_ready"))})
+    sync_project_retrieval_assets(project_name)
+
+
+def load_arc_discussion_artifact(project_name: str, arc_no: int) -> dict:
+    file = _arc_discussion_path(project_name, arc_no)
+    if not file.exists():
+        return {}
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    discussion = payload.get("discussion", {})
+    return {
+        "arc_no": arc_no,
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(payload.get("report_markdown", "") or ""),
+    }
+
+
+def delete_arc_discussion_artifact(project_name: str, arc_no: int) -> bool:
+    file = _arc_discussion_path(project_name, arc_no)
+    if not file.exists():
+        return False
+    file.unlink()
+    save_arc_metadata(project_name, arc_no, {"has_approved_discussion": False})
+    sync_project_retrieval_assets(project_name)
+    return True
 
 
 def load_arc_metadata(project_name: str, arc_no: int) -> dict:
@@ -358,11 +492,15 @@ def delete_arc(project_name: str, arc_no: int) -> bool:
     deleted = False
     markdown_path = _arc_markdown_path(project_name, arc_no)
     meta_path = _arc_meta_path(project_name, arc_no)
+    discussion_path = _arc_discussion_path(project_name, arc_no)
     if markdown_path.exists():
         markdown_path.unlink()
         deleted = True
     if meta_path.exists():
         meta_path.unlink()
+        deleted = True
+    if discussion_path.exists():
+        discussion_path.unlink()
         deleted = True
     if deleted:
         chapter_outline_dir = project_path(project_name) / "chapter_outlines"
@@ -388,6 +526,12 @@ def _chapter_outline_meta_path(project_name: str, chapter_no: int) -> Path:
     return path / f"chapter_{chapter_no:03d}.meta.json"
 
 
+def _chapter_discussion_path(project_name: str, chapter_no: int) -> Path:
+    path = project_path(project_name) / "chapter_outlines"
+    path.mkdir(exist_ok=True)
+    return path / f"chapter_{chapter_no:03d}.discussion.json"
+
+
 def save_chapter_outline(project_name: str, chapter_no: int, outline: str):
     path = project_path(project_name) / "chapter_outlines"
     path.mkdir(exist_ok=True)
@@ -401,6 +545,44 @@ def save_chapter_outline_metadata(project_name: str, chapter_no: int, metadata: 
     file = _chapter_outline_meta_path(project_name, chapter_no)
     file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
+
+
+def save_chapter_discussion_artifact(project_name: str, chapter_no: int, discussion: dict, report_markdown: str):
+    file = _chapter_discussion_path(project_name, chapter_no)
+    payload = {
+        "chapter_no": chapter_no,
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(report_markdown or ""),
+    }
+    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_chapter_discussion_artifact(project_name: str, chapter_no: int) -> dict:
+    file = _chapter_discussion_path(project_name, chapter_no)
+    if not file.exists():
+        return {}
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    discussion = payload.get("discussion", {})
+    return {
+        "chapter_no": chapter_no,
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(payload.get("report_markdown", "") or ""),
+    }
+
+
+def delete_chapter_discussion_artifact(project_name: str, chapter_no: int) -> bool:
+    file = _chapter_discussion_path(project_name, chapter_no)
+    if not file.exists():
+        return False
+    file.unlink()
+    sync_project_retrieval_assets(project_name)
+    return True
 
 
 def load_chapter_outline_metadata(project_name: str, chapter_no: int) -> dict:

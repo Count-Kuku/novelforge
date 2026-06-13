@@ -258,11 +258,46 @@ class ChapterDiscussionResult(NovelForgeSchema):
         return _normalize_string_list(value)
 
 
+class VolumeDiscussionResult(NovelForgeSchema):
+    title: str = "分卷讨论"
+    volume_goal: str = ""
+    current_understanding: str = ""
+    key_constraints: list[str] = Field(default_factory=list)
+    options: list[PlanningOption] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommended_direction: str = ""
+    approval_ready: bool = False
+
+    @field_validator("key_constraints", "open_questions", "risks", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class ArcDiscussionResult(NovelForgeSchema):
+    title: str = "剧情段讨论"
+    arc_goal: str = ""
+    current_understanding: str = ""
+    key_constraints: list[str] = Field(default_factory=list)
+    options: list[PlanningOption] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommended_direction: str = ""
+    approval_ready: bool = False
+
+    @field_validator("key_constraints", "open_questions", "risks", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
 class VolumeOutlineMetadata(NovelForgeSchema):
     volume_no: int
     title: str = ""
     summary: str = ""
     status: Literal["draft", "approved", "archived"] = "draft"
+    has_approved_discussion: bool = False
 
 
 class ArcOutlineMetadata(NovelForgeSchema):
@@ -273,12 +308,27 @@ class ArcOutlineMetadata(NovelForgeSchema):
     status: Literal["draft", "approved", "archived"] = "draft"
     estimated_chapter_count: int | None = None
     target_word_count_range: str = ""
+    has_approved_discussion: bool = False
 
 
 class ChapterOutlineMetadata(NovelForgeSchema):
     chapter_no: int
     volume_no: int | None = None
     arc_no: int | None = None
+
+
+class ChapterWritingGuidance(NovelForgeSchema):
+    tone: str = ""
+    pacing: str = ""
+    dialogue_density: str = ""
+    focus: list[str] = Field(default_factory=list)
+    ending_strength: str = ""
+    extra_requirements: str = ""
+
+    @field_validator("focus", mode="before")
+    @classmethod
+    def _normalize_focus(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
 
 
 class RetrievalDocument(NovelForgeSchema):
@@ -528,12 +578,20 @@ def render_organized_reference_markdown(result: OrganizedReferenceResult) -> str
     return "\n".join(lines)
 
 
-def render_discussion_markdown(result: OutlineDiscussionResult | ChapterDiscussionResult) -> str:
+def render_discussion_markdown(
+    result: OutlineDiscussionResult | ChapterDiscussionResult | VolumeDiscussionResult | ArcDiscussionResult,
+) -> str:
     lines = [f"# {result.title}"]
 
-    chapter_goal = getattr(result, "chapter_goal", "")
-    if chapter_goal:
-        lines.extend(["", "## Chapter Goal", "", chapter_goal])
+    goal_sections = [
+        ("chapter_goal", "Chapter Goal"),
+        ("volume_goal", "Volume Goal"),
+        ("arc_goal", "Arc Goal"),
+    ]
+    for attr_name, label in goal_sections:
+        goal = getattr(result, attr_name, "")
+        if goal:
+            lines.extend(["", f"## {label}", "", goal])
 
     if result.current_understanding:
         lines.extend(["", "## Current Understanding", "", result.current_understanding])

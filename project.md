@@ -60,12 +60,14 @@ Current practical status:
 * Retrieval evidence grouping, authority weighting, conflict warnings, and reranking
 * Structured pasted-reference organization and single-page URL reference ingestion for canon/reference knowledge
 * Discussion-first planning support for full-story outline and chapter direction before formal generation
+* Approval-based planning artifacts for outline / volume / arc / chapter discussions
 * Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
 * Story-state oriented memory fields for canon mode, AU rules, relationships, and active constraints
 * Multi-turn planning discussion UI with continuously updated discussion conclusions
 * Project management workspace with project overview, rename/delete, and resource CRUD
 * IDE-style resource browser for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
 * Hierarchical outline support with project outline + volume outlines + arc outlines + chapter assignment to volume / arc
+* Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
@@ -193,11 +195,15 @@ novelforge/
 
         Note:
 
+        * `outline.discussion.json` stores approved full-story discussion artifacts when available
         * `volumes/volume_xxx.md` stores per-volume outline content
         * `volumes/volume_xxx.meta.json` stores per-volume metadata such as title / summary / status
+        * `volumes/volume_xxx.discussion.json` stores approved per-volume discussion artifacts when available
         * `arcs/arc_xxx.md` stores per-arc outline content
         * `arcs/arc_xxx.meta.json` stores per-arc metadata such as `volume_no`, title, summary, status, and planning estimates
+        * `arcs/arc_xxx.discussion.json` stores approved per-arc discussion artifacts when available
         * `chapter_outlines/chapter_xxx.meta.json` stores lightweight chapter outline metadata such as `volume_no` and `arc_no`
+        * `chapter_outlines/chapter_xxx.discussion.json` stores approved chapter-planning discussion artifacts when available
 ```
 
 ---
@@ -227,6 +233,7 @@ Responsibilities:
 * Supporting direct CRUD for outlines, chapter files, review artifacts, analysis artifacts, run snapshots, and external sources from the UI
 * Supporting batch cleanup for chapter bundles, run snapshots, and external sources
 * Managing volume outlines, arc outlines, and assigning chapter outlines to parent volume / arc nodes
+* Managing approval / clearing of persisted planning discussion artifacts for outline, volume, arc, and chapter layers
 
 UI features:
 
@@ -246,6 +253,8 @@ UI features:
 * Dedicated volume outline page for editing per-volume title / summary / status / outline body
 * Dedicated arc outline page for editing per-arc parent volume, title, summary, status, estimated chapter count, target word count range, outline body, and linked chapter visibility
 * Chapter discussion and chapter-outline generation now both consume the currently selected volume / arc planning context so discussion and formal generation stay aligned
+* Planning pages can now approve and clear persisted discussion artifacts, and chapter-outline generation can optionally require approved chapter / volume / arc planning discussions
+* Chapter writing page now includes lightweight writing-guidance controls instead of a heavier second discussion layer
 
 Business logic should remain minimal.
 
@@ -318,14 +327,22 @@ Responsibilities:
 * Saving volume outlines
 * Loading volume metadata
 * Saving volume metadata
+* Loading persisted full-story discussion artifacts
+* Saving persisted full-story discussion artifacts
+* Loading persisted volume discussion artifacts
+* Saving persisted volume discussion artifacts
 * Loading arc outlines
 * Saving arc outlines
 * Loading arc metadata
 * Saving arc metadata
+* Loading persisted arc discussion artifacts
+* Saving persisted arc discussion artifacts
 * Loading chapter outlines
 * Saving chapter outlines
 * Loading chapter-outline metadata such as volume / arc assignment
 * Saving chapter-outline metadata such as volume / arc assignment
+* Loading persisted chapter discussion artifacts
+* Saving persisted chapter discussion artifacts
 * Keeping downstream chapter metadata consistent when parent volume / arc planning nodes are deleted
 * Loading chapters
 * Saving chapters
@@ -355,8 +372,9 @@ Responsibilities:
 * Validate memory update payloads
 * Define structured analysis result models
 * Define structured reference-organization result models for controlled knowledge ingestion
-* Define structured discussion result models for outline-level and chapter-level planning conversations
+* Define structured discussion result models for outline-level, volume-level, arc-level, and chapter-level planning conversations
 * Define structured metadata models for volume outlines, arc outlines, and chapter assignment to parent planning nodes
+* Define structured writing-guidance model for lightweight chapter execution control
 * Define retrieval documents, chunks, hits, and index manifest models
 * Convert validated analysis objects into Markdown for UI/storage
 * Centralize schema error formatting
@@ -393,6 +411,7 @@ Current retrieval design notes:
 * Scope priority currently prefers `project`, then `canon`, then `reference`
 * Retrieval is already injected into outline, chapter planning, writing, review, memory update, and analysis steps
 * Project volume outlines and arc outlines are now indexed as first-class retrieval documents so chapter planning can use story-level, volume-level, and arc-level context together
+* Approved outline / volume / arc / chapter discussion artifacts are now indexed as first-class retrieval documents so planning approvals remain visible to retrieval-aware workflows
 * Planning metadata saves now trigger retrieval asset refresh so hierarchy changes stay visible to later retrieval-augmented planning steps
 * Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
 * Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows
@@ -425,10 +444,11 @@ Responsibilities:
 * Memory update prompts
 * Memory compaction prompts
 * Reference organization prompts for pasted text and fetched pages
-* Discussion prompts for outline-level and chapter-level planning
+* Discussion prompts for outline-level, volume-level, arc-level, and chapter-level planning
 * Formatting layered rule blocks for prompt injection
 * Merging retrieved context into generation prompts
 * Injecting current volume outline and arc outline context into chapter-planning prompts when available
+* Injecting approved planning-discussion artifacts into outline, volume, arc, and chapter generation prompts when available
 
 Current prompt design notes:
 
@@ -439,6 +459,7 @@ Current prompt design notes:
 * Memory compaction prompt compresses old character/world/timeline/foreshadowing entries to control prompt length
 * All major generation prompts can receive layered rule text assembled from global and project storage
 * Retrieved context is appended after the base prompt so retrieval remains a composable layer
+* Chapter writing prompt now accepts lightweight writing-guidance controls for style and execution emphasis
 
 Prompt engineering should be isolated here.
 
@@ -459,6 +480,7 @@ Responsibilities:
 * Compact memory (compress old entries to control prompt length)
 * Merge layered rules into prompts before LLM calls
 * Save user requirements into global or project rule storage
+* Approve and clear persisted planning discussion artifacts for outline, volume, arc, and chapter levels
 * Consistency check
 * Character analysis
 * Timeline analysis
@@ -491,6 +513,7 @@ Current skill design notes:
 * Review and analysis reports now include citation-style supporting source sections for better explainability
 * Analysis results now expose both `data.analysis` (structured payload) and `data.report_markdown` (rendered report) to the UI
 * Outline and chapter planning can now be preceded by structured discussion steps that return machine-readable options, risks, open questions, and recommended directions
+* Approved planning discussions can now be persisted as reusable artifacts and fed back into later generation steps or approval gates
 * Retrieval evidence is grouped by scope and source type to make trust boundaries and source provenance easier to inspect
 * External-source trust metadata is now visible and participates in ranking, making authority boundaries explicit during retrieval review
 * Potential conflicts are now surfaced when project evidence and external evidence overlap, giving the user an early warning before trusting a generated diagnosis
@@ -695,6 +718,8 @@ Planning Discussion Contract
 The system now supports structured planning discussions for:
 
 * full-story outline direction
+* volume direction
+* arc direction
 * chapter direction
 
 These discussion steps return workflow step objects with:
@@ -704,6 +729,8 @@ These discussion steps return workflow step objects with:
 * options with strengths / risks
 * open questions and recommended direction
 * `approval_ready` — whether the current discussion is ready to move into formal generation
+
+When the user explicitly approves a planning discussion from the UI, the discussion can also be persisted as a reusable artifact under project storage so later generation steps can consume the approved direction rather than relying only on transient session state.
 
 ---
 
@@ -742,19 +769,29 @@ outline.md
 
 Stores the global story outline.
 
+outline.discussion.json
+
+Stores approved full-story planning discussion artifact when available.
+
 chapter_outlines/
 
 Stores chapter plans.
 
 Each chapter outline can also carry lightweight metadata such as parent `volume_no` and `arc_no`.
 
+Each chapter may also carry an approved chapter-discussion artifact used to stabilize later chapter-outline generation.
+
 volumes/
 
 Stores per-volume outlines and metadata used for mid-level story planning.
 
+Per-volume discussion artifacts can also be stored here when the user approves a volume planning discussion.
+
 arcs/
 
 Stores per-arc outlines and metadata used for sequence-level story planning under a volume.
+
+Per-arc discussion artifacts can also be stored here when the user approves an arc planning discussion.
 
 chapters/
 
@@ -866,7 +903,7 @@ The project already has explicit workflow state, structured step contracts, pers
 
 3. Strengthen planning and approval loops
 
-Structured outline discussion and chapter discussion are already implemented. The next step is turning those discussions into clearer approval checkpoints and more reusable planning artifacts.
+Structured outline, volume, arc, and chapter discussions are already implemented. The next step is making these approval checkpoints stricter where appropriate and improving how approved artifacts propagate into downstream execution and evaluation.
 
 This now also includes continuing the new hierarchy work from story outline into volume-level planning and arc-level planning, then later into chapter-allocation and word-budget planning.
 
@@ -935,6 +972,10 @@ Current implementation status:
 * Implemented: structured chapter discussion before formal chapter outline generation
 * Implemented: multi-turn outline discussion with assistant replies and continuously updated discussion summaries
 * Implemented: multi-turn chapter discussion with assistant replies and continuously updated discussion summaries
+* Implemented: volume discussion and arc discussion before formal mid-level planning generation
+* Implemented: approval and clearing workflow for persisted outline / volume / arc / chapter discussion artifacts
+* Implemented: chapter-outline approval gate option requiring approved chapter / volume / arc discussions before generation
+* Implemented: lightweight chapter-writing guidance controls for tone / pacing / dialogue density / focus / ending strength / extra requirements
 * Implemented: project overview page and project rename/delete controls
 * Implemented: project resource CRUD for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
 * Implemented: IDE-style resource browser with unified edit/save/delete flows and batch cleanup controls
@@ -978,6 +1019,7 @@ Current implementation status:
 * Implemented: typed external source templates for better RAG ingestion quality
 * Implemented: per-step retrieval trace display in generation, review, analysis, and pipeline result views
 * Implemented: volume-outline and arc-outline retrieval indexing and prompt injection for chapter planning
+* Implemented: retrieval indexing for approved outline / volume / arc / chapter discussion artifacts
 * Implemented: supporting source sections in review and analysis outputs
 * Implemented: scope-aware grouped evidence display for retrieval traces and supporting sources
 * Implemented: authority-aware metadata capture, ranking, and evidence display for external sources

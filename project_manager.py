@@ -307,6 +307,8 @@ def get_project_summary(project_name: str) -> dict:
         "chapter_outline_count": len([item for item in chapter_inventory if item.get("has_outline")]),
         "volume_count": len(volumes),
         "arc_count": len(arcs),
+        "approved_volume_count": len([item for item in volumes if item.get("has_approved_discussion")]),
+        "approved_arc_count": len([item for item in arcs if item.get("has_approved_discussion")]),
         "review_count": len([item for item in chapter_inventory if item.get("has_review_markdown") or item.get("has_review_json")]),
         "analysis_count": len(analysis_reports),
         "run_count": len(runs),

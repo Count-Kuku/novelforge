@@ -4,10 +4,12 @@ import streamlit as st
 from urllib.parse import urlparse
 
 from memory import (
+    load_chapter_discussion_artifact,
     create_project,
     delete_arc,
     delete_retrieval_source_file,
     delete_volume,
+    load_arc_discussion_artifact,
     list_arcs,
     load_analysis_report,
     load_arc_metadata,
@@ -21,9 +23,11 @@ from memory import (
     load_chapter_outline,
     load_memory,
     load_outline,
+    load_outline_discussion_artifact,
     load_project_rules,
     load_review,
     load_review_json,
+    load_volume_discussion_artifact,
     load_volume_metadata,
     load_volume_outline,
     save_chapter,
@@ -63,17 +67,31 @@ from project_manager import (
 )
 from retrieval import build_structured_external_source_payload, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
 from skills import (
+    approve_chapter_discussion,
+    approve_arc_discussion,
+    approve_outline_discussion,
+    approve_volume_discussion,
     analyze_characters,
     analyze_foreshadowing,
     analyze_timeline,
+    clear_chapter_discussion_approval,
+    clear_arc_discussion_approval,
+    clear_outline_discussion_approval,
+    clear_volume_discussion_approval,
     compact_memory,
     detect_potential_conflicts,
+    discuss_arc,
+    discuss_arc_turn,
     discuss_chapter,
     discuss_chapter_turn,
     discuss_outline,
     discuss_outline_turn,
+    discuss_volume,
+    discuss_volume_turn,
+    generate_arc_outline,
     generate_chapter_outline,
     generate_outline,
+    generate_volume_outline,
     get_retrieval_trace,
     organize_reference_html,
     organize_reference_url,
@@ -151,6 +169,16 @@ def _render_discussion_summary(discussion_result: dict, empty_message: str):
     st.markdown(report_markdown)
     render_step_validation(discussion_result)
     render_step_json_expander("讨论结构化结果", discussion)
+
+
+def _render_approved_discussion_artifact(artifact: dict, empty_message: str):
+    discussion = artifact.get("discussion", {}) if isinstance(artifact, dict) else {}
+    report_markdown = artifact.get("report_markdown", "") if isinstance(artifact, dict) else ""
+    if not discussion:
+        st.caption(empty_message)
+        return
+    st.markdown(report_markdown or "已存在批准后的讨论工件，但缺少 Markdown 预览。")
+    render_step_json_expander("已批准讨论工件", discussion)
 
 
 def _resource_browser_selection_key(project_name: str) -> str:
@@ -455,6 +483,7 @@ def render_outline_page(project_name: str):
     clear_input_flag_key = _discussion_input_clear_flag_key("outline")
     _consume_discussion_input_clear("outline")
     discussion_step = st.session_state.get(result_key, {})
+    approved_artifact = load_outline_discussion_artifact(project_name)
 
     col_action_1, col_action_2 = st.columns(2)
     if col_action_1.button("开始讨论大纲方向"):
@@ -478,6 +507,22 @@ def render_outline_page(project_name: str):
     with summary_col:
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前收敛出的结论。")
+        approve_col, clear_col = st.columns(2)
+        if approve_col.button("批准当前讨论", key="approve_outline_discussion"):
+            try:
+                result = approve_outline_discussion(project_name, discussion_step)
+                st.success(f"已保存全书讨论工件：{result.get('saved_path', '')}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"批准失败：{exc}")
+        if clear_col.button("清除已批准版本", key="clear_outline_discussion"):
+            if clear_outline_discussion_approval(project_name):
+                st.success("已清除全书已批准讨论工件。")
+                st.rerun()
+            else:
+                st.warning("当前没有可清除的已批准讨论工件。")
+        st.markdown("### 已批准讨论版本")
+        _render_approved_discussion_artifact(approved_artifact, "当前全书还没有已批准讨论工件。")
 
     with chat_col:
         st.markdown("### 讨论对话")
@@ -545,9 +590,11 @@ def render_chapter_outline_page(project_name: str):
     )
     if volume_no:
         volume_meta = load_volume_metadata(project_name, volume_no)
+        volume_discussion_artifact = load_volume_discussion_artifact(project_name, volume_no)
         st.caption(f"当前分卷：第 {volume_no} 卷 / {volume_meta.get('title', '') or '未命名分卷'}")
     else:
         volume_meta = {}
+        volume_discussion_artifact = {}
     arcs = list_arcs(project_name, volume_no=volume_no or None)
     arc_options = [0] + [int(item.get("arc_no", 0)) for item in arcs]
     default_arc = int(outline_metadata.get("arc_no") or 0)
@@ -560,9 +607,11 @@ def render_chapter_outline_page(project_name: str):
     )
     if arc_no:
         arc_meta = load_arc_metadata(project_name, arc_no)
+        arc_discussion_artifact = load_arc_discussion_artifact(project_name, arc_no)
         st.caption(f"当前剧情段：Arc {arc_no:03d} / {arc_meta.get('title', '') or '未命名剧情段'}")
     else:
         arc_meta = {}
+        arc_discussion_artifact = {}
 
     hierarchy_parts = ["全书大纲"]
     if volume_no:
@@ -578,6 +627,18 @@ def render_chapter_outline_page(project_name: str):
     if arc_meta.get("summary"):
         with st.expander("当前剧情段摘要", expanded=False):
             st.markdown(arc_meta.get("summary", ""))
+    approval_required = st.checkbox(
+        "要求已批准的章节/卷/剧情段讨论后再生成章节细纲",
+        value=False,
+        key=f"chapter_outline_require_approval_{chapter_no}",
+    )
+    with st.expander("当前使用的已批准规划工件", expanded=False):
+        st.markdown("### 章节已批准讨论")
+        _render_approved_discussion_artifact(load_chapter_discussion_artifact(project_name, chapter_no), "当前章节没有已批准讨论工件。")
+        st.markdown("### 分卷已批准讨论")
+        _render_approved_discussion_artifact(volume_discussion_artifact, "当前分卷没有已批准讨论工件。")
+        st.markdown("### 剧情段已批准讨论")
+        _render_approved_discussion_artifact(arc_discussion_artifact, "当前剧情段没有已批准讨论工件。")
     step_result = st.session_state.get(f"chapter_outline_step_{chapter_no}", {})
     requirement = st.text_area("本章要求", height=200)
 
@@ -588,6 +649,7 @@ def render_chapter_outline_page(project_name: str):
     clear_input_flag_key = _discussion_input_clear_flag_key("chapter", suffix)
     _consume_discussion_input_clear("chapter", suffix)
     discussion_step = st.session_state.get(result_key, {})
+    chapter_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no)
 
     col_action_1, col_action_2 = st.columns(2)
     if col_action_1.button("开始讨论本章方向"):
@@ -612,6 +674,22 @@ def render_chapter_outline_page(project_name: str):
     with summary_col:
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示本章方向的当前结论。")
+        approve_col, clear_col = st.columns(2)
+        if approve_col.button("批准当前章节讨论", key=f"approve_chapter_discussion_{chapter_no}"):
+            try:
+                result = approve_chapter_discussion(project_name, chapter_no, discussion_step)
+                st.success(f"已保存章节讨论工件：{result.get('saved_path', '')}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"批准失败：{exc}")
+        if clear_col.button("清除已批准章节讨论", key=f"clear_chapter_discussion_{chapter_no}"):
+            if clear_chapter_discussion_approval(project_name, chapter_no):
+                st.success("已清除章节已批准讨论工件。")
+                st.rerun()
+            else:
+                st.warning("当前没有可清除的已批准章节讨论工件。")
+        st.markdown("### 已批准章节讨论")
+        _render_approved_discussion_artifact(chapter_discussion_artifact, "当前章节还没有已批准讨论工件。")
 
     with chat_col:
         st.markdown("### 讨论对话")
@@ -650,9 +728,21 @@ def render_chapter_outline_page(project_name: str):
                     st.error(f"继续讨论失败：{exc}")
 
     if st.button("生成章节细纲"):
-        result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None)
-        st.session_state[f"chapter_outline_step_{chapter_no}"] = result
-        st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
+        if approval_required:
+            if volume_no and not (volume_discussion_artifact.get("discussion", {}) or {}).get("approval_ready"):
+                st.error("当前分卷还没有已批准讨论工件，已阻止章节细纲生成。")
+            elif arc_no and not (arc_discussion_artifact.get("discussion", {}) or {}).get("approval_ready"):
+                st.error("当前剧情段还没有已批准讨论工件，已阻止章节细纲生成。")
+            elif not (chapter_discussion_artifact.get("discussion", {}) or {}).get("approval_ready"):
+                st.error("当前章节还没有已批准讨论工件，已阻止章节细纲生成。")
+            else:
+                result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None)
+                st.session_state[f"chapter_outline_step_{chapter_no}"] = result
+                st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
+        else:
+            result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None)
+            st.session_state[f"chapter_outline_step_{chapter_no}"] = result
+            st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
 
     outline_text = st.text_area(
         "章节细纲内容",
@@ -687,15 +777,63 @@ def render_chapter_page(project_name: str):
         height=250
     )
 
+    tone = st.selectbox(
+        "文风/基调",
+        options=["", "克制", "热血", "轻快", "压抑", "爽文推进"],
+        format_func=lambda value: value or "未特别指定",
+        key=f"write_tone_{chapter_no}",
+    )
+    pacing = st.selectbox(
+        "节奏",
+        options=["", "慢铺", "均衡", "快推"],
+        format_func=lambda value: value or "未特别指定",
+        key=f"write_pacing_{chapter_no}",
+    )
+    dialogue_density = st.selectbox(
+        "对话密度",
+        options=["", "低", "中", "高"],
+        format_func=lambda value: value or "未特别指定",
+        key=f"write_dialogue_density_{chapter_no}",
+    )
+    focus = st.multiselect(
+        "描写重点",
+        options=["动作", "心理", "环境", "关系拉扯", "战斗", "信息揭示"],
+        key=f"write_focus_{chapter_no}",
+    )
+    ending_strength = st.selectbox(
+        "结尾力度",
+        options=["", "轻钩子", "强钩子", "悬念断点"],
+        format_func=lambda value: value or "未特别指定",
+        key=f"write_ending_strength_{chapter_no}",
+    )
+    extra_requirements = st.text_area(
+        "写作补充要求",
+        height=120,
+        key=f"write_extra_requirements_{chapter_no}",
+        placeholder="例如：减少说明性段落，多写试探性对话，结尾用短句收束。",
+    )
+
+    writing_guidance = {
+        "tone": tone,
+        "pacing": pacing,
+        "dialogue_density": dialogue_density,
+        "focus": focus,
+        "ending_strength": ending_strength,
+        "extra_requirements": extra_requirements,
+    }
+
     word_count = st.text_input(
         "目标字数（如 2000-2500）",
         value="2000-2500"
     )
 
     if st.button("写正文"):
-        result = write_chapter(project_name, chapter_no, chapter_outline, word_count)
+        result = write_chapter(project_name, chapter_no, chapter_outline, writing_guidance, word_count)
         st.session_state[f"chapter_step_{chapter_no}"] = result
         st.session_state[f"chapter_{chapter_no}"] = result.get("data", {}).get("chapter", "")
+
+    with st.expander("当前写作指导", expanded=False):
+        render_step_json_expander("写作指导参数", writing_guidance)
 
     chapter_text = st.text_area(
         "章节正文",
@@ -800,6 +938,10 @@ def render_project_overview_page(project_name: str):
     col7.metric("流水线记录", summary.get("run_count", 0))
     col8.metric("外部资料", summary.get("retrieval_source_count", 0))
 
+    col9, col10 = st.columns(2)
+    col9.metric("已批准分卷讨论", summary.get("approved_volume_count", 0))
+    col10.metric("已批准剧情段讨论", summary.get("approved_arc_count", 0))
+
     st.caption(f"章节摘要={summary.get('chapter_summary_count', 0)} / 资源文件数={summary.get('resource_file_count', 0)}")
 
     st.caption(
@@ -837,6 +979,7 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
     items: list[dict] = []
 
     outline = load_outline(project_name)
+    outline_discussion = load_outline_discussion_artifact(project_name)
     items.append({
         "id": "outline:root",
         "group": "outline",
@@ -849,14 +992,29 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
         "editable": True,
         "deletable": bool(outline.strip()),
     })
+    if outline_discussion.get("discussion"):
+        items.append({
+            "id": "outline-discussion:root",
+            "group": "outline_discussion",
+            "label": "outline.discussion.json [approved]",
+            "path_label": "全书讨论工件 / outline.discussion.json / approved=true",
+            "content": outline_discussion.get("report_markdown", ""),
+            "discussion_payload": outline_discussion.get("discussion", {}),
+            "chapter_no": None,
+            "analysis_type": "",
+            "relative_path": "outline.discussion.json",
+            "editable": False,
+            "deletable": True,
+        })
 
     for volume in list_volumes(project_name):
         volume_no = int(volume.get("volume_no", 0))
+        volume_discussion = load_volume_discussion_artifact(project_name, volume_no)
         items.append({
             "id": f"volume:{volume_no}",
             "group": "volume_outline",
-            "label": f"volume_{volume_no:03d}.md",
-            "path_label": f"volumes / volume_{volume_no:03d}.md",
+            "label": f"volume_{volume_no:03d}.md{' [approved]' if volume.get('has_approved_discussion') else ''}",
+            "path_label": f"volumes / volume_{volume_no:03d}.md / approved={bool(volume.get('has_approved_discussion'))}",
             "content": volume.get("outline", ""),
             "volume_no": volume_no,
             "volume_metadata": volume,
@@ -866,16 +1024,32 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
             "editable": True,
             "deletable": True,
         })
+        if volume_discussion.get("discussion"):
+            items.append({
+                "id": f"volume-discussion:{volume_no}",
+                "group": "volume_discussion",
+                "label": f"volume_{volume_no:03d}.discussion.json [approved]",
+                "path_label": f"volumes / volume_{volume_no:03d}.discussion.json / approved=true",
+                "content": volume_discussion.get("report_markdown", ""),
+                "volume_no": volume_no,
+                "discussion_payload": volume_discussion.get("discussion", {}),
+                "chapter_no": None,
+                "analysis_type": "",
+                "relative_path": f"volumes/volume_{volume_no:03d}.discussion.json",
+                "editable": False,
+                "deletable": True,
+            })
 
     for arc in list_arcs(project_name):
         arc_no = int(arc.get("arc_no", 0))
         volume_no = arc.get("volume_no")
         parent_label = f" / 第{int(volume_no)}卷" if volume_no else ""
+        arc_discussion = load_arc_discussion_artifact(project_name, arc_no)
         items.append({
             "id": f"arc:{arc_no}",
             "group": "arc_outline",
-            "label": f"arc_{arc_no:03d}.md",
-            "path_label": f"arcs / arc_{arc_no:03d}.md{parent_label}",
+            "label": f"arc_{arc_no:03d}.md{' [approved]' if arc.get('has_approved_discussion') else ''}",
+            "path_label": f"arcs / arc_{arc_no:03d}.md{parent_label} / approved={bool(arc.get('has_approved_discussion'))}",
             "content": arc.get("outline", ""),
             "arc_no": arc_no,
             "arc_metadata": arc,
@@ -885,6 +1059,22 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
             "editable": True,
             "deletable": True,
         })
+        if arc_discussion.get("discussion"):
+            items.append({
+                "id": f"arc-discussion:{arc_no}",
+                "group": "arc_discussion",
+                "label": f"arc_{arc_no:03d}.discussion.json [approved]",
+                "path_label": f"arcs / arc_{arc_no:03d}.discussion.json{parent_label} / approved=true",
+                "content": arc_discussion.get("report_markdown", ""),
+                "arc_no": arc_no,
+                "arc_metadata": arc,
+                "discussion_payload": arc_discussion.get("discussion", {}),
+                "chapter_no": None,
+                "analysis_type": "",
+                "relative_path": f"arcs/arc_{arc_no:03d}.discussion.json",
+                "editable": False,
+                "deletable": True,
+            })
     
 
     chapter_inventory = list_chapter_inventory(project_name)
@@ -892,6 +1082,7 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
         chapter_no = int(item.get("chapter_no", 0))
         if item.get("has_outline"):
             chapter_meta = item.get("metadata", {}) or {}
+            chapter_discussion = load_chapter_discussion_artifact(project_name, chapter_no)
             volume_suffix = f" / 第{int(chapter_meta.get('volume_no'))}卷" if chapter_meta.get("volume_no") else ""
             arc_suffix = f" / Arc {int(chapter_meta.get('arc_no')):03d}" if chapter_meta.get("arc_no") else ""
             items.append({
@@ -907,6 +1098,21 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
                 "editable": True,
                 "deletable": True,
             })
+            if chapter_discussion.get("discussion"):
+                items.append({
+                    "id": f"chapter-discussion:{chapter_no}",
+                    "group": "chapter_discussion",
+                    "label": f"chapter_{chapter_no:03d}.discussion.json [approved]",
+                    "path_label": f"chapter_outlines / chapter_{chapter_no:03d}.discussion.json{volume_suffix}{arc_suffix} / approved=true",
+                    "content": chapter_discussion.get("report_markdown", ""),
+                    "chapter_no": chapter_no,
+                    "chapter_metadata": chapter_meta,
+                    "discussion_payload": chapter_discussion.get("discussion", {}),
+                    "analysis_type": "",
+                    "relative_path": f"chapter_outlines/chapter_{chapter_no:03d}.discussion.json",
+                    "editable": False,
+                    "deletable": True,
+                })
         if item.get("has_content"):
             items.append({
                 "id": f"chapter-content:{chapter_no}",
@@ -1033,12 +1239,20 @@ def _delete_browser_resource(project_name: str, resource: dict):
     group = resource.get("group")
     if group == "outline":
         return delete_outline(project_name)
+    if group == "outline_discussion":
+        return clear_outline_discussion_approval(project_name)
     if group == "volume_outline":
         return delete_volume(project_name, int(resource.get("volume_no", 0)))
+    if group == "volume_discussion":
+        return clear_volume_discussion_approval(project_name, int(resource.get("volume_no", 0)))
     if group == "arc_outline":
         return delete_arc(project_name, int(resource.get("arc_no", 0)))
+    if group == "arc_discussion":
+        return clear_arc_discussion_approval(project_name, int(resource.get("arc_no", 0)))
     if group == "chapter_outline":
         return delete_chapter_outline(project_name, int(resource.get("chapter_no", 0)))
+    if group == "chapter_discussion":
+        return clear_chapter_discussion_approval(project_name, int(resource.get("chapter_no", 0)))
     if group == "chapter_content":
         return delete_chapter_content(project_name, int(resource.get("chapter_no", 0)))
     if group == "review":
@@ -1069,6 +1283,17 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
         if st.button("删除该运行记录", key=f"browser_delete_{resource.get('id')}"):
             if _delete_browser_resource(project_name, resource):
                 st.success("运行记录已删除。")
+                st.session_state[_resource_browser_selection_key(project_name)] = {}
+                st.rerun()
+        return
+
+    if group in {"outline_discussion", "volume_discussion", "arc_discussion", "chapter_discussion"}:
+        if resource.get("content"):
+            st.markdown(resource.get("content", ""))
+        render_step_json_expander("讨论工件 JSON", resource.get("discussion_payload", {}))
+        if st.button("删除该讨论工件", key=f"browser_delete_{resource.get('id')}"):
+            if _delete_browser_resource(project_name, resource):
+                st.success("讨论工件已删除。")
                 st.session_state[_resource_browser_selection_key(project_name)] = {}
                 st.rerun()
         return
@@ -1226,9 +1451,13 @@ def render_resource_management_page(project_name: str):
 
         groups = [
             ("outline", "全书大纲"),
+            ("outline_discussion", "全书讨论工件"),
             ("volume_outline", "分卷大纲"),
+            ("volume_discussion", "分卷讨论工件"),
             ("arc_outline", "剧情段大纲"),
+            ("arc_discussion", "剧情段讨论工件"),
             ("chapter_outline", "章节细纲"),
+            ("chapter_discussion", "章节讨论工件"),
             ("chapter_content", "章节正文"),
             ("review", "审阅结果"),
             ("analysis", "分析报告"),
@@ -1261,7 +1490,7 @@ def render_resource_management_page(project_name: str):
                         item_arc_no = (item.get("arc_metadata") or {}).get("arc_no")
                     if item_arc_no is None:
                         item_arc_no = (item.get("chapter_metadata") or {}).get("arc_no")
-                    if item.get("group") in {"outline", "volume_outline", "run", "analysis", "source", "review", "chapter_content"}:
+                    if item.get("group") in {"outline", "outline_discussion", "volume_outline", "volume_discussion", "run", "analysis", "source", "review", "chapter_content"}:
                         filtered_items.append(item)
                     elif item_arc_no == browser_arc_filter:
                         filtered_items.append(item)
@@ -1300,6 +1529,11 @@ def render_project_files_page(project_name: str):
     if outline:
         with st.expander("outline.md", expanded=True):
             st.markdown(outline)
+    outline_discussion = load_outline_discussion_artifact(project_name)
+    if outline_discussion.get("discussion"):
+        with st.expander("outline.discussion.json", expanded=False):
+            st.markdown(outline_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
+            render_step_json_expander("全书讨论工件 JSON", outline_discussion.get("discussion", {}))
 
     volumes = list_volumes(project_name)
     for volume in volumes:
@@ -1309,6 +1543,11 @@ def render_project_files_page(project_name: str):
             if volume.get("summary"):
                 st.caption(volume.get("summary"))
             st.markdown(volume.get("outline", "") or "")
+        volume_discussion = load_volume_discussion_artifact(project_name, volume_no)
+        if volume_discussion.get("discussion"):
+            with st.expander(f"volumes/volume_{volume_no:03d}.discussion.json / {title}", expanded=False):
+                st.markdown(volume_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
+                render_step_json_expander("分卷讨论工件 JSON", volume_discussion.get("discussion", {}))
 
     arcs = list_arcs(project_name)
     for arc in arcs:
@@ -1320,6 +1559,11 @@ def render_project_files_page(project_name: str):
             if arc.get("volume_no"):
                 st.caption(f"所属分卷：第 {int(arc.get('volume_no'))} 卷")
             st.markdown(arc.get("outline", "") or "")
+        arc_discussion = load_arc_discussion_artifact(project_name, arc_no)
+        if arc_discussion.get("discussion"):
+            with st.expander(f"arcs/arc_{arc_no:03d}.discussion.json / {title}", expanded=False):
+                st.markdown(arc_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
+                render_step_json_expander("剧情段讨论工件 JSON", arc_discussion.get("discussion", {}))
 
 
     chapter_no = st.number_input("预览章节编号", min_value=1, value=1, key="preview_chapter_no")
@@ -1331,6 +1575,11 @@ def render_project_files_page(project_name: str):
     if chapter_outline:
         with st.expander(f"chapter_outlines/chapter_{chapter_no:03d}.md", expanded=True):
             st.markdown(chapter_outline)
+    chapter_discussion = load_chapter_discussion_artifact(project_name, chapter_no)
+    if chapter_discussion.get("discussion"):
+        with st.expander(f"chapter_outlines/chapter_{chapter_no:03d}.discussion.json", expanded=False):
+            st.markdown(chapter_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
+            render_step_json_expander("章节讨论工件 JSON", chapter_discussion.get("discussion", {}))
 
     if chapter:
         with st.expander(f"chapters/chapter_{chapter_no:03d}.md", expanded=True):
@@ -1350,6 +1599,7 @@ def render_volume_outline_page(project_name: str):
     volume_no = st.number_input("分卷编号", min_value=1, value=1, key="volume_outline_no")
     metadata = load_volume_metadata(project_name, volume_no)
     existing_outline = load_volume_outline(project_name, volume_no)
+    step_result = st.session_state.get(f"volume_outline_step_{volume_no}", {})
 
     title = st.text_input("分卷标题", value=metadata.get("title", ""), key=f"volume_title_{volume_no}")
     summary = st.text_area("分卷摘要", value=metadata.get("summary", ""), height=120, key=f"volume_summary_{volume_no}")
@@ -1360,7 +1610,95 @@ def render_volume_outline_page(project_name: str):
         key=f"volume_status_{volume_no}",
     )
 
-    outline_text = st.text_area("分卷大纲内容", value=existing_outline, height=500, key=f"volume_outline_editor_{volume_no}")
+    requirement = st.text_area("本卷要求", height=180, key=f"volume_requirement_{volume_no}")
+    suffix = str(volume_no)
+    messages_key = _discussion_messages_key("volume", suffix)
+    result_key = _discussion_result_key("volume", suffix)
+    input_key = _discussion_input_key("volume", suffix)
+    clear_input_flag_key = _discussion_input_clear_flag_key("volume", suffix)
+    _consume_discussion_input_clear("volume", suffix)
+    discussion_step = st.session_state.get(result_key, {})
+    approved_artifact = load_volume_discussion_artifact(project_name, volume_no)
+
+    col_action_1, col_action_2 = st.columns(2)
+    if col_action_1.button("开始讨论分卷方向", key=f"start_volume_discussion_{volume_no}"):
+        try:
+            result = discuss_volume(project_name, volume_no, title, summary, requirement)
+            st.session_state[result_key] = result
+            st.session_state[messages_key] = []
+            assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本卷的定位、可选结构和待确认问题，我们可以继续细化。"
+            _append_discussion_message(messages_key, "assistant", assistant_message)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"讨论失败：{exc}")
+
+    if col_action_2.button("重置分卷讨论", key=f"reset_volume_discussion_{volume_no}"):
+        st.session_state[result_key] = {}
+        st.session_state[messages_key] = []
+        st.session_state[clear_input_flag_key] = True
+        st.rerun()
+
+    summary_col, chat_col = st.columns([1, 1])
+    with summary_col:
+        st.markdown("### 当前讨论结论")
+        _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前分卷方向的结论。")
+        approve_col, clear_col = st.columns(2)
+        if approve_col.button("批准当前讨论", key=f"approve_volume_discussion_{volume_no}"):
+            try:
+                result = approve_volume_discussion(project_name, volume_no, discussion_step)
+                st.success(f"已保存分卷讨论工件：{result.get('saved_path', '')}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"批准失败：{exc}")
+        if clear_col.button("清除已批准版本", key=f"clear_volume_discussion_{volume_no}"):
+            if clear_volume_discussion_approval(project_name, volume_no):
+                st.success("已清除分卷已批准讨论工件。")
+                st.rerun()
+            else:
+                st.warning("当前没有可清除的已批准讨论工件。")
+        st.markdown("### 已批准讨论版本")
+        _render_approved_discussion_artifact(approved_artifact, "当前分卷还没有已批准讨论工件。")
+
+    with chat_col:
+        st.markdown("### 讨论对话")
+        messages = st.session_state.get(messages_key, [])
+        _render_discussion_chat(messages)
+        follow_up = st.text_area("继续讨论分卷", key=input_key, height=120, placeholder="例如：这一卷我想更偏升级与站稳脚跟，不要太早引爆终局矛盾。")
+        if st.button("发送分卷讨论消息", key=f"send_volume_discussion_{volume_no}"):
+            if not follow_up.strip():
+                st.warning("讨论消息不能为空。")
+            else:
+                try:
+                    _append_discussion_message(messages_key, "user", follow_up)
+                    messages = st.session_state.get(messages_key, [])
+                    result = discuss_volume_turn(
+                        project_name,
+                        volume_no,
+                        title,
+                        summary,
+                        requirement,
+                        messages,
+                        discussion_step.get("data", {}).get("discussion", {}),
+                        follow_up,
+                    )
+                    st.session_state[result_key] = result
+                    assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本卷讨论结论。"
+                    _append_discussion_message(messages_key, "assistant", assistant_message)
+                    st.session_state[clear_input_flag_key] = True
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"继续讨论失败：{exc}")
+
+    if st.button("生成分卷大纲", key=f"generate_volume_outline_{volume_no}"):
+        try:
+            result = generate_volume_outline(project_name, volume_no, title, summary, requirement, status=status)
+            st.session_state[f"volume_outline_step_{volume_no}"] = result
+            st.session_state[f"volume_outline_{volume_no}"] = result.get("data", {}).get("volume_outline", "")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"生成分卷大纲失败：{exc}")
+
+    outline_text = st.text_area("分卷大纲内容", value=st.session_state.get(f"volume_outline_{volume_no}", existing_outline), height=500, key=f"volume_outline_editor_{volume_no}")
 
     col1, col2 = st.columns(2)
     if col1.button("保存分卷大纲", key=f"save_volume_{volume_no}"):
@@ -1379,7 +1717,11 @@ def render_volume_outline_page(project_name: str):
     if volumes:
         st.markdown("### 现有分卷")
         for item in volumes:
-            st.caption(f"第 {int(item.get('volume_no', 0))} 卷 / {item.get('title', '') or '未命名'} / status={item.get('status', 'draft')}")
+            approval_label = "approved_discussion=yes" if item.get("has_approved_discussion") else "approved_discussion=no"
+            st.caption(f"第 {int(item.get('volume_no', 0))} 卷 / {item.get('title', '') or '未命名'} / status={item.get('status', 'draft')} / {approval_label}")
+
+    render_step_validation(step_result)
+    render_step_retrieval(step_result, "本次分卷大纲生成使用的检索上下文", get_retrieval_trace(f"volume_outline:{project_name}:{volume_no}"))
 
 
 def render_arc_outline_page(project_name: str):
@@ -1388,6 +1730,7 @@ def render_arc_outline_page(project_name: str):
     arc_no = st.number_input("剧情段编号", min_value=1, value=1, key="arc_outline_no")
     metadata = load_arc_metadata(project_name, arc_no)
     existing_outline = load_arc_outline(project_name, arc_no)
+    step_result = st.session_state.get(f"arc_outline_step_{arc_no}", {})
 
     volume_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name)]
     current_volume = int(metadata.get("volume_no") or 0)
@@ -1408,8 +1751,118 @@ def render_arc_outline_page(project_name: str):
     )
     estimated_chapter_count = st.number_input("预计章节数", min_value=0, value=int(metadata.get("estimated_chapter_count") or 0), key=f"arc_estimated_chapters_{arc_no}")
     target_word_count_range = st.text_input("目标总字数范围", value=metadata.get("target_word_count_range", ""), key=f"arc_word_range_{arc_no}")
+    requirement = st.text_area("本剧情段要求", height=180, key=f"arc_requirement_{arc_no}")
 
-    outline_text = st.text_area("剧情段大纲内容", value=existing_outline, height=500, key=f"arc_outline_editor_{arc_no}")
+    suffix = str(arc_no)
+    messages_key = _discussion_messages_key("arc", suffix)
+    result_key = _discussion_result_key("arc", suffix)
+    input_key = _discussion_input_key("arc", suffix)
+    clear_input_flag_key = _discussion_input_clear_flag_key("arc", suffix)
+    _consume_discussion_input_clear("arc", suffix)
+    discussion_step = st.session_state.get(result_key, {})
+    approved_artifact = load_arc_discussion_artifact(project_name, arc_no)
+
+    col_action_1, col_action_2 = st.columns(2)
+    if col_action_1.button("开始讨论剧情段方向", key=f"start_arc_discussion_{arc_no}"):
+        try:
+            result = discuss_arc(
+                project_name,
+                arc_no,
+                volume_no or None,
+                title,
+                summary,
+                estimated_chapter_count or None,
+                target_word_count_range,
+                requirement,
+            )
+            st.session_state[result_key] = result
+            st.session_state[messages_key] = []
+            assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了这个剧情段的目标、可选推进结构和待确认问题，我们可以继续细化。"
+            _append_discussion_message(messages_key, "assistant", assistant_message)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"讨论失败：{exc}")
+
+    if col_action_2.button("重置剧情段讨论", key=f"reset_arc_discussion_{arc_no}"):
+        st.session_state[result_key] = {}
+        st.session_state[messages_key] = []
+        st.session_state[clear_input_flag_key] = True
+        st.rerun()
+
+    summary_col, chat_col = st.columns([1, 1])
+    with summary_col:
+        st.markdown("### 当前讨论结论")
+        _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前剧情段方向的结论。")
+        approve_col, clear_col = st.columns(2)
+        if approve_col.button("批准当前讨论", key=f"approve_arc_discussion_{arc_no}"):
+            try:
+                result = approve_arc_discussion(project_name, arc_no, discussion_step)
+                st.success(f"已保存剧情段讨论工件：{result.get('saved_path', '')}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"批准失败：{exc}")
+        if clear_col.button("清除已批准版本", key=f"clear_arc_discussion_{arc_no}"):
+            if clear_arc_discussion_approval(project_name, arc_no):
+                st.success("已清除剧情段已批准讨论工件。")
+                st.rerun()
+            else:
+                st.warning("当前没有可清除的已批准讨论工件。")
+        st.markdown("### 已批准讨论版本")
+        _render_approved_discussion_artifact(approved_artifact, "当前剧情段还没有已批准讨论工件。")
+
+    with chat_col:
+        st.markdown("### 讨论对话")
+        messages = st.session_state.get(messages_key, [])
+        _render_discussion_chat(messages)
+        follow_up = st.text_area("继续讨论剧情段", key=input_key, height=120, placeholder="例如：这一段我想让冲突递进更快，但高潮不要提早透支。")
+        if st.button("发送剧情段讨论消息", key=f"send_arc_discussion_{arc_no}"):
+            if not follow_up.strip():
+                st.warning("讨论消息不能为空。")
+            else:
+                try:
+                    _append_discussion_message(messages_key, "user", follow_up)
+                    messages = st.session_state.get(messages_key, [])
+                    result = discuss_arc_turn(
+                        project_name,
+                        arc_no,
+                        volume_no or None,
+                        title,
+                        summary,
+                        estimated_chapter_count or None,
+                        target_word_count_range,
+                        requirement,
+                        messages,
+                        discussion_step.get("data", {}).get("discussion", {}),
+                        follow_up,
+                    )
+                    st.session_state[result_key] = result
+                    assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了剧情段讨论结论。"
+                    _append_discussion_message(messages_key, "assistant", assistant_message)
+                    st.session_state[clear_input_flag_key] = True
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"继续讨论失败：{exc}")
+
+    if st.button("生成剧情段大纲", key=f"generate_arc_outline_{arc_no}"):
+        try:
+            result = generate_arc_outline(
+                project_name,
+                arc_no,
+                volume_no or None,
+                title,
+                summary,
+                estimated_chapter_count or None,
+                target_word_count_range,
+                requirement,
+                status=status,
+            )
+            st.session_state[f"arc_outline_step_{arc_no}"] = result
+            st.session_state[f"arc_outline_{arc_no}"] = result.get("data", {}).get("arc_outline", "")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"生成剧情段大纲失败：{exc}")
+
+    outline_text = st.text_area("剧情段大纲内容", value=st.session_state.get(f"arc_outline_{arc_no}", existing_outline), height=500, key=f"arc_outline_editor_{arc_no}")
 
     col1, col2 = st.columns(2)
     if col1.button("保存剧情段大纲", key=f"save_arc_{arc_no}"):
@@ -1436,7 +1889,8 @@ def render_arc_outline_page(project_name: str):
         st.markdown("### 现有剧情段")
         for item in arcs:
             volume_label = f" / 第 {int(item.get('volume_no'))} 卷" if item.get("volume_no") else ""
-            st.caption(f"Arc {int(item.get('arc_no', 0)):03d}{volume_label} / {item.get('title', '') or '未命名'} / status={item.get('status', 'draft')}")
+            approval_label = "approved_discussion=yes" if item.get("has_approved_discussion") else "approved_discussion=no"
+            st.caption(f"Arc {int(item.get('arc_no', 0)):03d}{volume_label} / {item.get('title', '') or '未命名'} / status={item.get('status', 'draft')} / {approval_label}")
 
     chapter_inventory = list_chapter_inventory(project_name)
     linked_chapters = [
@@ -1458,6 +1912,9 @@ def render_arc_outline_page(project_name: str):
                 status_parts.append("审阅")
             status_text = " / ".join(status_parts) if status_parts else "尚无内容"
             st.caption(f"第 {chapter_no} 章 / {status_text}")
+
+    render_step_validation(step_result)
+    render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{arc_no}"))
 
 
 def render_pipeline_page(project_name: str):

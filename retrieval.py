@@ -10,6 +10,8 @@ from pathlib import Path
 
 from llm import get_embedding
 from memory import (
+    load_chapter_discussion_artifact,
+    load_arc_discussion_artifact,
     load_arc_metadata,
     load_arc_outline,
     load_analysis_report,
@@ -18,10 +20,12 @@ from memory import (
     load_chapter_outline_metadata,
     load_memory,
     load_outline,
+    load_outline_discussion_artifact,
     load_volume_outline,
     load_volume_metadata,
     load_review,
     load_review_json,
+    load_volume_discussion_artifact,
     list_arcs,
     list_volumes,
     load_retrieval_manifest,
@@ -61,6 +65,10 @@ STRUCTURED_SOURCE_TYPES = {
     "review_world_check",
     "review_timeline_check",
     "review_foreshadowing_check",
+    "outline_discussion",
+    "volume_discussion",
+    "arc_discussion",
+    "chapter_discussion",
 }
 
 
@@ -344,6 +352,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
     base_path = project_path(project_name)
 
     outline = load_outline(project_name)
+    outline_discussion_artifact = load_outline_discussion_artifact(project_name)
     doc = _make_document(
         project_name,
         "outline",
@@ -357,10 +366,28 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
     if doc:
         documents.append(doc)
 
+    outline_discussion = outline_discussion_artifact.get("report_markdown", "")
+    doc = _make_document(
+        project_name,
+        "outline_discussion",
+        "outline_discussion",
+        "Approved Outline Discussion",
+        outline_discussion,
+        path=str(base_path / "outline.discussion.json"),
+        tags=["outline_discussion", "approved_discussion"],
+        metadata={
+            "authority": "project",
+            "approval_ready": bool((outline_discussion_artifact.get("discussion") or {}).get("approval_ready")),
+        },
+    )
+    if doc:
+        documents.append(doc)
+
     for volume in list_volumes(project_name):
         volume_no = int(volume.get("volume_no", 0))
         volume_outline = load_volume_outline(project_name, volume_no)
         volume_meta = load_volume_metadata(project_name, volume_no)
+        volume_discussion_artifact = load_volume_discussion_artifact(project_name, volume_no)
         doc = _make_document(
             project_name,
             "volume_outline",
@@ -379,10 +406,29 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         if doc:
             documents.append(doc)
 
+        volume_discussion = volume_discussion_artifact.get("report_markdown", "")
+        doc = _make_document(
+            project_name,
+            "volume_discussion",
+            f"volume_{volume_no:03d}",
+            f"{volume_meta.get('title') or f'Volume {volume_no:03d}'} Approved Discussion",
+            volume_discussion,
+            path=str(base_path / "volumes" / f"volume_{volume_no:03d}.discussion.json"),
+            tags=["volume_discussion", f"volume_{volume_no:03d}", "approved_discussion"],
+            metadata={
+                "authority": "project",
+                "volume_no": volume_no,
+                "approval_ready": bool((volume_discussion_artifact.get("discussion") or {}).get("approval_ready")),
+            },
+        )
+        if doc:
+            documents.append(doc)
+
     for arc in list_arcs(project_name):
         arc_no = int(arc.get("arc_no", 0))
         arc_outline = load_arc_outline(project_name, arc_no)
         arc_meta = load_arc_metadata(project_name, arc_no)
+        arc_discussion_artifact = load_arc_discussion_artifact(project_name, arc_no)
         doc = _make_document(
             project_name,
             "arc_outline",
@@ -404,7 +450,32 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         if doc:
             documents.append(doc)
 
+        arc_discussion = arc_discussion_artifact.get("report_markdown", "")
+        doc = _make_document(
+            project_name,
+            "arc_discussion",
+            f"arc_{arc_no:03d}",
+            f"{arc_meta.get('title') or f'Arc {arc_no:03d}'} Approved Discussion",
+            arc_discussion,
+            path=str(base_path / "arcs" / f"arc_{arc_no:03d}.discussion.json"),
+            tags=["arc_discussion", f"arc_{arc_no:03d}", "approved_discussion"],
+            metadata={
+                "authority": "project",
+                "arc_no": arc_no,
+                "volume_no": arc_meta.get("volume_no"),
+                "approval_ready": bool((arc_discussion_artifact.get("discussion") or {}).get("approval_ready")),
+            },
+        )
+        if doc:
+            documents.append(doc)
+
     chapter_outline_dir = base_path / "chapter_outlines"
+    chapter_discussion_numbers: set[int] = set()
+    if chapter_outline_dir.exists():
+        for file in chapter_outline_dir.glob("chapter_*.discussion.json"):
+            match = re.search(r"chapter_(\d+)\.discussion\.json$", file.name)
+            if match:
+                chapter_discussion_numbers.add(int(match.group(1)))
     if chapter_outline_dir.exists():
         for file in sorted(chapter_outline_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
@@ -423,6 +494,30 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                     "authority": "project",
                     "volume_no": chapter_meta.get("volume_no"),
                     "arc_no": chapter_meta.get("arc_no"),
+                },
+            )
+            if doc:
+                documents.append(doc)
+
+        for chapter_no in sorted(chapter_discussion_numbers):
+            chapter_meta = load_chapter_outline_metadata(project_name, chapter_no)
+            chapter_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no)
+            chapter_discussion = chapter_discussion_artifact.get("report_markdown", "")
+            doc = _make_document(
+                project_name,
+                "chapter_discussion",
+                f"chapter_{chapter_no:03d}",
+                f"Chapter {chapter_no:03d} Approved Discussion",
+                chapter_discussion,
+                chapter_no=chapter_no,
+                path=str(base_path / "chapter_outlines" / f"chapter_{chapter_no:03d}.discussion.json"),
+                tags=["chapter_discussion", f"chapter_{chapter_no:03d}", "approved_discussion"],
+                metadata={
+                    "authority": "project",
+                    "chapter_no": chapter_no,
+                    "volume_no": chapter_meta.get("volume_no"),
+                    "arc_no": chapter_meta.get("arc_no"),
+                    "approval_ready": bool((chapter_discussion_artifact.get("discussion") or {}).get("approval_ready")),
                 },
             )
             if doc:
