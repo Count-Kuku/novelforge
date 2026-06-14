@@ -1,79 +1,81 @@
+[中文](./README.md) | [English](./README.en.md)
+
 # NovelForge
 
-NovelForge is a long-form novel writing workspace built around LLMs, persistent project storage, retrieval, structured workflows, and future multi-agent collaboration.
+NovelForge 是一个面向长篇小说创作的 LLM 写作工作台，核心围绕持久化项目存储、检索增强、结构化工作流，以及未来的多 Agent 协作能力构建。
 
-It is designed for long-running creative projects such as fan fiction and web novels, where consistency, memory, planning, and iterative refinement matter more than one-off chat generation.
+它更适合长期创作场景，例如同人文、网文、长篇原创小说，而不是一次性聊天生成。项目重点关注设定持续维护、上下文记忆、分层规划和迭代修订。
 
-## Why NovelForge
+## 项目定位
 
-Most LLM writing tools are optimized for short conversations and single-pass generation.
-NovelForge focuses on a different problem:
+大多数 LLM 写作工具更偏向短对话和单次生成。
+NovelForge 想解决的是另一类问题：
 
-- persistent project-based writing
-- long-term story memory
-- outline to chapter workflow support
-- retrieval-augmented context injection
-- structured review and validation
-- future workflow runtime and agent orchestration
+- 基于项目的长期写作
+- 长期记忆与设定维护
+- 从总纲到章节的完整工作流
+- 检索增强上下文注入
+- 结构化审阅与校验
+- 为后续工作流运行时和多 Agent 协作预留架构
 
-The project is both:
+这个项目同时也是：
 
-- a practical novel-writing tool
-- a learning platform for LLM apps, RAG, workflows, and agent systems
+- 一个实际可用的小说写作工具
+- 一个用于学习 LLM 应用、RAG、工作流与 Agent 系统的实验平台
 
-## Current Status
+## 当前状态
 
-NovelForge is already beyond an early prototype.
+NovelForge 已经不再是早期原型。
 
-Current maturity can be summarized as:
+当前成熟度大致可以概括为：
 
-- V1 writing workspace: implemented
-- V1.1 persistence, validation, and UX hardening: implemented
-- V2 retrieval foundation: largely implemented
-- V3 workflow/state foundation: partially implemented
-- V4 multi-agent architecture: planned
-- V5 evaluation system: planned
+- V1 写作工作台：已实现
+- V1.1 持久化、校验与体验强化：已实现
+- V2 检索基础：大部分已实现
+- V3 工作流 / 状态系统基础：部分实现
+- V4 多 Agent 架构：规划中
+- V5 评估系统：规划中
 
-## Core Features
+## 核心能力
 
-- Project-based storage for each story
-- Streamlit web UI
-- Full-story outline generation
-- Chapter outline generation
-- Chapter writing
-- Chapter review
-- Memory update from written chapters
-- Structured memory editing forms
-- Configurable chapter target word count
-- Memory compaction for long-running projects
-- Layered prompt rules at global and project scope
-- Retrieval center for project and external knowledge
-- Lexical, semantic, and hybrid retrieval modes
-- Authority-aware and conflict-aware retrieval evidence
-- Character, timeline, foreshadowing, and consistency analysis
-- Structured planning discussions for outline, volume, arc, and chapter direction
-- Approval-based planning artifacts
-- One-click chapter pipeline with persisted workflow state and run snapshots
-- Volume and arc planning hierarchy
-- Lightweight writing-guidance controls for chapter execution
-- In-app LLM endpoint and key configuration
+- 基于项目的故事存储
+- Streamlit Web 界面
+- 全书大纲生成
+- 章节细纲生成
+- 正文章节写作
+- 章节审阅
+- 根据章节内容更新记忆
+- 表单化故事记忆编辑
+- 可配置章节目标字数
+- 长期项目的记忆压缩
+- 全局 / 项目双层规则系统
+- 面向项目与外部资料的检索中心
+- 词法 / 语义 / 混合检索
+- 带权威度与冲突提示的证据展示
+- 角色 / 时间线 / 伏笔 / 一致性分析
+- 面向总纲、分卷、剧情段、章节的结构化规划讨论
+- 审批式规划工件
+- 一键章节流水线与运行快照
+- 分卷 / 剧情段分层规划体系
+- 轻量写作指导参数
+- 应用内模型地址与密钥配置
 
-## Design Principles
+## 设计原则
 
-NovelForge follows a few core principles:
+NovelForge 遵循几条核心原则：
 
-1. Persistence before intelligence
-2. Workflow before agents
-3. Skills before autonomy
-4. Project-oriented architecture
-5. Model independence through an OpenAI-compatible interface
+1. 持久化优先于智能化
+2. 工作流优先于多 Agent
+3. 技能化优先于自治化
+4. 一切以项目为中心
+5. 通过 OpenAI-compatible 接口保持模型独立性
 
-## Architecture
+## 架构概览
 
-Current high-level flow:
+当前高层流程：
 
 ```text
-User
+用户
 -> Streamlit UI (app.py)
 -> Skill Layer (skills.py)
 -> Prompt Layer (prompts.py)
@@ -82,55 +84,55 @@ User
 -> Memory / Storage / Retrieval
 ```
 
-Main file responsibilities:
+主要文件职责：
 
-- `app.py`: UI and interaction flow
-- `skills.py`: writing and analysis capabilities
-- `prompts.py`: prompt templates and prompt assembly
-- `llm.py`: model abstraction and API integration
-- `memory.py`: persistent storage and project data management
-- `schemas.py`: structured output contracts and validation
-- `retrieval.py`: indexing, retrieval, and context formatting
+- `app.py`：界面与交互流程
+- `skills.py`：写作与分析能力
+- `prompts.py`：提示词模板与拼装
+- `llm.py`：模型抽象与 API 集成
+- `memory.py`：持久化存储与项目数据管理
+- `schemas.py`：结构化输出契约与校验
+- `retrieval.py`：索引、检索与上下文格式化
 
-## Typical Workflow
+## 典型工作流
 
-NovelForge supports both direct generation and discussion-first planning.
+NovelForge 支持直接生成，也支持“先讨论，再生成”的规划方式。
 
-Typical chapter flow:
+典型章节流程：
 
-1. Discuss story or chapter direction
-2. Generate outline or chapter outline
-3. Write chapter content
-4. Review chapter quality and consistency
-5. Update story memory
-6. Inspect analysis or retrieval evidence if needed
+1. 讨论故事或章节方向
+2. 生成总纲或章节细纲
+3. 生成章节正文
+4. 审阅章节质量与一致性
+5. 更新故事记忆
+6. 需要时查看分析报告或检索证据
 
-The system also supports a combined pipeline:
+系统也支持一键流水线：
 
 ```text
 Plan -> Write -> Review -> Update Memory
 ```
 
-## Retrieval And Knowledge Support
+## 检索与知识支持
 
-NovelForge includes a project-scoped retrieval layer for both internal story assets and external reference material.
+NovelForge 内置项目级检索层，可同时处理内部写作资料和外部参考资料。
 
-Supported retrieval concepts include:
+当前支持的检索能力包括：
 
-- project knowledge
-- canon/reference knowledge
-- chunked document indexing
-- semantic embeddings
-- hybrid lexical + semantic ranking
-- source authority weighting
-- evidence grouping by scope
-- conflict warnings when project and external evidence overlap
+- 项目知识检索
+- 原作 / 参考资料检索
+- 文档切块索引
+- 语义向量检索
+- 词法 + 语义混合排序
+- 来源权威度加权
+- 按作用域分组证据
+- 当项目证据与外部证据冲突时给出提示
 
-## Project Storage
+## 项目存储结构
 
-Each story is stored as a persistent project directory under `data/projects/`.
+每个故事会作为独立项目存放在 `data/projects/` 下。
 
-Typical structure:
+典型结构：
 
 ```text
 data/
@@ -150,24 +152,24 @@ data/
       runs/
 ```
 
-This keeps planning, writing, review, analysis, and retrieval assets attached to the same project instead of scattering them across chat history.
+这样可以把规划、正文、审阅、分析和检索工件统一挂在同一个项目下，而不是散落在聊天记录中。
 
-## Setup
+## 安装与运行
 
-### 1. Install dependencies
+### 1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure model access
+### 2. 配置模型访问
 
-You can configure model settings in either of these ways:
+你可以通过两种方式配置模型：
 
-- edit `.env` manually
-- use the in-app `模型配置` page to create and switch between multiple saved profiles
+- 手动编辑 `.env`
+- 在应用内使用 `模型配置` 页面创建并切换多套配置档案
 
-Typical environment values:
+典型环境变量：
 
 ```env
 LLM_API_KEY=
@@ -177,96 +179,96 @@ LLM_MODEL=deepseek-v4-flash
 LLM_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-### 3. Run the app
+### 3. 启动应用
 
 ```bash
 streamlit run app.py
 ```
 
-## Local Windows Portable Build
+## 本地 Windows 便携版构建
 
-NovelForge can also be packaged as a local Windows portable app that launches the Streamlit server and opens the browser automatically.
+NovelForge 也可以打包成一个本地 Windows 便携版，双击后自动启动 Streamlit 服务并打开浏览器。
 
-### Release shape
+### 发布形态
 
-The intended local distribution is:
+目标分发形式为：
 
-- `NovelForge.exe` as a small launcher
-- bundled `.venv` runtime
-- project source files
-- local `data/` directory for project storage
+- `NovelForge.exe` 作为小型启动器
+- 随包附带 `.venv` 运行时
+- 保留项目源码文件
+- 使用本地 `data/` 目录存放项目数据
 
-When the user launches `NovelForge.exe`, it should:
+用户启动 `NovelForge.exe` 后，程序会：
 
-1. start the local Streamlit server on `127.0.0.1`, preferring `8501`
-2. wait until the app is reachable
-3. open the browser automatically
+1. 在 `127.0.0.1` 启动本地 Streamlit 服务，优先尝试 `8501`
+2. 等待应用可访问
+3. 自动打开浏览器
 
-### Build steps
+### 构建步骤
 
-1. Create and populate the local virtual environment:
+1. 创建并准备本地虚拟环境：
 
 ```bash
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-2. Run the packaging script from PowerShell:
+2. 在 PowerShell 中运行构建脚本：
 
 ```powershell
 .\build_release.ps1 -Version v0.1.0
 ```
 
-3. The script will:
+3. 脚本会自动：
 
-- install `pyinstaller` into `.venv`
-- build `NovelForge.exe` from `launcher.py`
-- assemble `release/NovelForge-Portable/`
-- create `release/NovelForge-windows-portable-v0.1.0.zip`
-- save a local build transcript under `release/`
+- 在 `.venv` 中安装 `pyinstaller`
+- 根据 `launcher.py` 构建 `NovelForge.exe`
+- 组装 `release/NovelForge-Portable/`
+- 生成 `release/NovelForge-windows-portable-v0.1.0.zip`
+- 在 `release/` 下保存本地构建日志
 
-### Notes
+### 使用说明
 
-- Extract the portable build into a writable folder such as `D:\Apps\NovelForge\`
-- Avoid protected folders such as `C:\Program Files\`
-- User data remains in the local `data/` folder and `.env` file next to the app
-- The launcher prefers local port `8501` and automatically falls back to nearby ports if needed
-- If startup fails, check `launcher.log` in the app directory for diagnostics
-- If one candidate port is already occupied by another local app, the launcher will try the next port instead of opening the wrong page
-- Build-time packaging logs are written next to the artifacts under `release/build_release-<version>.log`
+- 建议把便携版解压到可写目录，例如 `D:\Apps\NovelForge\`
+- 不建议放在 `C:\Program Files\` 这类受保护目录
+- 用户数据会保存在同目录下的 `data/` 和 `.env`
+- 启动器会优先使用 `8501`，必要时会自动回退到附近端口
+- 如果启动失败，可查看应用目录中的 `launcher.log`
+- 如果候选端口之一被其他应用占用，启动器会自动尝试下一个端口，而不是误打开错误页面
+- 构建日志会保存在 `release/build_release-<version>.log`
 
-## Supported Model Strategy
+## 模型支持策略
 
-The project is designed around an OpenAI-compatible API layer.
+项目围绕 OpenAI-compatible API 层设计。
 
-Current default:
+当前默认模型方向：
 
 - DeepSeek
 
-Planned or compatible direction:
+规划中或兼容方向：
 
 - GPT
 - Claude
 - Qwen
-- local or self-hosted OpenAI-compatible models
+- 本地或自托管的 OpenAI-compatible 模型
 
 ## Roadmap
 
-### V2 backend maturation
+### V2 后端强化
 
-- dedicated vector database backend
-- deeper fact-level conflict handling
-- stronger retrieval robustness
+- 引入专用向量数据库后端
+- 更深入的事实级冲突处理
+- 更强的检索稳定性
 
-### V3 workflow runtime adoption
+### V3 工作流运行时落地
 
-- graph/runtime-based orchestration
-- first-class retry and resume behavior
-- branching workflow execution
+- 图式 / runtime 工作流编排
+- 一等公民级别的重试与恢复能力
+- 支持分支式工作流执行
 
-### V4 multi-agent architecture
+### V4 多 Agent 架构
 
-Planned roles include:
+计划中的角色包括：
 
 - ChiefEditorAgent
 - PlotAgent
@@ -275,29 +277,29 @@ Planned roles include:
 - MemoryAgent
 - ResearchAgent
 
-### V5 evaluation system
+### V5 评估系统
 
-Planned evaluation dimensions include:
+计划中的评估维度包括：
 
-- character consistency
-- world consistency
-- timeline consistency
-- writing quality
-- plot progression
+- 角色一致性
+- 世界观一致性
+- 时间线一致性
+- 文笔质量
+- 剧情推进质量
 
-## Development Notes
+## 开发说明
 
-The project keeps responsibilities intentionally separated:
+项目在职责划分上保持明确边界：
 
-- UI logic should stay light in `app.py`
-- new writing abilities should be added through `skills.py`
-- prompt engineering belongs in `prompts.py`
-- persistence logic belongs in `memory.py`
-- model changes should stay isolated in `llm.py`
-- structured LLM outputs should be defined through `schemas.py`
+- UI 逻辑尽量保持在 `app.py` 的轻量层面
+- 新写作能力优先通过 `skills.py` 扩展
+- Prompt 工程集中在 `prompts.py`
+- 持久化逻辑集中在 `memory.py`
+- 模型适配尽量只改 `llm.py`
+- 结构化 LLM 输出优先通过 `schemas.py` 定义
 
-For deeper implementation and roadmap details, see `project.md`.
+更详细的实现说明和路线规划请查看 `project.md`。
 
 ## License
 
-No license file is currently included in the repository.
+当前仓库中尚未包含许可证文件。
