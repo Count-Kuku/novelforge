@@ -32,9 +32,9 @@ Current maturity can be summarized as:
 - V1 writing workspace: implemented
 - V1.1 persistence, validation, and UX hardening: implemented
 - V2 retrieval foundation: largely implemented
-- V3 workflow and state foundation: partially implemented
+- V3 workflow and state foundation: partially implemented, with failed-run resume support
 - V4 multi-agent architecture: planned
-- V5 evaluation system: planned
+- V5 evaluation system: initial chapter-level foundation implemented
 
 ## Core Capabilities
 
@@ -52,11 +52,15 @@ Current maturity can be summarized as:
 - retrieval center for project and external knowledge
 - lexical, semantic, and hybrid retrieval
 - authority-aware and conflict-aware evidence presentation
+- retrieval debug preview for query terms, candidate chunks, and reranked hits
+- persisted retrieval conflict resolutions
 - character, timeline, foreshadowing, and consistency analysis
+- chapter quality evaluation with structured scoring reports
 - structured planning discussions for outline, volume, arc, and chapter direction
 - approval-based planning artifacts
-- one-click chapter pipeline with run snapshots
+- one-click chapter pipeline with run snapshots and failed-run resume
 - volume and arc planning hierarchy
+- arc-level chapter allocation plans
 - lightweight writing guidance controls
 - in-app model endpoint and key configuration
 
@@ -106,6 +110,7 @@ Typical chapter workflow:
 4. review quality and consistency
 5. update story memory
 6. inspect analysis or retrieval evidence when needed
+7. run chapter evaluation or resume a failed pipeline run when needed
 
 The system also supports a combined pipeline:
 
@@ -127,6 +132,8 @@ Current retrieval capabilities include:
 - source authority weighting
 - scope-grouped evidence display
 - conflict warnings when project evidence and external evidence overlap
+- persisted conflict resolutions that can be recalled as project knowledge
+- optional retrieval debug output for inspecting recall and ranking behavior
 
 ## Project Storage Structure
 
@@ -148,11 +155,19 @@ data/
       chapters/
       reviews/
       analysis/
+      evaluation/
       retrieval/
       runs/
 ```
 
 This keeps planning, draft chapters, reviews, analysis, and retrieval artifacts attached to the same project instead of scattering them across chat history.
+
+Newer persisted artifacts include:
+
+- `arcs/arc_xxx.chapter_plan.json`: arc-level chapter allocation plans
+- `evaluation/chapter_xxx.md` / `.json`: chapter evaluation reports and structured scores
+- `retrieval/conflict_resolutions.json`: saved retrieval conflict decisions
+- `runs/*.json`: resumable pipeline run snapshots
 
 ## Setup And Run
 
@@ -257,13 +272,13 @@ Planned or compatible directions:
 ### V2 backend maturation
 
 - dedicated vector database backend
-- deeper fact-level conflict handling
+- deeper fact-level conflict recommendation logic
 - stronger retrieval robustness
 
 ### V3 workflow runtime adoption
 
 - graph or runtime-based workflow orchestration
-- first-class retry and resume support
+- richer first-class retry and resume policies
 - branching workflow execution
 
 ### V4 multi-agent architecture
@@ -279,13 +294,22 @@ Planned roles include:
 
 ### V5 evaluation system
 
-Planned evaluation dimensions include:
+The initial chapter-level evaluation foundation is implemented and can persist Markdown and JSON reports.
+
+Current evaluation dimensions include:
 
 - character consistency
-- world consistency
-- timeline consistency
 - writing quality
 - plot progression quality
+- information density
+- emotional impact
+- foreshadowing handling
+
+Planned next steps:
+
+- cross-version chapter comparison
+- cross-run metric tracking
+- automated evaluation suites for model and prompt changes
 
 ## Development Notes
 

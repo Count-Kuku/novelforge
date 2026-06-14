@@ -10,6 +10,8 @@ from prompts import (
     discuss_chapter_turn_prompt,
     discuss_arc_prompt,
     discuss_arc_turn_prompt,
+    arc_chapter_plan_prompt,
+    evaluate_chapter_prompt,
     discuss_outline_prompt,
     discuss_outline_turn_prompt,
     discuss_volume_prompt,
@@ -37,6 +39,7 @@ from memory import (
     delete_outline_discussion_artifact,
     delete_volume_discussion_artifact,
     get_recent_chapter_summaries,
+    load_arc_chapter_plan,
     load_chapter_discussion_artifact,
     load_arc_discussion_artifact,
     load_arc_outline,
@@ -46,10 +49,12 @@ from memory import (
     load_memory,
     load_outline,
     load_outline_discussion_artifact,
+    load_pipeline_run,
     load_project_rules,
     load_volume_discussion_artifact,
     load_volume_outline,
     save_arc_metadata,
+    save_arc_chapter_plan,
     save_arc_discussion_artifact,
     save_arc_outline,
     save_chapter,
@@ -58,6 +63,9 @@ from memory import (
     save_chapter_outline_metadata,
     save_global_rules,
     save_analysis_report,
+    save_conflict_resolution,
+    save_evaluation_json,
+    save_evaluation_report,
     save_memory,
     save_outline,
     save_pipeline_run,
@@ -71,8 +79,10 @@ from memory import (
 )
 from schemas import (
     ChapterWritingGuidance,
+    ArcChapterPlanResult,
     ArcDiscussionResult,
     ChapterPipelineState,
+    ChapterEvaluationResult,
     CharacterAnalysisResult,
     ChapterDiscussionResult,
     ConsistencyAnalysisResult,
@@ -90,6 +100,8 @@ from schemas import (
     ValidationStatus,
     format_schema_validation_error,
     render_character_analysis_markdown,
+    render_arc_chapter_plan_markdown,
+    render_chapter_evaluation_markdown,
     render_consistency_analysis_markdown,
     render_foreshadowing_analysis_markdown,
     render_discussion_markdown,
@@ -342,6 +354,38 @@ def _detect_potential_conflicts(hits: list[dict], limit: int = 4) -> list[Retrie
 
 def detect_potential_conflicts(hits: list[dict], limit: int = 4) -> list[dict]:
     return [conflict.model_dump() for conflict in _detect_potential_conflicts(hits, limit=limit)]
+
+
+def _conflict_id(conflict: dict) -> str:
+    project_chunk = conflict.get("project_hit", {}).get("chunk", {})
+    external_chunk = conflict.get("external_hit", {}).get("chunk", {})
+    terms = "_".join(conflict.get("shared_terms", []))
+    raw = "|".join([
+        str(project_chunk.get("path", "")),
+        str(project_chunk.get("title", "")),
+        str(external_chunk.get("path", "")),
+        str(external_chunk.get("title", "")),
+        terms,
+    ])
+    return re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "_", raw).strip("_")[:120] or "conflict"
+
+
+def save_retrieval_conflict_resolution(
+    project_name: str,
+    conflict: dict,
+    decision: str,
+    note: str = "",
+) -> dict:
+    project_chunk = conflict.get("project_hit", {}).get("chunk", {})
+    external_chunk = conflict.get("external_hit", {}).get("chunk", {})
+    return save_conflict_resolution(project_name, {
+        "conflict_id": _conflict_id(conflict),
+        "shared_terms": conflict.get("shared_terms", []),
+        "decision": decision,
+        "note": note,
+        "project_source": project_chunk.get("path") or project_chunk.get("title", ""),
+        "external_source": external_chunk.get("path") or external_chunk.get("title", ""),
+    })
 
 
 def _select_supporting_sources(hits: list[dict], limit: int = 4) -> list[dict]:
@@ -1313,6 +1357,86 @@ def generate_arc_outline(
     ).model_dump()
 
 
+def generate_arc_chapter_plan(
+    project_name: str,
+    arc_no: int,
+    start_chapter_no: int,
+    chapter_count: int,
+    user_requirement: str = "",
+) -> dict:
+    arc_meta = load_arc_metadata(project_name, arc_no)
+    volume_no = arc_meta.get("volume_no")
+    memory = load_memory(project_name)
+    story_outline = load_outline(project_name)
+    volume_outline = load_volume_outline(project_name, int(volume_no)) if volume_no else ""
+    arc_outline = load_arc_outline(project_name, arc_no)
+    trace_key = f"arc_chapter_plan:{project_name}:{arc_no}"
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"Arc {arc_no:03d} 章节分配 {arc_meta.get('title', '')} {arc_meta.get('summary', '')} {arc_outline} {user_requirement}",
+        allowed_source_types=[
+            "outline",
+            "volume_outline",
+            "volume_discussion",
+            "arc_outline",
+            "arc_discussion",
+            "chapter_summary",
+            "chapter_outline",
+            "memory_character",
+            "memory_world",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "external_source",
+            "conflict_resolution",
+        ],
+        allowed_scopes=["project", "canon", "reference"],
+        trace_key=trace_key,
+    )
+    prompt = merge_retrieval_context(
+        arc_chapter_plan_prompt(
+            memory,
+            story_outline,
+            volume_outline,
+            arc_outline,
+            arc_no,
+            start_chapter_no,
+            chapter_count,
+            arc_meta.get("target_word_count_range", ""),
+            user_requirement,
+            _build_rules_text(project_name, "chapter_outline"),
+        ),
+        retrieval_context,
+    )
+    payload = _call_json_llm(prompt, "LLM returned empty arc chapter plan.")
+    try:
+        result = ArcChapterPlanResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Arc chapter plan schema validation failed: {format_schema_validation_error(exc)}") from exc
+
+    report_markdown = render_arc_chapter_plan_markdown(result)
+    save_arc_chapter_plan(project_name, arc_no, result.model_dump(), report_markdown)
+    return _make_step_result(
+        "arc_chapter_plan",
+        success=True,
+        status="completed",
+        data={
+            "arc_chapter_plan": result.model_dump(),
+            "report_markdown": report_markdown,
+        },
+        retrieval_hits=get_retrieval_trace(trace_key),
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="ArcChapterPlanResult",
+            message="Arc chapter plan validated and persisted.",
+        ),
+        artifacts={
+            "saved_path": f"data/projects/{project_name}/arcs/arc_{arc_no:03d}.chapter_plan.json",
+        },
+    ).model_dump()
+
+
 def generate_chapter_outline(
     project_name: str,
     chapter_no: int,
@@ -1896,6 +2020,79 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> d
     )
 
 
+def evaluate_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
+    memory = load_memory(project_name)
+    chapter_outline = load_chapter_outline(project_name, chapter_no)
+    trace_key = f"evaluation:chapter:{project_name}:{chapter_no}"
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章质量评估 {chapter_outline} {chapter}",
+        allowed_source_types=[
+            "outline",
+            "volume_outline",
+            "arc_outline",
+            "arc_chapter_plan",
+            "chapter_summary",
+            "chapter_outline",
+            "chapter_content",
+            "memory_character",
+            "memory_world",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "review_issue",
+            "analysis_consistency",
+            "analysis_characters",
+            "analysis_timeline",
+            "analysis_foreshadowing",
+            "conflict_resolution",
+            "external_source",
+        ],
+        allowed_scopes=["project", "canon", "reference"],
+        trace_key=trace_key,
+    )
+    prompt = merge_retrieval_context(
+        evaluate_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review")),
+        retrieval_context,
+    )
+    payload = _call_json_llm(prompt, "LLM returned empty chapter evaluation.")
+    try:
+        result = ChapterEvaluationResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"Chapter evaluation schema validation failed: {format_schema_validation_error(exc)}") from exc
+
+    retrieval_hits = get_retrieval_trace(trace_key)
+    report_markdown = render_chapter_evaluation_markdown(result)
+    sources_md = _format_supporting_sources_markdown(retrieval_hits)
+    conflict_md = _format_potential_conflicts_markdown(retrieval_hits)
+    if sources_md:
+        report_markdown += f"\n\n{sources_md}"
+    if conflict_md:
+        report_markdown += f"\n\n{conflict_md}"
+    save_evaluation_json(project_name, chapter_no, result.model_dump())
+    save_evaluation_report(project_name, chapter_no, report_markdown)
+    return _make_step_result(
+        "evaluate_chapter",
+        success=True,
+        status="completed",
+        data={
+            "evaluation": result.model_dump(),
+            "report_markdown": report_markdown,
+        },
+        retrieval_hits=retrieval_hits,
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="ChapterEvaluationResult",
+            message="Chapter evaluation validated and persisted.",
+        ),
+        artifacts={
+            "report_saved": True,
+            "saved_path": f"data/projects/{project_name}/evaluation/chapter_{chapter_no:03d}.md",
+        },
+    ).model_dump()
+
+
 def pipeline_plan_write_review_update(
     project_name: str,
     chapter_no: int,
@@ -2025,6 +2222,8 @@ def pipeline_plan_write_review_update(
     state.memory_update = memory_step.data.get("applied_updates", {})
     if memory_step.success:
         state.last_successful_step = "memory_update"
+    elif not state.halted:
+        _halt_pipeline(state, "memory_update_failed")
 
     if not state.halted:
         state.next_step = ""
@@ -2033,6 +2232,103 @@ def pipeline_plan_write_review_update(
     state.success = all(step.success for step in state.steps.values() if step.status != "skipped")
     state.resumable = bool(state.halted and state.last_successful_step)
 
+    pipeline_result = WorkflowPipelineResult(
+        success=state.success,
+        steps=state.steps,
+        warnings=state.warnings,
+    )
+    result = state.model_dump()
+    result["pipeline"] = pipeline_result.model_dump()
+    save_pipeline_run(project_name, state.run_id, json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
+def resume_chapter_pipeline(project_name: str, run_id: str) -> dict:
+    raw = load_pipeline_run(project_name, run_id)
+    if not raw.strip():
+        raise RuntimeError("Pipeline run not found.")
+    previous = json.loads(raw)
+    if not previous.get("resumable"):
+        raise RuntimeError("Selected pipeline run is not marked as resumable.")
+
+    chapter_no = int(previous.get("chapter_no", 0))
+    if chapter_no <= 0:
+        raise RuntimeError("Previous run does not contain a valid chapter number.")
+
+    started_at = datetime.now().isoformat(timespec="seconds")
+    resumed_run_id = f"chapter_{chapter_no:03d}_resume_{started_at.replace(':', '').replace('-', '').replace('T', '_')}"
+    state = ChapterPipelineState(
+        run_id=resumed_run_id,
+        parent_run_id=run_id,
+        project_name=project_name,
+        chapter_no=chapter_no,
+        user_requirement=str(previous.get("user_requirement", "")),
+        word_count=str(previous.get("word_count", "2000-2500")),
+        current_step="resume",
+        next_step="",
+        started_at=started_at,
+        chapter_outline=str(previous.get("chapter_outline", "") or ""),
+        chapter=str(previous.get("chapter", "") or ""),
+        review=previous.get("review", {}) if isinstance(previous.get("review", {}), dict) else {},
+        review_markdown=str(previous.get("review_markdown", "") or ""),
+        memory_update=previous.get("memory_update", {}) if isinstance(previous.get("memory_update", {}), dict) else {},
+        completed_steps=list(previous.get("completed_steps", [])),
+    )
+    _transition_pipeline_state(state, "resume", f"resuming from {run_id}")
+
+    last_successful_step = str(previous.get("last_successful_step", "") or "")
+    if last_successful_step == "chapter_outline":
+        state.next_step = "write_chapter"
+        _transition_pipeline_state(state, "write_chapter", "resuming after chapter outline")
+        try:
+            chapter_step = WorkflowStepResult.model_validate(
+                write_chapter(project_name, chapter_no, state.chapter_outline, None, state.word_count)
+            )
+        except Exception as exc:
+            chapter_step = _make_step_result("write_chapter", success=False, status="failed", error=str(exc))
+        _record_pipeline_step(state, chapter_step)
+        state.chapter = chapter_step.data.get("chapter", "")
+        if not chapter_step.success:
+            _halt_pipeline(state, "write_chapter_failed")
+        else:
+            state.last_successful_step = "write_chapter"
+            last_successful_step = "write_chapter"
+
+    if last_successful_step == "write_chapter":
+        state.next_step = "review_chapter"
+        _transition_pipeline_state(state, "review_chapter", "resuming after chapter writing")
+        try:
+            review_step = WorkflowStepResult.model_validate(review_chapter(project_name, chapter_no, state.chapter))
+        except Exception as exc:
+            review_step = _make_step_result("review_chapter", success=False, status="failed", error=str(exc))
+        _record_pipeline_step(state, review_step)
+        state.review = review_step.data.get("review", {})
+        state.review_markdown = review_step.data.get("review_markdown", "")
+        if review_step.success:
+            state.last_successful_step = "review_chapter"
+            last_successful_step = "review_chapter"
+
+    if last_successful_step == "review_chapter":
+        state.next_step = "memory_update"
+        _transition_pipeline_state(state, "memory_update", "resuming after review")
+        try:
+            memory_step = WorkflowStepResult.model_validate(update_memory_from_chapter(project_name, chapter_no, state.chapter))
+        except Exception as exc:
+            memory_step = _make_step_result("memory_update", success=False, status="failed", error=str(exc))
+        _record_pipeline_step(state, memory_step)
+        state.memory_update = memory_step.data.get("applied_updates", {})
+        if memory_step.success:
+            state.last_successful_step = "memory_update"
+
+    if state.last_successful_step == "memory_update":
+        state.next_step = ""
+        _transition_pipeline_state(state, "completed", "resume finished")
+    elif not state.halted:
+        _halt_pipeline(state, "resume_incomplete")
+
+    state.finished_at = datetime.now().isoformat(timespec="seconds")
+    state.success = state.last_successful_step == "memory_update" and not state.halted
+    state.resumable = bool(state.halted and state.last_successful_step)
     pipeline_result = WorkflowPipelineResult(
         success=state.success,
         steps=state.steps,

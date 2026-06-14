@@ -411,6 +411,69 @@ class RetrievalConflict(NovelForgeSchema):
     rationale: str = ""
 
 
+class ConflictResolution(NovelForgeSchema):
+    conflict_id: str
+    shared_terms: list[str] = Field(default_factory=list)
+    decision: Literal["use_project", "use_external", "merge", "ignore"] = "merge"
+    note: str = ""
+    project_source: str = ""
+    external_source: str = ""
+    updated_at: str = ""
+
+    @field_validator("shared_terms", mode="before")
+    @classmethod
+    def _normalize_terms(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class ChapterAllocationItem(NovelForgeSchema):
+    chapter_no: int
+    title: str = ""
+    chapter_goal: str = ""
+    conflict: str = ""
+    expected_word_count: str = ""
+    key_events: list[str] = Field(default_factory=list)
+    foreshadowing_dependencies: list[str] = Field(default_factory=list)
+
+    @field_validator("key_events", "foreshadowing_dependencies", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class ArcChapterPlanResult(NovelForgeSchema):
+    title: str = "剧情段章节分配"
+    arc_goal: str = ""
+    planning_assumptions: list[str] = Field(default_factory=list)
+    chapters: list[ChapterAllocationItem] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+    @field_validator("planning_assumptions", "risks", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class ChapterEvaluationResult(NovelForgeSchema):
+    title: str = "章节质量评估"
+    overall_score: int = Field(default=0, ge=0, le=100)
+    character_consistency_score: int = Field(default=0, ge=0, le=100)
+    plot_progression_score: int = Field(default=0, ge=0, le=100)
+    information_density_score: int = Field(default=0, ge=0, le=100)
+    emotional_impact_score: int = Field(default=0, ge=0, le=100)
+    foreshadowing_score: int = Field(default=0, ge=0, le=100)
+    prose_quality_score: int = Field(default=0, ge=0, le=100)
+    strengths: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+    revision_priorities: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+    @field_validator("strengths", "issues", "revision_priorities", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
 class ValidationStatus(NovelForgeSchema):
     status: Literal["not_applicable", "passed", "failed"] = "not_applicable"
     schema_name: str = ""
@@ -452,6 +515,7 @@ class WorkflowTransition(NovelForgeSchema):
 
 class ChapterPipelineState(NovelForgeSchema):
     run_id: str = ""
+    parent_run_id: str = ""
     project_name: str
     chapter_no: int
     user_requirement: str = ""
@@ -631,3 +695,50 @@ def render_discussion_markdown(
 
     lines.extend(["", f"Approval Ready: `{result.approval_ready}`"])
     return "\n".join(lines)
+
+
+def render_arc_chapter_plan_markdown(result: ArcChapterPlanResult) -> str:
+    lines = [f"# {result.title}"]
+    if result.arc_goal:
+        lines.extend(["", "## Arc Goal", "", result.arc_goal])
+    if result.planning_assumptions:
+        lines.extend(["", "## Planning Assumptions", ""])
+        lines.extend([f"- {item}" for item in result.planning_assumptions])
+    if result.chapters:
+        lines.extend(["", "## Chapter Allocation", ""])
+        for item in result.chapters:
+            lines.append(f"### Chapter {item.chapter_no:03d}: {item.title or 'Untitled'}")
+            lines.extend(["", f"- Goal: {item.chapter_goal or '无'}"])
+            lines.append(f"- Conflict: {item.conflict or '无'}")
+            lines.append(f"- Expected Word Count: {item.expected_word_count or '未设置'}")
+            if item.key_events:
+                lines.append("- Key Events:")
+                lines.extend([f"  - {event}" for event in item.key_events])
+            if item.foreshadowing_dependencies:
+                lines.append("- Foreshadowing Dependencies:")
+                lines.extend([f"  - {dependency}" for dependency in item.foreshadowing_dependencies])
+            lines.append("")
+    if result.risks:
+        lines.extend(["", "## Risks", ""])
+        lines.extend([f"- {item}" for item in result.risks])
+    return "\n".join(lines).strip()
+
+
+def render_chapter_evaluation_markdown(result: ChapterEvaluationResult) -> str:
+    score_lines = [
+        f"- Overall: {result.overall_score}",
+        f"- Character Consistency: {result.character_consistency_score}",
+        f"- Plot Progression: {result.plot_progression_score}",
+        f"- Information Density: {result.information_density_score}",
+        f"- Emotional Impact: {result.emotional_impact_score}",
+        f"- Foreshadowing: {result.foreshadowing_score}",
+        f"- Prose Quality: {result.prose_quality_score}",
+    ]
+    return "\n\n".join([
+        f"# {result.title}",
+        "## Scores\n\n" + "\n".join(score_lines),
+        f"## Summary\n\n{result.summary or '无'}",
+        _markdown_section("Strengths", result.strengths),
+        _markdown_section("Issues", result.issues),
+        _markdown_section("Revision Priorities", result.revision_priorities),
+    ])

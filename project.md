@@ -28,7 +28,7 @@ The roadmap labels `V1` through `V5` still describe the long-term evolution path
 * `V2` RAG foundation: largely implemented
 * `V3` workflow/state foundation for graph execution: partially implemented
 * `V4` multi-agent architecture: planned
-* `V5` evaluation system: planned
+* `V5` evaluation system: initial chapter-level foundation implemented
 
 Current practical status:
 
@@ -70,6 +70,11 @@ Current practical status:
 * Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
 * In-app LLM configuration with multi-profile endpoint / key management and active-profile switching
 * Local launcher and portable-build scripts for desktop-style localhost packaging
+* Resumable chapter pipeline runs from persisted workflow snapshots
+* Arc-level chapter allocation planning with persisted structured plans
+* Retrieval debug preview with query terms, filters, candidate counts, and rerank inspection
+* Persisted retrieval conflict resolutions for project-vs-canon/reference decisions
+* Chapter-level evaluation reports with structured scoring and saved Markdown/JSON artifacts
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
@@ -193,6 +198,8 @@ novelforge/
 
         ├── analysis/
 
+        ├── evaluation/
+
         └── retrieval/
 
             ├── manifest.json
@@ -210,8 +217,11 @@ novelforge/
         * `arcs/arc_xxx.md` stores per-arc outline content
         * `arcs/arc_xxx.meta.json` stores per-arc metadata such as `volume_no`, title, summary, status, and planning estimates
         * `arcs/arc_xxx.discussion.json` stores approved per-arc discussion artifacts when available
+        * `arcs/arc_xxx.chapter_plan.json` stores arc-level chapter allocation plans when available
         * `chapter_outlines/chapter_xxx.meta.json` stores lightweight chapter outline metadata such as `volume_no` and `arc_no`
         * `chapter_outlines/chapter_xxx.discussion.json` stores approved chapter-planning discussion artifacts when available
+        * `evaluation/chapter_xxx.md` and `evaluation/chapter_xxx.json` store chapter-level evaluation reports and structured scores
+        * `retrieval/conflict_resolutions.json` stores user-approved retrieval conflict decisions
 ```
 
 ---
@@ -243,6 +253,7 @@ Responsibilities:
 * Managing volume outlines, arc outlines, and assigning chapter outlines to parent volume / arc nodes
 * Managing approval / clearing of persisted planning discussion artifacts for outline, volume, arc, and chapter layers
 * Managing multiple saved LLM endpoint / API-key profiles and syncing the active profile back into `.env`
+* Managing arc-level chapter allocation plans, chapter evaluation reports, retrieval debug output, conflict resolutions, and resumable pipeline actions
 
 UI features:
 
@@ -396,6 +407,8 @@ Responsibilities:
 * Saving arc metadata
 * Loading persisted arc discussion artifacts
 * Saving persisted arc discussion artifacts
+* Loading arc chapter allocation plans
+* Saving arc chapter allocation plans
 * Loading chapter outlines
 * Saving chapter outlines
 * Loading chapter-outline metadata such as volume / arc assignment
@@ -409,6 +422,8 @@ Responsibilities:
 * Saving reviews
 * Loading analysis reports
 * Saving analysis reports
+* Loading chapter evaluation reports
+* Saving chapter evaluation reports
 * Saving pipeline run state snapshots
 * Loading historical pipeline runs
 * Listing pipeline runs for inspection and future resume/replay flows
@@ -751,6 +766,7 @@ The pipeline now also returns a chapter workflow state object containing:
 * `transition_log`
 * `errors`
 * `run_id`
+* `parent_run_id` for resumed runs
 * `started_at` / `finished_at`
 * `halted` / `halt_reason`
 * `resumable`
@@ -758,6 +774,7 @@ The pipeline now also returns a chapter workflow state object containing:
 Current observability note:
 
 * The pipeline UI now shows transition logs, typed workflow errors, and resumable hints derived from persisted chapter run state
+* Resumable failed runs can be continued from the last successful step, producing a new child run instead of overwriting the original run snapshot
 
 ---
 
@@ -852,6 +869,8 @@ Stores per-arc outlines and metadata used for sequence-level story planning unde
 
 Per-arc discussion artifacts can also be stored here when the user approves an arc planning discussion.
 
+Arc chapter allocation plans can also be stored here as `arc_xxx.chapter_plan.json` when generated.
+
 chapters/
 
 Stores chapter content.
@@ -864,9 +883,14 @@ analysis/
 
 Stores consistency, character, timeline, and foreshadowing analysis reports.
 
+evaluation/
+
+Stores chapter quality evaluation reports and structured score JSON files.
+
 retrieval/
 
 Stores retrieval index artifacts and external knowledge sources.
+Also stores persisted conflict decisions in `conflict_resolutions.json`.
 
 runs/
 
@@ -954,11 +978,11 @@ The highest-value next steps are no longer the original V1 items; they are the r
 
 1. Mature the retrieval backend
 
-Current retrieval works with embeddings, hybrid scoring, reranking, observability, and structured ingestion. The next step is moving beyond file-based vector persistence toward a dedicated vector backend and stronger fact-level conflict handling.
+Current retrieval works with embeddings, hybrid scoring, reranking, observability, structured ingestion, debug inspection, and persisted conflict resolutions. The next step is moving beyond file-based vector persistence toward a dedicated vector backend and stronger fact-level conflict recommendation logic.
 
 2. Finish workflow runtime adoption
 
-The project already has explicit workflow state, structured step contracts, persisted run snapshots, and transition logs. The next step is to map this into a graph/runtime layer with first-class retry, branching, and resume behavior.
+The project already has explicit workflow state, structured step contracts, persisted run snapshots, transition logs, and a first resumable-run implementation. The next step is to map this into a graph/runtime layer with first-class branching, retry policy, and richer resume behavior.
 
 3. Strengthen planning and approval loops
 
@@ -968,7 +992,7 @@ This now also includes continuing the new hierarchy work from story outline into
 
 4. Prepare for evaluation
 
-Structured outputs, retrieval traces, and workflow state now make evaluation feasible. The next step is defining stable metrics and artifact collection so future automated evaluation can measure quality over time.
+Structured outputs, retrieval traces, workflow state, and chapter-level evaluation reports now make evaluation feasible. The next step is defining stable cross-run metrics and artifact collection so future automated evaluation can measure quality over time.
 
 5. Prepare local desktop-style packaging
 
@@ -1097,10 +1121,12 @@ Current implementation status:
 * Implemented: conflict-aware warnings in retrieval evidence views and diagnostic outputs
 * Implemented: structured conflict objects with severity and rationale
 * Implemented: lightweight retrieval reranking after initial lexical/semantic scoring
+* Implemented: retrieval debug preview for query terms, filters, candidates, and reranked hits
+* Implemented: persisted conflict resolutions for recurring evidence disagreements
 * Implemented: pasted reference organization into structured retrieval-ready entries
 * Implemented: single-page URL fetch and organization for controlled canon/reference ingestion
 * Pending: dedicated external vector database backend
-* Pending: deeper fact-level conflict resolution and recommendation logic
+* Pending: deeper fact-level conflict recommendation logic
 
 Possible technologies:
 
@@ -1138,8 +1164,9 @@ Current implementation status:
 * Implemented: structured `WorkflowError` records with typed categories
 * Implemented: persisted pipeline run snapshots for later inspection
 * Implemented: transition logs and resumable workflow hints in the UI
+* Implemented: resumable failed chapter runs from the last successful step
 * Pending: full LangGraph or equivalent workflow runtime adoption
-* Pending: first-class branching, retry policy, and resume execution
+* Pending: first-class branching, retry policy, and richer resume execution
 
 Workflow:
 
@@ -1178,6 +1205,23 @@ ResearchAgent
 ## V5
 
 Evaluation System
+
+Status:
+
+* Initial foundation implemented
+
+Current implementation status:
+
+* Implemented: chapter-level quality evaluation prompt
+* Implemented: schema-validated evaluation score payload
+* Implemented: persisted evaluation Markdown and JSON artifacts
+* Implemented: evaluation reports in project overview, file preview, and resource management
+
+Pending:
+
+* Cross-run metric tracking
+* Version comparison for regenerated chapters
+* Automated evaluation suites for model/prompt changes
 
 Metrics:
 

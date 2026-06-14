@@ -1211,4 +1211,119 @@ def organize_reference_prompt(
 4. `summary` 用于短摘要，`content` 用于保留可检索细节
 5. `extra_fields` 只保留高价值结构信息，例如阵营、能力、首次登场、所属组织、时间点、关系、来源说明
 6. `notes` 可以写你发现的资料缺口、模糊点或冲突点
+    """
+
+
+def arc_chapter_plan_prompt(
+    memory: dict,
+    story_outline: str,
+    volume_outline: str,
+    arc_outline: str,
+    arc_no: int,
+    start_chapter_no: int,
+    chapter_count: int,
+    target_word_count_range: str,
+    user_requirement: str,
+    rules_text: str = "当前无额外规则。",
+) -> str:
+    return f"""
+你是长篇小说剧情段章节分配 Agent。
+
+规则约束：
+{rules_text}
+
+小说设定：
+{memory}
+
+{format_story_state_guidance(memory)}
+
+全书大纲：
+{story_outline or '暂无全书大纲。'}
+
+所属分卷大纲：
+{volume_outline or '当前剧情段未指定分卷，或该分卷尚无大纲。'}
+
+当前剧情段大纲：
+{arc_outline or '当前剧情段尚无大纲，请根据已有信息做保守规划。'}
+
+当前要规划 Arc {arc_no:03d}，从第 {start_chapter_no} 章开始，共 {chapter_count} 章。
+
+目标总字数范围：
+{target_word_count_range or '未设置'}
+
+用户补充要求：
+{user_requirement or '无'}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "title": "剧情段章节分配",
+  "arc_goal": "",
+  "planning_assumptions": [],
+  "chapters": [
+    {{
+      "chapter_no": 1,
+      "title": "",
+      "chapter_goal": "",
+      "conflict": "",
+      "expected_word_count": "",
+      "key_events": [],
+      "foreshadowing_dependencies": []
+    }}
+  ],
+  "risks": []
+}}
+
+要求：
+1. chapters 数量必须尽量等于用户要求的章节数
+2. chapter_no 从指定起始章节编号连续递增
+3. 每章必须有明确目标、冲突、关键事件和预计字数
+4. 如果上游规划不足，请在 planning_assumptions 中说明你的保守假设
+5. 不要写正文，只做章节分配计划
+"""
+
+
+def evaluate_chapter_prompt(
+    memory: dict,
+    chapter_outline: str,
+    chapter: str,
+    rules_text: str = "当前无额外规则。",
+) -> str:
+    return f"""
+你是长篇小说质量评估 Agent。
+
+规则约束：
+{rules_text}
+
+小说设定：
+{memory}
+
+{format_story_state_guidance(memory)}
+
+章节细纲：
+{chapter_outline or '暂无章节细纲。'}
+
+章节正文：
+{chapter}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "title": "章节质量评估",
+  "overall_score": 0,
+  "character_consistency_score": 0,
+  "plot_progression_score": 0,
+  "information_density_score": 0,
+  "emotional_impact_score": 0,
+  "foreshadowing_score": 0,
+  "prose_quality_score": 0,
+  "strengths": [],
+  "issues": [],
+  "revision_priorities": [],
+  "summary": ""
+}}
+
+评分要求：
+1. 所有分数为 0-100 的整数
+2. 优先评估该章节是否服务于长篇连载推进
+3. 明确指出最值得先改的 3-5 个问题
+4. 如果没有足够上下文，请在 summary 中说明不确定性，但仍给出可用评估
 """

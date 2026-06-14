@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, VolumeOutlineMetadata
+from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, ConflictResolution, VolumeOutlineMetadata
 
 BASE_DIR = Path("data/projects")
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
@@ -532,6 +532,10 @@ def _arc_discussion_path(project_name: str, arc_no: int) -> Path:
     return arcs_path(project_name) / f"arc_{arc_no:03d}.discussion.json"
 
 
+def _arc_chapter_plan_path(project_name: str, arc_no: int) -> Path:
+    return arcs_path(project_name) / f"arc_{arc_no:03d}.chapter_plan.json"
+
+
 def save_volume_outline(project_name: str, volume_no: int, outline: str):
     file = _volume_markdown_path(project_name, volume_no)
     file.write_text(outline, encoding="utf-8")
@@ -725,6 +729,44 @@ def delete_arc_discussion_artifact(project_name: str, arc_no: int) -> bool:
     return True
 
 
+def save_arc_chapter_plan(project_name: str, arc_no: int, plan: dict, report_markdown: str):
+    file = _arc_chapter_plan_path(project_name, arc_no)
+    payload = {
+        "arc_no": arc_no,
+        "plan": plan if isinstance(plan, dict) else {},
+        "report_markdown": str(report_markdown or ""),
+    }
+    file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_arc_chapter_plan(project_name: str, arc_no: int) -> dict:
+    file = _arc_chapter_plan_path(project_name, arc_no)
+    if not file.exists():
+        return {}
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    plan = payload.get("plan", {})
+    return {
+        "arc_no": arc_no,
+        "plan": plan if isinstance(plan, dict) else {},
+        "report_markdown": str(payload.get("report_markdown", "") or ""),
+    }
+
+
+def delete_arc_chapter_plan(project_name: str, arc_no: int) -> bool:
+    file = _arc_chapter_plan_path(project_name, arc_no)
+    if not file.exists():
+        return False
+    file.unlink()
+    sync_project_retrieval_assets(project_name)
+    return True
+
+
 def load_arc_metadata(project_name: str, arc_no: int) -> dict:
     file = _arc_meta_path(project_name, arc_no)
     fallback = ArcOutlineMetadata(arc_no=arc_no).model_dump()
@@ -769,6 +811,7 @@ def delete_arc(project_name: str, arc_no: int) -> bool:
     markdown_path = _arc_markdown_path(project_name, arc_no)
     meta_path = _arc_meta_path(project_name, arc_no)
     discussion_path = _arc_discussion_path(project_name, arc_no)
+    chapter_plan_path = _arc_chapter_plan_path(project_name, arc_no)
     if markdown_path.exists():
         markdown_path.unlink()
         deleted = True
@@ -777,6 +820,9 @@ def delete_arc(project_name: str, arc_no: int) -> bool:
         deleted = True
     if discussion_path.exists():
         discussion_path.unlink()
+        deleted = True
+    if chapter_plan_path.exists():
+        chapter_plan_path.unlink()
         deleted = True
     if deleted:
         chapter_outline_dir = project_path(project_name) / "chapter_outlines"
@@ -953,6 +999,41 @@ def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int)
     return file.read_text(encoding="utf-8")
 
 
+def evaluation_path(project_name: str) -> Path:
+    path = project_path(project_name) / "evaluation"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def save_evaluation_report(project_name: str, chapter_no: int, content: str):
+    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.md"
+    file.write_text(content, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def save_evaluation_json(project_name: str, chapter_no: int, data: dict):
+    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.json"
+    file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_evaluation_report(project_name: str, chapter_no: int) -> str:
+    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.md"
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
+def load_evaluation_json(project_name: str, chapter_no: int) -> dict | None:
+    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.json"
+    if not file.exists():
+        return None
+    try:
+        return json.loads(file.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
 def runs_path(project_name: str) -> Path:
     path = project_path(project_name) / "runs"
     path.mkdir(exist_ok=True)
@@ -990,6 +1071,45 @@ def retrieval_sources_path(project_name: str) -> Path:
     path = retrieval_path(project_name) / "sources"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def conflict_resolutions_path(project_name: str) -> Path:
+    return retrieval_path(project_name) / "conflict_resolutions.json"
+
+
+def load_conflict_resolutions(project_name: str) -> list[dict]:
+    file = conflict_resolutions_path(project_name)
+    if not file.exists():
+        return []
+    try:
+        raw = json.loads(file.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, list):
+        return []
+    results = []
+    for item in raw:
+        try:
+            results.append(ConflictResolution.model_validate(item).model_dump())
+        except Exception:
+            continue
+    return results
+
+
+def save_conflict_resolution(project_name: str, resolution: dict) -> dict:
+    from datetime import datetime
+
+    normalized = ConflictResolution.model_validate({
+        **resolution,
+        "updated_at": str(resolution.get("updated_at") or datetime.now().isoformat(timespec="seconds")),
+    }).model_dump()
+    resolutions = load_conflict_resolutions(project_name)
+    resolutions = [item for item in resolutions if item.get("conflict_id") != normalized["conflict_id"]]
+    resolutions.append(normalized)
+    file = conflict_resolutions_path(project_name)
+    file.write_text(json.dumps(resolutions, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+    return normalized
 
 
 def list_retrieval_source_files(project_name: str) -> list[str]:

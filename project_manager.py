@@ -10,6 +10,8 @@ from memory import (
     list_arcs,
     list_volumes,
     load_chapter_outline_metadata,
+    load_evaluation_json,
+    load_evaluation_report,
     load_memory,
     load_outline,
     load_review,
@@ -17,6 +19,8 @@ from memory import (
     retrieval_sources_path,
     runs_path,
     save_analysis_report,
+    save_evaluation_json,
+    save_evaluation_report,
     save_memory,
     save_review,
     save_review_json,
@@ -27,6 +31,7 @@ from memory import (
 CHAPTER_FILE_PATTERN = re.compile(r"chapter_(\d+)\.md$")
 REVIEW_JSON_PATTERN = re.compile(r"chapter_(\d+)\.json$")
 ANALYSIS_PATTERN = re.compile(r"(.+)_chapter_(\d+)\.md$")
+EVALUATION_PATTERN = re.compile(r"chapter_(\d+)\.md$")
 
 
 def _project_dir(project_name: str) -> Path:
@@ -111,6 +116,16 @@ def delete_analysis_report(project_name: str, analysis_type: str, chapter_no: in
     return deleted
 
 
+def delete_evaluation_report(project_name: str, chapter_no: int) -> bool:
+    evaluation_dir = _project_dir(project_name) / "evaluation"
+    deleted_md = _safe_unlink(evaluation_dir / f"chapter_{chapter_no:03d}.md")
+    deleted_json = _safe_unlink(evaluation_dir / f"chapter_{chapter_no:03d}.json")
+    deleted = deleted_md or deleted_json
+    if deleted:
+        sync_project_retrieval_assets(project_name)
+    return deleted
+
+
 def delete_chapter_analysis_bundle(project_name: str, chapter_no: int) -> int:
     analysis_dir = _project_dir(project_name) / "analysis"
     if not analysis_dir.exists():
@@ -140,6 +155,12 @@ def save_analysis_resource(project_name: str, analysis_type: str, chapter_no: in
     save_analysis_report(project_name, analysis_type, chapter_no, markdown)
 
 
+def save_evaluation_resource(project_name: str, chapter_no: int, markdown: str, json_payload: dict | None = None):
+    save_evaluation_report(project_name, chapter_no, markdown)
+    if json_payload is not None:
+        save_evaluation_json(project_name, chapter_no, json_payload)
+
+
 def save_retrieval_source_content(project_name: str, relative_path: str, content: str):
     base = retrieval_sources_path(project_name).resolve()
     target = (base / relative_path).resolve()
@@ -164,6 +185,7 @@ def delete_chapter_bundle(project_name: str, chapter_no: int, *, remove_summary:
         "content_deleted": delete_chapter_content(project_name, chapter_no),
         "review_deleted": delete_chapter_review(project_name, chapter_no),
         "analysis_deleted": delete_chapter_analysis_bundle(project_name, chapter_no),
+        "evaluation_deleted": delete_evaluation_report(project_name, chapter_no),
         "runs_deleted": delete_chapter_runs(project_name, chapter_no),
         "summary_deleted": False,
     }
@@ -199,6 +221,23 @@ def list_analysis_reports(project_name: str) -> list[dict]:
             "path": str(file),
         })
     reports.sort(key=lambda item: (item.get("chapter_no") or 0, item.get("analysis_type", "")))
+    return reports
+
+
+def list_evaluation_reports(project_name: str) -> list[dict]:
+    evaluation_dir = _project_dir(project_name) / "evaluation"
+    if not evaluation_dir.exists():
+        return []
+    reports = []
+    for file in sorted(evaluation_dir.glob("chapter_*.md")):
+        match = EVALUATION_PATTERN.search(file.name)
+        chapter_no = int(match.group(1)) if match else None
+        reports.append({
+            "chapter_no": chapter_no,
+            "file_name": file.name,
+            "updated_at": _timestamp_or_empty(file.stat().st_mtime),
+            "path": str(file),
+        })
     return reports
 
 
@@ -241,6 +280,10 @@ def list_chapter_inventory(project_name: str) -> list[dict]:
         if isinstance(report.get("chapter_no"), int):
             chapter_numbers.add(int(report["chapter_no"]))
 
+    for report in list_evaluation_reports(project_name):
+        if isinstance(report.get("chapter_no"), int):
+            chapter_numbers.add(int(report["chapter_no"]))
+
     inventory = []
     for chapter_no in sorted(chapter_numbers):
         outline_file = base / "chapter_outlines" / f"chapter_{chapter_no:03d}.md"
@@ -251,6 +294,7 @@ def list_chapter_inventory(project_name: str) -> list[dict]:
             report for report in list_analysis_reports(project_name)
             if report.get("chapter_no") == chapter_no
         ]
+        evaluation_report = load_evaluation_report(project_name, chapter_no)
         run_items = [run for run in list_project_runs(project_name) if run.get("chapter_no") == chapter_no]
 
         updated_at = _timestamp_or_empty(_latest_mtime([
@@ -270,12 +314,15 @@ def list_chapter_inventory(project_name: str) -> list[dict]:
             "has_review_markdown": review_md.exists(),
             "has_review_json": review_json.exists(),
             "analysis_types": sorted({str(report.get("analysis_type", "")) for report in analysis_reports if report.get("analysis_type")}),
+            "has_evaluation": bool(evaluation_report.strip() or load_evaluation_json(project_name, chapter_no)),
             "run_count": len(run_items),
             "updated_at": updated_at,
             "outline_preview": load_text_file(outline_file, fallback=""),
             "content_preview": load_text_file(content_file, fallback=""),
             "review_preview": load_review(project_name, chapter_no),
             "review_payload": load_review_json(project_name, chapter_no) or {},
+            "evaluation_preview": evaluation_report,
+            "evaluation_payload": load_evaluation_json(project_name, chapter_no) or {},
         })
     return inventory
 
@@ -291,6 +338,7 @@ def get_project_summary(project_name: str) -> dict:
     memory = load_memory(project_name)
     files = [item for item in base.rglob("*") if item.is_file()]
     analysis_reports = list_analysis_reports(project_name)
+    evaluation_reports = list_evaluation_reports(project_name)
     runs = list_project_runs(project_name)
     retrieval_files = list(retrieval_sources_path(project_name).rglob("*"))
     retrieval_file_count = len([item for item in retrieval_files if item.is_file()])
@@ -311,6 +359,7 @@ def get_project_summary(project_name: str) -> dict:
         "approved_arc_count": len([item for item in arcs if item.get("has_approved_discussion")]),
         "review_count": len([item for item in chapter_inventory if item.get("has_review_markdown") or item.get("has_review_json")]),
         "analysis_count": len(analysis_reports),
+        "evaluation_count": len(evaluation_reports),
         "run_count": len(runs),
         "retrieval_source_count": retrieval_file_count,
         "outline_exists": bool(load_outline(project_name).strip()),

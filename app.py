@@ -15,8 +15,13 @@ from memory import (
     list_arcs,
     load_analysis_report,
     load_arc_metadata,
+    load_arc_chapter_plan,
     load_arc_outline,
     load_chapter_outline_metadata,
+    load_conflict_resolutions,
+    delete_arc_chapter_plan,
+    load_evaluation_json,
+    load_evaluation_report,
     load_global_rules,
     list_projects,
     list_retrieval_source_files,
@@ -58,20 +63,23 @@ from project_manager import (
     delete_chapter_content,
     delete_chapter_outline,
     delete_chapter_review,
+    delete_evaluation_report,
     delete_outline,
     delete_pipeline_run,
     delete_project,
     get_project_summary,
     list_analysis_reports,
     list_chapter_inventory,
+    list_evaluation_reports,
     list_project_runs,
     list_retrieval_sources,
     rename_project,
     save_analysis_resource,
+    save_evaluation_resource,
     save_retrieval_source_content,
     save_review_resources,
 )
-from retrieval import build_structured_external_source_payload, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
+from retrieval import build_structured_external_source_payload, debug_retrieve_context, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
 from skills import (
     approve_chapter_discussion,
     approve_arc_discussion,
@@ -95,6 +103,7 @@ from skills import (
     discuss_volume,
     discuss_volume_turn,
     generate_arc_outline,
+    generate_arc_chapter_plan,
     generate_chapter_outline,
     generate_outline,
     generate_volume_outline,
@@ -102,9 +111,12 @@ from skills import (
     organize_reference_html,
     organize_reference_url,
     organize_reference_text,
+    evaluate_chapter,
     review_chapter,
     run_consistency_check,
     pipeline_plan_write_review_update,
+    resume_chapter_pipeline,
+    save_retrieval_conflict_resolution,
     save_rule_text,
     update_memory_from_chapter,
     write_chapter,
@@ -1057,21 +1069,22 @@ def render_project_overview_page(project_name: str):
     st.subheader("项目总览")
     summary = get_project_summary(project_name)
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("正文章节", summary.get("chapter_count", 0))
     col2.metric("细纲章节", summary.get("chapter_outline_count", 0))
     col3.metric("审阅数量", summary.get("review_count", 0))
     col4.metric("分析报告", summary.get("analysis_count", 0))
+    col5.metric("评估报告", summary.get("evaluation_count", 0))
 
-    col5, col6, col7, col8 = st.columns(4)
-    col5.metric("分卷数量", summary.get("volume_count", 0))
-    col6.metric("剧情段数量", summary.get("arc_count", 0))
-    col7.metric("流水线记录", summary.get("run_count", 0))
-    col8.metric("外部资料", summary.get("retrieval_source_count", 0))
+    col6, col7, col8, col9 = st.columns(4)
+    col6.metric("分卷数量", summary.get("volume_count", 0))
+    col7.metric("剧情段数量", summary.get("arc_count", 0))
+    col8.metric("流水线记录", summary.get("run_count", 0))
+    col9.metric("外部资料", summary.get("retrieval_source_count", 0))
 
-    col9, col10 = st.columns(2)
-    col9.metric("已批准分卷讨论", summary.get("approved_volume_count", 0))
-    col10.metric("已批准剧情段讨论", summary.get("approved_arc_count", 0))
+    col10, col11 = st.columns(2)
+    col10.metric("已批准分卷讨论", summary.get("approved_volume_count", 0))
+    col11.metric("已批准剧情段讨论", summary.get("approved_arc_count", 0))
 
     st.caption(f"章节摘要={summary.get('chapter_summary_count', 0)} / 资源文件数={summary.get('resource_file_count', 0)}")
 
@@ -1206,6 +1219,23 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
                 "editable": False,
                 "deletable": True,
             })
+        arc_chapter_plan = load_arc_chapter_plan(project_name, arc_no)
+        if arc_chapter_plan.get("plan"):
+            items.append({
+                "id": f"arc-chapter-plan:{arc_no}",
+                "group": "arc_chapter_plan",
+                "label": f"arc_{arc_no:03d}.chapter_plan.json",
+                "path_label": f"arcs / arc_{arc_no:03d}.chapter_plan.json{parent_label}",
+                "content": arc_chapter_plan.get("report_markdown", ""),
+                "arc_no": arc_no,
+                "arc_metadata": arc,
+                "chapter_plan_payload": arc_chapter_plan.get("plan", {}),
+                "chapter_no": None,
+                "analysis_type": "",
+                "relative_path": f"arcs/arc_{arc_no:03d}.chapter_plan.json",
+                "editable": False,
+                "deletable": True,
+            })
     
 
     chapter_inventory = list_chapter_inventory(project_name)
@@ -1295,6 +1325,23 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
             "deletable": True,
         })
 
+    for report in list_evaluation_reports(project_name):
+        chapter_no = int(report.get("chapter_no") or 0)
+        content = load_evaluation_report(project_name, chapter_no)
+        items.append({
+            "id": f"evaluation:{chapter_no}",
+            "group": "evaluation",
+            "label": report.get("file_name", "evaluation.md"),
+            "path_label": f"evaluation / {report.get('file_name', 'evaluation.md')}",
+            "content": content,
+            "evaluation_payload": load_evaluation_json(project_name, chapter_no) or {},
+            "chapter_no": chapter_no,
+            "analysis_type": "",
+            "relative_path": report.get("file_name", ""),
+            "editable": True,
+            "deletable": True,
+        })
+
     for run in list_project_runs(project_name):
         run_content = load_pipeline_run(project_name, run.get("run_id", ""))
         items.append({
@@ -1359,6 +1406,10 @@ def _save_browser_resource(project_name: str, resource: dict, edited_content: st
     if group == "analysis":
         save_analysis_resource(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no", 0)), edited_content)
         return
+    if group == "evaluation":
+        parsed = json.loads(edited_json_text) if edited_json_text.strip() else {}
+        save_evaluation_resource(project_name, int(resource.get("chapter_no", 0)), edited_content, parsed)
+        return
     if group == "source":
         save_retrieval_source_content(project_name, str(resource.get("relative_path", "")), edited_content)
         rebuild_retrieval_assets(project_name, build_vectors=True)
@@ -1380,6 +1431,8 @@ def _delete_browser_resource(project_name: str, resource: dict):
         return delete_arc(project_name, int(resource.get("arc_no", 0)))
     if group == "arc_discussion":
         return clear_arc_discussion_approval(project_name, int(resource.get("arc_no", 0)))
+    if group == "arc_chapter_plan":
+        return delete_arc_chapter_plan(project_name, int(resource.get("arc_no", 0)))
     if group == "chapter_outline":
         return delete_chapter_outline(project_name, int(resource.get("chapter_no", 0)))
     if group == "chapter_discussion":
@@ -1390,6 +1443,8 @@ def _delete_browser_resource(project_name: str, resource: dict):
         return delete_chapter_review(project_name, int(resource.get("chapter_no", 0)))
     if group == "analysis":
         return delete_analysis_report(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no", 0)))
+    if group == "evaluation":
+        return delete_evaluation_report(project_name, int(resource.get("chapter_no", 0)))
     if group == "run":
         return delete_pipeline_run(project_name, str(resource.get("run_id", "")))
     if group == "source":
@@ -1418,13 +1473,13 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
                 st.rerun()
         return
 
-    if group in {"outline_discussion", "volume_discussion", "arc_discussion", "chapter_discussion"}:
+    if group in {"outline_discussion", "volume_discussion", "arc_discussion", "chapter_discussion", "arc_chapter_plan"}:
         if resource.get("content"):
             st.markdown(resource.get("content", ""))
-        render_step_json_expander("讨论工件 JSON", resource.get("discussion_payload", {}))
-        if st.button("删除该讨论工件", key=f"browser_delete_{resource.get('id')}"):
+        render_step_json_expander("结构化 JSON", resource.get("discussion_payload", {}) or resource.get("chapter_plan_payload", {}))
+        if st.button("删除该工件", key=f"browser_delete_{resource.get('id')}"):
             if _delete_browser_resource(project_name, resource):
-                st.success("讨论工件已删除。")
+                st.success("工件已删除。")
                 st.session_state[_resource_browser_selection_key(project_name)] = {}
                 st.rerun()
         return
@@ -1471,6 +1526,13 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
         edited_json_text = st.text_area(
             "审阅 JSON",
             value=json.dumps(resource.get("review_payload", {}), ensure_ascii=False, indent=2),
+            height=220,
+            key=f"browser_json_{resource.get('id')}"
+        )
+    if group == "evaluation":
+        edited_json_text = st.text_area(
+            "评估 JSON",
+            value=json.dumps(resource.get("evaluation_payload", {}), ensure_ascii=False, indent=2),
             height=220,
             key=f"browser_json_{resource.get('id')}"
         )
@@ -1587,11 +1649,13 @@ def render_resource_management_page(project_name: str):
             ("volume_discussion", "分卷讨论工件"),
             ("arc_outline", "剧情段大纲"),
             ("arc_discussion", "剧情段讨论工件"),
+            ("arc_chapter_plan", "剧情段章节分配"),
             ("chapter_outline", "章节细纲"),
             ("chapter_discussion", "章节讨论工件"),
             ("chapter_content", "章节正文"),
             ("review", "审阅结果"),
             ("analysis", "分析报告"),
+            ("evaluation", "评估报告"),
             ("run", "流水线记录"),
             ("source", "外部资料"),
         ]
@@ -1608,7 +1672,7 @@ def render_resource_management_page(project_name: str):
                         item_volume_no = (item.get("arc_metadata") or {}).get("volume_no")
                     if item_volume_no is None:
                         item_volume_no = (item.get("chapter_metadata") or {}).get("volume_no")
-                    if item.get("group") in {"outline", "run", "analysis", "source", "review", "chapter_content"}:
+                    if item.get("group") in {"outline", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
                         filtered_items.append(item)
                     elif item_volume_no == browser_volume_filter:
                         filtered_items.append(item)
@@ -1621,7 +1685,7 @@ def render_resource_management_page(project_name: str):
                         item_arc_no = (item.get("arc_metadata") or {}).get("arc_no")
                     if item_arc_no is None:
                         item_arc_no = (item.get("chapter_metadata") or {}).get("arc_no")
-                    if item.get("group") in {"outline", "outline_discussion", "volume_outline", "volume_discussion", "run", "analysis", "source", "review", "chapter_content"}:
+                    if item.get("group") in {"outline", "outline_discussion", "volume_outline", "volume_discussion", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
                         filtered_items.append(item)
                     elif item_arc_no == browser_arc_filter:
                         filtered_items.append(item)
@@ -1722,6 +1786,15 @@ def render_project_files_page(project_name: str):
     if review_json:
         with st.expander(f"reviews/chapter_{chapter_no:03d}.json", expanded=False):
             st.code(json.dumps(review_json, ensure_ascii=False, indent=2), language="json")
+
+    evaluation_report = load_evaluation_report(project_name, chapter_no)
+    evaluation_json = load_evaluation_json(project_name, chapter_no)
+    if evaluation_report:
+        with st.expander(f"evaluation/chapter_{chapter_no:03d}.md", expanded=False):
+            st.markdown(evaluation_report)
+    if evaluation_json:
+        with st.expander(f"evaluation/chapter_{chapter_no:03d}.json", expanded=False):
+            st.code(json.dumps(evaluation_json, ensure_ascii=False, indent=2), language="json")
 
 
 def render_volume_outline_page(project_name: str):
@@ -2044,6 +2117,46 @@ def render_arc_outline_page(project_name: str):
             status_text = " / ".join(status_parts) if status_parts else "尚无内容"
             st.caption(f"第 {chapter_no} 章 / {status_text}")
 
+    st.markdown("### Arc 章节分配计划")
+    saved_plan = load_arc_chapter_plan(project_name, arc_no)
+    plan_col1, plan_col2 = st.columns(2)
+    start_chapter_no = plan_col1.number_input(
+        "起始章节编号",
+        min_value=1,
+        value=min([int(item.get("chapter_no", 1)) for item in linked_chapters], default=1),
+        key=f"arc_plan_start_{arc_no}",
+    )
+    default_plan_count = int(metadata.get("estimated_chapter_count") or 5)
+    plan_chapter_count = plan_col2.number_input(
+        "计划章节数",
+        min_value=1,
+        value=max(default_plan_count, 1),
+        key=f"arc_plan_count_{arc_no}",
+    )
+    plan_requirement = st.text_area("章节分配补充要求", height=120, key=f"arc_plan_requirement_{arc_no}")
+    plan_step = st.session_state.get(f"arc_chapter_plan_step_{arc_no}", {})
+    if st.button("生成 Arc 章节分配计划", key=f"generate_arc_chapter_plan_{arc_no}"):
+        try:
+            result = generate_arc_chapter_plan(
+                project_name,
+                arc_no,
+                int(start_chapter_no),
+                int(plan_chapter_count),
+                plan_requirement,
+            )
+            st.session_state[f"arc_chapter_plan_step_{arc_no}"] = result
+            st.success("章节分配计划已生成并保存。")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"生成章节分配计划失败：{exc}")
+    latest_plan = st.session_state.get(f"arc_chapter_plan_step_{arc_no}", {}).get("data", {}).get("report_markdown", "") or saved_plan.get("report_markdown", "")
+    if latest_plan:
+        with st.expander("当前 Arc 章节分配计划", expanded=False):
+            st.markdown(latest_plan)
+            render_step_json_expander("章节分配 JSON", saved_plan.get("plan", {}))
+    render_step_validation(plan_step)
+    render_step_retrieval(plan_step, "本次章节分配使用的检索上下文", get_retrieval_trace(f"arc_chapter_plan:{project_name}:{arc_no}"))
+
     render_step_validation(step_result)
     render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{arc_no}"))
 
@@ -2153,6 +2266,15 @@ def render_pipeline_page(project_name: str):
             )
             if run_data.get("halted"):
                 st.warning(f"halt_reason={run_data.get('halt_reason', '-')}")
+            if run_data.get("resumable"):
+                if st.button("从该运行恢复流水线", key=f"resume_pipeline_{selected_run}"):
+                    try:
+                        with st.spinner("正在恢复流水线..."):
+                            resumed = resume_chapter_pipeline(project_name, selected_run)
+                        st.success(f"已生成恢复运行：{resumed.get('run_id', '')}")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"恢复流水线失败：{exc}")
             transitions = run_data.get("transition_log", [])
             if transitions:
                 with st.expander("该运行的状态迁移记录", expanded=False):
@@ -2235,6 +2357,59 @@ def render_analysis_page(project_name: str):
         analysis_step,
         "本次分析使用的检索上下文",
         get_retrieval_trace(f"analysis:{selected_type}:{project_name}:{chapter_no}")
+    )
+
+
+def render_evaluation_page(project_name: str):
+    st.subheader("章节评估")
+
+    chapter_no = st.number_input("章节编号", min_value=1, value=1, key="evaluation_chapter_no")
+    existing_chapter = load_chapter(project_name, chapter_no)
+    chapter_text = st.text_area(
+        "待评估正文",
+        value=existing_chapter,
+        height=420,
+        key=f"evaluation_chapter_text_{chapter_no}",
+    )
+    step_key = f"evaluation_step_{chapter_no}"
+    report_key = f"evaluation_report_{chapter_no}"
+    existing_report = load_evaluation_report(project_name, chapter_no)
+    existing_json = load_evaluation_json(project_name, chapter_no) or {}
+
+    if st.button("执行章节评估"):
+        try:
+            with st.spinner("正在生成章节质量评估..."):
+                result = evaluate_chapter(project_name, chapter_no, chapter_text)
+            report = result.get("data", {}).get("report_markdown", "")
+            st.session_state[step_key] = result
+            st.session_state[report_key] = report
+            st.rerun()
+        except Exception as exc:
+            st.error(f"章节评估失败：{exc}")
+
+    report_text = st.text_area(
+        "评估报告",
+        value=st.session_state.get(report_key, existing_report),
+        height=460,
+        key=f"evaluation_report_text_{chapter_no}",
+    )
+    if report_text:
+        st.markdown(report_text)
+
+    evaluation_step = st.session_state.get(step_key, {})
+    evaluation_payload = evaluation_step.get("data", {}).get("evaluation") or existing_json
+    if evaluation_payload:
+        cols = st.columns(4)
+        cols[0].metric("Overall", evaluation_payload.get("overall_score", 0))
+        cols[1].metric("Plot", evaluation_payload.get("plot_progression_score", 0))
+        cols[2].metric("Character", evaluation_payload.get("character_consistency_score", 0))
+        cols[3].metric("Prose", evaluation_payload.get("prose_quality_score", 0))
+        render_step_json_expander("评估 JSON", evaluation_payload)
+    render_step_validation(evaluation_step)
+    render_step_retrieval(
+        evaluation_step,
+        "本次评估使用的检索上下文",
+        get_retrieval_trace(f"evaluation:chapter:{project_name}:{chapter_no}")
     )
 
 
@@ -2542,6 +2717,14 @@ def render_retrieval_page(project_name: str):
             default=["project", "canon", "reference"],
             key="retrieval_scope_filter"
         )
+        source_type_candidates = sorted({chunk.source_type for chunk in manifest.chunks}) if manifest else []
+        source_type_filter = st.multiselect(
+            "来源类型过滤（可选）",
+            options=source_type_candidates,
+            default=[],
+            key="retrieval_source_type_filter",
+        )
+        include_debug = st.checkbox("生成检索调试信息", value=False, key="retrieval_include_debug")
         if st.button("执行检索"):
             try:
                 hits = retrieve_context(
@@ -2549,13 +2732,23 @@ def render_retrieval_page(project_name: str):
                     query,
                     top_k=top_k,
                     allowed_scopes=scope_options,
+                    allowed_source_types=source_type_filter or None,
                     retrieval_mode=retrieval_mode,
                 )
                 st.session_state["retrieval_hits"] = [hit.model_dump() for hit in hits]
+                st.session_state["retrieval_debug"] = debug_retrieve_context(
+                    project_name,
+                    query,
+                    top_k=top_k,
+                    allowed_scopes=scope_options,
+                    allowed_source_types=source_type_filter or None,
+                    retrieval_mode=retrieval_mode,
+                ) if include_debug else {}
             except Exception as exc:
                 st.error(f"检索失败：{exc}")
 
-        for hit in st.session_state.get("retrieval_hits", []):
+        current_hits = st.session_state.get("retrieval_hits", [])
+        for hit in current_hits:
             chunk = hit.get("chunk", {})
             st.markdown(
                 f"### {chunk.get('source_type', 'unknown')} / {chunk.get('scope', 'project')} / mode={hit.get('retrieval_mode', 'lexical')} / score={hit.get('score', 0):.2f}"
@@ -2569,6 +2762,59 @@ def render_retrieval_page(project_name: str):
             st.caption(
                 f"lexical={hit.get('lexical_score', 0):.2f} / semantic={hit.get('semantic_score', 0):.2f} / source={chunk.get('path', '-') }"
             )
+
+        debug_payload = st.session_state.get("retrieval_debug", {})
+        if debug_payload:
+            with st.expander("检索调试信息", expanded=False):
+                st.caption(
+                    f"query_terms={', '.join(debug_payload.get('query_terms', [])) or '-'} / candidates={debug_payload.get('candidate_chunk_count', 0)} / semantic_enabled={debug_payload.get('semantic_enabled', False)}"
+                )
+                st.markdown("### Rerank 前")
+                for index, hit in enumerate(debug_payload.get("initial_hits", []), start=1):
+                    chunk = hit.get("chunk", {})
+                    st.caption(f"{index}. {chunk.get('source_type', 'unknown')} / {chunk.get('title', '')} / score={hit.get('score', 0):.2f}")
+                st.markdown("### Rerank 后")
+                for index, hit in enumerate(debug_payload.get("reranked_hits", []), start=1):
+                    chunk = hit.get("chunk", {})
+                    st.caption(f"{index}. {chunk.get('source_type', 'unknown')} / {chunk.get('title', '')} / score={hit.get('score', 0):.2f}")
+                render_step_json_expander("完整调试 JSON", debug_payload)
+
+        conflicts = detect_potential_conflicts(current_hits)
+        if conflicts:
+            st.markdown("### 检索冲突裁决")
+            for index, conflict in enumerate(conflicts, start=1):
+                project_chunk = conflict.get("project_hit", {}).get("chunk", {})
+                external_chunk = conflict.get("external_hit", {}).get("chunk", {})
+                with st.expander(f"冲突 {index} / severity={conflict.get('severity', 'low')}", expanded=False):
+                    st.caption(f"shared_terms={', '.join(conflict.get('shared_terms', [])) or '-'}")
+                    st.markdown(f"**项目证据**：{project_chunk.get('source_type', 'unknown')} / {project_chunk.get('title', 'untitled')}")
+                    st.write(project_chunk.get("content", ""))
+                    st.markdown(f"**外部证据**：{external_chunk.get('source_type', 'unknown')} / {external_chunk.get('title', 'untitled')}")
+                    st.write(external_chunk.get("content", ""))
+                    decision = st.selectbox(
+                        "裁决",
+                        options=["merge", "use_project", "use_external", "ignore"],
+                        format_func=lambda value: {
+                            "merge": "人工折中",
+                            "use_project": "采纳项目设定",
+                            "use_external": "采纳外部/原作资料",
+                            "ignore": "忽略该冲突",
+                        }.get(value, value),
+                        key=f"conflict_decision_{index}",
+                    )
+                    note = st.text_area("裁决说明", height=80, key=f"conflict_note_{index}")
+                    if st.button("保存该冲突裁决", key=f"save_conflict_resolution_{index}"):
+                        try:
+                            saved = save_retrieval_conflict_resolution(project_name, conflict, decision, note)
+                            st.success(f"已保存裁决：{saved.get('conflict_id', '')}")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"保存裁决失败：{exc}")
+
+        resolutions = load_conflict_resolutions(project_name)
+        if resolutions:
+            with st.expander("已保存冲突裁决", expanded=False):
+                st.code(json.dumps(resolutions, ensure_ascii=False, indent=2), language="json")
 
 
 st.set_page_config(page_title="NovelForge", layout="wide")
@@ -2587,7 +2833,7 @@ else:
 
 page = st.sidebar.radio(
     "项目管理",
-    ["项目总览", "项目资源", "设定库", "交互规则", "模型配置", "RAG 检索", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
+    ["项目总览", "项目资源", "设定库", "交互规则", "模型配置", "RAG 检索", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "章节评估", "一键流水线", "文件预览"]
 )
 
 if not project_name and page != "模型配置":
@@ -2618,6 +2864,8 @@ elif page == "章节审阅":
     render_review_page(project_name)
 elif page == "一致性分析":
     render_analysis_page(project_name)
+elif page == "章节评估":
+    render_evaluation_page(project_name)
 elif page == "一键流水线":
     render_pipeline_page(project_name)
 elif page == "文件预览":

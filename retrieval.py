@@ -12,6 +12,7 @@ from llm import get_embedding
 from memory import (
     load_chapter_discussion_artifact,
     load_arc_discussion_artifact,
+    load_arc_chapter_plan,
     load_arc_metadata,
     load_arc_outline,
     load_analysis_report,
@@ -26,6 +27,9 @@ from memory import (
     load_review,
     load_review_json,
     load_volume_discussion_artifact,
+    load_conflict_resolutions,
+    load_evaluation_report,
+    load_evaluation_json,
     list_arcs,
     list_volumes,
     load_retrieval_manifest,
@@ -69,6 +73,7 @@ STRUCTURED_SOURCE_TYPES = {
     "volume_discussion",
     "arc_discussion",
     "chapter_discussion",
+    "conflict_resolution",
 }
 
 
@@ -469,6 +474,25 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         if doc:
             documents.append(doc)
 
+        arc_chapter_plan = load_arc_chapter_plan(project_name, arc_no)
+        plan_markdown = arc_chapter_plan.get("report_markdown", "")
+        doc = _make_document(
+            project_name,
+            "arc_chapter_plan",
+            f"arc_{arc_no:03d}",
+            f"{arc_meta.get('title') or f'Arc {arc_no:03d}'} Chapter Plan",
+            plan_markdown,
+            path=str(base_path / "arcs" / f"arc_{arc_no:03d}.chapter_plan.json"),
+            tags=["arc_chapter_plan", f"arc_{arc_no:03d}"],
+            metadata={
+                "authority": "project",
+                "arc_no": arc_no,
+                "volume_no": arc_meta.get("volume_no"),
+            },
+        )
+        if doc:
+            documents.append(doc)
+
     chapter_outline_dir = base_path / "chapter_outlines"
     chapter_discussion_numbers: set[int] = set()
     if chapter_outline_dir.exists():
@@ -644,6 +668,51 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 if doc:
                     documents.append(doc)
 
+    evaluation_dir = base_path / "evaluation"
+    if evaluation_dir.exists():
+        for file in sorted(evaluation_dir.glob("chapter_*.md")):
+            match = re.search(r"chapter_(\d+)\.md$", file.name)
+            chapter_no = int(match.group(1)) if match else None
+            content = load_evaluation_report(project_name, chapter_no) if chapter_no is not None else file.read_text(encoding="utf-8")
+            doc = _make_document(
+                project_name,
+                "evaluation_chapter",
+                file.stem,
+                f"Chapter {chapter_no:03d} Evaluation" if chapter_no is not None else file.stem,
+                content,
+                chapter_no=chapter_no,
+                path=str(file),
+                tags=["evaluation"],
+                metadata={
+                    "authority": "project",
+                    "evaluation": load_evaluation_json(project_name, chapter_no) if chapter_no is not None else {},
+                },
+            )
+            if doc:
+                documents.append(doc)
+
+    conflict_resolutions = load_conflict_resolutions(project_name)
+    for item in conflict_resolutions:
+        content = "\n".join([
+            f"decision: {item.get('decision', '')}",
+            f"note: {item.get('note', '')}",
+            f"shared_terms: {', '.join(item.get('shared_terms', []))}",
+            f"project_source: {item.get('project_source', '')}",
+            f"external_source: {item.get('external_source', '')}",
+        ])
+        doc = _make_document(
+            project_name,
+            "conflict_resolution",
+            str(item.get("conflict_id", "")),
+            f"Conflict Resolution {item.get('conflict_id', '')}",
+            content,
+            path=str(base_path / "retrieval" / "conflict_resolutions.json"),
+            tags=["conflict_resolution"],
+            metadata={"authority": "project", "decision": item.get("decision", "")},
+        )
+        if doc:
+            documents.append(doc)
+
     return documents
 
 
@@ -706,7 +775,7 @@ def chunk_document(document: RetrievalDocument) -> list[RetrievalChunk]:
         parts = [(document.title, document.content.strip())] if document.content.strip() else []
     elif document.source_type.startswith("analysis_"):
         parts = _chunk_markdown_sections(document.content)
-    elif document.source_type in {"outline", "chapter_outline", "review_markdown", "external_source", "external_character_sheet", "external_location_sheet", "external_organization_sheet", "external_timeline_note", "external_canon_event", "external_world_rule", "external_artifact_note"}:
+    elif document.source_type in {"outline", "chapter_outline", "arc_chapter_plan", "evaluation_chapter", "review_markdown", "external_source", "external_character_sheet", "external_location_sheet", "external_organization_sheet", "external_timeline_note", "external_canon_event", "external_world_rule", "external_artifact_note"}:
         parts = _chunk_markdown_sections(document.content)
     elif document.source_type == "chapter_content":
         parts = [(document.title, chunk) for chunk in _chunk_by_paragraphs(document.content)]
@@ -966,6 +1035,67 @@ def retrieve_context(
 
     hits = _rerank_hits(hits)
     return hits[:top_k]
+
+
+def debug_retrieve_context(
+    project_name: str,
+    query: str,
+    *,
+    top_k: int = DEFAULT_TOP_K,
+    allowed_scopes: list[str] | None = None,
+    allowed_source_types: list[str] | None = None,
+    retrieval_mode: str = "hybrid",
+) -> dict:
+    index = load_retrieval_index(project_name)
+    query_terms = _expand_query_terms(query)
+    scope_filter = set(allowed_scopes or ["project", "canon", "reference"])
+    source_filter = set(allowed_source_types or [])
+    filtered_chunks = [
+        chunk for chunk in index.chunks
+        if chunk.scope in scope_filter and (not source_filter or chunk.source_type in source_filter)
+    ]
+
+    semantic_scores = {}
+    if retrieval_mode in {"semantic", "hybrid"}:
+        try:
+            semantic_scores = _semantic_scores(project_name, query, filtered_chunks)
+        except Exception:
+            semantic_scores = {}
+
+    initial_hits = []
+    for chunk in filtered_chunks:
+        lexical_score, matched_terms = _score_chunk(chunk, query_terms) if query_terms else (0.0, [])
+        semantic_score = semantic_scores.get(chunk.chunk_id, 0.0)
+        if retrieval_mode == "lexical":
+            final_score = lexical_score
+        elif retrieval_mode == "semantic":
+            final_score = semantic_score
+        else:
+            final_score = lexical_score + semantic_score * 4.0
+        if final_score <= 0:
+            continue
+        initial_hits.append(RetrievalHit(
+            chunk=chunk,
+            score=final_score,
+            lexical_score=lexical_score,
+            semantic_score=semantic_score,
+            retrieval_mode=retrieval_mode if semantic_scores else "lexical",
+            matched_terms=matched_terms,
+        ))
+
+    initial_hits.sort(key=lambda item: (-item.score, -item.semantic_score, -item.lexical_score, item.chunk.chunk_id))
+    reranked_hits = _rerank_hits(initial_hits)
+    return {
+        "query": query,
+        "query_terms": query_terms,
+        "retrieval_mode": retrieval_mode,
+        "scope_filter": sorted(scope_filter),
+        "source_type_filter": sorted(source_filter),
+        "candidate_chunk_count": len(filtered_chunks),
+        "semantic_enabled": bool(semantic_scores),
+        "initial_hits": [hit.model_dump() for hit in initial_hits[:top_k]],
+        "reranked_hits": [hit.model_dump() for hit in reranked_hits[:top_k]],
+    }
 
 
 def format_retrieval_context(hits: list[RetrievalHit]) -> str:
