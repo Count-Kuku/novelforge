@@ -4,5 +4,9 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.spec
 .streamlit/
 data/projects/
+build/
+dist/
+release/

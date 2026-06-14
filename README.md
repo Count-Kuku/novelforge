@@ -183,6 +183,58 @@ LLM_EMBEDDING_MODEL=text-embedding-3-small
 streamlit run app.py
 ```
 
+## Local Windows Portable Build
+
+NovelForge can also be packaged as a local Windows portable app that launches the Streamlit server and opens the browser automatically.
+
+### Release shape
+
+The intended local distribution is:
+
+- `NovelForge.exe` as a small launcher
+- bundled `.venv` runtime
+- project source files
+- local `data/` directory for project storage
+
+When the user launches `NovelForge.exe`, it should:
+
+1. start the local Streamlit server on `127.0.0.1`, preferring `8501`
+2. wait until the app is reachable
+3. open the browser automatically
+
+### Build steps
+
+1. Create and populate the local virtual environment:
+
+```bash
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+```
+
+2. Run the packaging script from PowerShell:
+
+```powershell
+.\build_release.ps1 -Version v0.1.0
+```
+
+3. The script will:
+
+- install `pyinstaller` into `.venv`
+- build `NovelForge.exe` from `launcher.py`
+- assemble `release/NovelForge-Portable/`
+- create `release/NovelForge-windows-portable-v0.1.0.zip`
+- save a local build transcript under `release/`
+
+### Notes
+
+- Extract the portable build into a writable folder such as `D:\Apps\NovelForge\`
+- Avoid protected folders such as `C:\Program Files\`
+- User data remains in the local `data/` folder and `.env` file next to the app
+- The launcher prefers local port `8501` and automatically falls back to nearby ports if needed
+- If startup fails, check `launcher.log` in the app directory for diagnostics
+- If one candidate port is already occupied by another local app, the launcher will try the next port instead of opening the wrong page
+- Build-time packaging logs are written next to the artifacts under `release/build_release-<version>.log`
+
 ## Supported Model Strategy
 
 The project is designed around an OpenAI-compatible API layer.

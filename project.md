@@ -69,6 +69,7 @@ Current practical status:
 * Hierarchical outline support with project outline + volume outlines + arc outlines + chapter assignment to volume / arc
 * Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
 * In-app LLM configuration with multi-profile endpoint / key management and active-profile switching
+* Local launcher and portable-build scripts for desktop-style localhost packaging
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
@@ -160,6 +161,10 @@ novelforge/
 ├── README.md
 
 ├── project.md
+
+├── launcher.py
+
+├── build_release.ps1
 
 ```
 ├── llm_profiles.json
@@ -266,6 +271,46 @@ Business logic should remain minimal.
 Current UI design note:
 
 * `app.py` now includes lightweight reusable render helpers so pages consume `WorkflowStepResult` objects consistently instead of hand-formatting each skill result independently
+
+---
+
+## launcher.py
+
+Local desktop-style launcher.
+
+Responsibilities:
+
+* Resolve the bundled Python runtime from `.venv`
+* Start the Streamlit app on local host
+* Wait for the local server to become reachable
+* Open the browser automatically for local packaged usage
+* Reuse an already-running localhost instance only when it is confirmed to be NovelForge
+* Fall back across a small local port range when the default port is unavailable
+* Write launcher diagnostics to `launcher.log` and surface blocking startup errors to the user
+
+Design purpose:
+
+* Provide a release-friendly local entrypoint so end users do not need to manually open a terminal and run `streamlit run app.py`
+
+---
+
+## build_release.ps1
+
+Windows portable build script.
+
+Responsibilities:
+
+* Install `pyinstaller` into the local `.venv`
+* Build `NovelForge.exe` from `launcher.py`
+* Assemble a portable release directory
+* Copy the runtime, source files, and baseline data structure into the release bundle
+* Copy optional `.streamlit` runtime configuration when present
+* Save a build transcript under `release/` for local diagnostics
+* Produce a zip archive suitable for GitHub Releases
+
+Design purpose:
+
+* Provide a repeatable local packaging flow before any future installer or remote deployment work
 
 ---
 
@@ -928,6 +973,13 @@ Structured outputs, retrieval traces, and workflow state now make evaluation fea
 5. Prepare local desktop-style packaging
 
 The app now has in-UI model profile management, which reduces manual setup friction. The next step is packaging the Streamlit workspace into a local-launchable Windows distribution so users can start the localhost app without opening a terminal.
+
+Current implementation status:
+
+* Implemented: `launcher.py` local browser-launching entrypoint for packaged localhost usage
+* Implemented: `build_release.ps1` portable Windows build script using `PyInstaller`
+* Pending: installer-grade packaging flow
+* Pending: update flow for portable desktop releases
 
 ---
 
