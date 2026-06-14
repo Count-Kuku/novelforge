@@ -6,9 +6,11 @@ from urllib.parse import urlparse
 from memory import (
     load_chapter_discussion_artifact,
     create_project,
+    delete_llm_profile,
     delete_arc,
     delete_retrieval_source_file,
     delete_volume,
+    get_active_llm_profile,
     load_arc_discussion_artifact,
     list_arcs,
     load_analysis_report,
@@ -24,6 +26,8 @@ from memory import (
     load_memory,
     load_outline,
     load_outline_discussion_artifact,
+    load_llm_settings,
+    load_llm_profiles,
     load_project_rules,
     load_review,
     load_review_json,
@@ -37,10 +41,12 @@ from memory import (
     save_memory,
     save_outline,
     save_project_rules,
+    set_active_llm_profile,
     save_arc_metadata,
     save_arc_outline,
     save_volume_metadata,
     save_volume_outline,
+    upsert_llm_profile,
     list_pipeline_runs,
     load_pipeline_run,
     retrieval_sources_path,
@@ -282,6 +288,131 @@ def render_rules_page(project_name: str):
         if st.button("保存全局规则"):
             save_global_rules(updated_global_rules)
             st.success("全局规则已保存")
+
+
+def render_llm_settings_page():
+    st.subheader("模型配置")
+    st.caption("支持保存多套模型服务档案，并在网页端一键切换。当前激活的档案会同步写入项目根目录 `.env`。")
+
+    profiles_payload = load_llm_profiles()
+    profiles = profiles_payload.get("profiles", [])
+    active_profile = get_active_llm_profile()
+    settings = load_llm_settings()
+    profile_options = [profile.get("id", "") for profile in profiles]
+
+    selected_profile_id = st.selectbox(
+        "已保存档案",
+        options=profile_options,
+        index=profile_options.index(active_profile.get("id", "")) if active_profile.get("id", "") in profile_options else 0,
+        format_func=lambda profile_id: next((profile.get("name", profile_id) for profile in profiles if profile.get("id") == profile_id), profile_id),
+        key="llm_profile_selector",
+    )
+
+    selected_profile = next((profile for profile in profiles if profile.get("id") == selected_profile_id), active_profile)
+
+    switch_col, delete_col = st.columns(2)
+    if switch_col.button("切换为当前档案", use_container_width=True):
+        try:
+            set_active_llm_profile(selected_profile_id)
+            st.success("已切换当前模型档案，并同步更新 .env")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"切换失败：{exc}")
+
+    if delete_col.button("删除当前档案", use_container_width=True):
+        try:
+            delete_llm_profile(selected_profile_id)
+            st.success("档案已删除，当前激活配置已同步更新。")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"删除失败：{exc}")
+
+    with st.form("llm_profile_form"):
+        st.markdown("### 编辑或新增档案")
+        profile_id_value = st.text_input("档案 ID", value=selected_profile.get("id", ""), help="用于内部标识。建议使用英文、数字、短横线，例如 deepseek-main。")
+        profile_name = st.text_input("档案名称", value=selected_profile.get("name", ""), placeholder="例如：DeepSeek 主账号")
+        base_url = st.text_input("模型服务网址", value=selected_profile.get("base_url", ""), placeholder="https://api.deepseek.com")
+        api_key = st.text_input("API 密钥", value=selected_profile.get("api_key", ""), type="password")
+        model_name = st.text_input("聊天模型名", value=selected_profile.get("model_name", ""), placeholder="deepseek-v4-flash")
+        embedding_model_name = st.text_input(
+            "Embedding 模型名",
+            value=selected_profile.get("embedding_model_name", ""),
+            placeholder="text-embedding-3-small",
+        )
+        auto_activate = st.checkbox("保存后立即切换为当前档案", value=selected_profile.get("id") == active_profile.get("id"))
+        submitted = st.form_submit_button("保存档案")
+
+    if submitted:
+        cleaned_profile_id = profile_id_value.strip()
+        cleaned_profile_name = profile_name.strip()
+        cleaned_base_url = base_url.strip()
+        cleaned_api_key = api_key.strip()
+        cleaned_model_name = model_name.strip()
+        cleaned_embedding_model_name = embedding_model_name.strip()
+
+        if not cleaned_profile_id:
+            st.error("档案 ID 不能为空。")
+            return
+        if not cleaned_profile_name:
+            st.error("档案名称不能为空。")
+            return
+        if cleaned_base_url:
+            parsed_url = urlparse(cleaned_base_url)
+            if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+                st.error("模型服务网址格式无效，需为完整的 http/https URL。")
+                return
+
+        try:
+            saved_profile = upsert_llm_profile({
+                "id": cleaned_profile_id,
+                "name": cleaned_profile_name,
+                "base_url": cleaned_base_url,
+                "api_key": cleaned_api_key,
+                "model_name": cleaned_model_name,
+                "embedding_model_name": cleaned_embedding_model_name,
+            })
+            if auto_activate:
+                set_active_llm_profile(saved_profile.get("id", ""))
+            st.success("模型档案已保存")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"保存模型档案失败：{exc}")
+
+    st.markdown("### 已保存档案概览")
+    for profile in profiles:
+        label = profile.get("name", profile.get("id", ""))
+        if profile.get("id") == active_profile.get("id"):
+            label = f"{label}（当前）"
+        with st.expander(label, expanded=False):
+            preview_key = ""
+            if profile.get("api_key"):
+                preview_key = f"***{str(profile.get('api_key'))[-4:]}"
+            st.code(json.dumps({
+                "id": profile.get("id", ""),
+                "name": profile.get("name", ""),
+                "base_url": profile.get("base_url", ""),
+                "api_key": preview_key,
+                "model_name": profile.get("model_name", ""),
+                "embedding_model_name": profile.get("embedding_model_name", ""),
+            }, ensure_ascii=False, indent=2), language="json")
+
+    masked_key = ""
+    current_api_key = settings.get("api_key", "")
+    if current_api_key:
+        visible_tail = current_api_key[-4:] if len(current_api_key) >= 4 else current_api_key
+        masked_key = f"***{visible_tail}"
+
+    st.markdown("### 当前生效配置")
+    st.code(json.dumps({
+        "profile_id": settings.get("profile_id", ""),
+        "profile_name": settings.get("profile_name", ""),
+        "base_url": settings.get("base_url", ""),
+        "api_key": masked_key,
+        "model_name": settings.get("model_name", ""),
+        "embedding_model_name": settings.get("embedding_model_name", ""),
+        "env_path": settings.get("env_path", ""),
+        "profiles_path": settings.get("profiles_path", ""),
+    }, ensure_ascii=False, indent=2), language="json")
 
 
 @st.dialog("新建项目")
@@ -2452,15 +2583,17 @@ if project_name:
     st.caption(f"当前项目：`{project_name}`")
 else:
     memory = None
-    st.info("当前还没有项目。点击侧边栏“新建项目”开始创建。")
+    st.info("当前还没有项目。可先进入“模型配置”填写服务地址与密钥，或点击侧边栏“新建项目”开始创建。")
 
 page = st.sidebar.radio(
     "项目管理",
-    ["项目总览", "项目资源", "设定库", "交互规则", "RAG 检索", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
+    ["项目总览", "项目资源", "设定库", "交互规则", "模型配置", "RAG 检索", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "一键流水线", "文件预览"]
 )
 
-if not project_name:
+if not project_name and page != "模型配置":
     st.stop()
+elif page == "模型配置":
+    render_llm_settings_page()
 elif page == "项目总览":
     render_project_overview_page(project_name)
 elif page == "项目资源":

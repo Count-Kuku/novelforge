@@ -1,11 +1,28 @@
 import json
+import os
+import re
 from pathlib import Path
+
+from dotenv import dotenv_values
 
 from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, VolumeOutlineMetadata
 
 BASE_DIR = Path("data/projects")
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
+ENV_PATH = Path(".env")
+LLM_PROFILES_PATH = Path("data/llm_profiles.json")
 RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "memory_update"]
+DEFAULT_LLM_BASE_URL = "https://api.deepseek.com"
+DEFAULT_LLM_MODEL = "deepseek-v4-flash"
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+MANAGED_ENV_KEYS = [
+    "LLM_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_MODEL",
+    "LLM_EMBEDDING_MODEL",
+]
+DEFAULT_LLM_PROFILE_NAME = "默认配置"
 DEFAULT_MEMORY = {
     "title": "",
     "genre": "",
@@ -39,6 +56,265 @@ def normalize_rules(rules: dict | None) -> dict:
             value = rules.get(scope, [])
             normalized[scope] = [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
     return normalized
+
+
+def _default_llm_profile_payload() -> dict:
+    return {
+        "active_profile_id": None,
+        "profiles": [],
+    }
+
+
+def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
+    raw = profile if isinstance(profile, dict) else {}
+    profile_id = str(raw.get("id") or fallback_id).strip() or fallback_id
+    name = str(raw.get("name") or "").strip() or DEFAULT_LLM_PROFILE_NAME
+    return {
+        "id": profile_id,
+        "name": name,
+        "base_url": str(raw.get("base_url") or DEFAULT_LLM_BASE_URL),
+        "api_key": str(raw.get("api_key") or ""),
+        "model_name": str(raw.get("model_name") or DEFAULT_LLM_MODEL),
+        "embedding_model_name": str(raw.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+    }
+
+
+def _load_env_llm_profile() -> dict:
+    file_values = dotenv_values(ENV_PATH) if ENV_PATH.exists() else {}
+    api_key = (
+        os.getenv("LLM_API_KEY")
+        or file_values.get("LLM_API_KEY")
+        or os.getenv("DEEPSEEK_API_KEY")
+        or file_values.get("DEEPSEEK_API_KEY")
+        or ""
+    )
+    base_url = os.getenv("LLM_BASE_URL") or file_values.get("LLM_BASE_URL") or DEFAULT_LLM_BASE_URL
+    model_name = os.getenv("LLM_MODEL") or file_values.get("LLM_MODEL") or DEFAULT_LLM_MODEL
+    embedding_model_name = (
+        os.getenv("LLM_EMBEDDING_MODEL")
+        or file_values.get("LLM_EMBEDDING_MODEL")
+        or os.getenv("EMBEDDING_MODEL")
+        or file_values.get("EMBEDDING_MODEL")
+        or DEFAULT_EMBEDDING_MODEL
+    )
+    return _normalize_llm_profile(
+        {
+            "id": "default",
+            "name": DEFAULT_LLM_PROFILE_NAME,
+            "base_url": base_url,
+            "api_key": api_key,
+            "model_name": model_name,
+            "embedding_model_name": embedding_model_name,
+        },
+        "default",
+    )
+
+
+def load_llm_profiles() -> dict:
+    LLM_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not LLM_PROFILES_PATH.exists():
+        env_profile = _load_env_llm_profile()
+        payload = {
+            "active_profile_id": env_profile["id"],
+            "profiles": [env_profile],
+        }
+        save_llm_profiles(payload)
+        return payload
+
+    try:
+        raw_payload = json.loads(LLM_PROFILES_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        raw_payload = _default_llm_profile_payload()
+
+    raw_profiles = raw_payload.get("profiles", []) if isinstance(raw_payload, dict) else []
+    normalized_profiles: list[dict] = []
+    seen_ids: set[str] = set()
+    for index, profile in enumerate(raw_profiles, start=1):
+        normalized = _normalize_llm_profile(profile, f"profile_{index:03d}")
+        if normalized["id"] in seen_ids:
+            normalized["id"] = f"{normalized['id']}_{index:03d}"
+        seen_ids.add(normalized["id"])
+        normalized_profiles.append(normalized)
+
+    if not normalized_profiles:
+        env_profile = _load_env_llm_profile()
+        normalized_profiles = [env_profile]
+
+    active_profile_id = str((raw_payload.get("active_profile_id") if isinstance(raw_payload, dict) else "") or "").strip()
+    if active_profile_id not in {profile["id"] for profile in normalized_profiles}:
+        active_profile_id = normalized_profiles[0]["id"]
+
+    payload = {
+        "active_profile_id": active_profile_id,
+        "profiles": normalized_profiles,
+    }
+    if payload != raw_payload:
+        save_llm_profiles(payload)
+    return payload
+
+
+def save_llm_profiles(payload: dict):
+    LLM_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    raw_profiles = payload.get("profiles", []) if isinstance(payload, dict) else []
+    normalized_profiles: list[dict] = []
+    seen_ids: set[str] = set()
+    for index, profile in enumerate(raw_profiles, start=1):
+        normalized = _normalize_llm_profile(profile, f"profile_{index:03d}")
+        if normalized["id"] in seen_ids:
+            normalized["id"] = f"{normalized['id']}_{index:03d}"
+        seen_ids.add(normalized["id"])
+        normalized_profiles.append(normalized)
+
+    if not normalized_profiles:
+        normalized_profiles = [_load_env_llm_profile()]
+
+    active_profile_id = str(payload.get("active_profile_id") or "").strip()
+    if active_profile_id not in {profile["id"] for profile in normalized_profiles}:
+        active_profile_id = normalized_profiles[0]["id"]
+
+    normalized_payload = {
+        "active_profile_id": active_profile_id,
+        "profiles": normalized_profiles,
+    }
+    LLM_PROFILES_PATH.write_text(json.dumps(normalized_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_active_llm_profile() -> dict:
+    payload = load_llm_profiles()
+    active_profile_id = payload.get("active_profile_id")
+    for profile in payload.get("profiles", []):
+        if profile.get("id") == active_profile_id:
+            return dict(profile)
+    return dict(payload.get("profiles", [{}])[0])
+
+
+def load_llm_settings() -> dict:
+    active_profile = get_active_llm_profile()
+    return {
+        "profile_id": str(active_profile.get("id") or ""),
+        "profile_name": str(active_profile.get("name") or DEFAULT_LLM_PROFILE_NAME),
+        "api_key": str(active_profile.get("api_key") or ""),
+        "base_url": str(active_profile.get("base_url") or DEFAULT_LLM_BASE_URL),
+        "model_name": str(active_profile.get("model_name") or DEFAULT_LLM_MODEL),
+        "embedding_model_name": str(active_profile.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+        "env_path": str(ENV_PATH.resolve()),
+        "profiles_path": str(LLM_PROFILES_PATH.resolve()),
+    }
+
+
+def _serialize_env_value(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return ""
+    if any(char in text for char in [' ', '#', '"', "'", '\t']):
+        return json.dumps(text, ensure_ascii=False)
+    return text
+
+
+def save_llm_settings(settings: dict):
+    normalized = {
+        "LLM_API_KEY": str(settings.get("api_key", "") or ""),
+        "DEEPSEEK_API_KEY": str(settings.get("api_key", "") or ""),
+        "LLM_BASE_URL": str(settings.get("base_url", "") or ""),
+        "LLM_MODEL": str(settings.get("model_name", "") or ""),
+        "LLM_EMBEDDING_MODEL": str(settings.get("embedding_model_name", "") or ""),
+    }
+    env_lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
+    pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
+    updated_lines: list[str] = []
+    seen_keys: set[str] = set()
+
+    for line in env_lines:
+        match = pattern.match(line)
+        if not match:
+            updated_lines.append(line)
+            continue
+
+        key = match.group(1)
+        if key not in normalized:
+            updated_lines.append(line)
+            continue
+        if key in seen_keys:
+            continue
+
+        updated_lines.append(f"{key}={_serialize_env_value(normalized[key])}")
+        seen_keys.add(key)
+
+    if updated_lines and updated_lines[-1].strip():
+        updated_lines.append("")
+    if not env_lines:
+        updated_lines.extend([
+            "# Managed by NovelForge UI",
+        ])
+
+    for key in MANAGED_ENV_KEYS:
+        if key in seen_keys:
+            continue
+        updated_lines.append(f"{key}={_serialize_env_value(normalized[key])}")
+
+    ENV_PATH.write_text("\n".join(updated_lines).rstrip() + "\n", encoding="utf-8")
+
+    for key, value in normalized.items():
+        if value:
+            os.environ[key] = value
+        else:
+            os.environ.pop(key, None)
+
+
+def set_active_llm_profile(profile_id: str):
+    payload = load_llm_profiles()
+    target_id = str(profile_id or "").strip()
+    for profile in payload.get("profiles", []):
+        if profile.get("id") != target_id:
+            continue
+        payload["active_profile_id"] = target_id
+        save_llm_profiles(payload)
+        save_llm_settings(profile)
+        return dict(profile)
+    raise ValueError("LLM profile not found.")
+
+
+def upsert_llm_profile(profile: dict) -> dict:
+    payload = load_llm_profiles()
+    target_id = str(profile.get("id") or "").strip()
+    normalized = _normalize_llm_profile(profile, target_id or f"profile_{len(payload.get('profiles', [])) + 1:03d}")
+
+    updated_profiles: list[dict] = []
+    replaced = False
+    for existing in payload.get("profiles", []):
+        if existing.get("id") == normalized["id"]:
+            updated_profiles.append(normalized)
+            replaced = True
+        else:
+            updated_profiles.append(existing)
+    if not replaced:
+        updated_profiles.append(normalized)
+
+    payload["profiles"] = updated_profiles
+    if not payload.get("active_profile_id"):
+        payload["active_profile_id"] = normalized["id"]
+    save_llm_profiles(payload)
+    if payload.get("active_profile_id") == normalized["id"]:
+        save_llm_settings(normalized)
+    return normalized
+
+
+def delete_llm_profile(profile_id: str) -> dict:
+    payload = load_llm_profiles()
+    target_id = str(profile_id or "").strip()
+    remaining_profiles = [profile for profile in payload.get("profiles", []) if profile.get("id") != target_id]
+    if len(remaining_profiles) == len(payload.get("profiles", [])):
+        raise ValueError("LLM profile not found.")
+    if not remaining_profiles:
+        raise ValueError("At least one LLM profile must remain.")
+
+    payload["profiles"] = remaining_profiles
+    if payload.get("active_profile_id") == target_id:
+        payload["active_profile_id"] = remaining_profiles[0]["id"]
+    save_llm_profiles(payload)
+    active_profile = get_active_llm_profile()
+    save_llm_settings(active_profile)
+    return payload
 
 
 def project_path(project_name: str) -> Path:

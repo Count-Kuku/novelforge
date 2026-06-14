@@ -68,6 +68,7 @@ Current practical status:
 * IDE-style resource browser for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
 * Hierarchical outline support with project outline + volume outlines + arc outlines + chapter assignment to volume / arc
 * Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
+* In-app LLM configuration with multi-profile endpoint / key management and active-profile switching
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
@@ -156,11 +157,13 @@ novelforge/
 
 ├── .env.example
 
+├── README.md
+
 ├── project.md
 
-└── data/
-
 ```
+├── llm_profiles.json
+
 ├── global_rules.json
 
 └── projects/
@@ -234,6 +237,7 @@ Responsibilities:
 * Supporting batch cleanup for chapter bundles, run snapshots, and external sources
 * Managing volume outlines, arc outlines, and assigning chapter outlines to parent volume / arc nodes
 * Managing approval / clearing of persisted planning discussion artifacts for outline, volume, arc, and chapter layers
+* Managing multiple saved LLM endpoint / API-key profiles and syncing the active profile back into `.env`
 
 UI features:
 
@@ -255,6 +259,7 @@ UI features:
 * Chapter discussion and chapter-outline generation now both consume the currently selected volume / arc planning context so discussion and formal generation stay aligned
 * Planning pages can now approve and clear persisted discussion artifacts, and chapter-outline generation can optionally require approved chapter / volume / arc planning discussions
 * Chapter writing page now includes lightweight writing-guidance controls instead of a heavier second discussion layer
+* Dedicated model configuration page for saving multiple endpoint/key/model profiles and switching the active runtime profile from the UI
 
 Business logic should remain minimal.
 
@@ -276,6 +281,7 @@ Responsibilities:
 * API key validation
 * Support for temperature and system message per call
 * Provide embedding generation for semantic retrieval
+* Read active model settings from profile-backed persistent configuration
 
 Current model:
 
@@ -286,6 +292,11 @@ Current configuration:
 * `LLM_API_KEY` or `DEEPSEEK_API_KEY`
 * `LLM_BASE_URL` (optional)
 * `LLM_MODEL` (optional)
+* `LLM_EMBEDDING_MODEL` (optional)
+
+Current configuration note:
+
+* The active runtime configuration is still mirrored into `.env` for compatibility, but the app can now manage multiple saved profiles through `data/llm_profiles.json` and switch the active one from the UI
 
 Interface:
 
@@ -321,6 +332,9 @@ Responsibilities:
 * Saving global rules
 * Loading project rules
 * Saving project rules
+* Loading saved LLM configuration profiles
+* Saving saved LLM configuration profiles
+* Switching the active LLM configuration profile and syncing it back into `.env`
 * Loading outlines
 * Saving outlines
 * Loading volume outlines
@@ -911,6 +925,10 @@ This now also includes continuing the new hierarchy work from story outline into
 
 Structured outputs, retrieval traces, and workflow state now make evaluation feasible. The next step is defining stable metrics and artifact collection so future automated evaluation can measure quality over time.
 
+5. Prepare local desktop-style packaging
+
+The app now has in-UI model profile management, which reduces manual setup friction. The next step is packaging the Streamlit workspace into a local-launchable Windows distribution so users can start the localhost app without opening a terminal.
+
 ---
 
 ## V1
@@ -981,6 +999,7 @@ Current implementation status:
 * Implemented: IDE-style resource browser with unified edit/save/delete flows and batch cleanup controls
 * Implemented: project-level volume outline storage, editing UI, and chapter-to-volume assignment metadata
 * Implemented: project-level arc outline storage, editing UI, and chapter-to-arc assignment metadata
+* Implemented: in-app LLM endpoint / API-key profile management with active-profile switching and `.env` sync
 
 Interpretation:
 
