@@ -1,4 +1,5 @@
 import json
+import re
 
 import streamlit as st
 from urllib.parse import urlparse
@@ -25,6 +26,7 @@ from memory import (
     load_global_rules,
     load_creative_profile,
     load_knowledge_base,
+    load_pending_knowledge_items,
     list_projects,
     list_retrieval_source_files,
     list_volumes,
@@ -48,6 +50,10 @@ from memory import (
     save_global_rules,
     save_memory,
     append_knowledge_items,
+    confirm_pending_knowledge_items,
+    discard_pending_knowledge_items,
+    queue_pending_knowledge_items,
+    save_pending_knowledge_items,
     save_outline,
     save_project_rules,
     set_active_llm_profile,
@@ -1348,12 +1354,13 @@ def render_project_overview_page(project_name: str):
     col4.metric("分析报告", summary.get("analysis_count", 0))
     col5.metric("评估报告", summary.get("evaluation_count", 0))
 
-    col6, col7, col8, col9, col12 = st.columns(5)
+    col6, col7, col8, col9, col12, col13 = st.columns(6)
     col6.metric("分卷数量", summary.get("volume_count", 0))
     col7.metric("剧情段数量", summary.get("arc_count", 0))
     col8.metric("流水线记录", summary.get("run_count", 0))
     col9.metric("外部资料", summary.get("retrieval_source_count", 0))
     col12.metric("结构化知识", summary.get("knowledge_item_count", 0))
+    col13.metric("待确认知识", summary.get("pending_knowledge_count", 0))
 
     col10, col11 = st.columns(2)
     col10.metric("已批准分卷讨论", summary.get("approved_volume_count", 0))
@@ -1395,6 +1402,9 @@ def render_project_overview_page(project_name: str):
 def render_creative_profile_page(project_name: str):
     st.subheader("创作配置")
     st.caption("配置本项目的任务性质、目标篇幅、生成层级和资料参考强度。预设只是快捷入口，每一项都可以自定义。")
+
+    render_creative_task_wizard(project_name)
+    st.divider()
 
     profile = load_creative_profile(project_name)
     story_modes = ["主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"]
@@ -1588,6 +1598,430 @@ def render_dynamic_generation_page(project_name: str):
             st.markdown(chapter)
 
     render_step_json_expander("动态生成结构化数据", result)
+
+
+def build_profile_from_task_wizard(
+    task_type: str,
+    target_length: str,
+    output_goal: str,
+    reference_strength: str,
+    target_word_count: str,
+    focus_items: list[str],
+    allow_canon_deviation: bool,
+    conflict_policy: str,
+    notes: str,
+) -> dict:
+    workflow_depth = "按创作配置"
+    if output_goal == "只要正文":
+        workflow_depth = "只生成正文"
+    elif output_goal == "短篇结构和正文":
+        workflow_depth = "短篇结构+正文"
+    elif output_goal == "章节计划和正文":
+        workflow_depth = "章节计划+正文"
+    elif output_goal == "分卷/剧情段/章节计划":
+        workflow_depth = "分卷/剧情段/章节"
+    elif output_goal == "完整长篇流程":
+        workflow_depth = "完整长篇流程"
+    elif target_length in {"片段", "短篇"}:
+        workflow_depth = "短篇结构+正文"
+    elif target_length == "中篇":
+        workflow_depth = "章节计划+正文"
+    else:
+        workflow_depth = "完整长篇流程"
+
+    return {
+        "story_mode": task_type,
+        "target_length": target_length,
+        "target_word_count": target_word_count,
+        "workflow_depth": workflow_depth,
+        "reference_strength": reference_strength,
+        "reference_focus": focus_items,
+        "allow_canon_deviation": allow_canon_deviation,
+        "conflict_policy": conflict_policy,
+        "notes": notes,
+    }
+
+
+def render_creative_task_wizard(project_name: str):
+    st.markdown("### 创作任务向导")
+    st.caption("用中文目标快速生成一份创作配置。保存后，“动态生成”和各类生成提示会按这份配置调整。")
+
+    task_options = ["主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"]
+    length_options = ["片段", "短篇", "中篇", "长篇"]
+    output_options = ["只要正文", "短篇结构和正文", "章节计划和正文", "分卷/剧情段/章节计划", "完整长篇流程"]
+    strength_options = ["轻参考", "中参考", "强参考", "严格原作", "主要参考文风"]
+    focus_options = ["角色", "世界观", "剧情事件", "道具能力", "时间线", "写作风格", "对白风格", "写作手法", "硬性约束"]
+    conflict_options = ["优先项目设定", "优先原作资料", "人工确认", "保留多版本"]
+
+    col_a, col_b = st.columns(2)
+    task_type = col_a.selectbox("这次想写什么", task_options, key="task_wizard_type")
+    target_length = col_b.selectbox("大概篇幅", length_options, key="task_wizard_length")
+    output_goal = col_a.selectbox("希望系统产出什么", output_options, key="task_wizard_output")
+    reference_strength = col_b.selectbox("参考原作/资料的强度", strength_options, index=1, key="task_wizard_reference_strength")
+    target_word_count = col_a.text_input("目标字数（可选）", placeholder="例如：8000、2万、20万", key="task_wizard_word_count")
+    conflict_policy = col_b.selectbox("资料冲突时怎么处理", conflict_options, key="task_wizard_conflict_policy")
+    focus_items = st.multiselect(
+        "重点参考方向",
+        options=focus_options,
+        default=["角色", "世界观", "剧情事件"],
+        key="task_wizard_focus",
+    )
+    allow_canon_deviation = st.checkbox("允许按需求改写原设", value=True, key="task_wizard_allow_deviation")
+    notes = st.text_area(
+        "补充说明",
+        height=120,
+        key="task_wizard_notes",
+        placeholder="例如：穿越到新环境，只保留角色性格和说话方式；能力体系保留原作限制，但剧情完全重写。",
+    )
+
+    preview_profile = build_profile_from_task_wizard(
+        task_type,
+        target_length,
+        output_goal,
+        reference_strength,
+        target_word_count,
+        focus_items,
+        allow_canon_deviation,
+        conflict_policy,
+        notes,
+    )
+    st.caption(f"推荐路径：{' -> '.join(recommended_workflow_for_profile(preview_profile))}")
+    render_step_json_expander("向导生成的配置预览", preview_profile)
+
+    if st.button("保存向导配置"):
+        saved = save_creative_profile(project_name, preview_profile)
+        st.success("已根据向导保存创作配置。")
+        st.session_state["task_wizard_last_profile"] = saved
+        st.rerun()
+
+
+def render_pending_knowledge_queue(project_name: str):
+    pending_items = load_pending_knowledge_items(project_name)
+    pending_count = len(pending_items)
+    with st.expander(f"待确认结构化知识（{pending_count}）", expanded=bool(pending_count)):
+        st.caption("提取结果先进入这里。确认后才写入结构化知识并重建检索索引；不合适的条目可以丢弃。")
+        if not pending_items:
+            st.caption("当前没有待确认的知识条目。")
+            return
+
+        option_indices = list(range(pending_count))
+        selected_indices = st.multiselect(
+            "选择要处理的条目",
+            options=option_indices,
+            default=option_indices[: min(10, pending_count)],
+            format_func=lambda index: (
+                f"{index + 1}. {label_knowledge_category(pending_items[index].get('category', ''))}"
+                f" / {pending_items[index].get('name', '未命名')}"
+                f" / {label_scope(pending_items[index].get('scope', 'reference'))}"
+            ),
+            key="pending_knowledge_selected_indices",
+        )
+
+        for index, item in enumerate(pending_items[:30], start=1):
+            st.markdown(f"#### {index}. {label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}")
+            st.caption(
+                f"范围={label_scope(item.get('scope', 'reference'))} / 可信度={label_authority(item.get('authority', 'curated'))} / 来源={item.get('source_title', '-') or '-'}"
+            )
+            if item.get("summary"):
+                st.write(item.get("summary"))
+            if item.get("tags"):
+                st.caption(f"标签：{', '.join(item.get('tags', []))}")
+        if len(pending_items) > 30:
+            st.caption(f"仅预览前 30 条，共 {pending_count} 条。")
+
+        selected_ids = [
+            str(pending_items[index].get("pending_id", ""))
+            for index in selected_indices
+            if 0 <= index < pending_count and pending_items[index].get("pending_id")
+        ]
+        col_a, col_b = st.columns(2)
+        if col_a.button("确认所选并写入结构化知识"):
+            if not selected_ids:
+                st.error("请先选择条目。")
+            else:
+                saved_count = confirm_pending_knowledge_items(project_name, selected_ids)
+                if saved_count:
+                    rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success(f"已确认 {saved_count} 条结构化知识。")
+                st.rerun()
+        if col_b.button("丢弃所选待确认条目"):
+            if not selected_ids:
+                st.error("请先选择条目。")
+            else:
+                removed_count = discard_pending_knowledge_items(project_name, selected_ids)
+                st.success(f"已丢弃 {removed_count} 条待确认知识。")
+                st.rerun()
+
+        with st.expander("高级编辑：待确认队列原始数据", expanded=False):
+            pending_json = st.text_area(
+                "pending.json",
+                value=json.dumps(pending_items, ensure_ascii=False, indent=2),
+                height=360,
+                key="pending_knowledge_raw_json",
+            )
+            if st.button("保存待确认队列修改"):
+                try:
+                    parsed = json.loads(pending_json)
+                    if not isinstance(parsed, list):
+                        st.error("待确认队列必须是列表结构。")
+                    else:
+                        save_pending_knowledge_items(project_name, parsed)
+                        st.success("待确认队列已保存。")
+                        st.rerun()
+                except json.JSONDecodeError as exc:
+                    st.error(f"结构化数据格式错误：{exc}")
+
+
+CHAPTER_TITLE_PATTERN = re.compile(
+    r"^\s*(?:第\s*[0-9零一二三四五六七八九十百千万两〇]+\s*[章节卷回部篇]|Chapter\s+\d+|CHAPTER\s+\d+|番外|楔子|序章|终章).*$"
+)
+
+
+def decode_uploaded_text(uploaded_file) -> str:
+    if uploaded_file is None:
+        return ""
+    data = uploaded_file.getvalue()
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="ignore")
+
+
+def split_long_reference_text(source_title: str, raw_text: str, max_chars: int = 6000) -> list[dict]:
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return []
+
+    lines = text.splitlines()
+    chapter_starts = [
+        index for index, line in enumerate(lines)
+        if CHAPTER_TITLE_PATTERN.match(line.strip())
+    ]
+
+    segments: list[dict] = []
+    if chapter_starts:
+        if chapter_starts[0] > 0:
+            preface = "\n".join(lines[:chapter_starts[0]]).strip()
+            if preface:
+                segments.append({
+                    "title": f"{source_title} 序言/简介",
+                    "content": preface,
+                    "split_method": "章节标题",
+                    "chapter_index": 0,
+                    "char_count": len(preface),
+                })
+        for item_index, start in enumerate(chapter_starts):
+            end = chapter_starts[item_index + 1] if item_index + 1 < len(chapter_starts) else len(lines)
+            title = lines[start].strip() or f"{source_title} 第 {item_index + 1} 段"
+            content = "\n".join(lines[start:end]).strip()
+            if content:
+                segments.append({
+                    "title": title,
+                    "content": content,
+                    "split_method": "章节标题",
+                    "chapter_index": item_index + 1,
+                    "char_count": len(content),
+                })
+
+    if not segments:
+        paragraphs = [item.strip() for item in re.split(r"\n\s*\n+", text) if item.strip()]
+        current: list[str] = []
+        current_length = 0
+        for paragraph in paragraphs or [text]:
+            paragraph_length = len(paragraph)
+            if current and current_length + paragraph_length + 2 > max_chars:
+                content = "\n\n".join(current).strip()
+                segments.append({
+                    "title": f"{source_title} 片段 {len(segments) + 1:03d}",
+                    "content": content,
+                    "split_method": "字数切分",
+                    "chapter_index": len(segments) + 1,
+                    "char_count": len(content),
+                })
+                current = []
+                current_length = 0
+            if paragraph_length > max_chars:
+                for start in range(0, paragraph_length, max_chars):
+                    piece = paragraph[start:start + max_chars].strip()
+                    if piece:
+                        segments.append({
+                            "title": f"{source_title} 片段 {len(segments) + 1:03d}",
+                            "content": piece,
+                            "split_method": "字数切分",
+                            "chapter_index": len(segments) + 1,
+                            "char_count": len(piece),
+                        })
+                continue
+            current.append(paragraph)
+            current_length += paragraph_length + 2
+        if current:
+            content = "\n\n".join(current).strip()
+            segments.append({
+                "title": f"{source_title} 片段 {len(segments) + 1:03d}",
+                "content": content,
+                "split_method": "字数切分",
+                "chapter_index": len(segments) + 1,
+                "char_count": len(content),
+            })
+
+    normalized = []
+    for index, segment in enumerate(segments, start=1):
+        item = dict(segment)
+        item["index"] = index
+        item["title"] = item.get("title") or f"{source_title} 片段 {index:03d}"
+        item["char_count"] = len(item.get("content", ""))
+        normalized.append(item)
+    return normalized
+
+
+def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str]):
+    with st.expander("长篇资料导入器", expanded=False):
+        st.caption("适合导入长篇网文、原作正文或大段参考资料。建议先切分并导入索引，再分批提取结构化知识。")
+
+        col_a, col_b = st.columns(2)
+        long_title = col_a.text_input("长篇资料标题", key="long_reference_title", placeholder="例如：某某原作正文")
+        long_scope = col_b.selectbox("资料范围", options=["canon", "reference"], format_func=label_scope, key="long_reference_scope")
+        long_authority = col_a.selectbox(
+            "资料可信度",
+            options=["official", "curated", "community", "unknown"],
+            index=0,
+            format_func=label_authority,
+            key="long_reference_authority",
+        )
+        long_source_type = col_b.selectbox(
+            "资料模板",
+            options=list(source_type_options.keys()),
+            index=0,
+            format_func=lambda key: source_type_options.get(key, label_source_type(key)),
+            key="long_reference_source_type",
+        )
+        long_origin = st.text_input("来源说明/链接（可选）", key="long_reference_origin")
+        uploaded_file = st.file_uploader("上传 txt/md 文件（可选）", type=["txt", "md"], key="long_reference_file")
+        uploaded_text = decode_uploaded_text(uploaded_file)
+        pasted_text = st.text_area(
+            "或直接粘贴长篇资料",
+            value=uploaded_text,
+            height=260,
+            key="long_reference_text",
+        )
+        max_chars = st.slider("无章节标题时的切分字数", min_value=2000, max_value=12000, value=6000, step=1000, key="long_reference_max_chars")
+
+        if st.button("预览长篇切分"):
+            title = long_title.strip() or (uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料")
+            segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
+            st.session_state["long_reference_segments"] = segments
+            if segments:
+                st.success(f"已切分为 {len(segments)} 个资料片段。")
+            else:
+                st.error("没有可切分的资料内容。")
+
+        segments = st.session_state.get("long_reference_segments", [])
+        if not segments:
+            return
+
+        total_chars = sum(int(item.get("char_count", 0)) for item in segments)
+        st.caption(f"当前预览：{len(segments)} 个片段 / 共 {total_chars} 字符。")
+        for segment in segments[:10]:
+            st.markdown(f"#### {segment.get('index')}. {segment.get('title')}")
+            st.caption(f"切分方式={segment.get('split_method')} / 字符数={segment.get('char_count')}")
+            st.write(segment.get("content", "")[:320] + ("..." if len(segment.get("content", "")) > 320 else ""))
+        if len(segments) > 10:
+            st.caption(f"仅预览前 10 个片段，共 {len(segments)} 个。")
+
+        segment_options = list(range(len(segments)))
+        selected_indices = st.multiselect(
+            "选择要处理的片段",
+            options=segment_options,
+            default=segment_options,
+            format_func=lambda index: f"{segments[index].get('index')}. {segments[index].get('title')}（{segments[index].get('char_count')} 字符）",
+            key="long_reference_selected_segments",
+        )
+
+        col_import, col_extract = st.columns(2)
+        if col_import.button("批量导入所选片段到资料索引"):
+            if not selected_indices:
+                st.error("请先选择片段。")
+            else:
+                imported = 0
+                total_selected = len(selected_indices)
+                base_title = long_title.strip() or "长篇资料"
+                for order, index in enumerate(selected_indices, start=1):
+                    segment = segments[index]
+                    payload = build_structured_external_source_payload(
+                        source_type=long_source_type,
+                        scope=long_scope,
+                        title=segment.get("title", f"{base_title} 片段 {order:03d}"),
+                        summary=f"长篇资料片段 {segment.get('index')} / 共 {len(segments)} 段 / 字符数 {segment.get('char_count')}",
+                        content=segment.get("content", ""),
+                        tags=["长篇资料", "自动切分"],
+                        metadata={
+                            "authority": long_authority,
+                            "source_origin": long_origin.strip(),
+                            "long_reference": True,
+                            "part_index": segment.get("index"),
+                            "part_count": len(segments),
+                            "split_method": segment.get("split_method"),
+                            "selected_order": order,
+                            "selected_count": total_selected,
+                        },
+                    )
+                    short_title = re.sub(r"\s+", "_", str(segment.get("title", "segment")))[:40]
+                    source_name = f"{base_title}_{int(segment.get('index', order)):04d}_{short_title}"
+                    ingest_external_source_file(project_name, source_name, json.dumps(payload, ensure_ascii=False, indent=2))
+                    imported += 1
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success(f"已导入 {imported} 个长篇资料片段，并重建检索索引。")
+                st.rerun()
+
+        batch_limit = st.number_input("本次最多提取片段数", min_value=1, max_value=20, value=3, key="long_reference_extract_limit")
+        enabled_categories = st.multiselect(
+            "批量提取分类",
+            options=knowledge_category_options,
+            default=["characters", "items", "abilities", "world_rules", "timeline_events", "relationships"],
+            format_func=label_knowledge_category,
+            key="long_reference_extract_categories",
+        )
+        if col_extract.button("批量提取所选片段到待确认队列"):
+            if not selected_indices:
+                st.error("请先选择片段。")
+            elif not enabled_categories:
+                st.error("请至少选择一个提取分类。")
+            else:
+                queued_total = 0
+                processed = 0
+                failed_titles = []
+                with st.spinner("正在分批提取结构化知识..."):
+                    for index in selected_indices[: int(batch_limit)]:
+                        segment = segments[index]
+                        try:
+                            result = extract_reference_knowledge(
+                                project_name,
+                                segment.get("title", long_title.strip() or "长篇资料"),
+                                segment.get("content", ""),
+                                enabled_categories,
+                            )
+                            payload = result.get("data", {}).get("knowledge_extraction", {})
+                            items = payload.get("items", []) if isinstance(payload, dict) else []
+                            queued_total += queue_pending_knowledge_items(
+                                project_name,
+                                items,
+                                scope=long_scope,
+                                authority=long_authority,
+                                source_title=payload.get("source_title", "") or segment.get("title", ""),
+                                source_origin=long_origin.strip(),
+                            )
+                            processed += 1
+                        except Exception as exc:
+                            failed_titles.append(f"{segment.get('title', '未命名片段')}：{exc}")
+                st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
+                for failure in failed_titles[:5]:
+                    st.warning(f"提取失败：{failure}")
+                if len(failed_titles) > 5:
+                    st.warning(f"另有 {len(failed_titles) - 5} 个片段提取失败。")
+                if not failed_titles:
+                    st.rerun()
 
 
 def _build_resource_browser_items(project_name: str) -> list[dict]:
@@ -3039,6 +3473,8 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
     if mode == "ingestion":
         source_dir = retrieval_sources_path(project_name)
         st.caption(f"外部资料保存目录：`{source_dir}`")
+        render_pending_knowledge_queue(project_name)
+        render_long_reference_importer(project_name, source_type_options, knowledge_category_options)
 
     if mode == "ingestion":
         with st.expander("添加外部资料", expanded=False):
@@ -3229,7 +3665,20 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     format_func=lambda index: f"{index + 1}. {label_knowledge_category(extraction_items[index].get('category', ''))} / {extraction_items[index].get('name', '未命名')}",
                     key="knowledge_extract_selected_items",
                 )
-                if st.button("保存所选知识到结构化知识"):
+                col_queue, col_direct = st.columns(2)
+                if col_queue.button("加入待确认队列"):
+                    selected_items = [extraction_items[index] for index in selected_item_indices]
+                    queued_count = queue_pending_knowledge_items(
+                        project_name,
+                        selected_items,
+                        scope=knowledge_scope,
+                        authority=knowledge_authority,
+                        source_title=extraction_payload.get("source_title", "") or knowledge_title,
+                        source_origin=knowledge_origin,
+                    )
+                    st.success(f"已加入 {queued_count} 条待确认知识。")
+                    st.rerun()
+                if col_direct.button("直接保存所选知识"):
                     selected_items = [extraction_items[index] for index in selected_item_indices]
                     saved_count = append_knowledge_items(
                         project_name,

@@ -52,8 +52,11 @@ Current maturity can be summarized as:
 - project resources page for browsing, editing, and cleaning project files
 - core story state page for short, high-priority settings injected into generation
 - source ingestion page for importing canon/reference/sample text and extracting structured knowledge
+- long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing
+- pending structured-knowledge queue for reviewing extracted items before persistence
 - retrieval center for index rebuilds, recall tests, debug inspection, and conflict handling
 - project creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
+- creative task wizard for turning Chinese task goals into project creative settings
 - dynamic generation entry that can run direct prose, short-form structure, or chapter-plan based generation from the creative profile
 - structured knowledge ingestion from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 - lexical, semantic, and hybrid retrieval
@@ -133,11 +136,13 @@ The app separates three related concepts:
 - `Project Resources`: file-level management for outlines, chapters, reports, run snapshots, and source files.
 - `Core State`: compact story settings that are injected with high priority, such as key canon mode, relationships, timeline items, and hard constraints.
 - `Source Ingestion` / `Retrieval Center`: ingestion imports and structures material; retrieval rebuilds indexes, tests recall, inspects debug output, and stores conflict decisions.
+- `Pending Structured Knowledge`: extracted items can be staged for review before they become indexed structured knowledge.
 
 Current retrieval capabilities include:
 
 - project knowledge retrieval
 - canon and reference retrieval
+- long-form text splitting by chapter title or length before batch import
 - document chunk indexing
 - semantic embedding retrieval
 - hybrid lexical + semantic ranking
@@ -147,6 +152,8 @@ Current retrieval capabilities include:
 - persisted conflict resolutions that can be recalled as project knowledge
 - optional retrieval debug output for inspecting recall and ranking behavior
 - structured knowledge extraction from pasted material with human confirmation before persistence
+- pending review queue for accepting, discarding, or editing extracted knowledge before indexing
+- batched structured-knowledge extraction from selected long-form source segments
 - confirmed structured knowledge is indexed for later generation, review, analysis, and evaluation
 
 ## Creative Profile
@@ -160,6 +167,8 @@ Each project can store a creative profile describing the intended generation pat
 - reference focus such as characters, worldbuilding, events, abilities, timeline, writing style, dialogue style, techniques, and hard constraints, with custom tags supported
 
 This profile is injected into major generation, discussion, review, and analysis prompts so model behavior can adapt to length, workflow depth, and reference strength.
+
+The in-app creative task wizard can create this profile from plain Chinese task choices such as what to write, target length, output goal, reference strength, conflict policy, and notes.
 
 The in-app `动态生成` page now provides a first executable dynamic path:
 
@@ -204,6 +213,7 @@ Newer persisted artifacts include:
 - `arcs/arc_xxx.chapter_plan.json`: arc-level chapter allocation plans
 - `creative_profile.json`: project-level creative profile
 - `knowledge/*.json`: confirmed structured knowledge records
+- `knowledge/pending.json`: pending structured-knowledge review queue
 - `evaluation/chapter_xxx.md` / `.json`: chapter evaluation reports and structured scores
 - `retrieval/conflict_resolutions.json`: saved retrieval conflict decisions
 - `runs/*.json`: resumable pipeline run snapshots

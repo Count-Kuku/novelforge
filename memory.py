@@ -1,7 +1,9 @@
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from dotenv import dotenv_values
 
@@ -347,6 +349,7 @@ def create_project(project_name: str) -> str:
     load_creative_profile(normalized_name)
     load_project_rules(normalized_name)
     knowledge_dir_path(normalized_name)
+    save_pending_knowledge_items(normalized_name, load_pending_knowledge_items(normalized_name))
     retrieval_sources_path(normalized_name)
     return normalized_name
 
@@ -454,6 +457,10 @@ def knowledge_category_path(project_name: str, category: str) -> Path:
     return knowledge_dir_path(project_name) / f"{safe_category}.json"
 
 
+def pending_knowledge_path(project_name: str) -> Path:
+    return knowledge_dir_path(project_name) / "pending.json"
+
+
 def _load_json_list(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -480,6 +487,96 @@ def load_knowledge_base(project_name: str) -> dict[str, list[dict]]:
         category: load_knowledge_category(project_name, category)
         for category in KNOWLEDGE_CATEGORIES
     }
+
+
+def load_pending_knowledge_items(project_name: str) -> list[dict]:
+    return _load_json_list(pending_knowledge_path(project_name))
+
+
+def save_pending_knowledge_items(project_name: str, items: list[dict]):
+    path = pending_knowledge_path(project_name)
+    normalized = [item for item in items if isinstance(item, dict)]
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def queue_pending_knowledge_items(
+    project_name: str,
+    items: list[dict],
+    *,
+    scope: str,
+    authority: str,
+    source_title: str = "",
+    source_origin: str = "",
+) -> int:
+    pending = load_pending_knowledge_items(project_name)
+    queued_at = datetime.now(timezone.utc).isoformat()
+    added_count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if category not in KNOWLEDGE_CATEGORIES or not name:
+            continue
+        normalized = dict(item)
+        normalized["pending_id"] = normalized.get("pending_id") or f"pending_{uuid4().hex}"
+        normalized["category"] = category
+        normalized["name"] = name
+        normalized["scope"] = scope
+        normalized["authority"] = authority
+        normalized["source_title"] = source_title or normalized.get("source_title", "")
+        normalized["source_origin"] = source_origin
+        normalized["status"] = "pending"
+        normalized["queued_at"] = queued_at
+        pending.append(normalized)
+        added_count += 1
+    if added_count:
+        save_pending_knowledge_items(project_name, pending)
+    return added_count
+
+
+def discard_pending_knowledge_items(project_name: str, pending_ids: list[str]) -> int:
+    id_set = {str(item) for item in pending_ids}
+    if not id_set:
+        return 0
+    pending = load_pending_knowledge_items(project_name)
+    remaining = [item for item in pending if str(item.get("pending_id", "")) not in id_set]
+    removed_count = len(pending) - len(remaining)
+    if removed_count:
+        save_pending_knowledge_items(project_name, remaining)
+    return removed_count
+
+
+def confirm_pending_knowledge_items(project_name: str, pending_ids: list[str]) -> int:
+    id_set = {str(item) for item in pending_ids}
+    if not id_set:
+        return 0
+    pending = load_pending_knowledge_items(project_name)
+    selected = [item for item in pending if str(item.get("pending_id", "")) in id_set]
+    remaining = [item for item in pending if str(item.get("pending_id", "")) not in id_set]
+
+    saved_count = 0
+    grouped: dict[tuple[str, str, str, str], list[dict]] = {}
+    for item in selected:
+        key = (
+            str(item.get("scope") or "reference"),
+            str(item.get("authority") or "curated"),
+            str(item.get("source_title") or ""),
+            str(item.get("source_origin") or ""),
+        )
+        grouped.setdefault(key, []).append(item)
+    for (scope, authority, source_title, source_origin), items in grouped.items():
+        saved_count += append_knowledge_items(
+            project_name,
+            items,
+            scope=scope,
+            authority=authority,
+            source_title=source_title,
+            source_origin=source_origin,
+        )
+    if selected:
+        save_pending_knowledge_items(project_name, remaining)
+    return saved_count
 
 
 def _make_knowledge_id(category: str, index: int) -> str:
@@ -511,6 +608,8 @@ def append_knowledge_items(
         next_index = len(existing) + 1
         for item in category_items:
             normalized = dict(item)
+            normalized.pop("pending_id", None)
+            normalized.pop("queued_at", None)
             normalized.setdefault("name", "")
             if not str(normalized.get("name", "")).strip():
                 continue

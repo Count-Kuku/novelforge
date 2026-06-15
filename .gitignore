@@ -6,7 +6,7 @@ __pycache__/
 *.pyd
 .spec
 .streamlit/
-data/projects/
+data/
 build/
 dist/
 release/

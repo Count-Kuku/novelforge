@@ -60,10 +60,13 @@ Current practical status:
 * Hybrid retrieval with lexical + semantic scoring
 * Retrieval evidence grouping, authority weighting, conflict warnings, and reranking
 * Structured pasted-reference organization and single-page URL reference ingestion for canon/reference knowledge
+* Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing
 * Project-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
+* Creative task wizard for creating project creative profiles from plain Chinese task choices
 * First dynamic generation entry that can execute direct prose, short-form structure + prose, or chapter-plan + prose based on the creative profile
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 * Confirmed structured knowledge persisted under project `knowledge/` storage and indexed for retrieval
+* Pending structured-knowledge review queue before extracted items become official project knowledge
 * Discussion-first planning support for full-story outline and chapter direction before formal generation
 * Approval-based planning artifacts for outline / volume / arc / chapter discussions
 * Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
@@ -253,6 +256,8 @@ Responsibilities:
 * Consuming structured review/update results produced by the schema layer
 * Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
 * Managing source ingestion, retrieval sources, index rebuilds, and retrieval preview
+* Managing long-form source splitting, batch import, and batch structured extraction into the pending queue
+* Managing a pending structured-knowledge queue for accept/discard/edit review before persistence
 * Exposing retrieval mode and score breakdown for debugging/learning
 * Organizing pasted reference text and URL pages into structured retrieval-ready entries before ingestion
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
@@ -279,6 +284,7 @@ UI features:
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
+* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, batch indexing, and limited batch extraction
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
 * Resource browser with left-side file navigation, right-side editor/detail panel, and lightweight volume / arc filtering
@@ -288,6 +294,7 @@ UI features:
 * Planning pages can now approve and clear persisted discussion artifacts, and chapter-outline generation can optionally require approved chapter / volume / arc planning discussions
 * Chapter writing page now includes lightweight writing-guidance controls instead of a heavier second discussion layer
 * Dedicated model configuration page for saving multiple endpoint/key/model profiles and switching the active runtime profile from the UI
+* Creative task wizard that saves project creative settings from task type, length, output goal, reference strength, conflict policy, and notes
 
 Business logic should remain minimal.
 
@@ -927,6 +934,8 @@ Stores confirmed structured knowledge extracted from source material. Current ca
 * `narrative_techniques.json`
 * `constraints.json`
 
+`knowledge/pending.json` stores extracted knowledge items waiting for user confirmation. Confirmed items are moved into the category files above and then indexed for retrieval.
+
 retrieval/
 
 Stores retrieval index artifacts and external knowledge sources.
@@ -1167,7 +1176,9 @@ Current implementation status:
 * Implemented: persisted conflict resolutions for recurring evidence disagreements
 * Implemented: pasted reference organization into structured retrieval-ready entries
 * Implemented: single-page URL fetch and organization for controlled canon/reference ingestion
+* Implemented: long-form source importer with chapter-title splitting, length fallback splitting, batch source indexing, and limited batch extraction
 * Implemented: structured knowledge extraction from pasted material into typed categories
+* Implemented: pending structured-knowledge queue with batch confirmation/discard and raw-data editing
 * Implemented: human-confirmed knowledge persistence under project `knowledge/`
 * Implemented: retrieval indexing for confirmed structured knowledge
 * Pending: dedicated external vector database backend
@@ -1205,6 +1216,7 @@ Current implementation status:
 
 * Implemented: one-click chapter pipeline across planning, writing, review, and memory update
 * Implemented: project-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
+* Implemented: creative task wizard that maps plain Chinese task choices into the project creative profile
 * Implemented: first dynamic generation page for direct prose, short-form structure + prose, and chapter-plan + prose tasks
 * Implemented: per-step error isolation with partial result recovery
 * Implemented: explicit `ChapterPipelineState`-style workflow object
