@@ -67,6 +67,7 @@ Current practical status:
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 * Confirmed structured knowledge persisted under project `knowledge/` storage and indexed for retrieval
 * Pending structured-knowledge review queue before extracted items become official project knowledge
+* Structured-knowledge organizer for duplicate detection, manual merge, deletion, and raw category editing
 * Discussion-first planning support for full-story outline and chapter direction before formal generation
 * Approval-based planning artifacts for outline / volume / arc / chapter discussions
 * Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
@@ -258,6 +259,7 @@ Responsibilities:
 * Managing source ingestion, retrieval sources, index rebuilds, and retrieval preview
 * Managing long-form source splitting, batch import, and batch structured extraction into the pending queue
 * Managing a pending structured-knowledge queue for accept/discard/edit review before persistence
+* Managing structured-knowledge cleanup with duplicate detection, merge preview, deletion, and raw category editing
 * Exposing retrieval mode and score breakdown for debugging/learning
 * Organizing pasted reference text and URL pages into structured retrieval-ready entries before ingestion
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
@@ -285,6 +287,7 @@ UI features:
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
 * Long-form source importer for txt/md upload, pasted text, chapter/title splitting, batch indexing, and limited batch extraction
+* Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
 * Resource browser with left-side file navigation, right-side editor/detail panel, and lightweight volume / arc filtering
@@ -1180,6 +1183,7 @@ Current implementation status:
 * Implemented: structured knowledge extraction from pasted material into typed categories
 * Implemented: pending structured-knowledge queue with batch confirmation/discard and raw-data editing
 * Implemented: human-confirmed knowledge persistence under project `knowledge/`
+* Implemented: structured-knowledge organizer with duplicate detection, manual merge, deletion, and raw category editing
 * Implemented: retrieval indexing for confirmed structured knowledge
 * Pending: dedicated external vector database backend
 * Pending: deeper fact-level conflict recommendation logic

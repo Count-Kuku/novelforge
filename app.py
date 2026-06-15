@@ -26,6 +26,7 @@ from memory import (
     load_global_rules,
     load_creative_profile,
     load_knowledge_base,
+    load_knowledge_category,
     load_pending_knowledge_items,
     list_projects,
     list_retrieval_source_files,
@@ -49,6 +50,7 @@ from memory import (
     save_chapter_outline_metadata,
     save_global_rules,
     save_memory,
+    save_knowledge_category,
     append_knowledge_items,
     confirm_pending_knowledge_items,
     discard_pending_knowledge_items,
@@ -1772,6 +1774,207 @@ def render_pending_knowledge_queue(project_name: str):
                     st.error(f"结构化数据格式错误：{exc}")
 
 
+def normalize_knowledge_match_name(value: str) -> str:
+    cleaned = str(value or "").lower()
+    cleaned = re.sub(r"[\s　·・,，。.!！?？:：;；'\"“”‘’《》〈〉（）()\[\]【】_\-—]+", "", cleaned)
+    return cleaned.strip()
+
+
+def find_duplicate_knowledge_groups(items: list[dict]) -> list[list[int]]:
+    groups: dict[str, list[int]] = {}
+    for index, item in enumerate(items):
+        key = normalize_knowledge_match_name(item.get("name", ""))
+        if not key:
+            continue
+        groups.setdefault(key, []).append(index)
+    return [indices for indices in groups.values() if len(indices) > 1]
+
+
+def merge_text_values(values: list[str], separator: str = "\n\n") -> str:
+    merged = []
+    seen = set()
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        merged.append(cleaned)
+    return separator.join(merged)
+
+
+def merge_list_values(values: list) -> list:
+    merged = []
+    seen = set()
+    for value in values:
+        if isinstance(value, list):
+            candidates = value
+        else:
+            candidates = [value]
+        for candidate in candidates:
+            marker = json.dumps(candidate, ensure_ascii=False, sort_keys=True) if isinstance(candidate, dict) else str(candidate)
+            if not marker.strip() or marker in seen:
+                continue
+            seen.add(marker)
+            merged.append(candidate)
+    return merged
+
+
+def merge_details_values(items: list[dict]) -> dict:
+    merged: dict[str, str] = {}
+    for item in items:
+        details = item.get("details", {})
+        if not isinstance(details, dict):
+            continue
+        for key, value in details.items():
+            cleaned_key = str(key).strip()
+            cleaned_value = str(value or "").strip()
+            if not cleaned_key or not cleaned_value:
+                continue
+            if cleaned_key in merged:
+                merged[cleaned_key] = merge_text_values([merged[cleaned_key], cleaned_value])
+            else:
+                merged[cleaned_key] = cleaned_value
+    return merged
+
+
+def pick_authority(values: list[str]) -> str:
+    priority = {"official": 5, "project": 4, "curated": 3, "community": 2, "unknown": 1}
+    cleaned = [str(value or "unknown") for value in values]
+    return max(cleaned or ["unknown"], key=lambda value: priority.get(value, 0))
+
+
+def safe_confidence(value) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = 0.7
+    return max(0.0, min(1.0, number))
+
+
+def build_merged_knowledge_item(category: str, selected_items: list[dict]) -> dict:
+    first = selected_items[0] if selected_items else {}
+    merged_name = first.get("name", "")
+    summaries = [item.get("summary", "") for item in selected_items]
+    source_titles = [item.get("source_title", "") for item in selected_items]
+    source_origins = [item.get("source_origin", "") for item in selected_items]
+    return {
+        "id": first.get("id", ""),
+        "category": category,
+        "name": merged_name,
+        "summary": merge_text_values(summaries),
+        "details": merge_details_values(selected_items),
+        "evidence": merge_list_values([item.get("evidence", []) for item in selected_items]),
+        "confidence": max([safe_confidence(item.get("confidence", 0.7)) for item in selected_items] or [0.7]),
+        "tags": merge_list_values([item.get("tags", []) for item in selected_items]),
+        "scope": first.get("scope", "reference"),
+        "authority": pick_authority([item.get("authority", "unknown") for item in selected_items]),
+        "source_title": merge_text_values(source_titles, separator="；"),
+        "source_origin": merge_text_values(source_origins, separator="；"),
+        "status": "confirmed",
+        "merged_from": [item.get("id", "") for item in selected_items if item.get("id")],
+    }
+
+
+def render_knowledge_organizer(project_name: str, knowledge_category_options: list[str]):
+    with st.expander("结构化知识整理", expanded=False):
+        st.caption("用于处理长篇资料导入后的重复条目。可以按分类查看、合并同名知识，或删除明显错误的条目。")
+        category = st.selectbox(
+            "知识分类",
+            options=knowledge_category_options,
+            format_func=label_knowledge_category,
+            key="knowledge_organizer_category",
+        )
+        items = load_knowledge_category(project_name, category)
+        if not items:
+            st.caption("当前分类还没有结构化知识。")
+            return
+
+        duplicate_groups = find_duplicate_knowledge_groups(items)
+        st.caption(f"当前分类共有 {len(items)} 条；检测到 {len(duplicate_groups)} 组同名/近似重复。")
+        if duplicate_groups:
+            for group_index, group in enumerate(duplicate_groups[:8], start=1):
+                names = " / ".join(items[index].get("name", "未命名") for index in group)
+                st.caption(f"重复组 {group_index}：{names}")
+            if len(duplicate_groups) > 8:
+                st.caption(f"仅显示前 8 组，共 {len(duplicate_groups)} 组。")
+
+        default_indices = duplicate_groups[0] if duplicate_groups else []
+        selected_indices = st.multiselect(
+            "选择要合并或删除的条目",
+            options=list(range(len(items))),
+            default=default_indices,
+            format_func=lambda index: f"{index + 1}. {items[index].get('name', '未命名')} / {items[index].get('summary', '')[:50]}",
+            key=f"knowledge_organizer_selected_{category}",
+        )
+        selected_items = [items[index] for index in selected_indices if 0 <= index < len(items)]
+
+        if selected_items:
+            for index, item in zip(selected_indices[:10], selected_items[:10]):
+                st.markdown(f"#### {index + 1}. {item.get('name', '未命名')}")
+                st.caption(
+                    f"范围={label_scope(item.get('scope', 'reference'))} / 可信度={label_authority(item.get('authority', 'unknown'))} / 来源={item.get('source_title', '-') or '-'}"
+                )
+                if item.get("summary"):
+                    st.write(item.get("summary"))
+
+        if len(selected_items) >= 2:
+            merged_item = build_merged_knowledge_item(category, selected_items)
+            raw_merged_json = st.text_area(
+                "合并后结构化数据，可在保存前修改",
+                value=json.dumps(merged_item, ensure_ascii=False, indent=2),
+                height=340,
+                key=f"knowledge_organizer_merged_json_{category}",
+            )
+            if st.button("保存合并结果并移除原条目", key=f"knowledge_organizer_save_merge_{category}"):
+                try:
+                    parsed = json.loads(raw_merged_json)
+                    if not isinstance(parsed, dict):
+                        st.error("合并结果必须是对象结构。")
+                    else:
+                        parsed["category"] = category
+                        selected_set = set(selected_indices)
+                        remaining = [item for index, item in enumerate(items) if index not in selected_set]
+                        remaining.append(parsed)
+                        save_knowledge_category(project_name, category, remaining)
+                        rebuild_retrieval_assets(project_name, build_vectors=True)
+                        st.success(f"已合并 {len(selected_items)} 条结构化知识，并重建检索索引。")
+                        st.rerun()
+                except json.JSONDecodeError as exc:
+                    st.error(f"结构化数据格式错误：{exc}")
+
+        if selected_items:
+            if st.button("删除所选结构化知识", key=f"knowledge_organizer_delete_{category}"):
+                selected_set = set(selected_indices)
+                remaining = [item for index, item in enumerate(items) if index not in selected_set]
+                save_knowledge_category(project_name, category, remaining)
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success(f"已删除 {len(selected_items)} 条结构化知识，并重建检索索引。")
+                st.rerun()
+
+        with st.expander("高级编辑：当前分类原始数据", expanded=False):
+            raw_category_json = st.text_area(
+                f"{category}.json",
+                value=json.dumps(items, ensure_ascii=False, indent=2),
+                height=360,
+                key=f"knowledge_organizer_raw_json_{category}",
+            )
+            if st.button("保存当前分类原始数据", key=f"knowledge_organizer_save_raw_{category}"):
+                try:
+                    parsed = json.loads(raw_category_json)
+                    if not isinstance(parsed, list):
+                        st.error("分类数据必须是列表结构。")
+                    else:
+                        normalized = [item for item in parsed if isinstance(item, dict)]
+                        for item in normalized:
+                            item["category"] = category
+                        save_knowledge_category(project_name, category, normalized)
+                        rebuild_retrieval_assets(project_name, build_vectors=True)
+                        st.success("当前分类结构化知识已保存，并重建检索索引。")
+                        st.rerun()
+                except json.JSONDecodeError as exc:
+                    st.error(f"结构化数据格式错误：{exc}")
+
+
 CHAPTER_TITLE_PATTERN = re.compile(
     r"^\s*(?:第\s*[0-9零一二三四五六七八九十百千万两〇]+\s*[章节卷回部篇]|Chapter\s+\d+|CHAPTER\s+\d+|番外|楔子|序章|终章).*$"
 )
@@ -3474,6 +3677,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
         source_dir = retrieval_sources_path(project_name)
         st.caption(f"外部资料保存目录：`{source_dir}`")
         render_pending_knowledge_queue(project_name)
+        render_knowledge_organizer(project_name, knowledge_category_options)
         render_long_reference_importer(project_name, source_type_options, knowledge_category_options)
 
     if mode == "ingestion":

@@ -54,6 +54,7 @@ Current maturity can be summarized as:
 - source ingestion page for importing canon/reference/sample text and extracting structured knowledge
 - long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing
 - pending structured-knowledge queue for reviewing extracted items before persistence
+- structured-knowledge organizer for duplicate detection, merging, deletion, and raw editing
 - retrieval center for index rebuilds, recall tests, debug inspection, and conflict handling
 - project creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 - creative task wizard for turning Chinese task goals into project creative settings
@@ -137,6 +138,7 @@ The app separates three related concepts:
 - `Core State`: compact story settings that are injected with high priority, such as key canon mode, relationships, timeline items, and hard constraints.
 - `Source Ingestion` / `Retrieval Center`: ingestion imports and structures material; retrieval rebuilds indexes, tests recall, inspects debug output, and stores conflict decisions.
 - `Pending Structured Knowledge`: extracted items can be staged for review before they become indexed structured knowledge.
+- `Structured Knowledge Organizer`: after long-form extraction, duplicate characters, abilities, locations, and other repeated entries can be merged or removed.
 
 Current retrieval capabilities include:
 
@@ -153,6 +155,7 @@ Current retrieval capabilities include:
 - optional retrieval debug output for inspecting recall and ranking behavior
 - structured knowledge extraction from pasted material with human confirmation before persistence
 - pending review queue for accepting, discarding, or editing extracted knowledge before indexing
+- category-level structured-knowledge organization with duplicate detection, merge preview, deletion, and raw editing
 - batched structured-knowledge extraction from selected long-form source segments
 - confirmed structured knowledge is indexed for later generation, review, analysis, and evaluation
 
