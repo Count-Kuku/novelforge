@@ -2,7 +2,6 @@ import json
 import re
 from datetime import datetime
 from urllib.request import Request, urlopen
-from uuid import uuid4
 from llm import call_llm
 from pydantic import ValidationError
 from prompts import (
@@ -41,9 +40,9 @@ from memory import (
     delete_outline_discussion_artifact,
     delete_volume_discussion_artifact,
     get_recent_chapter_summaries,
-    load_arc_chapter_plan,
     load_chapter_discussion_artifact,
     load_arc_discussion_artifact,
+    load_arc_metadata,
     load_arc_outline,
     load_chapter_outline,
     load_chapter_outline_metadata,

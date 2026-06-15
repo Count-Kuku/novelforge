@@ -10,6 +10,7 @@ $PortableRoot = Join-Path $ReleaseRoot "NovelForge-Portable"
 $ZipPath = Join-Path $ReleaseRoot ("NovelForge-windows-portable-{0}.zip" -f $Version)
 $BuildLogPath = Join-Path $ReleaseRoot ("build_release-{0}.log" -f $Version)
 $LauncherSpecRoot = Join-Path $ProjectRoot "dist"
+$LauncherSpecPath = Join-Path $ProjectRoot "NovelForge.spec"
 $BundledVenv = Join-Path $ProjectRoot ".venv"
 $BundledPython = Join-Path $BundledVenv "Scripts\python.exe"
 $StreamlitConfigRoot = Join-Path $ProjectRoot ".streamlit"
@@ -40,13 +41,14 @@ function Assert-PathExists {
 Assert-PathExists -LiteralPath $ProjectRoot -Message "Project root not found."
 Assert-PathExists -LiteralPath $BundledVenv -Message "Missing .venv. Create it first with 'python -m venv .venv'."
 Assert-PathExists -LiteralPath $BundledPython -Message "Missing .venv\Scripts\python.exe. Install dependencies before building."
+Assert-PathExists -LiteralPath $LauncherSpecPath -Message "Missing NovelForge.spec."
 
 & $BundledPython -m pip install pyinstaller
 if (-not $?) {
     throw "Failed to install PyInstaller into .venv."
 }
 
-& $BundledPython -m PyInstaller --noconfirm --clean --onefile --name NovelForge --noconsole launcher.py
+& $BundledPython -m PyInstaller --noconfirm --clean $LauncherSpecPath
 if (-not $?) {
     throw "PyInstaller build failed."
 }
@@ -69,6 +71,7 @@ $filesToCopy = @(
     "skills.py",
     "project_manager.py",
     "launcher.py",
+    "NovelForge.spec",
     "requirements.txt",
     ".env.example",
     "README.md",

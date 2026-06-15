@@ -1,6 +1,7 @@
 import json
 import re
 import hashlib
+import html
 
 import streamlit as st
 from urllib.parse import urlparse
@@ -78,7 +79,6 @@ from memory import (
 )
 from project_manager import (
     delete_analysis_report,
-    delete_chapter_analysis_bundle,
     delete_chapter_bundle,
     delete_chapter_content,
     delete_chapter_outline,
@@ -129,7 +129,6 @@ from skills import (
     generate_outline,
     generate_volume_outline,
     get_retrieval_trace,
-    organize_reference_html,
     organize_reference_url,
     organize_reference_text,
     evaluate_chapter,
@@ -253,6 +252,38 @@ SEVERITY_LABELS = {
     "medium": "中",
     "high": "高",
 }
+
+PAGE_GROUPS = {
+    "工作台": ["项目总览", "动态生成", "一键流水线", "项目资源"],
+    "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
+    "写作": ["写章节", "章节审阅", "章节评估", "一致性分析"],
+    "资料": ["核心设定", "资料录入", "检索中心", "交互规则"],
+    "系统": ["模型配置", "文件预览"],
+}
+
+PAGE_DESCRIPTIONS = {
+    "项目总览": "查看项目进度、资源规模和基础管理。",
+    "动态生成": "根据创作配置自动选择短文、结构或章节生成路径。",
+    "一键流水线": "按章节串联细纲、正文、审阅和记忆更新。",
+    "项目资源": "集中浏览、编辑和清理项目文件。",
+    "创作配置": "定义任务类型、篇幅、流程深度和参考强度。",
+    "生成大纲": "规划全书方向并生成全局大纲。",
+    "分卷大纲": "维护中层分卷结构。",
+    "剧情段大纲": "维护剧情段和章节分配计划。",
+    "生成细纲": "生成具体章节细纲。",
+    "写章节": "按细纲和写作指导生成正文。",
+    "章节审阅": "审阅章节并输出结构化修改意见。",
+    "章节评估": "生成章节质量评分和评估报告。",
+    "一致性分析": "检查设定、角色、时间线和伏笔问题。",
+    "核心设定": "维护会被优先注入的故事状态。",
+    "资料录入": "导入原作、参考资料和长篇文本。",
+    "检索中心": "调试索引、召回证据和冲突裁决。",
+    "交互规则": "管理全局和项目级生成约束。",
+    "模型配置": "配置模型端点、密钥和档案切换。",
+    "文件预览": "按原始文件结构查看项目内容。",
+}
+
+DEFAULT_PAGE = "项目总览"
 
 SCHEMA_LABELS = {
     "OrganizedReferenceResult": "资料整理结果",
@@ -378,6 +409,229 @@ def label_batch_segment_status(value: str) -> str:
         "": "待处理",
     }
     return labels.get(str(value or ""), str(value or "未知"))
+
+
+def apply_app_style():
+    st.markdown(
+        """
+        <style>
+        :root {
+            --nf-bg: #f6f3ee;
+            --nf-panel: #ffffff;
+            --nf-border: #e5ded3;
+            --nf-text: #231f1a;
+            --nf-muted: #746b61;
+            --nf-accent: #7c4f2b;
+            --nf-shadow: 0 16px 42px rgba(52, 38, 24, 0.08);
+        }
+
+        .stApp {
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.74), rgba(246,243,238,0.95)),
+                var(--nf-bg);
+            color: var(--nf-text);
+        }
+
+        [data-testid="stSidebar"] {
+            background: #29231d;
+            border-right: 1px solid rgba(255,255,255,0.08);
+        }
+
+        [data-testid="stSidebar"] * {
+            color: #f7f0e7;
+        }
+
+        [data-testid="stSidebar"] .stCaption,
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+            color: rgba(247,240,231,0.72);
+        }
+
+        [data-testid="stSidebar"] [data-baseweb="select"] > div,
+        [data-testid="stSidebar"] input,
+        [data-testid="stSidebar"] textarea {
+            background: #fffaf2 !important;
+            border-color: rgba(255,255,255,0.18) !important;
+            color: #231f1a !important;
+        }
+
+        [data-testid="stSidebar"] [data-baseweb="select"] *,
+        [data-testid="stSidebar"] [data-baseweb="select"] span,
+        [data-testid="stSidebar"] [data-baseweb="select"] svg,
+        [data-testid="stSidebar"] input::placeholder,
+        [data-testid="stSidebar"] textarea::placeholder {
+            color: #231f1a !important;
+            fill: #231f1a !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button {
+            background: #fffaf2 !important;
+            border-color: rgba(255,255,255,0.22) !important;
+            color: #231f1a !important;
+            font-weight: 650 !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button *,
+        [data-testid="stSidebar"] .stButton > button p,
+        [data-testid="stSidebar"] .stButton > button span {
+            color: #231f1a !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button:hover {
+            background: #f0e4d7 !important;
+            border-color: #c89b6d !important;
+            color: #231f1a !important;
+        }
+
+        .block-container {
+            max-width: 1320px;
+            padding-top: 1.4rem;
+            padding-bottom: 4rem;
+        }
+
+        h1, h2, h3 {
+            letter-spacing: 0;
+        }
+
+        div[data-testid="stMetric"] {
+            background: var(--nf-panel);
+            border: 1px solid var(--nf-border);
+            border-radius: 8px;
+            padding: 0.85rem 1rem;
+            box-shadow: 0 10px 28px rgba(52, 38, 24, 0.05);
+        }
+
+        div[data-testid="stMetric"] label {
+            color: var(--nf-muted);
+        }
+
+        .nf-hero {
+            background: linear-gradient(135deg, #fffdf9 0%, #f2e7dc 100%);
+            border: 1px solid var(--nf-border);
+            border-radius: 8px;
+            padding: 1.25rem 1.35rem;
+            box-shadow: var(--nf-shadow);
+            margin-bottom: 1rem;
+        }
+
+        .nf-kicker {
+            color: var(--nf-accent);
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 0.35rem;
+        }
+
+        .nf-title {
+            color: var(--nf-text);
+            font-size: 1.7rem;
+            line-height: 1.25;
+            font-weight: 750;
+            margin: 0;
+        }
+
+        .nf-subtitle {
+            color: var(--nf-muted);
+            margin-top: 0.35rem;
+            margin-bottom: 0;
+        }
+
+        .nf-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.8rem;
+            margin: 1rem 0;
+        }
+
+        .nf-card {
+            background: var(--nf-panel);
+            border: 1px solid var(--nf-border);
+            border-radius: 8px;
+            padding: 1rem;
+            box-shadow: 0 10px 26px rgba(52, 38, 24, 0.05);
+        }
+
+        .nf-card-title {
+            font-weight: 700;
+            color: var(--nf-text);
+            margin-bottom: 0.35rem;
+        }
+
+        .nf-card-copy {
+            color: var(--nf-muted);
+            font-size: 0.92rem;
+            line-height: 1.55;
+        }
+
+        .nf-sidebar-title {
+            font-size: 1.05rem;
+            font-weight: 750;
+            margin: 0.2rem 0 0.2rem;
+        }
+
+        .nf-sidebar-meta {
+            color: rgba(247,240,231,0.68);
+            font-size: 0.82rem;
+            line-height: 1.45;
+            margin-bottom: 0.8rem;
+        }
+
+        .stButton > button {
+            border-radius: 8px;
+            border: 1px solid var(--nf-border);
+            background: var(--nf-panel);
+        }
+
+        .stButton > button:hover {
+            border-color: var(--nf-accent);
+            color: var(--nf-accent);
+        }
+
+        div[data-testid="stExpander"] {
+            border: 1px solid var(--nf-border);
+            border-radius: 8px;
+            background: rgba(255,255,255,0.72);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_app_header(project_name: str | None, page: str, memory: dict | None):
+    title = html.escape(str((memory or {}).get("title") or project_name or "未选择项目"))
+    genre = html.escape(str((memory or {}).get("genre") or "未设置类型"))
+    canon_mode = html.escape(str((memory or {}).get("canon_mode") or "未设置原作对齐"))
+    page_label = html.escape(str(page))
+    project_label = html.escape(str(project_name or "-"))
+    description = html.escape(PAGE_DESCRIPTIONS.get(page, ""))
+    st.markdown(
+        f"""
+        <div class="nf-hero">
+            <div class="nf-kicker">NovelForge / {page_label}</div>
+            <h1 class="nf-title">{title}</h1>
+            <p class="nf-subtitle">{description}</p>
+            <p class="nf-subtitle">项目：<b>{project_label}</b> / 类型：{genre} / 原作对齐：{canon_mode}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def navigate_to(page: str):
+    st.session_state["pending_nav_page"] = page
+    st.rerun()
+
+
+def stable_widget_suffix(value: str) -> str:
+    return hashlib.md5(str(value).encode("utf-8")).hexdigest()[:10]
+
+
+def render_quick_action(label: str, page: str, help_text: str):
+    st.markdown(f"**{label}**")
+    st.caption(help_text)
+    if st.button("进入", key=f"quick_action_{stable_widget_suffix(page)}", use_container_width=True):
+        navigate_to(page)
 
 
 def recommended_workflow_for_profile(profile: dict) -> list[str]:
@@ -767,7 +1021,15 @@ def init_project_state() -> str | None:
     return None
 
 
-def render_sidebar(project_name: str | None, projects: list[str]):
+def render_sidebar(project_name: str | None, projects: list[str]) -> str:
+    st.sidebar.markdown(
+        """
+        <div class="nf-sidebar-title">NovelForge</div>
+        <div class="nf-sidebar-meta">长篇创作工作台</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     if projects:
         st.sidebar.caption("已有项目")
         selected_project = st.sidebar.selectbox(
@@ -779,6 +1041,8 @@ def render_sidebar(project_name: str | None, projects: list[str]):
         if selected_project != project_name:
             st.session_state["project_name"] = selected_project
             st.rerun()
+    else:
+        st.sidebar.info("还没有项目。可以先配置模型，也可以直接新建项目。")
 
     if st.sidebar.button("新建项目", use_container_width=True):
         st.session_state[NEW_PROJECT_INPUT_KEY] = ""
@@ -786,6 +1050,61 @@ def render_sidebar(project_name: str | None, projects: list[str]):
 
     if st.session_state.get(NEW_PROJECT_DIALOG_FLAG):
         render_new_project_dialog(projects)
+
+    st.sidebar.divider()
+
+    available_pages = [page for pages in PAGE_GROUPS.values() for page in pages]
+    pending_nav_page = st.session_state.pop("pending_nav_page", "")
+    if pending_nav_page in available_pages:
+        st.session_state["active_page"] = pending_nav_page
+        st.session_state["nav_revision"] = int(st.session_state.get("nav_revision", 0)) + 1
+
+    active_page = st.session_state.get("active_page", DEFAULT_PAGE)
+    if active_page not in available_pages:
+        active_page = DEFAULT_PAGE
+
+    active_group = next(
+        (group for group, pages in PAGE_GROUPS.items() if active_page in pages),
+        "工作台",
+    )
+    group_names = list(PAGE_GROUPS.keys())
+    nav_revision = int(st.session_state.get("nav_revision", 0))
+    selected_group = st.sidebar.radio(
+        "工作区",
+        options=group_names,
+        index=group_names.index(active_group),
+        key=f"active_page_group_{nav_revision}",
+    )
+    group_pages = PAGE_GROUPS[selected_group]
+    if active_page not in group_pages:
+        active_page = group_pages[0]
+
+    selected_page = st.sidebar.radio(
+        "页面",
+        options=group_pages,
+        index=group_pages.index(active_page),
+        key=f"active_page_in_group_{selected_group}_{nav_revision}",
+        format_func=lambda page: page,
+    )
+    st.session_state["active_page"] = selected_page
+
+    description = PAGE_DESCRIPTIONS.get(selected_page, "")
+    if description:
+        st.sidebar.caption(description)
+
+    if project_name:
+        try:
+            summary = get_project_summary(project_name)
+            st.sidebar.divider()
+            st.sidebar.caption(
+                f"正文 {summary.get('chapter_count', 0)} / 细纲 {summary.get('chapter_outline_count', 0)} / 资料 {summary.get('retrieval_source_count', 0)}"
+            )
+            updated_at = summary.get("updated_at") or "-"
+            st.sidebar.caption(f"最近更新：{updated_at}")
+        except Exception:
+            st.sidebar.caption("项目摘要暂不可用。")
+
+    return selected_page
 
 
 def render_memory_page(project_name: str, memory: dict):
@@ -884,10 +1203,12 @@ def render_memory_page(project_name: str, memory: dict):
         changed = True
 
     col1, col2 = st.columns(2)
-    if col1.button("保存设定"):
+    if col1.button("保存设定", disabled=not changed):
         save_memory(project_name, new_memory)
         st.success("已保存")
         st.rerun()
+    if not changed:
+        col1.caption("当前表单没有未保存改动。")
 
     if col2.button("精简核心设定"):
         with st.spinner("正在压缩旧设定..."):
@@ -1367,9 +1688,39 @@ def render_review_page(project_name: str):
 
 
 def render_project_overview_page(project_name: str):
-    st.subheader("项目总览")
     summary = get_project_summary(project_name)
+    overview_title = html.escape(str(summary.get("title", project_name) or project_name))
+    overview_genre = html.escape(str(summary.get("genre", "-") or "-"))
+    overview_canon_mode = html.escape(str(summary.get("canon_mode", "-") or "-"))
+    overview_updated_at = html.escape(str(summary.get("updated_at", "-") or "-"))
 
+    st.markdown(
+        f"""
+        <div class="nf-card">
+            <div class="nf-card-title">当前创作状态</div>
+            <div class="nf-card-copy">
+                书名：{overview_title} /
+                类型：{overview_genre} /
+                原作对齐：{overview_canon_mode} /
+                更新时间：{overview_updated_at}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### 常用入口")
+    action_col1, action_col2, action_col3, action_col4 = st.columns(4)
+    with action_col1:
+        render_quick_action("继续生成", "动态生成", "按创作配置选择合适生成路径。")
+    with action_col2:
+        render_quick_action("章节流水线", "一键流水线", "生成、审阅、更新记忆一并执行。")
+    with action_col3:
+        render_quick_action("整理资料", "资料录入", "导入原作、参考和长文本资料。")
+    with action_col4:
+        render_quick_action("查看资源", "项目资源", "集中管理章节、报告和来源文件。")
+
+    st.markdown("### 项目指标")
     col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("正文章节", summary.get("chapter_count", 0))
     col2.metric("细纲章节", summary.get("chapter_outline_count", 0))
@@ -1391,10 +1742,6 @@ def render_project_overview_page(project_name: str):
     col11.metric("已批准剧情段讨论", summary.get("approved_arc_count", 0))
 
     st.caption(f"章节摘要={summary.get('chapter_summary_count', 0)} / 资源文件数={summary.get('resource_file_count', 0)}")
-
-    st.caption(
-        f"书名={summary.get('title', project_name)} / 类型={summary.get('genre', '-') or '-'} / 原作对齐={summary.get('canon_mode', '-') or '-'} / 更新时间={summary.get('updated_at', '-') or '-'}"
-    )
 
     with st.expander("项目设置", expanded=False):
         new_name = st.text_input("重命名项目", value=project_name, key=f"rename_project_input_{project_name}")
@@ -1964,6 +2311,38 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
                 except json.JSONDecodeError as exc:
                     st.error(f"结构化数据格式错误：{exc}")
 
+        if selected_items:
+            if st.button("删除所选结构化知识", key=f"knowledge_organizer_delete_{category}"):
+                selected_set = set(selected_indices)
+                remaining = [item for index, item in enumerate(items) if index not in selected_set]
+                save_knowledge_category(project_name, category, remaining)
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success(f"已删除 {len(selected_items)} 条结构化知识，并重建检索索引。")
+                st.rerun()
+
+        with st.expander("高级编辑：当前分类原始数据", expanded=False):
+            raw_category_json = st.text_area(
+                f"{category}.json",
+                value=json.dumps(items, ensure_ascii=False, indent=2),
+                height=360,
+                key=f"knowledge_organizer_raw_json_{category}",
+            )
+            if st.button("保存当前分类原始数据", key=f"knowledge_organizer_save_raw_{category}"):
+                try:
+                    parsed = json.loads(raw_category_json)
+                    if not isinstance(parsed, list):
+                        st.error("分类数据必须是列表结构。")
+                    else:
+                        normalized = [item for item in parsed if isinstance(item, dict)]
+                        for item in normalized:
+                            item["category"] = category
+                        save_knowledge_category(project_name, category, normalized)
+                        rebuild_retrieval_assets(project_name, build_vectors=True)
+                        st.success("当前分类结构化知识已保存，并重建检索索引。")
+                        st.rerun()
+                except json.JSONDecodeError as exc:
+                    st.error(f"结构化数据格式错误：{exc}")
+
 
 def format_knowledge_item_for_report(item: dict) -> list[str]:
     lines = [f"### {item.get('name', '未命名')}"]
@@ -2071,38 +2450,6 @@ def render_source_package_report_page(project_name: str):
                 max_items_per_category=max_items,
             )
             st.rerun()
-
-        if selected_items:
-            if st.button("删除所选结构化知识", key=f"knowledge_organizer_delete_{category}"):
-                selected_set = set(selected_indices)
-                remaining = [item for index, item in enumerate(items) if index not in selected_set]
-                save_knowledge_category(project_name, category, remaining)
-                rebuild_retrieval_assets(project_name, build_vectors=True)
-                st.success(f"已删除 {len(selected_items)} 条结构化知识，并重建检索索引。")
-                st.rerun()
-
-        with st.expander("高级编辑：当前分类原始数据", expanded=False):
-            raw_category_json = st.text_area(
-                f"{category}.json",
-                value=json.dumps(items, ensure_ascii=False, indent=2),
-                height=360,
-                key=f"knowledge_organizer_raw_json_{category}",
-            )
-            if st.button("保存当前分类原始数据", key=f"knowledge_organizer_save_raw_{category}"):
-                try:
-                    parsed = json.loads(raw_category_json)
-                    if not isinstance(parsed, list):
-                        st.error("分类数据必须是列表结构。")
-                    else:
-                        normalized = [item for item in parsed if isinstance(item, dict)]
-                        for item in normalized:
-                            item["category"] = category
-                        save_knowledge_category(project_name, category, normalized)
-                        rebuild_retrieval_assets(project_name, build_vectors=True)
-                        st.success("当前分类结构化知识已保存，并重建检索索引。")
-                        st.rerun()
-                except json.JSONDecodeError as exc:
-                    st.error(f"结构化数据格式错误：{exc}")
 
 
 CHAPTER_TITLE_PATTERN = re.compile(
@@ -4487,23 +4834,19 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
 
 
 st.set_page_config(page_title="NovelForge", layout="wide")
-st.title("NovelForge：同人小说创作工作台")
+apply_app_style()
 
 project_name = init_project_state()
 projects = list_projects()
-render_sidebar(project_name, projects)
+page = render_sidebar(project_name, projects)
 
 if project_name:
     memory = load_memory(project_name)
-    st.caption(f"当前项目：`{project_name}`")
 else:
     memory = None
     st.info("当前还没有项目。可先进入“模型配置”填写服务地址与密钥，或点击侧边栏“新建项目”开始创建。")
 
-page = st.sidebar.radio(
-    "项目管理",
-    ["项目总览", "创作配置", "动态生成", "项目资源", "核心设定", "资料录入", "检索中心", "交互规则", "模型配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲", "写章节", "章节审阅", "一致性分析", "章节评估", "一键流水线", "文件预览"]
-)
+render_app_header(project_name, page, memory)
 
 if not project_name and page != "模型配置":
     st.stop()

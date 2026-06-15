@@ -82,6 +82,9 @@ Current practical status:
 * Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
 * In-app LLM configuration with multi-profile endpoint / key management and active-profile switching
 * Local launcher and portable-build scripts for desktop-style localhost packaging
+* Grouped workspace navigation in the sidebar so planning, writing, resources, and system pages are separated by work area
+* Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
+* Project overview page upgraded into a quick-action home screen for generation, pipeline, ingestion, and resource browsing
 * Resumable chapter pipeline runs from persisted workflow snapshots
 * Arc-level chapter allocation planning with persisted structured plans
 * Retrieval debug preview with query terms, filters, candidate counts, and rerank inspection
@@ -187,6 +190,8 @@ novelforge/
 
 ├── launcher.py
 
+├── NovelForge.spec
+
 ├── build_release.ps1
 
 ```
@@ -258,6 +263,7 @@ Responsibilities:
 * Calling skills
 * Managing UI state
 * Consuming structured review/update results produced by the schema layer
+* Applying grouped workspace navigation, project-aware page headers, and shared app-level visual styling
 * Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
 * Managing source ingestion, retrieval sources, index rebuilds, and retrieval preview
 * Managing long-form source splitting, batch import, and batch structured extraction into the pending queue
@@ -297,6 +303,10 @@ UI features:
 * Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
 * Source package report panel for generating a searchable project reference report
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
+* Grouped sidebar navigation that separates workspace pages into workbench / planning / writing / resources / system areas
+* Project overview home screen with quick actions for dynamic generation, chapter pipeline, source ingestion, and resource browsing
+* Project-aware page header that surfaces project title, genre, canon mode, and current page description
+* Save buttons in structured story-state forms stay disabled until the user actually changes form content
 * Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
 * Resource browser with left-side file navigation, right-side editor/detail panel, and lightweight volume / arc filtering
 * Dedicated volume outline page for editing per-volume title / summary / status / outline body
@@ -352,6 +362,10 @@ Responsibilities:
 Design purpose:
 
 * Provide a repeatable local packaging flow before any future installer or remote deployment work
+
+Related packaging note:
+
+* `NovelForge.spec` now provides a checked-in PyInstaller spec for building the desktop-style launcher executable from `launcher.py`
 
 ---
 
