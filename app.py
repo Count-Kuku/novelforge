@@ -16,7 +16,6 @@ from memory import (
     delete_long_reference_batch,
     delete_arc,
     delete_retrieval_source_file,
-    delete_story,
     delete_volume,
     get_active_llm_profile,
     get_active_story_id,
@@ -53,8 +52,7 @@ from memory import (
     load_llm_settings,
     load_llm_profiles,
     load_project_rules,
-    load_review,
-    load_review_json,
+    load_rule_conflict_resolutions,
     load_story_memory,
     load_story_rules,
     load_volume_discussion_artifact,
@@ -74,15 +72,22 @@ from memory import (
     append_knowledge_items,
     confirm_pending_knowledge_items,
     copy_story_settings,
-    archive_story,
     merge_story_to_project_memory,
     merge_project_to_story_memory,
+    merge_story_rules_to_project,
+    merge_project_rules_to_story,
+    merge_project_rules_to_global,
+    merge_story_rules_to_global,
+    merge_global_rules_to_project,
+    merge_global_rules_to_story,
     discard_pending_knowledge_items,
     queue_pending_knowledge_items,
     save_pending_knowledge_items,
     save_outline,
     save_project_rules,
     save_story_rules,
+    add_rule_conflict_resolution,
+    delete_rule_conflict_resolution,
     create_long_reference_batch,
     set_active_llm_profile,
     set_active_story,
@@ -91,7 +96,6 @@ from memory import (
     save_volume_metadata,
     save_volume_outline,
     upsert_llm_profile,
-    list_pipeline_runs,
     load_pipeline_run,
     retrieval_sources_path,
 )
@@ -124,9 +128,6 @@ from skills import (
     approve_creative_profile_discussion,
     approve_outline_discussion,
     approve_volume_discussion,
-    analyze_characters,
-    analyze_foreshadowing,
-    analyze_timeline,
     clear_chapter_discussion_approval,
     clear_arc_discussion_approval,
     clear_creative_profile_discussion_approval,
@@ -153,11 +154,8 @@ from skills import (
     get_retrieval_trace,
     organize_reference_url,
     organize_reference_text,
-    evaluate_chapter,
     review_chapter,
-    run_consistency_check,
     pipeline_plan_write_review_update,
-    resume_chapter_pipeline,
     run_dynamic_generation_task,
     save_retrieval_conflict_resolution,
     save_rule_text,
@@ -279,14 +277,13 @@ SEVERITY_LABELS = {
 PAGE_GROUPS = {
     "工作台": ["项目总览", "模型配置", "生成规则", "项目资源"],
     "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
-    "写作": ["动态生成", "一键流水线", "写章节", "章节审阅", "章节评估", "一致性分析"],
+    "写作": ["快速生成", "正文生成", "章节评价"],
     "资料": ["设定", "资料录入", "检索中心"],
 }
 
 PAGE_DESCRIPTIONS = {
     "项目总览": "查看项目进度、资源规模和基础管理。",
-    "动态生成": "根据创作配置自动选择短文、结构或章节生成路径。",
-    "一键流水线": "按章节串联细纲、正文、审阅和记忆更新。",
+    "快速生成": "实验性快速生成。只凭一段提示词就能生成，也可展开复杂配置，适合测试或临时片段。",
     "项目资源": "集中浏览、编辑和清理项目文件。",
     "创作配置": "定义任务类型、篇幅、流程深度和参考强度。",
     "设定": "管理故事级和项目级的核心设定（角色、世界观、时间线等）。",
@@ -294,10 +291,8 @@ PAGE_DESCRIPTIONS = {
     "分卷大纲": "维护中层分卷结构。",
     "剧情段大纲": "维护剧情段和章节分配计划。",
     "生成细纲": "生成具体章节细纲。",
-    "写章节": "按细纲和写作指导生成正文。",
-    "章节审阅": "审阅章节并输出结构化修改意见。",
-    "章节评估": "生成章节质量评分和评估报告。",
-    "一致性分析": "检查设定、角色、时间线和伏笔问题。",
+    "正文生成": "根据细纲或需求生成正文内容，可串联审阅和设定更新。适应章节制和自由写作两种模式。",
+    "章节评价": "综合判断章节是否可继续、质量分数和一致性诊断。",
     "资料录入": "导入原作、参考资料和长篇文本。",
     "检索中心": "调试索引、召回证据和冲突裁决。",
     "生成规则": "管理全局、项目和故事级的生成约束，控制模型怎么写。",
@@ -973,6 +968,40 @@ def _render_approved_discussion_artifact(artifact: dict, empty_message: str):
     render_step_json_expander("已批准讨论数据", discussion)
 
 
+def _format_discussion_artifact_as_guidance(artifact: dict) -> str:
+    discussion = artifact.get("discussion", {}) if isinstance(artifact, dict) else {}
+    if not discussion:
+        return ""
+
+    lines = ["来自已批准章节讨论："]
+    field_specs = [
+        ("current_understanding", "当前理解"),
+        ("recommended_direction", "推荐方向"),
+    ]
+    for field, label in field_specs:
+        value = str(discussion.get(field, "") or "").strip()
+        if value:
+            lines.append(f"- {label}：{value}")
+
+    list_field_specs = [
+        ("key_constraints", "关键约束"),
+        ("risks", "风险提醒"),
+        ("open_questions", "待确认问题"),
+    ]
+    for field, label in list_field_specs:
+        values = discussion.get(field, [])
+        if isinstance(values, list):
+            cleaned_values = [str(item).strip() for item in values if str(item).strip()]
+        else:
+            cleaned_values = [str(values).strip()] if str(values or "").strip() else []
+        if cleaned_values:
+            lines.append(f"- {label}：{'；'.join(cleaned_values)}")
+
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
+
+
 def _resource_browser_selection_key(project_name: str) -> str:
     return f"resource_browser_selection:{project_name}"
 
@@ -1035,6 +1064,134 @@ def _render_rule_editor(title: str, storage_key: str, rules: dict) -> dict:
     return updated
 
 
+def _render_rules_copy_tools(project_name: str, story_id: str, current_story_name: str):
+    st.markdown("#### 规则复制与导入")
+    st.caption("用于在项目规则和故事规则之间同步长期生成约束。项目规则会被所有故事继承，故事规则只覆盖当前故事。")
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        if st.button("从项目导入规则", use_container_width=True):
+            merge_project_rules_to_story(project_name, story_id)
+            st.success(f"已将项目规则复制到 {current_story_name}")
+            st.rerun()
+
+    with col_b:
+        other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
+        if other_stories:
+            selected_story = st.selectbox(
+                "从其他故事导入",
+                options=[s.get("story_id") for s in other_stories],
+                format_func=lambda sid: next((s.get("name", sid) for s in other_stories if s.get("story_id") == sid), sid),
+                key=f"rules_import_story_{story_id}",
+                label_visibility="collapsed",
+            )
+            if st.button("导入故事规则", use_container_width=True, key=f"import_rules_{story_id}"):
+                save_story_rules(project_name, story_id, load_story_rules(project_name, selected_story))
+                imported_name = next((s.get("name", selected_story) for s in other_stories if s.get("story_id") == selected_story), selected_story)
+                st.success(f"已从 {imported_name} 导入规则")
+                st.rerun()
+        else:
+            st.caption("没有其他故事可导入。")
+
+    with col_c:
+        if st.button("设为项目默认规则", use_container_width=True):
+            merge_story_rules_to_project(project_name, story_id)
+            st.success(f"已将 {current_story_name} 的规则合并为项目默认规则")
+            st.rerun()
+
+    with st.expander("全局规则同步", expanded=False):
+        st.caption("全局规则会影响所有项目。建议只放跨项目稳定偏好，例如输出语言、审阅标准、文风禁忌；具体角色、世界观和剧情要求更适合留在项目或故事规则。")
+        global_col_a, global_col_b = st.columns(2)
+        with global_col_a:
+            if st.button("全局规则合并到项目", use_container_width=True):
+                merge_global_rules_to_project(project_name)
+                st.success("已将全局规则合并到项目规则")
+                st.rerun()
+            if st.button("项目规则合并到全局", use_container_width=True):
+                merge_project_rules_to_global(project_name)
+                st.success("已将项目规则合并到全局规则")
+                st.rerun()
+        with global_col_b:
+            if st.button("全局规则合并到当前故事", use_container_width=True):
+                merge_global_rules_to_story(project_name, story_id)
+                st.success(f"已将全局规则合并到 {current_story_name}")
+                st.rerun()
+            if st.button("当前故事规则合并到全局", use_container_width=True):
+                merge_story_rules_to_global(project_name, story_id)
+                st.success(f"已将 {current_story_name} 的规则合并到全局规则")
+                st.rerun()
+
+
+def _render_rule_conflict_resolution_tools(project_name: str, story_id: str, current_story_name: str):
+    st.markdown("#### 冲突解决机制")
+    st.caption("默认优先级：人工裁决 > 故事规则 > 项目规则 > 全局规则；同层级内，当前能力的专用规则优先于通用规则。")
+
+    with st.expander("人工冲突裁决", expanded=False):
+        layer_options = {
+            "当前故事": "story",
+            "当前项目": "project",
+            "全局": "global",
+        }
+        col_scope, col_layer = st.columns(2)
+        scope_label = col_scope.selectbox(
+            "适用能力",
+            options=list(RULE_SCOPE_OPTIONS.values()),
+            key=f"rule_conflict_scope_{story_id}",
+        )
+        layer_label = col_layer.selectbox(
+            "裁决保存位置",
+            options=list(layer_options.keys()),
+            key=f"rule_conflict_layer_{story_id}",
+        )
+        title = st.text_input(
+            "裁决标题",
+            key=f"rule_conflict_title_{story_id}",
+            placeholder="例如：节奏规则冲突、视角规则冲突",
+        )
+        decision = st.text_area(
+            "裁决内容",
+            height=100,
+            key=f"rule_conflict_decision_{story_id}",
+            placeholder="例如：当“快节奏推进”和“日常慢热”冲突时，当前故事优先日常慢热，但章节结尾保留推进钩子。",
+        )
+        if st.button("保存人工裁决", key=f"save_rule_conflict_{story_id}", use_container_width=True):
+            if not decision.strip():
+                st.warning("请先填写裁决内容。")
+            else:
+                scope = next(key for key, value in RULE_SCOPE_OPTIONS.items() if value == scope_label)
+                layer = layer_options[layer_label]
+                add_rule_conflict_resolution(project_name, layer, scope, title, decision, story_id=story_id)
+                st.success("已保存人工冲突裁决")
+                st.rerun()
+
+        st.markdown("##### 已保存裁决")
+        layer_display = [
+            ("故事", "story", current_story_name),
+            ("项目", "project", project_name),
+            ("全局", "global", "所有项目"),
+        ]
+        has_items = False
+        for layer_label_text, layer, owner in layer_display:
+            items = load_rule_conflict_resolutions(project_name, layer, story_id=story_id)
+            if not items:
+                continue
+            has_items = True
+            st.markdown(f"**{layer_label_text}裁决 · {owner}**")
+            for item in items:
+                scope_name = RULE_SCOPE_OPTIONS.get(item.get("scope", "all"), item.get("scope", "all"))
+                row_cols = st.columns([4, 1])
+                with row_cols[0]:
+                    st.caption(f"{scope_name} / {item.get('title', '')}")
+                    st.write(item.get("decision", ""))
+                with row_cols[1]:
+                    if st.button("删除", key=f"delete_rule_conflict_{layer}_{item.get('id')}", use_container_width=True):
+                        delete_rule_conflict_resolution(project_name, layer, item.get("id", ""), story_id=story_id)
+                        st.success("已删除裁决")
+                        st.rerun()
+        if not has_items:
+            st.caption("暂无人工裁决。")
+
+
 def render_rules_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     stories = list_stories(project_name)
@@ -1065,6 +1222,10 @@ def render_rules_page(project_name: str):
                     st.warning("未提取到有效规则。")
             except Exception as exc:
                 st.error(f"保存失败：{exc}")
+
+    _render_rules_copy_tools(project_name, story_id, current_story_name)
+    _render_rule_conflict_resolution_tools(project_name, story_id, current_story_name)
+    st.divider()
 
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
@@ -1914,7 +2075,7 @@ def render_chapter_outline_page(project_name: str):
                 st.session_state[f"chapter_outline_step_{chapter_no}"] = result
                 st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
         else:
-            result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None)
+            result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None, story_id=story_id)
             st.session_state[f"chapter_outline_step_{chapter_no}"] = result
             st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
 
@@ -1939,19 +2100,117 @@ def render_chapter_outline_page(project_name: str):
 
 def render_chapter_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("章节正文")
+    profile = load_creative_profile(project_name, story_id=story_id) or {}
+    workflow_depth = profile.get("workflow_depth", "")
+    is_chapter_mode = workflow_depth in {"完整长篇流程", "分卷/剧情段/章节", "章节计划+正文"}
+    mode_hint = "章节模式" if is_chapter_mode else "自由模式"
 
-    chapter_no = st.number_input("章节编号", min_value=1, value=1)
+    st.subheader("正文生成")
+    st.caption(f"根据细纲或需求生成正文，可串联审阅和设定更新。当前：{mode_hint}")
+
+    chapter_no = st.number_input(
+        "编号" if not is_chapter_mode else "章节编号",
+        min_value=1 if is_chapter_mode else 0,
+        value=1,
+        help="章节模式下按编号读写已有细纲和正文；自由模式下填 1 即可",
+    )
+    if not is_chapter_mode and chapter_no < 1:
+        chapter_no = 1
+
     existing_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
     existing_chapter = load_chapter(project_name, chapter_no, story_id=story_id)
+    approved_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id) if is_chapter_mode else {}
+    discussion_guidance_default = _format_discussion_artifact_as_guidance(approved_discussion_artifact) if is_chapter_mode else ""
     chapter_step = st.session_state.get(f"chapter_step_{chapter_no}", {})
 
+    word_count = st.text_input(
+        "目标字数（如 2000-2500）",
+        value="2000-2500",
+        key=f"content_word_count_{chapter_no}",
+    )
+
+    has_existing_outline = bool(existing_outline or st.session_state.get(f"chapter_outline_gen_{chapter_no}"))
+
+    if not has_existing_outline:
+        st.info("没有已有细纲，可直接编写、从需求生成细纲、或从需求完整执行。")
+        with st.expander("从需求自动执行", expanded=True):
+            gen_requirement = st.text_area("创作需求", height=100, key=f"auto_full_req_{chapter_no}",
+                placeholder="例如：主角在废弃车站发现线索，与搭档产生分歧。")
+            col_gen_outline, col_full_pipeline = st.columns(2)
+            with col_gen_outline:
+                if st.button("仅生成细纲", use_container_width=True, key=f"gen_outline_btn_{chapter_no}"):
+                    if not gen_requirement.strip():
+                        st.warning("请先填写创作需求。")
+                    else:
+                        try:
+                            with st.spinner("正在生成细纲..."):
+                                outline_result = generate_chapter_outline(project_name, chapter_no, gen_requirement, story_id=story_id)
+                            outline_text = outline_result.get("data", {}).get("chapter_outline", "")
+                            if outline_text:
+                                st.session_state[f"chapter_outline_gen_{chapter_no}"] = outline_text
+                                st.success("细纲已生成，将在上方细纲文本框中显示。")
+                                st.rerun()
+                            else:
+                                st.error("细纲生成失败，请手工编写。")
+                        except Exception as exc:
+                            st.error(f"细纲生成失败：{exc}")
+            with col_full_pipeline:
+                if st.button("细纲→写作→审阅→更新设定", use_container_width=True, type="primary", key=f"full_pipeline_btn_{chapter_no}"):
+                    if not gen_requirement.strip():
+                        st.warning("请先填写创作需求。")
+                    else:
+                        try:
+                            with st.status("正在完整执行..."):
+                                pipeline_result = pipeline_plan_write_review_update(
+                                    project_name, chapter_no, gen_requirement, word_count, story_id=story_id
+                                )
+                            st.session_state[f"pipeline_result_{chapter_no}"] = pipeline_result
+                            chapter = pipeline_result.get("chapter", "") or pipeline_result.get("steps", {}).get("write_chapter", {}).get("data", {}).get("chapter", "")
+                            if chapter:
+                                st.session_state[f"chapter_{chapter_no}"] = chapter
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"完整流水线执行失败：{exc}")
+
+    chapter_outline_value = st.session_state.get(f"chapter_outline_gen_{chapter_no}", existing_outline)
     chapter_outline = st.text_area(
-        "章节细纲",
-        value=existing_outline,
+        "内容细纲" if not is_chapter_mode else "章节细纲",
+        value=chapter_outline_value,
         height=250
     )
 
+    if is_chapter_mode:
+        st.markdown("### 本章讨论与写作提示")
+        st.caption("这里适合写临时想法、需要特别执行的写法、和已批准章节讨论的收束结论；生成正文时会并入写作补充要求。")
+        discussion_guidance_key = f"write_discussion_guidance_{chapter_no}"
+        if discussion_guidance_default and discussion_guidance_key not in st.session_state:
+            st.session_state[discussion_guidance_key] = discussion_guidance_default
+        action_col, preview_col = st.columns([1, 1])
+        if action_col.button("用已批准章节讨论填入", key=f"fill_discussion_guidance_{chapter_no}"):
+            if discussion_guidance_default:
+                st.session_state[discussion_guidance_key] = discussion_guidance_default
+                st.success("已填入已批准章节讨论。")
+            else:
+                st.warning("当前章节还没有已批准讨论工件。")
+        with preview_col.expander("查看已批准章节讨论", expanded=False):
+            _render_approved_discussion_artifact(approved_discussion_artifact, "当前章节还没有已批准讨论工件。")
+        discussion_guidance = st.text_area(
+            "讨论/指导提示",
+            height=160,
+            key=discussion_guidance_key,
+            placeholder="例如：这一章重点写两人关系试探；冲突先压住，不急着摊牌；结尾让主角意识到线索来自旧案。",
+        )
+    else:
+        discussion_guidance = ""
+        st.markdown("### 写作提示（可选）")
+        discussion_guidance = st.text_area(
+            "补充提示",
+            height=80,
+            key=f"write_notes_{chapter_no}",
+            placeholder="例如：整体语气轻松，结尾留悬念。",
+        )
+
+    st.markdown("### 当前写作设置")
     tone = st.selectbox(
         "文风/基调",
         options=["", "克制", "热血", "轻快", "压抑", "爽文推进"],
@@ -1987,6 +2246,12 @@ def render_chapter_page(project_name: str):
         key=f"write_extra_requirements_{chapter_no}",
         placeholder="例如：减少说明性段落，多写试探性对话，结尾用短句收束。",
     )
+    combined_extra_requirements_parts = []
+    if discussion_guidance.strip():
+        combined_extra_requirements_parts.append(f"写作提示：\n{discussion_guidance.strip()}")
+    if extra_requirements.strip():
+        combined_extra_requirements_parts.append(f"补充要求：\n{extra_requirements.strip()}")
+    combined_extra_requirements = "\n\n".join(combined_extra_requirements_parts)
 
     writing_guidance = {
         "tone": tone,
@@ -1994,38 +2259,122 @@ def render_chapter_page(project_name: str):
         "dialogue_density": dialogue_density,
         "focus": focus,
         "ending_strength": ending_strength,
-        "extra_requirements": extra_requirements,
+        "extra_requirements": combined_extra_requirements,
     }
 
-    word_count = st.text_input(
-        "目标字数（如 2000-2500）",
-        value="2000-2500"
-    )
+    has_outline = bool(chapter_outline.strip())
 
-    if st.button("写正文"):
+    col_write, col_pipeline = st.columns([1, 1])
+    with col_write:
+        write_clicked = st.button("写正文", type="primary" if has_outline else "secondary", use_container_width=True)
+    with col_pipeline:
+        pipeline_clicked = st.button(
+            "细纲→写作→审阅→更新设定" if has_outline else "需要先填写或生成细纲",
+            disabled=not has_outline,
+            use_container_width=True,
+        )
+
+    if write_clicked:
         result = write_chapter(project_name, chapter_no, chapter_outline, writing_guidance, word_count, story_id=story_id)
         st.session_state[f"chapter_step_{chapter_no}"] = result
         st.session_state[f"chapter_{chapter_no}"] = result.get("data", {}).get("chapter", "")
+        st.rerun()
+
+    if pipeline_clicked and has_outline:
+        try:
+            with st.status("正在执行流水线..."):
+                steps_result = {}
+                write_result = write_chapter(project_name, chapter_no, chapter_outline, writing_guidance, word_count, story_id=story_id)
+                steps_result["write_chapter"] = write_result
+                chapter = write_result.get("data", {}).get("chapter", "")
+                if not chapter:
+                    raise RuntimeError(write_result.get("error", "正文生成失败"))
+
+                review_result = review_chapter(project_name, chapter_no, chapter, story_id=story_id)
+                steps_result["review_chapter"] = review_result
+                review_markdown = review_result.get("data", {}).get("review_markdown", "")
+
+                memory_result = update_memory_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
+                steps_result["memory_update"] = memory_result
+
+            st.session_state[f"chapter_{chapter_no}"] = chapter
+            st.session_state[f"pipeline_result_{chapter_no}"] = {
+                "steps": steps_result,
+                "review_markdown": review_markdown,
+            }
+            st.rerun()
+        except Exception as exc:
+            st.error(f"流水线执行失败：{exc}")
 
     with st.expander("当前写作指导", expanded=False):
+        if discussion_guidance.strip():
+            st.markdown("#### 写作提示")
+            st.markdown(discussion_guidance)
         render_step_json_expander("写作指导参数", writing_guidance)
 
     chapter_text = st.text_area(
-        "章节正文",
+        "正文" if not is_chapter_mode else "章节正文",
         value=st.session_state.get(f"chapter_{chapter_no}", existing_chapter),
         height=600
     )
 
-    if st.button("保存正文"):
-        save_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-        st.success(f"第 {chapter_no} 章正文已保存")
+    save_col, review_col, memory_col = st.columns(3)
+    with save_col:
+        if st.button("保存正文", use_container_width=True):
+            save_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
+            st.success(f"正文已保存")
 
-    if st.button("根据正文更新核心设定"):
-        result = update_memory_from_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-        st.session_state[f"memory_update_step_{chapter_no}"] = result
-        render_step_status_message(result, "核心设定更新成功", "核心设定更新失败：")
-        render_step_validation(result)
-        render_step_json_expander("设定更新结构化数据", result)
+    with review_col:
+        has_chapter = bool(chapter_text.strip())
+        do_review = st.button(
+            "审阅正文" if has_chapter else "需要先生成正文",
+            disabled=not has_chapter,
+            key=f"review_inline_{chapter_no}",
+            use_container_width=True,
+        )
+        if do_review and has_chapter:
+            try:
+                result = review_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
+                st.session_state[f"review_step_{chapter_no}_inline"] = result
+                st.session_state[f"review_markdown_{chapter_no}"] = result.get("data", {}).get("review_markdown", "")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"审阅失败：{exc}")
+
+    with memory_col:
+        do_memory = st.button(
+            "更新核心设定" if has_chapter else "需要先生成正文",
+            disabled=not has_chapter,
+            key=f"memory_inline_{chapter_no}",
+            use_container_width=True,
+        )
+        if do_memory and has_chapter:
+            result = update_memory_from_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
+            st.session_state[f"memory_update_step_{chapter_no}"] = result
+            render_step_status_message(result, "核心设定更新成功", "核心设定更新失败：")
+            render_step_validation(result)
+            render_step_json_expander("设定更新结构化数据", result)
+
+    review_markdown = st.session_state.get(f"review_markdown_{chapter_no}", "")
+    if review_markdown:
+        with st.expander("审阅结果", expanded=True):
+            st.markdown(review_markdown)
+
+    pipeline_result = st.session_state.get(f"pipeline_result_{chapter_no}", {})
+    if pipeline_result:
+        expanded_by_default = bool(pipeline_result.get("steps", {}).get("write_chapter", {}).get("success"))
+        with st.expander("流水线执行详情", expanded=not expanded_by_default):
+            pipeline_steps = pipeline_result.get("steps", {})
+            for step_label, step_key in [("细纲", "chapter_outline"), ("写作", "write_chapter"), ("审阅", "review_chapter"), ("设定更新", "memory_update")]:
+                step_result = pipeline_steps.get(step_key, {})
+                if step_result:
+                    status = step_result.get("status", "-")
+                    st.caption(f"{step_label}：{label_status(status)}")
+                    render_step_validation(step_result)
+            pipeline_markdown = pipeline_result.get("review_markdown", "") or pipeline_steps.get("review_chapter", {}).get("data", {}).get("review_markdown", "")
+            if pipeline_markdown:
+                st.markdown("#### 审阅结果")
+                st.markdown(pipeline_markdown)
 
     render_step_validation(chapter_step)
     render_step_retrieval(
@@ -2034,67 +2383,14 @@ def render_chapter_page(project_name: str):
         get_retrieval_trace(f"write:{project_name}:{chapter_no}")
     )
     render_step_retrieval(
+        st.session_state.get(f"review_step_{chapter_no}_inline", {}),
+        "本次审阅使用的检索上下文",
+        get_retrieval_trace(f"review:{project_name}:{chapter_no}")
+    )
+    render_step_retrieval(
         st.session_state.get(f"memory_update_step_{chapter_no}", {}),
         "本次设定更新使用的检索上下文",
         get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}")
-    )
-
-
-def render_review_page(project_name: str):
-    story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("章节审阅")
-
-    chapter_no = st.number_input("章节编号", min_value=1, value=1, key="review_chapter_no")
-    existing_chapter = load_chapter(project_name, chapter_no, story_id=story_id)
-    review_text_key = f"review_result_text_{chapter_no}"
-    chapter_text_key = f"review_chapter_text_{chapter_no}"
-
-    existing_review = load_review(project_name, chapter_no, story_id=story_id)
-    existing_review_json = load_review_json(project_name, chapter_no, story_id=story_id) or {}
-    review_step = st.session_state.get(f"review_step_{chapter_no}", {})
-
-    chapter_text = st.text_area(
-        "待审阅正文",
-        value=existing_chapter,
-        height=450,
-        key=chapter_text_key
-    )
-
-    if st.button("生成审阅意见"):
-        try:
-            review_result = review_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-            review_markdown = review_result.get("data", {}).get("review_markdown", "")
-            st.session_state[f"review_{chapter_no}"] = review_markdown
-            st.session_state[review_text_key] = review_markdown
-            st.session_state[f"review_step_{chapter_no}"] = review_result
-            st.rerun()
-        except Exception as exc:
-            st.error(f"生成审阅失败：{exc}")
-
-    review_text = st.text_area(
-        "审阅结果",
-        value=st.session_state.get(f"review_{chapter_no}", existing_review),
-        height=450,
-        key=review_text_key
-    )
-
-    if review_text:
-        st.markdown(review_text)
-
-    latest_review_json = load_review_json(project_name, chapter_no, story_id=story_id) or existing_review_json
-
-    if latest_review_json:
-        st.caption("结构化审阅状态")
-        cols = st.columns(3)
-        cols[0].metric("状态", label_status(latest_review_json.get("status", "-")))
-        cols[1].metric("问题数", len(latest_review_json.get("issues", [])))
-        cols[2].metric("优点数", len(latest_review_json.get("strengths", [])))
-
-    render_step_validation(review_step)
-    render_step_retrieval(
-        review_step,
-        "本次审阅使用的检索上下文",
-        get_retrieval_trace(f"review:{project_name}:{chapter_no}")
     )
 
 
@@ -2124,9 +2420,9 @@ def render_project_overview_page(project_name: str):
     st.markdown("### 常用入口")
     action_col1, action_col2, action_col3, action_col4 = st.columns(4)
     with action_col1:
-        render_quick_action("继续生成", "动态生成", "按创作配置选择合适生成路径。")
+        render_quick_action("快速生成", "快速生成", "实验性快速生成入口，适合测试或临时片段。")
     with action_col2:
-        render_quick_action("章节流水线", "一键流水线", "生成、审阅、更新记忆一并执行。")
+        render_quick_action("正文生成", "正文生成", "根据细纲或需求写作，可串联审阅和设定更新。")
     with action_col3:
         render_quick_action("整理资料", "资料录入", "导入原作、参考和长文本资料。")
     with action_col4:
@@ -2641,57 +2937,118 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
 
 def render_dynamic_generation_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("动态生成")
-    st.caption("根据创作配置自动选择生成层级。适合短篇、番外、续写、前传、穿越、新环境故事或临时片段。")
+    st.subheader("快速生成")
+    st.caption("实验性快速生成入口。只靠一段提示词就能生成，也可以展开高级配置进行精细控制。不需要预先配置创作配置。")
 
-    profile = load_creative_profile(project_name, story_id=story_id)
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("任务性质", profile.get("story_mode", "主线故事"))
-    col_b.metric("目标篇幅", profile.get("target_length", "长篇"))
-    col_c.metric("参考强度", profile.get("reference_strength", "中参考"))
-    st.caption(f"推荐路径：{' -> '.join(recommended_workflow_for_profile(profile))}")
+    profile = load_creative_profile(project_name, story_id=story_id) or {}
+    if profile.get("is_configured"):
+        st.caption(f"当前故事配置：{profile.get('story_mode', '主线故事')} / {profile.get('target_length', '长篇')} / 参考 {profile.get('reference_strength', '中参考')}")
 
-    chapter_no = st.number_input("保存到章节编号", min_value=1, value=1, key="dynamic_generation_chapter_no")
-    workflow_depth_options = ["按创作配置", "只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"]
-    workflow_depth = select_with_custom(
-        st,
-        "本次生成层级",
-        workflow_depth_options,
-        "按创作配置",
-        "dynamic_generation_workflow_depth",
-        "可临时写自己的执行方式，例如：先三幕结构，再写 5 个小节正文。",
+    requirement = st.text_area(
+        "创作提示词",
+        height=200,
+        key="quick_gen_requirement",
+        placeholder="例如：写一个 500 字的开场，主角在雨中遇到神秘人，气氛要压抑。",
     )
-    default_word_count = profile.get("target_word_count", "") or "2000-2500"
-    word_count = st.text_input("本次目标字数", value=default_word_count, key="dynamic_generation_word_count")
-    requirement = st.text_area("本次创作需求", height=220, key="dynamic_generation_requirement")
 
-    if st.button("按配置执行动态生成"):
+    col_run, col_save = st.columns([3, 1])
+    with col_save:
+        chapter_no = st.number_input("保存到章节", min_value=0, value=0, key="quick_gen_chapter_no",
+                                     help="0 表示不保存，仅预览。")
+
+    with st.expander("高级配置", expanded=False):
+        default_word_count = profile.get("target_word_count", "") or "2000-2500"
+        word_count = st.text_input("目标字数", value=default_word_count, key="quick_gen_word_count")
+        workflow_depth_options = ["只生成正文", "短篇结构+正文", "章节计划+正文"]
+        workflow_depth = st.selectbox(
+            "生成层级",
+            options=workflow_depth_options,
+            index=0,
+            key="quick_gen_workflow_depth",
+        )
+        st.caption("短篇结构会先生成创作结构再写正文；章节计划会先生成细纲再写正文。只生成正文则直接输出。")
+
+        st.markdown("#### 写作参数")
+        col_a, col_b, col_c = st.columns(3)
+        with col_a:
+            tone = st.selectbox(
+                "文风/基调",
+                options=["", "克制", "热血", "轻快", "压抑", "爽文推进"],
+                format_func=lambda v: v or "未指定",
+                key="quick_gen_tone",
+            )
+        with col_b:
+            pacing = st.selectbox(
+                "节奏",
+                options=["", "慢铺", "均衡", "快推"],
+                format_func=lambda v: v or "未指定",
+                key="quick_gen_pacing",
+            )
+        with col_c:
+            dialogue_density = st.selectbox(
+                "对话密度",
+                options=["", "低", "中", "高"],
+                format_func=lambda v: v or "未指定",
+                key="quick_gen_dialogue",
+            )
+        focus = st.multiselect(
+            "描写重点",
+            options=["动作", "心理", "环境", "关系拉扯", "战斗", "信息揭示"],
+            key="quick_gen_focus",
+        )
+        col_d, col_e = st.columns(2)
+        with col_d:
+            ending_strength = st.selectbox(
+                "结尾力度",
+                options=["", "轻钩子", "强钩子", "悬念断点"],
+                format_func=lambda v: v or "未指定",
+                key="quick_gen_ending",
+            )
+        with col_e:
+            extra_requirements = st.text_area(
+                "补充要求",
+                height=80,
+                key="quick_gen_extra",
+                placeholder="例如：减少说明性段落，多用短句。",
+            )
+
+    if col_run.button("生成", use_container_width=True, type="primary"):
         if not requirement.strip():
-            st.error("请先填写本次创作需求。")
+            st.error("请先填写创作提示词。")
         else:
             try:
-                with st.spinner("正在按创作配置生成..."):
+                effective_chapter_no = int(chapter_no) or 1
+                writing_guidance = {
+                    "tone": tone,
+                    "pacing": pacing,
+                    "dialogue_density": dialogue_density,
+                    "focus": focus,
+                    "ending_strength": ending_strength,
+                    "extra_requirements": extra_requirements,
+                }
+                with st.spinner("正在生成..."):
                     result = run_dynamic_generation_task(
                         project_name,
-                        int(chapter_no),
+                        effective_chapter_no,
                         requirement,
                         word_count,
                         workflow_depth,
                         story_id=story_id,
+                        writing_guidance=writing_guidance,
                     )
                 st.session_state["dynamic_generation_result"] = result
                 st.rerun()
             except Exception as exc:
-                st.error(f"动态生成失败：{exc}")
+                st.error(f"生成失败：{exc}")
 
     result = st.session_state.get("dynamic_generation_result", {})
     if not result:
         return
 
     if result.get("success"):
-        st.success("动态生成完成。")
+        st.success("生成完成。")
     else:
-        st.error(f"动态生成未完成：{result.get('status', '未知状态')}")
+        st.error(f"生成未完成：{result.get('status', '未知状态')}")
 
     for warning in result.get("warnings", []):
         st.warning(warning)
@@ -2715,7 +3072,7 @@ def render_dynamic_generation_page(project_name: str):
         with st.expander("生成正文", expanded=True):
             st.markdown(chapter)
 
-    render_step_json_expander("动态生成结构化数据", result)
+    render_step_json_expander("生成结构化数据", result)
 
 
 def build_profile_from_task_wizard(
@@ -2762,7 +3119,7 @@ def build_profile_from_task_wizard(
 
 def render_creative_task_wizard(project_name: str, story_id: str = "default"):
     st.markdown("### 创作任务向导")
-    st.caption("用中文目标快速生成一份创作配置。保存后，“动态生成”和各类生成提示会按这份配置调整。")
+    st.caption("用中文目标快速生成一份创作配置。保存后，“快速生成”和各类生成提示会按这份配置调整。")
 
     task_options = ["主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"]
     length_options = ["片段", "短篇", "中篇", "长篇"]
@@ -3608,8 +3965,8 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                     st.error(f"结构化数据格式错误：{exc}")
 
 
-def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str]):
-    with st.expander("长篇资料导入器", expanded=False):
+def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str], expanded: bool = False):
+    with st.expander("长篇资料导入器", expanded=expanded):
         st.caption("适合导入长篇网文、原作正文或大段参考资料。建议先切分并导入索引，再分批提取结构化知识。")
 
         col_a, col_b = st.columns(2)
@@ -4391,92 +4748,6 @@ def render_resource_management_page(project_name: str):
         _render_resource_browser_detail(project_name, selected)
 
 
-def render_project_files_page(project_name: str):
-    story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("项目文件预览")
-
-    outline = load_outline(project_name, story_id=story_id)
-    if outline:
-        with st.expander("outline.md", expanded=True):
-            st.markdown(outline)
-    outline_discussion = load_outline_discussion_artifact(project_name, story_id=story_id)
-    if outline_discussion.get("discussion"):
-        with st.expander("outline.discussion.json", expanded=False):
-            st.markdown(outline_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
-            render_step_json_expander("全书讨论结构化数据", outline_discussion.get("discussion", {}))
-    creative_profile_discussion = load_creative_profile_discussion_artifact(project_name, story_id=story_id)
-    if creative_profile_discussion.get("discussion"):
-        with st.expander("creative_profile.discussion.json", expanded=False):
-            st.markdown(creative_profile_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
-            render_step_json_expander("创作配置讨论结构化数据", creative_profile_discussion.get("discussion", {}))
-
-    volumes = list_volumes(project_name, story_id=story_id)
-    for volume in volumes:
-        volume_no = int(volume.get("volume_no", 0))
-        title = volume.get("title", "") or f"volume_{volume_no:03d}.md"
-        with st.expander(f"volumes/volume_{volume_no:03d}.md / {title}", expanded=False):
-            if volume.get("summary"):
-                st.caption(volume.get("summary"))
-            st.markdown(volume.get("outline", "") or "")
-        volume_discussion = load_volume_discussion_artifact(project_name, volume_no, story_id=story_id)
-        if volume_discussion.get("discussion"):
-            with st.expander(f"volumes/volume_{volume_no:03d}.discussion.json / {title}", expanded=False):
-                st.markdown(volume_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
-                render_step_json_expander("分卷讨论结构化数据", volume_discussion.get("discussion", {}))
-
-    arcs = list_arcs(project_name, story_id=story_id)
-    for arc in arcs:
-        arc_no = int(arc.get("arc_no", 0))
-        title = arc.get("title", "") or f"arc_{arc_no:03d}.md"
-        with st.expander(f"arcs/arc_{arc_no:03d}.md / {title}", expanded=False):
-            if arc.get("summary"):
-                st.caption(arc.get("summary"))
-            if arc.get("volume_no"):
-                st.caption(f"所属分卷：第 {int(arc.get('volume_no'))} 卷")
-            st.markdown(arc.get("outline", "") or "")
-        arc_discussion = load_arc_discussion_artifact(project_name, arc_no, story_id=story_id)
-        if arc_discussion.get("discussion"):
-            with st.expander(f"arcs/arc_{arc_no:03d}.discussion.json / {title}", expanded=False):
-                st.markdown(arc_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
-                render_step_json_expander("剧情段讨论结构化数据", arc_discussion.get("discussion", {}))
-
-
-    chapter_no = st.number_input("预览章节编号", min_value=1, value=1, key="preview_chapter_no")
-    chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
-    chapter = load_chapter(project_name, chapter_no, story_id=story_id)
-    review = load_review(project_name, chapter_no, story_id=story_id)
-    review_json = load_review_json(project_name, chapter_no, story_id=story_id)
-
-    if chapter_outline:
-        with st.expander(f"chapter_outlines/chapter_{chapter_no:03d}.md", expanded=True):
-            st.markdown(chapter_outline)
-    chapter_discussion = load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id)
-    if chapter_discussion.get("discussion"):
-        with st.expander(f"chapter_outlines/chapter_{chapter_no:03d}.discussion.json", expanded=False):
-            st.markdown(chapter_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
-            render_step_json_expander("章节讨论结构化数据", chapter_discussion.get("discussion", {}))
-
-    if chapter:
-        with st.expander(f"chapters/chapter_{chapter_no:03d}.md", expanded=True):
-            st.markdown(chapter)
-
-    if review:
-        with st.expander(f"reviews/chapter_{chapter_no:03d}.md", expanded=True):
-            st.markdown(review)
-    if review_json:
-        with st.expander(f"reviews/chapter_{chapter_no:03d}.json", expanded=False):
-            st.code(json.dumps(review_json, ensure_ascii=False, indent=2), language="json")
-
-    evaluation_report = load_evaluation_report(project_name, chapter_no, story_id=story_id)
-    evaluation_json = load_evaluation_json(project_name, chapter_no, story_id=story_id)
-    if evaluation_report:
-        with st.expander(f"evaluation/chapter_{chapter_no:03d}.md", expanded=False):
-            st.markdown(evaluation_report)
-    if evaluation_json:
-        with st.expander(f"evaluation/chapter_{chapter_no:03d}.json", expanded=False):
-            st.code(json.dumps(evaluation_json, ensure_ascii=False, indent=2), language="json")
-
-
 def render_volume_outline_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     st.subheader("分卷大纲")
@@ -4851,210 +5122,18 @@ def render_arc_outline_page(project_name: str):
     render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{arc_no}"))
 
 
-def render_pipeline_page(project_name: str):
-    story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("一键流水线：细纲→写作→审阅→更新记忆")
-    chapter_no = st.number_input("章节编号", min_value=1, value=1, key="pipeline_chapter_no")
-    requirement = st.text_area("本章要求", height=200, key="pipeline_requirement")
-    word_count = st.text_input(
-        "目标字数（如 2500-3500）",
-        value="2500-3500",
-        key="pipeline_word_count"
-    )
+def run_comprehensive_chapter_evaluation(project_name: str, chapter_no: int, chapter_text: str, story_id: str = "default") -> dict:
+    import importlib
+    import skills as skills_module
 
-    if st.button("执行流水线"):
-        with st.status("执行中..."):
-            result = pipeline_plan_write_review_update(
-                project_name, chapter_no, requirement, word_count, story_id=story_id
-            )
-        pipeline = result.get("pipeline", {})
-        if result.get("success"):
-            st.success("流水线完成")
-        else:
-            st.warning("流水线已完成，但存在失败或拒绝的步骤")
-        if result.get("halted"):
-            st.caption(f"流水线已暂停：{result.get('halt_reason', '-')}")
-
-        steps_result = result.get("steps", {}) or pipeline.get("steps", {})
-
-        st.subheader("执行状态")
-        steps = [
-            ("章节细纲", "chapter_outline"),
-            ("写作正文", "write_chapter"),
-            ("审阅", "review_chapter"),
-            ("更新核心设定", "memory_update"),
-        ]
-        for label, key in steps:
-            step_result = steps_result.get(key, {})
-            step_status = step_result.get("status")
-            if step_status == "completed":
-                st.success(f"{label}：完成")
-            elif step_status == "skipped":
-                st.info(f"{label}：已跳过（前置步骤未完成）")
-            else:
-                st.error(f"{label}：{step_result.get('error', '未知错误')}")
-            render_step_validation(step_result)
-
-        st.subheader("结果预览")
-        with st.expander("章节细纲", expanded=True):
-            st.markdown(result.get("chapter_outline", "") or steps_result.get("chapter_outline", {}).get("data", {}).get("chapter_outline", "") or "（未生成）")
-        with st.expander("章节正文", expanded=True):
-            st.markdown(result.get("chapter", "") or steps_result.get("write_chapter", {}).get("data", {}).get("chapter", "") or "（未生成）")
-        with st.expander("审阅报告", expanded=True):
-            st.markdown(result.get("review_markdown", "") or steps_result.get("review_chapter", {}).get("data", {}).get("review_markdown", "") or "（未生成）")
-        review = result.get("review") or steps_result.get("review_chapter", {}).get("data", {}).get("review") or {}
-        if review:
-            st.caption("结构化审阅状态")
-            cols = st.columns(3)
-            cols[0].metric("状态", label_status(review.get("status", "-")))
-            cols[1].metric("问题数", len(review.get("issues", [])))
-            cols[2].metric("优点数", len(review.get("strengths", [])))
-            with st.expander("审阅结构化数据", expanded=False):
-                st.code(json.dumps(review, ensure_ascii=False, indent=2), language="json")
-        render_step_json_expander("核心设定更新结果", result.get("memory_update") or steps_result.get("memory_update", {}))
-        render_step_json_expander("流水线状态对象", result)
-
-        transitions = result.get("transition_log", [])
-        if transitions:
-            with st.expander("状态迁移记录", expanded=False):
-                for index, item in enumerate(transitions, start=1):
-                    st.markdown(
-                        f"{index}. {label_step_name(item.get('from_step', '-'))} -> {label_step_name(item.get('to_step', '-'))} / {item.get('timestamp', '-')}"
-                    )
-                    if item.get("reason"):
-                        st.caption(item.get("reason"))
-
-        workflow_errors = result.get("errors", [])
-        if workflow_errors:
-            with st.expander("工作流错误记录", expanded=False):
-                for index, item in enumerate(workflow_errors, start=1):
-                    st.markdown(
-                        f"{index}. 步骤={label_step_name(item.get('step_name', '-'))} / 类型={label_error_type(item.get('error_type', 'unknown'))} / 可恢复={label_yes_no(bool(item.get('recoverable', True)))}"
-                    )
-                    st.caption(item.get("message", ""))
-
-        if result.get("resumable"):
-            st.info(f"该运行具备恢复潜力，可从“{label_step_name(result.get('last_successful_step', '-'))}”之后继续。")
-
-        render_step_retrieval(steps_result.get("chapter_outline", {}), "流水线：细纲步骤使用的检索上下文")
-        render_step_retrieval(steps_result.get("write_chapter", {}), "流水线：写作步骤使用的检索上下文")
-        render_step_retrieval(steps_result.get("review_chapter", {}), "流水线：审阅步骤使用的检索上下文")
-        render_step_retrieval(steps_result.get("memory_update", {}), "流水线：核心设定更新步骤使用的检索上下文")
-
-    st.subheader("最近运行记录")
-    run_ids = list_pipeline_runs(project_name, chapter_no, story_id=story_id)
-    if not run_ids:
-        st.caption("当前章节还没有运行记录。")
-        return
-
-    selected_run = st.selectbox("选择运行记录", options=run_ids, key=f"pipeline_run_select_{chapter_no}")
-    if selected_run:
-        run_content = load_pipeline_run(project_name, selected_run, story_id=story_id)
-        if run_content.strip():
-            run_data = json.loads(run_content)
-            st.caption(
-                f"运行编号={run_data.get('run_id', '-')} / 开始时间={run_data.get('started_at', '-')} / 结束时间={run_data.get('finished_at', '-')} / 可恢复={label_yes_no(bool(run_data.get('resumable', False)))}"
-            )
-            if run_data.get("halted"):
-                st.warning(f"暂停原因：{run_data.get('halt_reason', '-')}")
-            if run_data.get("resumable"):
-                if st.button("从该运行恢复流水线", key=f"resume_pipeline_{selected_run}"):
-                    try:
-                        with st.spinner("正在恢复流水线..."):
-                            resumed = resume_chapter_pipeline(project_name, selected_run, story_id=story_id)
-                        st.success(f"已生成恢复运行：{resumed.get('run_id', '')}")
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"恢复流水线失败：{exc}")
-            transitions = run_data.get("transition_log", [])
-            if transitions:
-                with st.expander("该运行的状态迁移记录", expanded=False):
-                    for index, item in enumerate(transitions, start=1):
-                        st.markdown(
-                            f"{index}. {label_step_name(item.get('from_step', '-'))} -> {label_step_name(item.get('to_step', '-'))} / {item.get('timestamp', '-')}"
-                        )
-                        if item.get("reason"):
-                            st.caption(item.get("reason"))
-            workflow_errors = run_data.get("errors", [])
-            if workflow_errors:
-                with st.expander("该运行的错误记录", expanded=False):
-                    for index, item in enumerate(workflow_errors, start=1):
-                        st.markdown(
-                            f"{index}. 步骤={label_step_name(item.get('step_name', '-'))} / 类型={label_error_type(item.get('error_type', 'unknown'))} / 可恢复={label_yes_no(bool(item.get('recoverable', True)))}"
-                        )
-                        st.caption(item.get("message", ""))
-            render_step_json_expander("运行记录状态对象", run_data)
-
-
-def render_analysis_page(project_name: str):
-    story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("一致性分析")
-
-    chapter_no = st.number_input("章节编号", min_value=1, value=1, key="analysis_chapter_no")
-    existing_chapter = load_chapter(project_name, chapter_no, story_id=story_id)
-    chapter_text_key = f"analysis_chapter_text_{chapter_no}"
-    chapter_text = st.text_area(
-        "待分析正文",
-        value=existing_chapter,
-        height=400,
-        key=chapter_text_key
-    )
-
-    analysis_options = {
-        "consistency": ("总一致性检查", run_consistency_check),
-        "characters": ("角色分析", analyze_characters),
-        "timeline": ("时间线分析", analyze_timeline),
-        "foreshadowing": ("伏笔分析", analyze_foreshadowing),
-    }
-
-    selected_type = st.selectbox(
-        "分析类型",
-        options=list(analysis_options.keys()),
-        format_func=lambda key: analysis_options[key][0],
-        key="analysis_type"
-    )
-
-    report_text_key = f"analysis_result_text_{selected_type}_{chapter_no}"
-    existing_report = load_analysis_report(project_name, selected_type, chapter_no, story_id=story_id)
-    step_state_key = f"analysis_step_{selected_type}_{chapter_no}"
-
-    if st.button("执行分析"):
-        try:
-            label, handler = analysis_options[selected_type]
-            with st.spinner(f"正在生成{label}..."):
-                result = handler(project_name, chapter_no, chapter_text, story_id=story_id)
-            report = result.get("data", {}).get("report_markdown", "")
-            st.session_state[f"analysis_{selected_type}_{chapter_no}"] = report
-            st.session_state[report_text_key] = report
-            st.session_state[step_state_key] = result
-            st.rerun()
-        except Exception as exc:
-            st.error(f"执行分析失败：{exc}")
-
-    report_text = st.text_area(
-        "分析结果",
-        value=st.session_state.get(f"analysis_{selected_type}_{chapter_no}", existing_report),
-        height=450,
-        key=report_text_key
-    )
-
-    if report_text:
-        st.markdown(report_text)
-
-    analysis_step = st.session_state.get(step_state_key, {})
-    analysis_data = analysis_step.get("data", {}).get("analysis") or {}
-    render_step_json_expander("结构化分析结果", analysis_data)
-    render_step_validation(analysis_step)
-    render_step_retrieval(
-        analysis_step,
-        "本次分析使用的检索上下文",
-        get_retrieval_trace(f"analysis:{selected_type}:{project_name}:{chapter_no}")
-    )
+    skills_module = importlib.reload(skills_module)
+    return skills_module.evaluate_chapter_comprehensive(project_name, chapter_no, chapter_text, story_id=story_id)
 
 
 def render_evaluation_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("章节评估")
+    st.subheader("章节评价")
+    st.caption("综合评价会一次性给出：通过/需改/阻塞结论、质量评分、一致性诊断和优先修改项。旧的审阅/专项分析能力仍保留给流水线和历史兼容。")
 
     chapter_no = st.number_input("章节编号", min_value=1, value=1, key="evaluation_chapter_no")
     existing_chapter = load_chapter(project_name, chapter_no, story_id=story_id)
@@ -5069,19 +5148,19 @@ def render_evaluation_page(project_name: str):
     existing_report = load_evaluation_report(project_name, chapter_no, story_id=story_id)
     existing_json = load_evaluation_json(project_name, chapter_no, story_id=story_id) or {}
 
-    if st.button("执行章节评估"):
+    if st.button("生成综合章节评价"):
         try:
-            with st.spinner("正在生成章节质量评估..."):
-                result = evaluate_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
+            with st.spinner("正在生成章节综合评价..."):
+                result = run_comprehensive_chapter_evaluation(project_name, chapter_no, chapter_text, story_id=story_id)
             report = result.get("data", {}).get("report_markdown", "")
             st.session_state[step_key] = result
             st.session_state[report_key] = report
             st.rerun()
         except Exception as exc:
-            st.error(f"章节评估失败：{exc}")
+            st.error(f"章节评价失败：{exc}")
 
     report_text = st.text_area(
-        "评估报告",
+        "评价报告",
         value=st.session_state.get(report_key, existing_report),
         height=460,
         key=f"evaluation_report_text_{chapter_no}",
@@ -5092,17 +5171,18 @@ def render_evaluation_page(project_name: str):
     evaluation_step = st.session_state.get(step_key, {})
     evaluation_payload = evaluation_step.get("data", {}).get("evaluation") or existing_json
     if evaluation_payload:
-        cols = st.columns(4)
-        cols[0].metric("总分", evaluation_payload.get("overall_score", 0))
-        cols[1].metric("剧情推进", evaluation_payload.get("plot_progression_score", 0))
-        cols[2].metric("角色一致性", evaluation_payload.get("character_consistency_score", 0))
-        cols[3].metric("文笔质量", evaluation_payload.get("prose_quality_score", 0))
-        render_step_json_expander("评估结构化数据", evaluation_payload)
+        cols = st.columns(5)
+        cols[0].metric("状态", label_status(evaluation_payload.get("status", "-")))
+        cols[1].metric("总分", evaluation_payload.get("overall_score", 0))
+        cols[2].metric("剧情推进", evaluation_payload.get("plot_progression_score", 0))
+        cols[3].metric("角色一致性", evaluation_payload.get("character_consistency_score", 0))
+        cols[4].metric("文字完成度", evaluation_payload.get("prose_quality_score", 0))
+        render_step_json_expander("评价结构化数据", evaluation_payload)
     render_step_validation(evaluation_step)
     render_step_retrieval(
         evaluation_step,
-        "本次评估使用的检索上下文",
-        get_retrieval_trace(f"evaluation:chapter:{project_name}:{chapter_no}")
+        "本次评价使用的检索上下文",
+        get_retrieval_trace(f"evaluation:comprehensive:{project_name}:{chapter_no}") or get_retrieval_trace(f"evaluation:chapter:{project_name}:{chapter_no}")
     )
 
 
@@ -5257,12 +5337,274 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
 
     if mode == "ingestion":
         source_dir = retrieval_sources_path(project_name)
+        pending_count = len(load_pending_knowledge_items(project_name))
+        batch_count = len(list_long_reference_batches(project_name))
+        source_count = len(list_retrieval_source_files(project_name))
+        knowledge_base = load_knowledge_base(project_name)
+        knowledge_count = sum(len(items) for items in knowledge_base.values())
+
         st.caption(f"外部资料保存目录：`{source_dir}`")
-        render_pending_knowledge_queue(project_name)
-        render_long_reference_batch_manager(project_name, knowledge_category_options)
-        render_knowledge_organizer(project_name, knowledge_category_options)
-        render_source_package_report_page(project_name)
-        render_long_reference_importer(project_name, source_type_options, knowledge_category_options)
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("待确认知识", pending_count)
+        metric_cols[1].metric("长篇批次", batch_count)
+        metric_cols[2].metric("已导入资料", source_count)
+        metric_cols[3].metric("已确认知识", knowledge_count)
+
+        st.markdown("### 导入向导")
+        st.caption("先选资料来源，再选处理目标。页面只显示当前这一步需要的表单。")
+
+        source_choice = st.radio(
+            "资料来源",
+            options=["粘贴一段资料", "上传长篇文本", "输入网页链接", "手动新增资料卡"],
+            horizontal=True,
+            key="ingestion_source_choice",
+        )
+
+        if source_choice == "粘贴一段资料":
+            target_choice = st.radio(
+                "处理目标",
+                options=["整理后加入检索资料库", "提取成结构化知识"],
+                horizontal=True,
+                key="paste_ingestion_target",
+            )
+
+            if target_choice == "整理后加入检索资料库":
+                st.markdown("#### 粘贴资料：整理后加入检索")
+                paste_title = st.text_input("资料标题", key="organized_reference_title")
+                paste_scope = st.selectbox("资料范围", options=["canon", "reference"], format_func=label_scope, key="organized_reference_scope")
+                paste_authority = st.selectbox(
+                    "资料可信度",
+                    options=["official", "curated", "community", "unknown"],
+                    index=1,
+                    format_func=label_authority,
+                    key="organized_reference_authority"
+                )
+                paste_origin = st.text_input("来源说明（可选）", key="organized_reference_origin")
+                paste_text = st.text_area("粘贴原始资料", height=240, key="organized_reference_text")
+
+                if st.button("整理并预览", use_container_width=True):
+                    if not paste_text.strip():
+                        st.error("请先粘贴原始资料。")
+                    else:
+                        try:
+                            result = organize_reference_text(project_name, paste_title, paste_text)
+                            st.session_state["organized_reference_result"] = result
+                        except Exception as exc:
+                            st.error(f"整理失败：{exc}")
+
+                organized_result = st.session_state.get("organized_reference_result", {})
+                organized_payload = organized_result.get("data", {}).get("organized_reference", {})
+                if organized_payload:
+                    st.markdown("#### 整理预览")
+                    st.markdown(organized_result.get("data", {}).get("report_markdown", ""))
+                    render_step_validation(organized_result)
+                    render_step_json_expander("整理结果结构化数据", organized_payload)
+                    if st.button("保存到检索资料库", use_container_width=True):
+                        imported = _import_organized_reference_entries(organized_payload, paste_scope, paste_authority, paste_origin)
+                        st.success(f"已导入 {imported} 条资料并重建索引。")
+                        st.rerun()
+
+            else:
+                st.markdown("#### 粘贴资料：提取结构化知识")
+                st.caption("适合把原作资料、参考资料或样本文风拆成角色、能力、世界观、时间线、文风等条目。")
+                knowledge_title = st.text_input("资料标题", key="knowledge_extract_title")
+                knowledge_scope = st.selectbox("知识范围", options=["canon", "reference", "project"], index=0, format_func=label_scope, key="knowledge_extract_scope")
+                knowledge_authority = st.selectbox(
+                    "知识可信度",
+                    options=["official", "curated", "community", "project", "unknown"],
+                    index=1,
+                    format_func=label_authority,
+                    key="knowledge_extract_authority",
+                )
+                knowledge_origin = st.text_input("来源说明（可选）", key="knowledge_extract_origin")
+                enabled_categories = st.multiselect(
+                    "提取分类",
+                    options=knowledge_category_options,
+                    default=["characters", "items", "abilities", "world_rules", "timeline_events", "writing_style", "dialogue_style", "constraints"],
+                    format_func=label_knowledge_category,
+                    key="knowledge_extract_categories",
+                )
+                knowledge_text = st.text_area("原始资料", height=260, key="knowledge_extract_text")
+
+                if st.button("提取知识并预览", use_container_width=True):
+                    if not knowledge_text.strip():
+                        st.error("请先粘贴原始资料。")
+                    elif not enabled_categories:
+                        st.error("请至少选择一个提取分类。")
+                    else:
+                        try:
+                            result = extract_reference_knowledge(project_name, knowledge_title, knowledge_text, enabled_categories)
+                            st.session_state["knowledge_extraction_result"] = result
+                        except Exception as exc:
+                            st.error(f"知识提取失败：{exc}")
+
+                extraction_result = st.session_state.get("knowledge_extraction_result", {})
+                extraction_payload = extraction_result.get("data", {}).get("knowledge_extraction", {})
+                extraction_items = extraction_payload.get("items", []) if isinstance(extraction_payload, dict) else []
+                if extraction_payload:
+                    st.markdown("#### 提取预览")
+                    st.markdown(extraction_result.get("data", {}).get("report_markdown", ""))
+                    render_step_validation(extraction_result)
+                    render_step_json_expander("知识提取结构化数据", extraction_payload)
+                if extraction_items:
+                    item_options = list(range(len(extraction_items)))
+                    selected_item_indices = st.multiselect(
+                        "选择要保存的知识条目",
+                        options=item_options,
+                        default=item_options,
+                        format_func=lambda index: f"{index + 1}. {label_knowledge_category(extraction_items[index].get('category', ''))} / {extraction_items[index].get('name', '未命名')}",
+                        key="knowledge_extract_selected_items",
+                    )
+                    col_queue, col_direct = st.columns(2)
+                    if col_queue.button("加入待确认队列", use_container_width=True):
+                        selected_items = [extraction_items[index] for index in selected_item_indices]
+                        queued_count = queue_pending_knowledge_items(
+                            project_name,
+                            selected_items,
+                            scope=knowledge_scope,
+                            authority=knowledge_authority,
+                            source_title=extraction_payload.get("source_title", "") or knowledge_title,
+                            source_origin=knowledge_origin,
+                        )
+                        st.success(f"已加入 {queued_count} 条待确认知识。")
+                        st.rerun()
+                    if col_direct.button("直接保存所选知识", use_container_width=True):
+                        selected_items = [extraction_items[index] for index in selected_item_indices]
+                        saved_count = append_knowledge_items(
+                            project_name,
+                            selected_items,
+                            scope=knowledge_scope,
+                            authority=knowledge_authority,
+                            source_title=extraction_payload.get("source_title", "") or knowledge_title,
+                            source_origin=knowledge_origin,
+                        )
+                        rebuild_retrieval_assets(project_name, build_vectors=True)
+                        st.success(f"已保存 {saved_count} 条结构化知识，并重建检索索引。")
+                        st.rerun()
+
+        elif source_choice == "上传长篇文本":
+            st.markdown("#### 长篇文本导入")
+            st.caption("适合整本 txt、原作正文或大量章节。先切分成片段，再选择导入检索或提取知识。")
+            render_long_reference_importer(project_name, source_type_options, knowledge_category_options, expanded=True)
+
+        elif source_choice == "输入网页链接":
+            st.markdown("#### 网页资料导入")
+            url_value = st.text_input("页面链接", key="reference_url_input")
+            parsed_url = urlparse(url_value.strip()) if url_value.strip() else None
+            default_url_title = parsed_url.netloc if parsed_url and parsed_url.netloc else ""
+            url_title = st.text_input("页面标题（可选）", value=default_url_title, key="reference_url_title")
+            url_scope = st.selectbox("网页资料范围", options=["canon", "reference"], format_func=label_scope, key="reference_url_scope")
+            url_authority = st.selectbox(
+                "网页资料可信度",
+                options=["official", "curated", "community", "unknown"],
+                index=0,
+                format_func=label_authority,
+                key="reference_url_authority"
+            )
+
+            if st.button("抓取并整理网页资料", use_container_width=True):
+                if not url_value.strip():
+                    st.error("页面链接不能为空。")
+                else:
+                    try:
+                        result = organize_reference_url(project_name, url_title or default_url_title or url_value.strip(), url_value.strip())
+                        st.session_state["organized_reference_url_result"] = result
+                    except Exception as exc:
+                        st.error(f"抓取或整理失败：{exc}")
+
+            organized_url_result = st.session_state.get("organized_reference_url_result", {})
+            organized_url_payload = organized_url_result.get("data", {}).get("organized_reference", {})
+            if organized_url_payload:
+                st.markdown("#### 网页整理预览")
+                st.markdown(organized_url_result.get("data", {}).get("report_markdown", ""))
+                render_step_validation(organized_url_result)
+                render_step_json_expander("网页整理结构化数据", organized_url_payload)
+                artifacts = organized_url_result.get("artifacts", {})
+                if artifacts.get("source_url"):
+                    st.caption(f"来源链接：{artifacts.get('source_url')}")
+                if st.button("保存网页资料到检索资料库", use_container_width=True):
+                    imported = _import_organized_reference_entries(
+                        organized_url_payload,
+                        url_scope,
+                        url_authority,
+                        artifacts.get("source_url", url_value.strip()),
+                    )
+                    st.success(f"已导入 {imported} 条网页资料并重建索引。")
+                    st.rerun()
+
+        else:
+            st.markdown("#### 手动新增资料卡")
+            st.caption("适合少量已经整理好的设定卡、角色卡、事件卡。保存后会直接进入检索资料库。")
+            source_name = st.text_input("资料名称", key="retrieval_source_name")
+            source_scope = st.selectbox("资料范围", options=["reference", "canon"], format_func=label_scope, key="retrieval_source_scope")
+            source_authority = st.selectbox(
+                "资料可信度",
+                options=["official", "curated", "community", "unknown"],
+                index=1,
+                format_func=label_authority,
+                key="retrieval_source_authority"
+            )
+            source_origin = st.text_input("来源标识/链接（可选）", key="retrieval_source_origin")
+            source_type = st.selectbox(
+                "资料模板",
+                options=list(source_type_options.keys()),
+                format_func=lambda key: source_type_options.get(key, label_source_type(key)),
+                key="retrieval_source_type"
+            )
+            source_title = st.text_input("显示标题（可选）", key="retrieval_source_title")
+            source_summary = st.text_area("资料摘要（可选）", height=100, key="retrieval_source_summary")
+            source_tags = st.text_input("标签（逗号分隔，可选）", key="retrieval_source_tags")
+            source_content = st.text_area("资料正文", height=220, key="retrieval_source_content")
+
+            col_a, col_b = st.columns(2)
+            extra_field_1_label = col_a.text_input("扩展字段1名称（可选）", key="retrieval_extra_label_1")
+            extra_field_1_value = col_a.text_area("扩展字段1内容", height=90, key="retrieval_extra_value_1")
+            extra_field_2_label = col_b.text_input("扩展字段2名称（可选）", key="retrieval_extra_label_2")
+            extra_field_2_value = col_b.text_area("扩展字段2内容", height=90, key="retrieval_extra_value_2")
+
+            if st.button("保存资料卡到检索资料库", use_container_width=True):
+                if not source_name.strip() or not source_content.strip():
+                    st.error("资料名称和资料正文不能为空。")
+                else:
+                    tags = [item.strip() for item in source_tags.split(",") if item.strip()]
+                    extra_fields = {}
+                    if extra_field_1_label.strip() and extra_field_1_value.strip():
+                        extra_fields[extra_field_1_label.strip()] = extra_field_1_value.strip()
+                    if extra_field_2_label.strip() and extra_field_2_value.strip():
+                        extra_fields[extra_field_2_label.strip()] = extra_field_2_value.strip()
+
+                    payload = build_structured_external_source_payload(
+                        source_type=source_type,
+                        scope=source_scope,
+                        title=source_title.strip() or source_name.strip(),
+                        summary=source_summary,
+                        content=source_content,
+                        tags=tags,
+                        metadata={
+                            "added_from_ui": True,
+                            "template": source_type,
+                            "authority": source_authority,
+                            "source_origin": source_origin.strip(),
+                        },
+                        extra_fields=extra_fields,
+                    )
+                    ingest_external_source_file(project_name, source_name, json.dumps(payload, ensure_ascii=False, indent=2))
+                    rebuild_retrieval_assets(project_name, build_vectors=True)
+                    st.success("资料卡已保存并重建索引。")
+                    st.rerun()
+
+        st.divider()
+        st.markdown("### 待处理与整理")
+        queue_tab, batch_tab, knowledge_tab, package_tab = st.tabs(["待确认知识", "长篇批次", "知识整理", "资料包"])
+        with queue_tab:
+            render_pending_knowledge_queue(project_name)
+        with batch_tab:
+            render_long_reference_batch_manager(project_name, knowledge_category_options)
+        with knowledge_tab:
+            render_knowledge_organizer(project_name, knowledge_category_options)
+        with package_tab:
+            render_source_package_report_page(project_name)
+        return
 
     if mode == "ingestion":
         with st.expander("添加外部资料", expanded=False):
@@ -5644,7 +5986,7 @@ elif page == "创作配置":
     render_creative_profile_page(project_name)
 elif page == "设定":
     render_settings_page(project_name)
-elif page == "动态生成":
+elif page == "快速生成":
     render_dynamic_generation_page(project_name)
 elif page == "项目资源":
     render_resource_management_page(project_name)
@@ -5662,14 +6004,8 @@ elif page == "剧情段大纲":
     render_arc_outline_page(project_name)
 elif page == "生成细纲":
     render_chapter_outline_page(project_name)
-elif page == "写章节":
+elif page == "正文生成":
     render_chapter_page(project_name)
-elif page == "章节审阅":
-    render_review_page(project_name)
-elif page == "一致性分析":
-    render_analysis_page(project_name)
-elif page == "章节评估":
+elif page == "章节评价":
     render_evaluation_page(project_name)
-elif page == "一键流水线":
-    render_pipeline_page(project_name)
 

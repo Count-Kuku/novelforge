@@ -12,6 +12,7 @@ from prompts import (
     discuss_arc_prompt,
     discuss_arc_turn_prompt,
     arc_chapter_plan_prompt,
+    comprehensive_chapter_evaluation_prompt,
     evaluate_chapter_prompt,
     discuss_outline_prompt,
     discuss_outline_turn_prompt,
@@ -52,12 +53,12 @@ from memory import (
     load_chapter_outline_metadata,
     load_creative_profile,
     load_global_rules,
-    load_memory,
     load_outline,
     load_outline_discussion_artifact,
     load_pipeline_run,
     load_project_rules,
     load_story_rules,
+    load_effective_rule_conflict_resolutions,
     load_volume_discussion_artifact,
     load_volume_outline,
     save_arc_metadata,
@@ -68,13 +69,13 @@ from memory import (
     save_chapter_discussion_artifact,
     save_chapter_outline,
     save_chapter_outline_metadata,
+    save_creative_profile,
     save_creative_profile_discussion_artifact,
     save_global_rules,
     save_analysis_report,
     save_conflict_resolution,
     save_evaluation_json,
     save_evaluation_report,
-    save_memory,
     save_outline,
     save_pipeline_run,
     save_project_rules,
@@ -93,6 +94,7 @@ from schemas import (
     CreativeProfileDiscussionResult,
     ChapterPipelineState,
     ChapterEvaluationResult,
+    ComprehensiveChapterEvaluationResult,
     CharacterAnalysisResult,
     ChapterDiscussionResult,
     ConsistencyAnalysisResult,
@@ -113,6 +115,7 @@ from schemas import (
     render_character_analysis_markdown,
     render_arc_chapter_plan_markdown,
     render_chapter_evaluation_markdown,
+    render_comprehensive_chapter_evaluation_markdown,
     render_consistency_analysis_markdown,
     render_foreshadowing_analysis_markdown,
     render_discussion_markdown,
@@ -630,7 +633,14 @@ def _build_rules_text(project_name: str, scope: str, story_id: str = "default") 
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
     story_rules = load_story_rules(project_name, story_id)
-    rules_text = format_rules_for_prompt(global_rules, project_rules, scope, story_rules=story_rules)
+    conflict_resolutions = load_effective_rule_conflict_resolutions(project_name, story_id, scope)
+    rules_text = format_rules_for_prompt(
+        global_rules,
+        project_rules,
+        scope,
+        story_rules=story_rules,
+        conflict_resolutions=conflict_resolutions,
+    )
     try:
         profile = load_creative_profile(project_name, story_id)
     except Exception:
@@ -1983,6 +1993,7 @@ def run_dynamic_generation_task(
     word_count: str = "",
     workflow_depth: str = "按创作配置",
     story_id: str = "default",
+    writing_guidance: dict | None = None,
 ) -> dict:
     profile = load_creative_profile(project_name, story_id)
     using_profile_depth = not workflow_depth or workflow_depth == "按创作配置"
@@ -1998,7 +2009,7 @@ def run_dynamic_generation_task(
             f"用户需求：{user_requirement}",
             "请根据创作配置和检索上下文直接写正文，不需要输出大纲。",
         ])
-        write_step = write_chapter(project_name, chapter_no, direct_outline, None, effective_word_count, story_id=story_id)
+        write_step = write_chapter(project_name, chapter_no, direct_outline, writing_guidance, effective_word_count, story_id=story_id)
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
@@ -2036,7 +2047,7 @@ def run_dynamic_generation_task(
             warnings.append("当前动态入口先生成可执行创作结构；完整分卷/剧情段拆分请继续使用对应长篇页面。")
         if is_custom_depth:
             warnings.append("本次使用自定义生成层级，系统会先生成适配结构，再继续生成正文。")
-        write_step = write_chapter(project_name, chapter_no, structure_text, None, effective_word_count, story_id=story_id)
+        write_step = write_chapter(project_name, chapter_no, structure_text, writing_guidance, effective_word_count, story_id=story_id)
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
@@ -2066,7 +2077,7 @@ def run_dynamic_generation_task(
                 "warnings": warnings,
             }
         outline_text = outline_step.get("data", {}).get("chapter_outline", "")
-        write_step = write_chapter(project_name, chapter_no, outline_text, None, effective_word_count, story_id=story_id)
+        write_step = write_chapter(project_name, chapter_no, outline_text, writing_guidance, effective_word_count, story_id=story_id)
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
@@ -2619,6 +2630,88 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id:
             status="passed",
             schema_name="ChapterEvaluationResult",
             message="章节评估已通过结构校验并保存。",
+        ),
+        artifacts={
+            "report_saved": True,
+            "saved_path": f"data/projects/{project_name}/stories/{story_id}/evaluation/chapter_{chapter_no:03d}.md",
+        },
+    ).model_dump()
+
+
+def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+    memory = load_story_memory(project_name, story_id)
+    chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
+    trace_key = f"evaluation:comprehensive:{project_name}:{chapter_no}"
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"第{chapter_no}章综合评价 {chapter_outline} {chapter}",
+        allowed_source_types=[
+            "outline",
+            "volume_outline",
+            "arc_outline",
+            "arc_chapter_plan",
+            "chapter_summary",
+            "chapter_outline",
+            "chapter_content",
+            "memory_character",
+            "memory_world",
+            "memory_au_rule",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "review_issue",
+            "review_timeline_check",
+            "review_foreshadowing_check",
+            "analysis_consistency",
+            "analysis_characters",
+            "analysis_timeline",
+            "analysis_foreshadowing",
+            "conflict_resolution",
+            "external_source",
+        ] + KNOWLEDGE_SOURCE_TYPES,
+        allowed_scopes=["project", "canon", "reference"],
+        trace_key=trace_key,
+        story_id=story_id,
+    )
+    prompt = merge_retrieval_context(
+        comprehensive_chapter_evaluation_prompt(
+            memory,
+            chapter_outline,
+            chapter,
+            _build_rules_text(project_name, "review", story_id=story_id),
+        ),
+        retrieval_context,
+    )
+    payload = _call_json_llm(prompt, "模型没有返回章节综合评价结果。")
+    try:
+        result = ComprehensiveChapterEvaluationResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"章节综合评价结构校验失败：{format_schema_validation_error(exc)}") from exc
+
+    retrieval_hits = get_retrieval_trace(trace_key)
+    report_markdown = render_comprehensive_chapter_evaluation_markdown(result)
+    sources_md = _format_supporting_sources_markdown(retrieval_hits)
+    conflict_md = _format_potential_conflicts_markdown(retrieval_hits)
+    if sources_md:
+        report_markdown += f"\n\n{sources_md}"
+    if conflict_md:
+        report_markdown += f"\n\n{conflict_md}"
+    save_evaluation_json(project_name, chapter_no, result.model_dump(), story_id=story_id)
+    save_evaluation_report(project_name, chapter_no, report_markdown, story_id=story_id)
+    return _make_step_result(
+        "evaluate_chapter_comprehensive",
+        success=True,
+        status="completed",
+        data={
+            "evaluation": result.model_dump(),
+            "report_markdown": report_markdown,
+        },
+        retrieval_hits=retrieval_hits,
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="ComprehensiveChapterEvaluationResult",
+            message="章节综合评价已通过结构校验并保存。",
         ),
         artifacts={
             "report_saved": True,

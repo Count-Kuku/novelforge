@@ -610,6 +610,48 @@ class ChapterEvaluationResult(NovelForgeSchema):
         return _normalize_string_list(value)
 
 
+class ChapterConsistencyDiagnosis(NovelForgeSchema):
+    characters: list[str] = Field(default_factory=list)
+    world: list[str] = Field(default_factory=list)
+    timeline: list[str] = Field(default_factory=list)
+    foreshadowing: list[str] = Field(default_factory=list)
+
+    @field_validator("characters", "world", "timeline", "foreshadowing", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class ComprehensiveChapterEvaluationResult(NovelForgeSchema):
+    title: str = "章节综合评价"
+    status: Literal["pass", "revise", "blocked"] = "revise"
+    verdict_summary: str = ""
+    overall_score: int = Field(default=0, ge=0, le=100)
+    character_consistency_score: int = Field(default=0, ge=0, le=100)
+    plot_progression_score: int = Field(default=0, ge=0, le=100)
+    information_density_score: int = Field(default=0, ge=0, le=100)
+    emotional_impact_score: int = Field(default=0, ge=0, le=100)
+    foreshadowing_score: int = Field(default=0, ge=0, le=100)
+    prose_quality_score: int = Field(default=0, ge=0, le=100)
+    strengths: list[str] = Field(default_factory=list)
+    blocking_issues: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+    consistency_diagnosis: ChapterConsistencyDiagnosis = Field(default_factory=ChapterConsistencyDiagnosis)
+    revision_priorities: list[str] = Field(default_factory=list)
+    next_action: str = ""
+    summary: str = ""
+
+    @field_validator("verdict_summary", "next_action", "summary", mode="before")
+    @classmethod
+    def _normalize_text(cls, value: Any) -> str:
+        return _stringify_item(value)
+
+    @field_validator("strengths", "blocking_issues", "issues", "revision_priorities", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
 class ValidationStatus(NovelForgeSchema):
     status: Literal["not_applicable", "passed", "failed"] = "not_applicable"
     schema_name: str = ""
@@ -952,5 +994,36 @@ def render_chapter_evaluation_markdown(result: ChapterEvaluationResult) -> str:
         f"## 总结\n\n{result.summary or '无'}",
         _markdown_section("优点", result.strengths),
         _markdown_section("问题", result.issues),
+        _markdown_section("优先修改项", result.revision_priorities),
+    ])
+
+
+def render_comprehensive_chapter_evaluation_markdown(result: ComprehensiveChapterEvaluationResult) -> str:
+    score_lines = [
+        f"- 总分：{result.overall_score}",
+        f"- 角色一致性：{result.character_consistency_score}",
+        f"- 剧情推进：{result.plot_progression_score}",
+        f"- 信息密度：{result.information_density_score}",
+        f"- 情绪效果：{result.emotional_impact_score}",
+        f"- 伏笔处理：{result.foreshadowing_score}",
+        f"- 文字完成度：{result.prose_quality_score}",
+    ]
+    diagnosis = result.consistency_diagnosis
+    return "\n\n".join([
+        f"# {result.title}",
+        f"## 总结论\n\n- 状态：`{result.status}`\n- 结论：{result.verdict_summary or '无'}\n- 下一步：{result.next_action or '无'}",
+        "## 评分\n\n" + "\n".join(score_lines),
+        f"## 总结\n\n{result.summary or '无'}",
+        _markdown_section("优点", result.strengths),
+        _markdown_section("阻塞问题", result.blocking_issues),
+        _markdown_section("主要问题", result.issues),
+        "## 一致性诊断\n\n"
+        + _markdown_section("角色", diagnosis.characters)
+        + "\n\n"
+        + _markdown_section("世界观", diagnosis.world)
+        + "\n\n"
+        + _markdown_section("时间线", diagnosis.timeline)
+        + "\n\n"
+        + _markdown_section("伏笔", diagnosis.foreshadowing),
         _markdown_section("优先修改项", result.revision_priorities),
     ])

@@ -182,12 +182,11 @@ This profile is injected into major generation, discussion, review, and analysis
 
 The in-app creative task wizard can create this profile from plain Chinese task choices such as what to write, target length, output goal, reference strength, conflict policy, and notes.
 
-The in-app `动态生成` page now provides a first executable dynamic path:
+The in-app `快速生成` (quick generation) page is designed for testing and experimentation:
 
-- direct prose generation
-- short-form structure plus prose
-- chapter plan plus prose
-- lightweight flows for short stories, side stories, continuations, prequels, transmigration/AU stories, completion pieces, and scene fragments
+- Works with just a prompt — no creative profile required
+- Optional advanced configuration for fine control
+- Suitable for side stories, continuations, prequels, crossovers, fragments, and other lightweight tasks
 
 Full automatic orchestration for long-form volume/arc/chapter pipelines is still planned.
 

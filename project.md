@@ -65,7 +65,9 @@ Current practical status:
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Creative task wizard for creating project creative profiles from plain Chinese task choices
-* First dynamic generation entry that can execute direct prose, short-form structure + prose, or chapter-plan + prose based on the creative profile
+* First dynamic generation entry replaced by lightweight quick-generation playground supporting prompt-only or fully-configured execution for testing and experimentation
+* Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and memory-update chaining
+* Content generation chained pipeline: write → review → memory update, plus reset-based full pipeline from requirement
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 * Confirmed structured knowledge persisted under project `knowledge/` storage and indexed for retrieval
 * Pending structured-knowledge review queue before extracted items become official project knowledge
@@ -84,9 +86,9 @@ Current practical status:
 * Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, SiliconFlow) for quick endpoint/model fill
 * Connection testing for model profiles before saving
 * Local launcher and portable-build scripts for desktop-style localhost packaging
-* Grouped workspace navigation in the sidebar: workbench pages stay focused on overview/config/resources, while story creative configuration lives in planning and unlocks the relevant planning pages for the current story
+* Grouped workspace navigation in the sidebar: 工作台 (overview/config/resources), 规划 (profile-aware planning), 写作 (quick gen, content generation, evaluation), 资料 (settings, ingestion, retrieval center)
 * Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
-* Project overview page upgraded into a quick-action home screen for generation, pipeline, ingestion, and resource browsing
+* Project overview page upgraded into a quick-action home screen for quick generation, content generation, ingestion, and resource browsing
 * Story spaces support：one project can hold multiple independent stories, each with its own creative profile, memory overrides, outlines, chapters, reviews, evaluations, analysis reports, pipeline runs, and chapter summaries, while sharing project-level base memory, structured knowledge, source materials, rules, and retrieval index
 * Automatic migration of existing single-story projects into the default story space on first access, with the active story persisted in `stories/index.json`
 * Creative-profile discussion assist for clarifying ambiguous task intent before saving recommended structured project settings
@@ -110,7 +112,7 @@ In short: the project already has a working V1 product, substantial V2 groundwor
 Recent direction update:
 
 * NovelForge is now moving toward configurable fan-fiction generation rather than one fixed long-form pipeline.
-* The first implementation step is a creative profile, a lightweight dynamic generation entry, and structured knowledge ingestion.
+* The first implementation step includes a creative profile, a quick-generation playground, profile-aware content generation with inline pipeline, and structured knowledge ingestion.
 * True multi-agent ingestion is still deferred; the current implementation uses a modular extractor workflow that can later be wrapped as specialist agents.
 
 ---
@@ -318,7 +320,7 @@ UI features:
 * Core story state editing via structured form (title, genre, world, characters, etc.)
   with raw JSON fallback in collapsible section
 * Word count configuration per chapter
-* Pipeline page shows per-step success/error status with partial results
+* Content generation page supports chained pipelines (write → review → memory update) with per-step status and partial results, plus a full requirement-based pipeline (outline → write → review → memory update)
 * One-click memory compaction button
 * Rule center for managing global/project prompt constraints
 * Quick requirement capture with selectable target scope
@@ -332,16 +334,16 @@ UI features:
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Grouped sidebar navigation that separates workspace pages into workbench / planning / writing / resources areas
 * Planning navigation is profile-aware: a new story initially shows only creative configuration, then expands to long-form or short-form planning pages based on target length and workflow depth
-* Project overview home screen with quick actions for dynamic generation, chapter pipeline, source ingestion, and resource browsing
+* Project overview home screen with quick actions for quick generation, content generation, source ingestion, and resource browsing
 * Project-aware page header that surfaces project title, genre, canon mode, and current page description
 * Save buttons in structured story-state forms stay disabled until the user actually changes form content
-* Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
+* Content generation page can inspect persisted run snapshots, transition logs, and structured workflow errors from pipeline executions
 * Resource browser with left-side file navigation, right-side editor/detail panel, and lightweight volume / arc filtering
 * Dedicated volume outline page for editing per-volume title / summary / status / outline body
 * Dedicated arc outline page for editing per-arc parent volume, title, summary, status, estimated chapter count, target word count range, outline body, and linked chapter visibility
 * Chapter discussion and chapter-outline generation now both consume the currently selected volume / arc planning context so discussion and formal generation stay aligned
 * Planning pages can now approve and clear persisted discussion artifacts, and chapter-outline generation can optionally require approved chapter / volume / arc planning discussions
-* Chapter writing page now includes lightweight writing-guidance controls instead of a heavier second discussion layer
+* Content generation page now includes lightweight writing-guidance controls (tone, pacing, dialogue density, focus, ending strength, extra requirements) and profile-aware mode switching between chapter-based and free-form writing
 * Dedicated model configuration page for saving multiple endpoint/key/model profiles and switching the active runtime profile from the UI
 * Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, etc.) for one-click endpoint/model fill
 * In-app connection testing for model profiles before saving
@@ -506,6 +508,28 @@ Responsibilities:
 * Counting total written chapters
 
 No LLM logic should exist here.
+
+---
+
+## merge.py
+
+Settings merge engine.
+
+Responsibilities:
+
+* Compare two settings dictionaries and build a merge plan listing per-field conflicts
+* Resolve conflicts with per-field granularity (source / target / merged)
+* Support scalar and list field types with dedup-aware merge logic
+
+Design purpose:
+
+* Provide a reusable conflict-detection layer for cross-scope settings copy operations (story ↔ project, story ↔ story)
+* Keep merge logic separate from UI and persistence layers
+
+Current merge usage:
+
+* `build_merge_plan()` is called from `memory.py` and `app.py` for settings copy/import workflows
+* The merge plan is rendered as an interactive preview in the settings UI, allowing per-field resolution before applying
 
 ---
 

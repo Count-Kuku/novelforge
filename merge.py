@@ -72,55 +72,6 @@ def _list_item_key(item: Any) -> str:
     return str(item).strip()
 
 
-def apply_merge_plan(source: dict, target: dict, plan: list[MergeOption]) -> dict:
-    result = {}
-    merged = _apply_plan_to_dict(source, target, plan)
-    result.update(merged)
-    return result
-
-
-def _apply_plan_to_dict(source: dict, target: dict, plan: list[MergeOption]) -> dict:
-    result = dict(target)
-    for option in plan:
-        if option.resolution_choice is None and not option.conflict:
-            continue
-        keys = option.path.split(".")
-        if len(keys) == 1:
-            result[option.path] = option.resolution
-        else:
-            d = result
-            for k in keys[:-1]:
-                if k not in d or not isinstance(d.get(k), dict):
-                    d[k] = {}
-                d = d[k]
-            d[keys[-1]] = option.resolution
-    return result
-
-
-def auto_resolve(plan: list[MergeOption], policy: str) -> list[MergeOption]:
-    for option in plan:
-        if not option.conflict:
-            continue
-        if policy == "优先来源":
-            option.resolution = option.source_value
-            option.resolution_choice = "source"
-        elif policy == "优先目标":
-            option.resolution = option.target_value
-            option.resolution_choice = "target"
-        elif policy == "合并列表":
-            if option.field_type == "list":
-                merged = _merge_dedup(option.source_value, option.target_value)
-                option.resolution = merged
-                option.resolution_choice = "merged"
-            else:
-                option.resolution = option.source_value
-                option.resolution_choice = "source"
-        else:
-            option.resolution = option.source_value
-            option.resolution_choice = "source"
-    return plan
-
-
 def _merge_dedup(a: list, b: list) -> list:
     seen: set[str] = set()
     result: list = []

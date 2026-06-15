@@ -12,6 +12,7 @@ from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, ConflictResoluti
 
 BASE_DIR = Path("data/projects")
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
+GLOBAL_RULE_CONFLICT_RESOLUTIONS_PATH = Path("data/global_rule_conflict_resolutions.json")
 ENV_PATH = Path(".env")
 LLM_PROFILES_PATH = Path("data/llm_profiles.json")
 RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "memory_update"]
@@ -525,6 +526,14 @@ def _story_rules_overrides_path(project_name: str, story_id: str) -> Path:
     return story_path(project_name, story_id) / "rules_overrides.json"
 
 
+def _project_rule_conflict_resolutions_path(project_name: str) -> Path:
+    return project_path(project_name) / "rule_conflict_resolutions.json"
+
+
+def _story_rule_conflict_resolutions_path(project_name: str, story_id: str) -> Path:
+    return story_path(project_name, story_id) / "rule_conflict_resolutions.json"
+
+
 def load_stories_index(project_name: str) -> dict:
     path = stories_index_path(project_name)
     if not path.exists():
@@ -598,7 +607,7 @@ def create_story(project_name: str, name: str, description: str = "") -> dict:
 
 
 def copy_story_settings(project_name: str, source_story_id: str, target_story_id: str):
-    """将源故事的创作配置、创作配置讨论工件和记忆覆盖复制到目标故事。"""
+    """将源故事的创作配置、创作配置讨论工件、记忆覆盖和生成规则复制到目标故事。"""
     from shutil import copy2
 
     src_profile = creative_profile_path(project_name, source_story_id)
@@ -619,11 +628,23 @@ def copy_story_settings(project_name: str, source_story_id: str, target_story_id
         dst_overrides.parent.mkdir(parents=True, exist_ok=True)
         copy2(str(src_overrides), str(dst_overrides))
 
+    src_rules = _story_rules_overrides_path(project_name, source_story_id)
+    if src_rules.exists():
+        dst_rules = _story_rules_overrides_path(project_name, target_story_id)
+        dst_rules.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(src_rules), str(dst_rules))
+
+    src_rule_conflicts = _story_rule_conflict_resolutions_path(project_name, source_story_id)
+    if src_rule_conflicts.exists():
+        dst_rule_conflicts = _story_rule_conflict_resolutions_path(project_name, target_story_id)
+        dst_rule_conflicts.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(src_rule_conflicts), str(dst_rule_conflicts))
+
     sync_project_retrieval_assets(project_name)
 
 
 def merge_story_to_project_memory(project_name: str, story_id: str, field_resolutions: dict[str, Any] | None = None) -> dict:
-    from merge import build_merge_plan, apply_merge_plan
+    from merge import build_merge_plan
 
     base = load_memory(project_name)
     story = load_story_memory(project_name, story_id)
@@ -690,6 +711,153 @@ def merge_project_rules_to_story(project_name: str, story_id: str) -> dict:
     project_rules = load_project_rules(project_name)
     save_story_rules(project_name, story_id, project_rules)
     return project_rules
+
+
+def _merge_rules_dedup(target_rules: dict, source_rules: dict) -> dict:
+    from merge import _merge_dedup
+
+    merged = dict(target_rules)
+    for scope in RULE_SCOPES:
+        source_items = source_rules.get(scope, [])
+        if source_items:
+            existing = merged.get(scope, [])
+            merged[scope] = _merge_dedup(existing, source_items)
+    return normalize_rules(merged)
+
+
+def merge_project_rules_to_global(project_name: str) -> dict:
+    global_rules = load_global_rules()
+    project_rules = load_project_rules(project_name)
+    merged = _merge_rules_dedup(global_rules, project_rules)
+    save_global_rules(merged)
+    return merged
+
+
+def merge_story_rules_to_global(project_name: str, story_id: str) -> dict:
+    global_rules = load_global_rules()
+    story_rules = load_story_rules(project_name, story_id)
+    merged = _merge_rules_dedup(global_rules, story_rules)
+    save_global_rules(merged)
+    return merged
+
+
+def merge_global_rules_to_project(project_name: str) -> dict:
+    global_rules = load_global_rules()
+    project_rules = load_project_rules(project_name)
+    merged = _merge_rules_dedup(project_rules, global_rules)
+    save_project_rules(project_name, merged)
+    return merged
+
+
+def merge_global_rules_to_story(project_name: str, story_id: str) -> dict:
+    global_rules = load_global_rules()
+    story_rules = load_story_rules(project_name, story_id)
+    merged = _merge_rules_dedup(story_rules, global_rules)
+    save_story_rules(project_name, story_id, merged)
+    return merged
+
+
+def normalize_rule_conflict_resolutions(items: list | None, source: str = "") -> list[dict]:
+    normalized: list[dict] = []
+    if not isinstance(items, list):
+        return normalized
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        decision = str(item.get("decision", "") or "").strip()
+        if not decision:
+            continue
+        scope = str(item.get("scope", "all") or "all").strip()
+        if scope not in RULE_SCOPES:
+            scope = "all"
+        title = str(item.get("title", "") or "").strip() or decision[:40]
+        payload = {
+            "id": str(item.get("id", "") or uuid4()).strip(),
+            "scope": scope,
+            "title": title,
+            "decision": decision,
+            "updated_at": str(item.get("updated_at", "") or datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        }
+        if source:
+            payload["source"] = source
+        normalized.append(payload)
+    return normalized
+
+
+def _rule_conflict_resolution_path(project_name: str, layer: str, story_id: str = "default") -> Path:
+    if layer == "global":
+        return GLOBAL_RULE_CONFLICT_RESOLUTIONS_PATH
+    if layer == "story":
+        return _story_rule_conflict_resolutions_path(project_name, story_id)
+    return _project_rule_conflict_resolutions_path(project_name)
+
+
+def load_rule_conflict_resolutions(project_name: str, layer: str = "story", story_id: str = "default") -> list[dict]:
+    path = _rule_conflict_resolution_path(project_name, layer, story_id)
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return normalize_rule_conflict_resolutions(raw if isinstance(raw, list) else None)
+
+
+def save_rule_conflict_resolutions(project_name: str, layer: str, resolutions: list[dict], story_id: str = "default") -> list[dict]:
+    path = _rule_conflict_resolution_path(project_name, layer, story_id)
+    normalized = normalize_rule_conflict_resolutions(resolutions)
+    if not normalized:
+        if path.exists():
+            path.unlink()
+        return []
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def add_rule_conflict_resolution(
+    project_name: str,
+    layer: str,
+    scope: str,
+    title: str,
+    decision: str,
+    story_id: str = "default",
+) -> dict:
+    existing = load_rule_conflict_resolutions(project_name, layer, story_id)
+    normalized_items = normalize_rule_conflict_resolutions([{
+        "id": str(uuid4()),
+        "scope": scope,
+        "title": title,
+        "decision": decision,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }])
+    if not normalized_items:
+        raise ValueError("Conflict resolution decision cannot be empty.")
+    item = normalized_items[0]
+    existing.append(item)
+    save_rule_conflict_resolutions(project_name, layer, existing, story_id)
+    return item
+
+
+def delete_rule_conflict_resolution(project_name: str, layer: str, resolution_id: str, story_id: str = "default") -> bool:
+    existing = load_rule_conflict_resolutions(project_name, layer, story_id)
+    kept = [item for item in existing if item.get("id") != resolution_id]
+    if len(kept) == len(existing):
+        return False
+    save_rule_conflict_resolutions(project_name, layer, kept, story_id)
+    return True
+
+
+def load_effective_rule_conflict_resolutions(project_name: str, story_id: str, scope: str) -> list[dict]:
+    effective: list[dict] = []
+    for layer, source_label in [("global", "全局"), ("project", "项目"), ("story", "故事")]:
+        for item in load_rule_conflict_resolutions(project_name, layer, story_id):
+            item_scope = item.get("scope", "all")
+            if item_scope in {"all", scope}:
+                normalized = dict(item)
+                normalized["source"] = source_label
+                effective.append(normalized)
+    return effective
 
 
 def copy_story(project_name: str, source_story_id: str, new_name: str,
