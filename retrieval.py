@@ -36,10 +36,12 @@ from memory import (
     list_volumes,
     load_retrieval_manifest,
     load_retrieval_vectors,
+    list_stories,
     project_path,
     retrieval_sources_path,
     save_retrieval_manifest,
     save_retrieval_vectors,
+    story_path,
 )
 from schemas import RetrievalChunk, RetrievalDocument, RetrievalHit, RetrievalIndexManifest, RetrievalVectorStore
 
@@ -405,22 +407,22 @@ def _documents_from_knowledge(project_name: str) -> list[RetrievalDocument]:
     return documents
 
 
-def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
+def _documents_from_project_files(project_name: str, story_id: str = "default") -> list[RetrievalDocument]:
     documents: list[RetrievalDocument] = []
-    base_path = project_path(project_name)
+    base_path = story_path(project_name, story_id)
 
-    outline = load_outline(project_name)
-    creative_profile_discussion_artifact = load_creative_profile_discussion_artifact(project_name)
-    outline_discussion_artifact = load_outline_discussion_artifact(project_name)
+    outline = load_outline(project_name, story_id=story_id)
+    creative_profile_discussion_artifact = load_creative_profile_discussion_artifact(project_name, story_id=story_id)
+    outline_discussion_artifact = load_outline_discussion_artifact(project_name, story_id=story_id)
     doc = _make_document(
         project_name,
         "outline",
-        "outline",
-        "Project Outline",
+        f"{story_id}/outline",
+        f"[{story_id}] Project Outline",
         outline,
         path=str(base_path / "outline.md"),
-        tags=["outline"],
-        metadata={"authority": "project"},
+        tags=["outline", f"story:{story_id}"],
+        metadata={"authority": "project", "story_id": story_id},
     )
     if doc:
         documents.append(doc)
@@ -429,13 +431,14 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
     doc = _make_document(
         project_name,
         "creative_profile_discussion",
-        "creative_profile_discussion",
-        "Approved Creative Profile Discussion",
+        f"{story_id}/creative_profile_discussion",
+        f"[{story_id}] Approved Creative Profile Discussion",
         creative_profile_discussion,
         path=str(base_path / "creative_profile.discussion.json"),
-        tags=["creative_profile_discussion", "approved_discussion", "creative_profile"],
+        tags=["creative_profile_discussion", "approved_discussion", "creative_profile", f"story:{story_id}"],
         metadata={
             "authority": "project",
+            "story_id": story_id,
             "approval_ready": bool((creative_profile_discussion_artifact.get("discussion") or {}).get("approval_ready")),
             "recommended_profile": (creative_profile_discussion_artifact.get("discussion") or {}).get("recommended_profile", {}),
         },
@@ -447,8 +450,8 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
     doc = _make_document(
         project_name,
         "outline_discussion",
-        "outline_discussion",
-        "Approved Outline Discussion",
+        f"{story_id}/outline_discussion",
+        f"[{story_id}] Approved Outline Discussion",
         outline_discussion,
         path=str(base_path / "outline.discussion.json"),
         tags=["outline_discussion", "approved_discussion"],
@@ -460,11 +463,11 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
     if doc:
         documents.append(doc)
 
-    for volume in list_volumes(project_name):
+    for volume in list_volumes(project_name, story_id=story_id):
         volume_no = int(volume.get("volume_no", 0))
-        volume_outline = load_volume_outline(project_name, volume_no)
-        volume_meta = load_volume_metadata(project_name, volume_no)
-        volume_discussion_artifact = load_volume_discussion_artifact(project_name, volume_no)
+        volume_outline = load_volume_outline(project_name, volume_no, story_id=story_id)
+        volume_meta = load_volume_metadata(project_name, volume_no, story_id=story_id)
+        volume_discussion_artifact = load_volume_discussion_artifact(project_name, volume_no, story_id=story_id)
         doc = _make_document(
             project_name,
             "volume_outline",
@@ -501,11 +504,11 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         if doc:
             documents.append(doc)
 
-    for arc in list_arcs(project_name):
+    for arc in list_arcs(project_name, story_id=story_id):
         arc_no = int(arc.get("arc_no", 0))
-        arc_outline = load_arc_outline(project_name, arc_no)
-        arc_meta = load_arc_metadata(project_name, arc_no)
-        arc_discussion_artifact = load_arc_discussion_artifact(project_name, arc_no)
+        arc_outline = load_arc_outline(project_name, arc_no, story_id=story_id)
+        arc_meta = load_arc_metadata(project_name, arc_no, story_id=story_id)
+        arc_discussion_artifact = load_arc_discussion_artifact(project_name, arc_no, story_id=story_id)
         doc = _make_document(
             project_name,
             "arc_outline",
@@ -546,7 +549,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         if doc:
             documents.append(doc)
 
-        arc_chapter_plan = load_arc_chapter_plan(project_name, arc_no)
+        arc_chapter_plan = load_arc_chapter_plan(project_name, arc_no, story_id=story_id)
         plan_markdown = arc_chapter_plan.get("report_markdown", "")
         doc = _make_document(
             project_name,
@@ -576,13 +579,13 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         for file in sorted(chapter_outline_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
             chapter_no = int(match.group(1)) if match else None
-            chapter_meta = load_chapter_outline_metadata(project_name, chapter_no) if chapter_no is not None else {}
+            chapter_meta = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id) if chapter_no is not None else {}
             doc = _make_document(
                 project_name,
                 "chapter_outline",
                 file.stem,
                 f"Chapter {chapter_no:03d} Outline" if chapter_no is not None else file.stem,
-                load_chapter_outline(project_name, chapter_no) if chapter_no is not None else file.read_text(encoding="utf-8"),
+                load_chapter_outline(project_name, chapter_no, story_id=story_id) if chapter_no is not None else file.read_text(encoding="utf-8"),
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["chapter_outline"],
@@ -596,8 +599,8 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 documents.append(doc)
 
         for chapter_no in sorted(chapter_discussion_numbers):
-            chapter_meta = load_chapter_outline_metadata(project_name, chapter_no)
-            chapter_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no)
+            chapter_meta = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
+            chapter_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id)
             chapter_discussion = chapter_discussion_artifact.get("report_markdown", "")
             doc = _make_document(
                 project_name,
@@ -624,7 +627,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         for file in sorted(chapters_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
             chapter_no = int(match.group(1)) if match else None
-            content = load_chapter(project_name, chapter_no) if chapter_no is not None else file.read_text(encoding="utf-8")
+            content = load_chapter(project_name, chapter_no, story_id=story_id) if chapter_no is not None else file.read_text(encoding="utf-8")
             doc = _make_document(
                 project_name,
                 "chapter_content",
@@ -646,7 +649,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
             if not match:
                 continue
             chapter_no = int(match.group(1))
-            review_json = load_review_json(project_name, chapter_no)
+            review_json = load_review_json(project_name, chapter_no, story_id=story_id)
             if not review_json:
                 continue
             summary_doc = _make_document(
@@ -702,7 +705,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         for file in sorted(reviews_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
             chapter_no = int(match.group(1)) if match else None
-            content = load_review(project_name, chapter_no) if chapter_no is not None else file.read_text(encoding="utf-8")
+            content = load_review(project_name, chapter_no, story_id=story_id) if chapter_no is not None else file.read_text(encoding="utf-8")
             doc = _make_document(
                 project_name,
                 "review_markdown",
@@ -723,7 +726,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
             match = re.search(r"(.+)_chapter_(\d+)\.md$", file.name)
             analysis_type = match.group(1) if match else file.stem
             chapter_no = int(match.group(2)) if match else None
-            content = load_analysis_report(project_name, analysis_type, chapter_no) if chapter_no is not None else file.read_text(encoding="utf-8")
+            content = load_analysis_report(project_name, analysis_type, chapter_no, story_id=story_id) if chapter_no is not None else file.read_text(encoding="utf-8")
             for section_title, section_body in _split_markdown_sections(content):
                 identifier = f"{analysis_type}_{chapter_no or 'na'}_{section_title or 'body'}"
                 doc = _make_document(
@@ -745,7 +748,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         for file in sorted(evaluation_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
             chapter_no = int(match.group(1)) if match else None
-            content = load_evaluation_report(project_name, chapter_no) if chapter_no is not None else file.read_text(encoding="utf-8")
+            content = load_evaluation_report(project_name, chapter_no, story_id=story_id) if chapter_no is not None else file.read_text(encoding="utf-8")
             doc = _make_document(
                 project_name,
                 "evaluation_chapter",
@@ -757,7 +760,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
                 tags=["evaluation"],
                 metadata={
                     "authority": "project",
-                    "evaluation": load_evaluation_json(project_name, chapter_no) if chapter_no is not None else {},
+                    "evaluation": load_evaluation_json(project_name, chapter_no, story_id=story_id) if chapter_no is not None else {},
                 },
             )
             if doc:
@@ -837,9 +840,14 @@ def _documents_from_external_sources(project_name: str) -> list[RetrievalDocumen
 def gather_retrieval_documents(project_name: str) -> list[RetrievalDocument]:
     documents = []
     documents.extend(_documents_from_memory(project_name))
-    documents.extend(_documents_from_project_files(project_name))
     documents.extend(_documents_from_knowledge(project_name))
     documents.extend(_documents_from_external_sources(project_name))
+    for story in list_stories(project_name):
+        story_id = story.get("story_id", "default")
+        try:
+            documents.extend(_documents_from_project_files(project_name, story_id))
+        except Exception:
+            pass
     return documents
 
 

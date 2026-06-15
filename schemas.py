@@ -257,6 +257,20 @@ class CreativeProfile(NovelForgeSchema):
         return self
 
 
+class StoryMeta(NovelForgeSchema):
+    story_id: str
+    name: str = ""
+    description: str = ""
+    status: Literal["active", "archived"] = "active"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class StoriesIndex(NovelForgeSchema):
+    stories: list[StoryMeta] = Field(default_factory=list)
+    active_story_id: str = "default"
+
+
 class KnowledgeEvidence(NovelForgeSchema):
     source_title: str = ""
     quote: str = ""

@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from dotenv import dotenv_values
 
-from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, ConflictResolution, CreativeProfile, VolumeOutlineMetadata
+from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, ConflictResolution, CreativeProfile, StoryMeta, StoriesIndex, VolumeOutlineMetadata
 
 BASE_DIR = Path("data/projects")
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
@@ -417,15 +417,15 @@ def save_memory(project_name: str, memory: dict):
     sync_project_retrieval_assets(project_name)
 
 
-def creative_profile_path(project_name: str) -> Path:
-    return project_path(project_name) / "creative_profile.json"
+def creative_profile_path(project_name: str, story_id: str = "default") -> Path:
+    return _story_path_from_project_path(project_name, story_id, "creative_profile.json")
 
 
-def load_creative_profile(project_name: str) -> dict:
-    path = creative_profile_path(project_name)
+def load_creative_profile(project_name: str, story_id: str = "default") -> dict:
+    path = creative_profile_path(project_name, story_id)
     if not path.exists():
         profile = CreativeProfile().model_dump()
-        save_creative_profile(project_name, profile)
+        save_creative_profile(project_name, profile, story_id)
         return profile
 
     try:
@@ -434,23 +434,25 @@ def load_creative_profile(project_name: str) -> dict:
         raw = {}
     profile = CreativeProfile.model_validate(raw).model_dump()
     if profile != raw:
-        save_creative_profile(project_name, profile)
+        save_creative_profile(project_name, profile, story_id)
     return profile
 
 
-def save_creative_profile(project_name: str, profile: dict) -> dict:
+def save_creative_profile(project_name: str, profile: dict, story_id: str = "default") -> dict:
     normalized = CreativeProfile.model_validate(profile or {}).model_dump()
-    path = creative_profile_path(project_name)
+    path = creative_profile_path(project_name, story_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
     return normalized
 
 
-def _creative_profile_discussion_path(project_name: str) -> Path:
-    return project_path(project_name) / "creative_profile.discussion.json"
+def _creative_profile_discussion_path(project_name: str, story_id: str = "default") -> Path:
+    return _story_path_from_project_path(project_name, story_id, "creative_profile.discussion.json")
 
 
-def save_creative_profile_discussion_artifact(project_name: str, discussion: dict, report_markdown: str):
-    path = _creative_profile_discussion_path(project_name)
+def save_creative_profile_discussion_artifact(project_name: str, discussion: dict, report_markdown: str, story_id: str = "default"):
+    path = _creative_profile_discussion_path(project_name, story_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
@@ -459,8 +461,8 @@ def save_creative_profile_discussion_artifact(project_name: str, discussion: dic
     sync_project_retrieval_assets(project_name)
 
 
-def load_creative_profile_discussion_artifact(project_name: str) -> dict:
-    path = _creative_profile_discussion_path(project_name)
+def load_creative_profile_discussion_artifact(project_name: str, story_id: str = "default") -> dict:
+    path = _creative_profile_discussion_path(project_name, story_id)
     if not path.exists():
         return {}
     try:
@@ -476,13 +478,269 @@ def load_creative_profile_discussion_artifact(project_name: str) -> dict:
     }
 
 
-def delete_creative_profile_discussion_artifact(project_name: str) -> bool:
-    path = _creative_profile_discussion_path(project_name)
+def delete_creative_profile_discussion_artifact(project_name: str, story_id: str = "default") -> bool:
+    path = _creative_profile_discussion_path(project_name, story_id)
     if not path.exists():
         return False
     path.unlink()
     sync_project_retrieval_assets(project_name)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Story spaces
+# ---------------------------------------------------------------------------
+
+def _story_id_slug(name: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff_-]", "", str(name or "untitled").strip())
+    return slug[:48] or "untitled"
+
+
+def stories_index_path(project_name: str) -> Path:
+    return project_path(project_name) / "stories" / "index.json"
+
+
+def story_path(project_name: str, story_id: str) -> Path:
+    return project_path(project_name) / "stories" / story_id
+
+
+def _story_chapter_summaries_path(project_name: str, story_id: str) -> Path:
+    return story_path(project_name, story_id) / "chapter_summaries.json"
+
+
+def _story_memory_overrides_path(project_name: str, story_id: str) -> Path:
+    return story_path(project_name, story_id) / "memory_overrides.json"
+
+
+def load_stories_index(project_name: str) -> dict:
+    path = stories_index_path(project_name)
+    if not path.exists():
+        default_story = StoryMeta(
+            story_id="default",
+            name="默认故事",
+            description="",
+            status="active",
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        idx = StoriesIndex(stories=[default_story], active_story_id="default")
+        save_stories_index(project_name, idx.model_dump())
+        return idx.model_dump()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return StoriesIndex.model_validate(raw).model_dump()
+    except Exception:
+        return StoriesIndex().model_dump()
+
+
+def save_stories_index(project_name: str, index: dict):
+    normalized = StoriesIndex.model_validate(index or {}).model_dump()
+    path = stories_index_path(project_name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_active_story_id(project_name: str) -> str:
+    index = load_stories_index(project_name)
+    return str(index.get("active_story_id", "default") or "default")
+
+
+def set_active_story(project_name: str, story_id: str):
+    index = load_stories_index(project_name)
+    story_ids = {s["story_id"] for s in index.get("stories", [])}
+    if story_id not in story_ids:
+        raise ValueError(f"故事不存在：{story_id}")
+    index["active_story_id"] = story_id
+    save_stories_index(project_name, index)
+
+
+def create_story(project_name: str, name: str, description: str = "") -> dict:
+    index = load_stories_index(project_name)
+    story_id = _story_id_slug(name)
+    existing_ids = {s["story_id"] for s in index.get("stories", [])}
+    if story_id in existing_ids:
+        counter = 2
+        while f"{story_id}_{counter}" in existing_ids:
+            counter += 1
+        story_id = f"{story_id}_{counter}"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    meta = StoryMeta(
+        story_id=story_id,
+        name=name,
+        description=description,
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    stories = index.get("stories", [])
+    stories.append(meta.model_dump())
+    index["stories"] = stories
+    if not index.get("active_story_id") or index["active_story_id"] == "default":
+        index["active_story_id"] = story_id
+    save_stories_index(project_name, index)
+    sp = story_path(project_name, story_id)
+    sp.mkdir(parents=True, exist_ok=True)
+    return meta.model_dump()
+
+
+def delete_story(project_name: str, story_id: str) -> bool:
+    index = load_stories_index(project_name)
+    before = len(index.get("stories", []))
+    index["stories"] = [s for s in index.get("stories", []) if s["story_id"] != story_id]
+    if len(index["stories"]) == before:
+        return False
+    if index.get("active_story_id") == story_id:
+        if index["stories"]:
+            index["active_story_id"] = index["stories"][0]["story_id"]
+        else:
+            default = StoryMeta(
+                story_id="default",
+                name="默认故事",
+                description="",
+                status="active",
+                created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            )
+            index["stories"].append(default.model_dump())
+            index["active_story_id"] = "default"
+    save_stories_index(project_name, index)
+    sp = story_path(project_name, story_id)
+    if sp.exists():
+        import shutil
+        shutil.rmtree(str(sp))
+    sync_project_retrieval_assets(project_name)
+    return True
+
+
+def list_stories(project_name: str) -> list[dict]:
+    index = load_stories_index(project_name)
+    return list(index.get("stories", []))
+
+
+def load_story_memory(project_name: str, story_id: str) -> dict:
+    base = load_memory(project_name)
+    overrides_path = _story_memory_overrides_path(project_name, story_id)
+    if not overrides_path.exists():
+        return base
+    try:
+        overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
+    except Exception:
+        return base
+    if not isinstance(overrides, dict):
+        return base
+    merged = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, list) and isinstance(base.get(key), list):
+            merged[key] = base[key] + value
+        elif value is not None:
+            merged[key] = value
+    return merged
+
+
+def save_story_memory(project_name: str, story_id: str, memory: dict):
+    if story_id == "default":
+        save_memory(project_name, memory)
+        return
+
+    base = load_memory(project_name)
+    overrides: dict = {}
+    for key, value in (memory or {}).items():
+        base_value = base.get(key)
+        if value == base_value:
+            continue
+        if isinstance(value, list) and isinstance(base_value, list) and value[:len(base_value)] == base_value:
+            extra_items = value[len(base_value):]
+            if extra_items:
+                overrides[key] = extra_items
+        else:
+            overrides[key] = value
+
+    path = _story_memory_overrides_path(project_name, story_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(overrides, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_story_chapter_summaries(project_name: str, story_id: str) -> list[dict]:
+    path = _story_chapter_summaries_path(project_name, story_id)
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return list(raw) if isinstance(raw, list) else []
+    except Exception:
+        return []
+
+
+def save_story_chapter_summaries(project_name: str, story_id: str, summaries: list[dict]):
+    path = _story_chapter_summaries_path(project_name, story_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(list(summaries or []), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def migrate_project_to_stories(project_name: str) -> bool:
+    marker = project_path(project_name) / ".migrated"
+    if marker.exists():
+        return False
+    sp = story_path(project_name, "default")
+    sp.mkdir(parents=True, exist_ok=True)
+
+    migratable = [
+        ("outline.md", "outline.md"),
+        ("outline.discussion.json", "outline.discussion.json"),
+        ("creative_profile.json", "creative_profile.json"),
+        ("creative_profile.discussion.json", "creative_profile.discussion.json"),
+        ("volumes", "volumes"),
+        ("arcs", "arcs"),
+        ("chapter_outlines", "chapter_outlines"),
+        ("chapters", "chapters"),
+        ("reviews", "reviews"),
+        ("analysis", "analysis"),
+        ("evaluation", "evaluation"),
+        ("runs", "runs"),
+    ]
+    moved_any = False
+    for src_name, dst_name in migratable:
+        src = project_path(project_name) / src_name
+        dst = sp / dst_name
+        if src.exists():
+            src.rename(dst)
+            moved_any = True
+
+    conflict_src = project_path(project_name) / "retrieval" / "conflict_resolutions.json"
+    conflict_dst = sp / "retrieval" / "conflict_resolutions.json"
+    if conflict_src.exists():
+        conflict_dst.parent.mkdir(parents=True, exist_ok=True)
+        conflict_src.rename(conflict_dst)
+
+    summaries = load_memory(project_name).get("chapter_summaries", [])
+    if summaries:
+        save_story_chapter_summaries(project_name, "default", list(summaries))
+
+    memory = load_memory(project_name)
+    if "chapter_summaries" in memory:
+        memory["chapter_summaries"] = []
+        save_memory(project_name, memory)
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    default_meta = StoryMeta(
+        story_id="default",
+        name="默认故事",
+        description="",
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+    idx = StoriesIndex(stories=[default_meta], active_story_id="default")
+    save_stories_index(project_name, idx.model_dump())
+
+    marker.write_text("")
+    sync_project_retrieval_assets(project_name)
+    return moved_any
+
+
+def _story_path_from_project_path(project_name: str, story_id: str, *parts: str) -> Path:
+    return story_path(project_name, story_id).joinpath(*parts)
 
 
 def knowledge_dir_path(project_name: str) -> Path:
@@ -714,25 +972,27 @@ def save_project_rules(project_name: str, rules: dict):
     )
 
 
-def save_outline(project_name: str, outline: str):
-    path = project_path(project_name) / "outline.md"
+def save_outline(project_name: str, outline: str, story_id: str = "default"):
+    path = _story_path_from_project_path(project_name, story_id, "outline.md")
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(outline, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def load_outline(project_name: str) -> str:
-    path = project_path(project_name) / "outline.md"
+def load_outline(project_name: str, story_id: str = "default") -> str:
+    path = _story_path_from_project_path(project_name, story_id, "outline.md")
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
 
 
-def _outline_discussion_path(project_name: str) -> Path:
-    return project_path(project_name) / "outline.discussion.json"
+def _outline_discussion_path(project_name: str, story_id: str = "default") -> Path:
+    return _story_path_from_project_path(project_name, story_id, "outline.discussion.json")
 
 
-def save_outline_discussion_artifact(project_name: str, discussion: dict, report_markdown: str):
-    path = _outline_discussion_path(project_name)
+def save_outline_discussion_artifact(project_name: str, discussion: dict, report_markdown: str, story_id: str = "default"):
+    path = _outline_discussion_path(project_name, story_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
@@ -741,8 +1001,8 @@ def save_outline_discussion_artifact(project_name: str, discussion: dict, report
     sync_project_retrieval_assets(project_name)
 
 
-def load_outline_discussion_artifact(project_name: str) -> dict:
-    path = _outline_discussion_path(project_name)
+def load_outline_discussion_artifact(project_name: str, story_id: str = "default") -> dict:
+    path = _outline_discussion_path(project_name, story_id)
     if not path.exists():
         return {}
     try:
@@ -758,8 +1018,8 @@ def load_outline_discussion_artifact(project_name: str) -> dict:
     }
 
 
-def delete_outline_discussion_artifact(project_name: str) -> bool:
-    path = _outline_discussion_path(project_name)
+def delete_outline_discussion_artifact(project_name: str, story_id: str = "default") -> bool:
+    path = _outline_discussion_path(project_name, story_id)
     if not path.exists():
         return False
     path.unlink()
@@ -767,81 +1027,81 @@ def delete_outline_discussion_artifact(project_name: str) -> bool:
     return True
 
 
-def volumes_path(project_name: str) -> Path:
-    path = project_path(project_name) / "volumes"
-    path.mkdir(exist_ok=True)
+def volumes_path(project_name: str, story_id: str = "default") -> Path:
+    path = _story_path_from_project_path(project_name, story_id, "volumes")
+    path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _volume_markdown_path(project_name: str, volume_no: int) -> Path:
-    return volumes_path(project_name) / f"volume_{volume_no:03d}.md"
+def _volume_markdown_path(project_name: str, volume_no: int, story_id: str = "default") -> Path:
+    return volumes_path(project_name, story_id) / f"volume_{volume_no:03d}.md"
 
 
-def _volume_meta_path(project_name: str, volume_no: int) -> Path:
-    return volumes_path(project_name) / f"volume_{volume_no:03d}.meta.json"
+def _volume_meta_path(project_name: str, volume_no: int, story_id: str = "default") -> Path:
+    return volumes_path(project_name, story_id) / f"volume_{volume_no:03d}.meta.json"
 
 
-def _volume_discussion_path(project_name: str, volume_no: int) -> Path:
-    return volumes_path(project_name) / f"volume_{volume_no:03d}.discussion.json"
+def _volume_discussion_path(project_name: str, volume_no: int, story_id: str = "default") -> Path:
+    return volumes_path(project_name, story_id) / f"volume_{volume_no:03d}.discussion.json"
 
 
-def arcs_path(project_name: str) -> Path:
-    path = project_path(project_name) / "arcs"
-    path.mkdir(exist_ok=True)
+def arcs_path(project_name: str, story_id: str = "default") -> Path:
+    path = _story_path_from_project_path(project_name, story_id, "arcs")
+    path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def _arc_markdown_path(project_name: str, arc_no: int) -> Path:
-    return arcs_path(project_name) / f"arc_{arc_no:03d}.md"
+def _arc_markdown_path(project_name: str, arc_no: int, story_id: str = "default") -> Path:
+    return arcs_path(project_name, story_id) / f"arc_{arc_no:03d}.md"
 
 
-def _arc_meta_path(project_name: str, arc_no: int) -> Path:
-    return arcs_path(project_name) / f"arc_{arc_no:03d}.meta.json"
+def _arc_meta_path(project_name: str, arc_no: int, story_id: str = "default") -> Path:
+    return arcs_path(project_name, story_id) / f"arc_{arc_no:03d}.meta.json"
 
 
-def _arc_discussion_path(project_name: str, arc_no: int) -> Path:
-    return arcs_path(project_name) / f"arc_{arc_no:03d}.discussion.json"
+def _arc_discussion_path(project_name: str, arc_no: int, story_id: str = "default") -> Path:
+    return arcs_path(project_name, story_id) / f"arc_{arc_no:03d}.discussion.json"
 
 
-def _arc_chapter_plan_path(project_name: str, arc_no: int) -> Path:
-    return arcs_path(project_name) / f"arc_{arc_no:03d}.chapter_plan.json"
+def _arc_chapter_plan_path(project_name: str, arc_no: int, story_id: str = "default") -> Path:
+    return arcs_path(project_name, story_id) / f"arc_{arc_no:03d}.chapter_plan.json"
 
 
-def save_volume_outline(project_name: str, volume_no: int, outline: str):
-    file = _volume_markdown_path(project_name, volume_no)
+def save_volume_outline(project_name: str, volume_no: int, outline: str, story_id: str = "default"):
+    file = _volume_markdown_path(project_name, volume_no, story_id)
     file.write_text(outline, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def load_volume_outline(project_name: str, volume_no: int) -> str:
-    file = _volume_markdown_path(project_name, volume_no)
+def load_volume_outline(project_name: str, volume_no: int, story_id: str = "default") -> str:
+    file = _volume_markdown_path(project_name, volume_no, story_id)
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
 
 
-def save_volume_metadata(project_name: str, volume_no: int, metadata: dict):
-    current = load_volume_metadata(project_name, volume_no)
+def save_volume_metadata(project_name: str, volume_no: int, metadata: dict, story_id: str = "default"):
+    current = load_volume_metadata(project_name, volume_no, story_id)
     normalized = VolumeOutlineMetadata.model_validate({**current, **metadata, "volume_no": volume_no})
-    file = _volume_meta_path(project_name, volume_no)
+    file = _volume_meta_path(project_name, volume_no, story_id)
     file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def save_volume_discussion_artifact(project_name: str, volume_no: int, discussion: dict, report_markdown: str):
-    file = _volume_discussion_path(project_name, volume_no)
+def save_volume_discussion_artifact(project_name: str, volume_no: int, discussion: dict, report_markdown: str, story_id: str = "default"):
+    file = _volume_discussion_path(project_name, volume_no, story_id)
     payload = {
         "volume_no": volume_no,
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
     file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    save_volume_metadata(project_name, volume_no, {"has_approved_discussion": bool((discussion or {}).get("approval_ready"))})
+    save_volume_metadata(project_name, volume_no, {"has_approved_discussion": bool((discussion or {}).get("approval_ready"))}, story_id)
     sync_project_retrieval_assets(project_name)
 
 
-def load_volume_discussion_artifact(project_name: str, volume_no: int) -> dict:
-    file = _volume_discussion_path(project_name, volume_no)
+def load_volume_discussion_artifact(project_name: str, volume_no: int, story_id: str = "default") -> dict:
+    file = _volume_discussion_path(project_name, volume_no, story_id)
     if not file.exists():
         return {}
     try:
@@ -858,18 +1118,18 @@ def load_volume_discussion_artifact(project_name: str, volume_no: int) -> dict:
     }
 
 
-def delete_volume_discussion_artifact(project_name: str, volume_no: int) -> bool:
-    file = _volume_discussion_path(project_name, volume_no)
+def delete_volume_discussion_artifact(project_name: str, volume_no: int, story_id: str = "default") -> bool:
+    file = _volume_discussion_path(project_name, volume_no, story_id)
     if not file.exists():
         return False
     file.unlink()
-    save_volume_metadata(project_name, volume_no, {"has_approved_discussion": False})
+    save_volume_metadata(project_name, volume_no, {"has_approved_discussion": False}, story_id)
     sync_project_retrieval_assets(project_name)
     return True
 
 
-def load_volume_metadata(project_name: str, volume_no: int) -> dict:
-    file = _volume_meta_path(project_name, volume_no)
+def load_volume_metadata(project_name: str, volume_no: int, story_id: str = "default") -> dict:
+    file = _volume_meta_path(project_name, volume_no, story_id)
     fallback = VolumeOutlineMetadata(volume_no=volume_no).model_dump()
     if not file.exists():
         return fallback
@@ -879,8 +1139,8 @@ def load_volume_metadata(project_name: str, volume_no: int) -> dict:
         return fallback
 
 
-def list_volumes(project_name: str) -> list[dict]:
-    path = volumes_path(project_name)
+def list_volumes(project_name: str, story_id: str = "default") -> list[dict]:
+    path = volumes_path(project_name, story_id)
     volume_numbers: set[int] = set()
     for file in path.glob("volume_*.md"):
         try:
@@ -895,8 +1155,8 @@ def list_volumes(project_name: str) -> list[dict]:
 
     items = []
     for volume_no in sorted(volume_numbers):
-        metadata = load_volume_metadata(project_name, volume_no)
-        outline = load_volume_outline(project_name, volume_no)
+        metadata = load_volume_metadata(project_name, volume_no, story_id)
+        outline = load_volume_outline(project_name, volume_no, story_id)
         items.append({
             **metadata,
             "outline": outline,
@@ -905,11 +1165,11 @@ def list_volumes(project_name: str) -> list[dict]:
     return items
 
 
-def delete_volume(project_name: str, volume_no: int) -> bool:
+def delete_volume(project_name: str, volume_no: int, story_id: str = "default") -> bool:
     deleted = False
-    markdown_path = _volume_markdown_path(project_name, volume_no)
-    meta_path = _volume_meta_path(project_name, volume_no)
-    discussion_path = _volume_discussion_path(project_name, volume_no)
+    markdown_path = _volume_markdown_path(project_name, volume_no, story_id)
+    meta_path = _volume_meta_path(project_name, volume_no, story_id)
+    discussion_path = _volume_discussion_path(project_name, volume_no, story_id)
     if markdown_path.exists():
         markdown_path.unlink()
         deleted = True
@@ -920,7 +1180,7 @@ def delete_volume(project_name: str, volume_no: int) -> bool:
         discussion_path.unlink()
         deleted = True
     if deleted:
-        chapter_outline_dir = project_path(project_name) / "chapter_outlines"
+        chapter_outline_dir = _story_path_from_project_path(project_name, story_id, "chapter_outlines")
         if chapter_outline_dir.exists():
             for file in chapter_outline_dir.glob("chapter_*.meta.json"):
                 try:
@@ -939,41 +1199,41 @@ def delete_volume(project_name: str, volume_no: int) -> bool:
     return deleted
 
 
-def save_arc_outline(project_name: str, arc_no: int, outline: str):
-    file = _arc_markdown_path(project_name, arc_no)
+def save_arc_outline(project_name: str, arc_no: int, outline: str, story_id: str = "default"):
+    file = _arc_markdown_path(project_name, arc_no, story_id)
     file.write_text(outline, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def load_arc_outline(project_name: str, arc_no: int) -> str:
-    file = _arc_markdown_path(project_name, arc_no)
+def load_arc_outline(project_name: str, arc_no: int, story_id: str = "default") -> str:
+    file = _arc_markdown_path(project_name, arc_no, story_id)
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
 
 
-def save_arc_metadata(project_name: str, arc_no: int, metadata: dict):
-    current = load_arc_metadata(project_name, arc_no)
+def save_arc_metadata(project_name: str, arc_no: int, metadata: dict, story_id: str = "default"):
+    current = load_arc_metadata(project_name, arc_no, story_id)
     normalized = ArcOutlineMetadata.model_validate({**current, **metadata, "arc_no": arc_no})
-    file = _arc_meta_path(project_name, arc_no)
+    file = _arc_meta_path(project_name, arc_no, story_id)
     file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def save_arc_discussion_artifact(project_name: str, arc_no: int, discussion: dict, report_markdown: str):
-    file = _arc_discussion_path(project_name, arc_no)
+def save_arc_discussion_artifact(project_name: str, arc_no: int, discussion: dict, report_markdown: str, story_id: str = "default"):
+    file = _arc_discussion_path(project_name, arc_no, story_id)
     payload = {
         "arc_no": arc_no,
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
     file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    save_arc_metadata(project_name, arc_no, {"has_approved_discussion": bool((discussion or {}).get("approval_ready"))})
+    save_arc_metadata(project_name, arc_no, {"has_approved_discussion": bool((discussion or {}).get("approval_ready"))}, story_id)
     sync_project_retrieval_assets(project_name)
 
 
-def load_arc_discussion_artifact(project_name: str, arc_no: int) -> dict:
-    file = _arc_discussion_path(project_name, arc_no)
+def load_arc_discussion_artifact(project_name: str, arc_no: int, story_id: str = "default") -> dict:
+    file = _arc_discussion_path(project_name, arc_no, story_id)
     if not file.exists():
         return {}
     try:
@@ -990,18 +1250,18 @@ def load_arc_discussion_artifact(project_name: str, arc_no: int) -> dict:
     }
 
 
-def delete_arc_discussion_artifact(project_name: str, arc_no: int) -> bool:
-    file = _arc_discussion_path(project_name, arc_no)
+def delete_arc_discussion_artifact(project_name: str, arc_no: int, story_id: str = "default") -> bool:
+    file = _arc_discussion_path(project_name, arc_no, story_id)
     if not file.exists():
         return False
     file.unlink()
-    save_arc_metadata(project_name, arc_no, {"has_approved_discussion": False})
+    save_arc_metadata(project_name, arc_no, {"has_approved_discussion": False}, story_id)
     sync_project_retrieval_assets(project_name)
     return True
 
 
-def save_arc_chapter_plan(project_name: str, arc_no: int, plan: dict, report_markdown: str):
-    file = _arc_chapter_plan_path(project_name, arc_no)
+def save_arc_chapter_plan(project_name: str, arc_no: int, plan: dict, report_markdown: str, story_id: str = "default"):
+    file = _arc_chapter_plan_path(project_name, arc_no, story_id)
     payload = {
         "arc_no": arc_no,
         "plan": plan if isinstance(plan, dict) else {},
@@ -1011,8 +1271,8 @@ def save_arc_chapter_plan(project_name: str, arc_no: int, plan: dict, report_mar
     sync_project_retrieval_assets(project_name)
 
 
-def load_arc_chapter_plan(project_name: str, arc_no: int) -> dict:
-    file = _arc_chapter_plan_path(project_name, arc_no)
+def load_arc_chapter_plan(project_name: str, arc_no: int, story_id: str = "default") -> dict:
+    file = _arc_chapter_plan_path(project_name, arc_no, story_id)
     if not file.exists():
         return {}
     try:
@@ -1029,8 +1289,8 @@ def load_arc_chapter_plan(project_name: str, arc_no: int) -> dict:
     }
 
 
-def delete_arc_chapter_plan(project_name: str, arc_no: int) -> bool:
-    file = _arc_chapter_plan_path(project_name, arc_no)
+def delete_arc_chapter_plan(project_name: str, arc_no: int, story_id: str = "default") -> bool:
+    file = _arc_chapter_plan_path(project_name, arc_no, story_id)
     if not file.exists():
         return False
     file.unlink()
@@ -1038,8 +1298,8 @@ def delete_arc_chapter_plan(project_name: str, arc_no: int) -> bool:
     return True
 
 
-def load_arc_metadata(project_name: str, arc_no: int) -> dict:
-    file = _arc_meta_path(project_name, arc_no)
+def load_arc_metadata(project_name: str, arc_no: int, story_id: str = "default") -> dict:
+    file = _arc_meta_path(project_name, arc_no, story_id)
     fallback = ArcOutlineMetadata(arc_no=arc_no).model_dump()
     if not file.exists():
         return fallback
@@ -1049,8 +1309,8 @@ def load_arc_metadata(project_name: str, arc_no: int) -> dict:
         return fallback
 
 
-def list_arcs(project_name: str, volume_no: int | None = None) -> list[dict]:
-    path = arcs_path(project_name)
+def list_arcs(project_name: str, volume_no: int | None = None, story_id: str = "default") -> list[dict]:
+    path = arcs_path(project_name, story_id)
     arc_numbers: set[int] = set()
     for file in path.glob("arc_*.md"):
         try:
@@ -1065,10 +1325,10 @@ def list_arcs(project_name: str, volume_no: int | None = None) -> list[dict]:
 
     items = []
     for arc_no in sorted(arc_numbers):
-        metadata = load_arc_metadata(project_name, arc_no)
+        metadata = load_arc_metadata(project_name, arc_no, story_id)
         if volume_no is not None and metadata.get("volume_no") != volume_no:
             continue
-        outline = load_arc_outline(project_name, arc_no)
+        outline = load_arc_outline(project_name, arc_no, story_id)
         items.append({
             **metadata,
             "outline": outline,
@@ -1077,12 +1337,12 @@ def list_arcs(project_name: str, volume_no: int | None = None) -> list[dict]:
     return items
 
 
-def delete_arc(project_name: str, arc_no: int) -> bool:
+def delete_arc(project_name: str, arc_no: int, story_id: str = "default") -> bool:
     deleted = False
-    markdown_path = _arc_markdown_path(project_name, arc_no)
-    meta_path = _arc_meta_path(project_name, arc_no)
-    discussion_path = _arc_discussion_path(project_name, arc_no)
-    chapter_plan_path = _arc_chapter_plan_path(project_name, arc_no)
+    markdown_path = _arc_markdown_path(project_name, arc_no, story_id)
+    meta_path = _arc_meta_path(project_name, arc_no, story_id)
+    discussion_path = _arc_discussion_path(project_name, arc_no, story_id)
+    chapter_plan_path = _arc_chapter_plan_path(project_name, arc_no, story_id)
     if markdown_path.exists():
         markdown_path.unlink()
         deleted = True
@@ -1096,7 +1356,7 @@ def delete_arc(project_name: str, arc_no: int) -> bool:
         chapter_plan_path.unlink()
         deleted = True
     if deleted:
-        chapter_outline_dir = project_path(project_name) / "chapter_outlines"
+        chapter_outline_dir = _story_path_from_project_path(project_name, story_id, "chapter_outlines")
         if chapter_outline_dir.exists():
             for file in chapter_outline_dir.glob("chapter_*.meta.json"):
                 try:
@@ -1113,35 +1373,35 @@ def delete_arc(project_name: str, arc_no: int) -> bool:
     return deleted
 
 
-def _chapter_outline_meta_path(project_name: str, chapter_no: int) -> Path:
-    path = project_path(project_name) / "chapter_outlines"
-    path.mkdir(exist_ok=True)
+def _chapter_outline_meta_path(project_name: str, chapter_no: int, story_id: str = "default") -> Path:
+    path = _story_path_from_project_path(project_name, story_id, "chapter_outlines")
+    path.mkdir(parents=True, exist_ok=True)
     return path / f"chapter_{chapter_no:03d}.meta.json"
 
 
-def _chapter_discussion_path(project_name: str, chapter_no: int) -> Path:
-    path = project_path(project_name) / "chapter_outlines"
-    path.mkdir(exist_ok=True)
+def _chapter_discussion_path(project_name: str, chapter_no: int, story_id: str = "default") -> Path:
+    path = _story_path_from_project_path(project_name, story_id, "chapter_outlines")
+    path.mkdir(parents=True, exist_ok=True)
     return path / f"chapter_{chapter_no:03d}.discussion.json"
 
 
-def save_chapter_outline(project_name: str, chapter_no: int, outline: str):
-    path = project_path(project_name) / "chapter_outlines"
-    path.mkdir(exist_ok=True)
+def save_chapter_outline(project_name: str, chapter_no: int, outline: str, story_id: str = "default"):
+    path = _story_path_from_project_path(project_name, story_id, "chapter_outlines")
+    path.mkdir(parents=True, exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.md"
     file.write_text(outline, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def save_chapter_outline_metadata(project_name: str, chapter_no: int, metadata: dict):
+def save_chapter_outline_metadata(project_name: str, chapter_no: int, metadata: dict, story_id: str = "default"):
     normalized = ChapterOutlineMetadata.model_validate({**metadata, "chapter_no": chapter_no})
-    file = _chapter_outline_meta_path(project_name, chapter_no)
+    file = _chapter_outline_meta_path(project_name, chapter_no, story_id=story_id)
     file.write_text(json.dumps(normalized.model_dump(), ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def save_chapter_discussion_artifact(project_name: str, chapter_no: int, discussion: dict, report_markdown: str):
-    file = _chapter_discussion_path(project_name, chapter_no)
+def save_chapter_discussion_artifact(project_name: str, chapter_no: int, discussion: dict, report_markdown: str, story_id: str = "default"):
+    file = _chapter_discussion_path(project_name, chapter_no, story_id=story_id)
     payload = {
         "chapter_no": chapter_no,
         "discussion": discussion if isinstance(discussion, dict) else {},
@@ -1151,8 +1411,8 @@ def save_chapter_discussion_artifact(project_name: str, chapter_no: int, discuss
     sync_project_retrieval_assets(project_name)
 
 
-def load_chapter_discussion_artifact(project_name: str, chapter_no: int) -> dict:
-    file = _chapter_discussion_path(project_name, chapter_no)
+def load_chapter_discussion_artifact(project_name: str, chapter_no: int, story_id: str = "default") -> dict:
+    file = _chapter_discussion_path(project_name, chapter_no, story_id=story_id)
     if not file.exists():
         return {}
     try:
@@ -1169,8 +1429,8 @@ def load_chapter_discussion_artifact(project_name: str, chapter_no: int) -> dict
     }
 
 
-def delete_chapter_discussion_artifact(project_name: str, chapter_no: int) -> bool:
-    file = _chapter_discussion_path(project_name, chapter_no)
+def delete_chapter_discussion_artifact(project_name: str, chapter_no: int, story_id: str = "default") -> bool:
+    file = _chapter_discussion_path(project_name, chapter_no, story_id=story_id)
     if not file.exists():
         return False
     file.unlink()
@@ -1178,8 +1438,8 @@ def delete_chapter_discussion_artifact(project_name: str, chapter_no: int) -> bo
     return True
 
 
-def load_chapter_outline_metadata(project_name: str, chapter_no: int) -> dict:
-    file = _chapter_outline_meta_path(project_name, chapter_no)
+def load_chapter_outline_metadata(project_name: str, chapter_no: int, story_id: str = "default") -> dict:
+    file = _chapter_outline_meta_path(project_name, chapter_no, story_id=story_id)
     fallback = ChapterOutlineMetadata(chapter_no=chapter_no).model_dump()
     if not file.exists():
         return fallback
@@ -1189,38 +1449,38 @@ def load_chapter_outline_metadata(project_name: str, chapter_no: int) -> dict:
         return fallback
 
 
-def load_chapter_outline(project_name: str, chapter_no: int) -> str:
-    file = project_path(project_name) / "chapter_outlines" / f"chapter_{chapter_no:03d}.md"
+def load_chapter_outline(project_name: str, chapter_no: int, story_id: str = "default") -> str:
+    file = _story_path_from_project_path(project_name, story_id, "chapter_outlines") / f"chapter_{chapter_no:03d}.md"
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
 
 
-def save_chapter(project_name: str, chapter_no: int, content: str):
-    path = project_path(project_name) / "chapters"
-    path.mkdir(exist_ok=True)
+def save_chapter(project_name: str, chapter_no: int, content: str, story_id: str = "default"):
+    path = _story_path_from_project_path(project_name, story_id, "chapters")
+    path.mkdir(parents=True, exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.md"
     file.write_text(content, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def load_chapter(project_name: str, chapter_no: int) -> str:
-    file = project_path(project_name) / "chapters" / f"chapter_{chapter_no:03d}.md"
+def load_chapter(project_name: str, chapter_no: int, story_id: str = "default") -> str:
+    file = _story_path_from_project_path(project_name, story_id, "chapters") / f"chapter_{chapter_no:03d}.md"
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
 
 
-def save_review(project_name: str, chapter_no: int, content: str):
-    path = project_path(project_name) / "reviews"
-    path.mkdir(exist_ok=True)
+def save_review(project_name: str, chapter_no: int, content: str, story_id: str = "default"):
+    path = _story_path_from_project_path(project_name, story_id, "reviews")
+    path.mkdir(parents=True, exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.md"
     file.write_text(content, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def load_review(project_name: str, chapter_no: int) -> str:
-    file = project_path(project_name) / "reviews" / f"chapter_{chapter_no:03d}.md"
+def load_review(project_name: str, chapter_no: int, story_id: str = "default") -> str:
+    file = _story_path_from_project_path(project_name, story_id, "reviews") / f"chapter_{chapter_no:03d}.md"
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
@@ -1228,25 +1488,25 @@ def load_review(project_name: str, chapter_no: int) -> str:
 
 DEFAULT_SUMMARY_LIMIT = 5
 
-def get_recent_chapter_summaries(project_name: str, limit: int = DEFAULT_SUMMARY_LIMIT) -> list[dict]:
-    memory = load_memory(project_name)
+def get_recent_chapter_summaries(project_name: str, limit: int = DEFAULT_SUMMARY_LIMIT, story_id: str = "default") -> list[dict]:
+    summaries = load_story_chapter_summaries(project_name, story_id)
     summaries = [
-        item for item in memory.get("chapter_summaries", [])
+        item for item in summaries
         if isinstance(item, dict) and item.get("summary")
     ]
     summaries.sort(key=lambda item: item.get("chapter_no", 0))
     return summaries[-limit:]
 
 
-def save_review_json(project_name: str, chapter_no: int, data: dict):
-    path = project_path(project_name) / "reviews"
-    path.mkdir(exist_ok=True)
+def save_review_json(project_name: str, chapter_no: int, data: dict, story_id: str = "default"):
+    path = _story_path_from_project_path(project_name, story_id, "reviews")
+    path.mkdir(parents=True, exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.json"
     file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_review_json(project_name: str, chapter_no: int) -> dict | None:
-    file = project_path(project_name) / "reviews" / f"chapter_{chapter_no:03d}.json"
+def load_review_json(project_name: str, chapter_no: int, story_id: str = "default") -> dict | None:
+    file = _story_path_from_project_path(project_name, story_id, "reviews") / f"chapter_{chapter_no:03d}.json"
     if not file.exists():
         return None
     try:
@@ -1255,16 +1515,16 @@ def load_review_json(project_name: str, chapter_no: int) -> dict | None:
         return None
 
 
-def save_analysis_report(project_name: str, analysis_type: str, chapter_no: int, content: str):
-    path = project_path(project_name) / "analysis"
-    path.mkdir(exist_ok=True)
+def save_analysis_report(project_name: str, analysis_type: str, chapter_no: int, content: str, story_id: str = "default"):
+    path = _story_path_from_project_path(project_name, story_id, "analysis")
+    path.mkdir(parents=True, exist_ok=True)
     file = path / f"{analysis_type}_chapter_{chapter_no:03d}.md"
     file.write_text(content, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int) -> str:
-    file = project_path(project_name) / "analysis" / f"{analysis_type}_chapter_{chapter_no:03d}.md"
+def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int, story_id: str = "default") -> str:
+    file = _story_path_from_project_path(project_name, story_id, "analysis") / f"{analysis_type}_chapter_{chapter_no:03d}.md"
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
@@ -1288,33 +1548,33 @@ def load_source_package_report(project_name: str) -> str:
     return file.read_text(encoding="utf-8")
 
 
-def evaluation_path(project_name: str) -> Path:
-    path = project_path(project_name) / "evaluation"
-    path.mkdir(exist_ok=True)
+def evaluation_path(project_name: str, story_id: str = "default") -> Path:
+    path = _story_path_from_project_path(project_name, story_id, "evaluation")
+    path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def save_evaluation_report(project_name: str, chapter_no: int, content: str):
-    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.md"
+def save_evaluation_report(project_name: str, chapter_no: int, content: str, story_id: str = "default"):
+    file = evaluation_path(project_name, story_id) / f"chapter_{chapter_no:03d}.md"
     file.write_text(content, encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def save_evaluation_json(project_name: str, chapter_no: int, data: dict):
-    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.json"
+def save_evaluation_json(project_name: str, chapter_no: int, data: dict, story_id: str = "default"):
+    file = evaluation_path(project_name, story_id) / f"chapter_{chapter_no:03d}.json"
     file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
 
 
-def load_evaluation_report(project_name: str, chapter_no: int) -> str:
-    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.md"
+def load_evaluation_report(project_name: str, chapter_no: int, story_id: str = "default") -> str:
+    file = evaluation_path(project_name, story_id) / f"chapter_{chapter_no:03d}.md"
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
 
 
-def load_evaluation_json(project_name: str, chapter_no: int) -> dict | None:
-    file = evaluation_path(project_name) / f"chapter_{chapter_no:03d}.json"
+def load_evaluation_json(project_name: str, chapter_no: int, story_id: str = "default") -> dict | None:
+    file = evaluation_path(project_name, story_id) / f"chapter_{chapter_no:03d}.json"
     if not file.exists():
         return None
     try:
@@ -1323,26 +1583,26 @@ def load_evaluation_json(project_name: str, chapter_no: int) -> dict | None:
         return None
 
 
-def runs_path(project_name: str) -> Path:
-    path = project_path(project_name) / "runs"
-    path.mkdir(exist_ok=True)
+def runs_path(project_name: str, story_id: str = "default") -> Path:
+    path = _story_path_from_project_path(project_name, story_id, "runs")
+    path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def save_pipeline_run(project_name: str, run_id: str, content: str):
-    file = runs_path(project_name) / f"{run_id}.json"
+def save_pipeline_run(project_name: str, run_id: str, content: str, story_id: str = "default"):
+    file = runs_path(project_name, story_id) / f"{run_id}.json"
     file.write_text(content, encoding="utf-8")
 
 
-def load_pipeline_run(project_name: str, run_id: str) -> str:
-    file = runs_path(project_name) / f"{run_id}.json"
+def load_pipeline_run(project_name: str, run_id: str, story_id: str = "default") -> str:
+    file = runs_path(project_name, story_id) / f"{run_id}.json"
     if not file.exists():
         return ""
     return file.read_text(encoding="utf-8")
 
 
-def list_pipeline_runs(project_name: str, chapter_no: int | None = None) -> list[str]:
-    path = runs_path(project_name)
+def list_pipeline_runs(project_name: str, chapter_no: int | None = None, story_id: str = "default") -> list[str]:
+    path = runs_path(project_name, story_id)
     files = sorted(path.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
     if chapter_no is None:
         return [file.stem for file in files]
@@ -1595,8 +1855,8 @@ def load_retrieval_vectors(project_name: str) -> str:
     return file.read_text(encoding="utf-8")
 
 
-def chapter_count(project_name: str) -> int:
-    chapters_dir = project_path(project_name) / "chapters"
+def chapter_count(project_name: str, story_id: str = "default") -> int:
+    chapters_dir = _story_path_from_project_path(project_name, story_id, "chapters")
     if not chapters_dir.exists():
         return 0
     return len([f for f in chapters_dir.iterdir() if f.suffix == ".md"])

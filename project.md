@@ -63,7 +63,7 @@ Current practical status:
 * Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing
 * Long-form source batch manager for whole-txt processing progress, continue actions, and failed extraction retries
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
-* Project-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
+* Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Creative task wizard for creating project creative profiles from plain Chinese task choices
 * First dynamic generation entry that can execute direct prose, short-form structure + prose, or chapter-plan + prose based on the creative profile
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
@@ -81,10 +81,14 @@ Current practical status:
 * Hierarchical outline support with project outline + volume outlines + arc outlines + chapter assignment to volume / arc
 * Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
 * In-app LLM configuration with multi-profile endpoint / key management and active-profile switching
+* Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, SiliconFlow) for quick endpoint/model fill
+* Connection testing for model profiles before saving
 * Local launcher and portable-build scripts for desktop-style localhost packaging
-* Grouped workspace navigation in the sidebar so planning, writing, resources, and system pages are separated by work area
+* Grouped workspace navigation in the sidebar so configuration pages live in the workbench alongside project overview, while planning and writing remain separate by work area
 * Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
 * Project overview page upgraded into a quick-action home screen for generation, pipeline, ingestion, and resource browsing
+* Story spaces support：one project can hold multiple independent stories, each with its own creative profile, memory overrides, outlines, chapters, reviews, evaluations, analysis reports, pipeline runs, and chapter summaries, while sharing project-level base memory, structured knowledge, source materials, rules, and retrieval index
+* Automatic migration of existing single-story projects into the default story space on first access, with the active story persisted in `stories/index.json`
 * Creative-profile discussion assist for clarifying ambiguous task intent before saving recommended structured project settings
 * Resumable chapter pipeline runs from persisted workflow snapshots
 * Arc-level chapter allocation planning with persisted structured plans
@@ -204,37 +208,47 @@ novelforge/
 
     └── {project_name}/
 
-        ├── memory.json
+        ├── memory.json          ← shared base memory
 
-        ├── rules.json
+        ├── rules.json           ← shared project rules
 
-        ├── outline.md
+        ├── knowledge/           ← shared structured knowledge
 
-        ├── volumes/
+        └── stories/             ← story spaces
 
-        ├── arcs/
+            ├── index.json       ← story list & active ID
 
-        ├── chapter_outlines/
+            └── {story_id}/
 
-        ├── chapters/
+                ├── creative_profile.json
 
-        ├── reviews/
+                ├── memory_overrides.json
 
-        ├── analysis/
+                ├── outline.md
 
-        ├── evaluation/
+                ├── volumes/
 
-        └── retrieval/
+                ├── arcs/
 
-            ├── manifest.json
+                ├── chapter_outlines/
 
-            ├── vectors.json
+                ├── chapters/
 
-            └── sources/
+                ├── reviews/
 
-        Note:
+                ├── analysis/
 
-        * `creative_profile.discussion.json` stores approved creative-profile discussion artifacts when available
+                ├── evaluation/
+
+                ├── runs/
+
+                └── retrieval/
+
+                    ├── conflict_resolutions.json
+
+            Note:
+
+            * `creative_profile.discussion.json` stores approved creative-profile discussion artifacts when available
         * `outline.discussion.json` stores approved full-story discussion artifacts when available
         * `volumes/volume_xxx.md` stores per-volume outline content
         * `volumes/volume_xxx.meta.json` stores per-volume metadata such as title / summary / status
@@ -305,7 +319,7 @@ UI features:
 * Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
 * Source package report panel for generating a searchable project reference report
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
-* Grouped sidebar navigation that separates workspace pages into workbench / planning / writing / resources / system areas
+* Grouped sidebar navigation that separates workspace pages into workbench / planning / writing / resources areas
 * Project overview home screen with quick actions for dynamic generation, chapter pipeline, source ingestion, and resource browsing
 * Project-aware page header that surfaces project title, genre, canon mode, and current page description
 * Save buttons in structured story-state forms stay disabled until the user actually changes form content
@@ -317,6 +331,8 @@ UI features:
 * Planning pages can now approve and clear persisted discussion artifacts, and chapter-outline generation can optionally require approved chapter / volume / arc planning discussions
 * Chapter writing page now includes lightweight writing-guidance controls instead of a heavier second discussion layer
 * Dedicated model configuration page for saving multiple endpoint/key/model profiles and switching the active runtime profile from the UI
+* Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, etc.) for one-click endpoint/model fill
+* In-app connection testing for model profiles before saving
 * Creative task wizard that saves project creative settings from task type, length, output goal, reference strength, conflict policy, and notes
 * Creative profile page can now combine direct option selection with discussion-assisted recommended settings, one-click form backfill, and approval-based persistence of a creative-profile discussion artifact
 
@@ -533,6 +549,7 @@ Current retrieval design notes:
 * Retrieval is already injected into outline, chapter planning, writing, review, memory update, and analysis steps
 * Project volume outlines and arc outlines are now indexed as first-class retrieval documents so chapter planning can use story-level, volume-level, and arc-level context together
 * Approved creative-profile / outline / volume / arc / chapter discussion artifacts are now indexed as first-class retrieval documents so configuration and planning approvals remain visible to retrieval-aware workflows
+* Story-level content (outlines, chapters, reviews, evaluations, pipeline runs) is now stored under `stories/{story_id}` and indexed separately per story
 * Planning metadata saves now trigger retrieval asset refresh so hierarchy changes stay visible to later retrieval-augmented planning steps
 * Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
 * Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows
@@ -890,7 +907,7 @@ Stores project-scoped prompt rules by capability:
 
 creative_profile.json
 
-Stores project-level creative intent and generation preferences:
+Stores story-level creative intent and generation preferences:
 
 * task nature
 * target length / word count
@@ -1252,8 +1269,8 @@ Features:
 Current implementation status:
 
 * Implemented: one-click chapter pipeline across planning, writing, review, and memory update
-* Implemented: project-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
-* Implemented: creative task wizard that maps plain Chinese task choices into the project creative profile
+* Implemented: story-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
+* Implemented: creative task wizard that maps plain Chinese task choices into the current story creative profile
 * Implemented: first dynamic generation page for direct prose, short-form structure + prose, and chapter-plan + prose tasks
 * Implemented: per-step error isolation with partial result recovery
 * Implemented: explicit `ChapterPipelineState`-style workflow object
