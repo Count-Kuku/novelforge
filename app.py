@@ -470,8 +470,16 @@ def apply_app_style():
         }
 
         [data-testid="stSidebar"] [data-baseweb="select"] *,
+        [data-testid="stSidebar"] [data-baseweb="select"] div,
         [data-testid="stSidebar"] [data-baseweb="select"] span,
+        [data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stMarkdownContainer"],
+        [data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stMarkdownContainer"] *,
+        [data-testid="stSidebar"] [data-baseweb="select"] [role="button"],
+        [data-testid="stSidebar"] [data-baseweb="select"] [role="button"] *,
         [data-testid="stSidebar"] [data-baseweb="select"] svg,
+        [data-testid="stSidebar"] [data-baseweb="select"] svg path,
+        [data-testid="stSidebar"] input,
+        [data-testid="stSidebar"] textarea,
         [data-testid="stSidebar"] input::placeholder,
         [data-testid="stSidebar"] textarea::placeholder {
             color: #231f1a !important;
@@ -485,16 +493,56 @@ def apply_app_style():
             font-weight: 650 !important;
         }
 
+        [data-testid="stSidebar"] button,
+        [data-testid="stSidebar"] [data-testid="stPopover"] button {
+            background: #fffaf2 !important;
+            border-color: rgba(255,255,255,0.22) !important;
+            color: #231f1a !important;
+            font-weight: 650 !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #231f1a !important;
+        }
+
         [data-testid="stSidebar"] .stButton > button *,
         [data-testid="stSidebar"] .stButton > button p,
-        [data-testid="stSidebar"] .stButton > button span {
+        [data-testid="stSidebar"] .stButton > button span,
+        [data-testid="stSidebar"] button *,
+        [data-testid="stSidebar"] button p,
+        [data-testid="stSidebar"] button span,
+        [data-testid="stSidebar"] button svg,
+        [data-testid="stSidebar"] button svg path {
             color: #231f1a !important;
+            fill: #231f1a !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #231f1a !important;
         }
 
         [data-testid="stSidebar"] .stButton > button:hover {
             background: #f0e4d7 !important;
             border-color: #c89b6d !important;
             color: #231f1a !important;
+        }
+
+        [data-testid="stSidebar"] button:hover,
+        [data-testid="stSidebar"] button:hover * {
+            color: #231f1a !important;
+            fill: #231f1a !important;
+            -webkit-text-fill-color: #231f1a !important;
+        }
+
+        [data-testid="stSidebar"] .stButton > button:disabled,
+        [data-testid="stSidebar"] .stButton > button[disabled],
+        [data-testid="stSidebar"] .stButton > button:disabled *,
+        [data-testid="stSidebar"] .stButton > button[disabled] *,
+        [data-testid="stSidebar"] button:disabled,
+        [data-testid="stSidebar"] button[disabled],
+        [data-testid="stSidebar"] button:disabled *,
+        [data-testid="stSidebar"] button[disabled] * {
+            background: #fffaf2 !important;
+            border-color: rgba(255,255,255,0.22) !important;
+            color: #231f1a !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #231f1a !important;
         }
 
         .block-container {
