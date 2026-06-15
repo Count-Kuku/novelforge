@@ -704,6 +704,8 @@ def migrate_project_to_stories(project_name: str) -> bool:
         src = project_path(project_name) / src_name
         dst = sp / dst_name
         if src.exists():
+            if dst.exists():
+                continue
             src.rename(dst)
             moved_any = True
 
