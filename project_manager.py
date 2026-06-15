@@ -13,11 +13,13 @@ from memory import (
     load_evaluation_json,
     load_evaluation_report,
     load_knowledge_base,
+    list_long_reference_batches,
     load_memory,
     load_outline,
     load_pending_knowledge_items,
     load_review,
     load_review_json,
+    load_source_package_report,
     retrieval_sources_path,
     runs_path,
     save_analysis_report,
@@ -33,6 +35,7 @@ from memory import (
 CHAPTER_FILE_PATTERN = re.compile(r"chapter_(\d+)\.md$")
 REVIEW_JSON_PATTERN = re.compile(r"chapter_(\d+)\.json$")
 ANALYSIS_PATTERN = re.compile(r"(.+)_chapter_(\d+)\.md$")
+SOURCE_PACKAGE_REPORT_NAME = "source_package.md"
 EVALUATION_PATTERN = re.compile(r"chapter_(\d+)\.md$")
 
 
@@ -112,7 +115,8 @@ def delete_chapter_review(project_name: str, chapter_no: int) -> bool:
 
 
 def delete_analysis_report(project_name: str, analysis_type: str, chapter_no: int) -> bool:
-    deleted = _safe_unlink(_project_dir(project_name) / "analysis" / f"{analysis_type}_chapter_{chapter_no:03d}.md")
+    file_name = SOURCE_PACKAGE_REPORT_NAME if analysis_type == "source_package" and chapter_no <= 0 else f"{analysis_type}_chapter_{chapter_no:03d}.md"
+    deleted = _safe_unlink(_project_dir(project_name) / "analysis" / file_name)
     if deleted:
         sync_project_retrieval_assets(project_name)
     return deleted
@@ -154,7 +158,12 @@ def save_review_resources(project_name: str, chapter_no: int, markdown: str, jso
 
 
 def save_analysis_resource(project_name: str, analysis_type: str, chapter_no: int, markdown: str):
-    save_analysis_report(project_name, analysis_type, chapter_no, markdown)
+    if analysis_type == "source_package" and chapter_no <= 0:
+        from memory import save_source_package_report
+
+        save_source_package_report(project_name, markdown)
+    else:
+        save_analysis_report(project_name, analysis_type, chapter_no, markdown)
 
 
 def save_evaluation_resource(project_name: str, chapter_no: int, markdown: str, json_payload: dict | None = None):
@@ -215,12 +224,19 @@ def list_analysis_reports(project_name: str) -> list[dict]:
     reports = []
     for file in sorted(analysis_dir.glob("*.md")):
         match = ANALYSIS_PATTERN.search(file.name)
+        if file.name == SOURCE_PACKAGE_REPORT_NAME:
+            analysis_type = "source_package"
+            chapter_no = None
+        else:
+            analysis_type = match.group(1) if match else file.stem
+            chapter_no = int(match.group(2)) if match else None
         reports.append({
-            "analysis_type": match.group(1) if match else file.stem,
-            "chapter_no": int(match.group(2)) if match else None,
+            "analysis_type": analysis_type,
+            "chapter_no": chapter_no,
             "file_name": file.name,
             "updated_at": _timestamp_or_empty(file.stat().st_mtime),
             "path": str(file),
+            "preview": load_source_package_report(project_name) if analysis_type == "source_package" else load_text_file(file, fallback=""),
         })
     reports.sort(key=lambda item: (item.get("chapter_no") or 0, item.get("analysis_type", "")))
     return reports
@@ -343,6 +359,7 @@ def get_project_summary(project_name: str) -> dict:
     analysis_reports = list_analysis_reports(project_name)
     evaluation_reports = list_evaluation_reports(project_name)
     runs = list_project_runs(project_name)
+    long_reference_batches = list_long_reference_batches(project_name)
     retrieval_files = list(retrieval_sources_path(project_name).rglob("*"))
     retrieval_file_count = len([item for item in retrieval_files if item.is_file()])
     chapter_inventory = list_chapter_inventory(project_name)
@@ -364,6 +381,7 @@ def get_project_summary(project_name: str) -> dict:
         "analysis_count": len(analysis_reports),
         "evaluation_count": len(evaluation_reports),
         "run_count": len(runs),
+        "long_reference_batch_count": len(long_reference_batches),
         "retrieval_source_count": retrieval_file_count,
         "knowledge_item_count": sum(len(items) for items in knowledge_base.values()),
         "pending_knowledge_count": len(load_pending_knowledge_items(project_name)),

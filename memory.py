@@ -350,6 +350,7 @@ def create_project(project_name: str) -> str:
     load_project_rules(normalized_name)
     knowledge_dir_path(normalized_name)
     save_pending_knowledge_items(normalized_name, load_pending_knowledge_items(normalized_name))
+    long_reference_batches_path(normalized_name)
     retrieval_sources_path(normalized_name)
     return normalized_name
 
@@ -1229,6 +1230,24 @@ def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int)
     return file.read_text(encoding="utf-8")
 
 
+def source_package_report_path(project_name: str) -> Path:
+    path = project_path(project_name) / "analysis"
+    path.mkdir(exist_ok=True)
+    return path / "source_package.md"
+
+
+def save_source_package_report(project_name: str, content: str):
+    source_package_report_path(project_name).write_text(content, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_source_package_report(project_name: str) -> str:
+    file = source_package_report_path(project_name)
+    if not file.exists():
+        return ""
+    return file.read_text(encoding="utf-8")
+
+
 def evaluation_path(project_name: str) -> Path:
     path = project_path(project_name) / "evaluation"
     path.mkdir(exist_ok=True)
@@ -1289,6 +1308,159 @@ def list_pipeline_runs(project_name: str, chapter_no: int | None = None) -> list
         return [file.stem for file in files]
     chapter_prefix = f"chapter_{chapter_no:03d}_"
     return [file.stem for file in files if file.stem.startswith(chapter_prefix)]
+
+
+def long_reference_batches_path(project_name: str) -> Path:
+    path = project_path(project_name) / "long_reference_batches"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+def long_reference_batch_path(project_name: str, batch_id: str) -> Path:
+    safe_id = re.sub(r"[^A-Za-z0-9_\-]+", "_", str(batch_id or "")).strip("_")
+    if not safe_id:
+        raise ValueError("Batch id cannot be empty.")
+    return long_reference_batches_path(project_name) / f"{safe_id}.json"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def summarize_long_reference_batch(batch: dict) -> dict:
+    segments = batch.get("segments", []) if isinstance(batch.get("segments", []), list) else []
+    imported_count = len([item for item in segments if item.get("import_status") == "imported"])
+    extracted_count = len([item for item in segments if item.get("extract_status") in {"queued", "extracted"}])
+    failed_count = len([item for item in segments if item.get("extract_status") == "failed"])
+    skipped_count = len([item for item in segments if item.get("extract_status") == "skipped"])
+    total_count = len(segments)
+    return {
+        "segment_count": total_count,
+        "imported_count": imported_count,
+        "extract_queued_count": extracted_count,
+        "extract_failed_count": failed_count,
+        "extract_skipped_count": skipped_count,
+        "import_pending_count": max(total_count - imported_count, 0),
+        "extract_pending_count": len([
+            item for item in segments
+            if item.get("extract_status", "pending") in {"pending", ""}
+        ]),
+    }
+
+
+def normalize_long_reference_batch(batch: dict | None) -> dict:
+    raw = batch if isinstance(batch, dict) else {}
+    batch_id = str(raw.get("batch_id") or f"batch_{uuid4().hex}")
+    now = _now_iso()
+    segments = []
+    for index, item in enumerate(raw.get("segments", []) if isinstance(raw.get("segments", []), list) else [], start=1):
+        if not isinstance(item, dict):
+            continue
+        content = str(item.get("content", ""))
+        title = str(item.get("title") or f"片段 {index:03d}")
+        segments.append({
+            **item,
+            "segment_id": str(item.get("segment_id") or f"seg_{index:04d}_{uuid4().hex[:8]}"),
+            "index": int(item.get("index") or index),
+            "title": title,
+            "content": content,
+            "char_count": int(item.get("char_count") or len(content)),
+            "split_method": str(item.get("split_method") or "未知"),
+            "import_status": str(item.get("import_status") or "pending"),
+            "extract_status": str(item.get("extract_status") or "pending"),
+            "queued_knowledge_count": int(item.get("queued_knowledge_count") or 0),
+            "imported_source_name": str(item.get("imported_source_name") or ""),
+            "extract_error": str(item.get("extract_error") or ""),
+        })
+    normalized = {
+        **raw,
+        "batch_id": batch_id,
+        "title": str(raw.get("title") or "长篇资料批次"),
+        "scope": str(raw.get("scope") or "reference"),
+        "authority": str(raw.get("authority") or "curated"),
+        "source_type": str(raw.get("source_type") or "external_source"),
+        "source_origin": str(raw.get("source_origin") or ""),
+        "source_file_name": str(raw.get("source_file_name") or ""),
+        "content_fingerprint": str(raw.get("content_fingerprint") or ""),
+        "content_char_count": int(raw.get("content_char_count") or sum(len(item.get("content", "")) for item in segments)),
+        "created_at": str(raw.get("created_at") or now),
+        "updated_at": str(raw.get("updated_at") or now),
+        "segments": segments,
+    }
+    normalized["summary"] = summarize_long_reference_batch(normalized)
+    return normalized
+
+
+def create_long_reference_batch(
+    project_name: str,
+    *,
+    title: str,
+    scope: str,
+    authority: str,
+    source_type: str,
+    source_origin: str = "",
+    source_file_name: str = "",
+    content_fingerprint: str = "",
+    content_char_count: int = 0,
+    segments: list[dict],
+) -> dict:
+    batch = normalize_long_reference_batch({
+        "batch_id": f"batch_{uuid4().hex}",
+        "title": title,
+        "scope": scope,
+        "authority": authority,
+        "source_type": source_type,
+        "source_origin": source_origin,
+        "source_file_name": source_file_name,
+        "content_fingerprint": content_fingerprint,
+        "content_char_count": content_char_count,
+        "segments": segments,
+    })
+    save_long_reference_batch(project_name, batch)
+    return batch
+
+
+def save_long_reference_batch(project_name: str, batch: dict) -> dict:
+    normalized = normalize_long_reference_batch({
+        **(batch or {}),
+        "updated_at": _now_iso(),
+    })
+    path = long_reference_batch_path(project_name, normalized["batch_id"])
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def load_long_reference_batch(project_name: str, batch_id: str) -> dict:
+    path = long_reference_batch_path(project_name, batch_id)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return normalize_long_reference_batch(raw)
+
+
+def list_long_reference_batches(project_name: str) -> list[dict]:
+    path = long_reference_batches_path(project_name)
+    batches = []
+    for file in sorted(path.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            raw = json.loads(file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        batch = normalize_long_reference_batch(raw)
+        batch["file_name"] = file.name
+        batches.append(batch)
+    return batches
+
+
+def delete_long_reference_batch(project_name: str, batch_id: str) -> bool:
+    path = long_reference_batch_path(project_name, batch_id)
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
 
 
 def retrieval_path(project_name: str) -> Path:

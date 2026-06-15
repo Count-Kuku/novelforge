@@ -61,6 +61,8 @@ Current practical status:
 * Retrieval evidence grouping, authority weighting, conflict warnings, and reranking
 * Structured pasted-reference organization and single-page URL reference ingestion for canon/reference knowledge
 * Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing
+* Long-form source batch manager for whole-txt processing progress, continue actions, and failed extraction retries
+* Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Project-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Creative task wizard for creating project creative profiles from plain Chinese task choices
 * First dynamic generation entry that can execute direct prose, short-form structure + prose, or chapter-plan + prose based on the creative profile
@@ -68,6 +70,7 @@ Current practical status:
 * Confirmed structured knowledge persisted under project `knowledge/` storage and indexed for retrieval
 * Pending structured-knowledge review queue before extracted items become official project knowledge
 * Structured-knowledge organizer for duplicate detection, manual merge, deletion, and raw category editing
+* Source package report generated from confirmed structured knowledge and indexed for retrieval
 * Discussion-first planning support for full-story outline and chapter direction before formal generation
 * Approval-based planning artifacts for outline / volume / arc / chapter discussions
 * Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
@@ -258,8 +261,11 @@ Responsibilities:
 * Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
 * Managing source ingestion, retrieval sources, index rebuilds, and retrieval preview
 * Managing long-form source splitting, batch import, and batch structured extraction into the pending queue
+* Managing long-form source batches with per-segment import/extraction state and retry controls
+* Detecting repeated long-form uploads through content fingerprints, file names, total character counts, and segment counts
 * Managing a pending structured-knowledge queue for accept/discard/edit review before persistence
 * Managing structured-knowledge cleanup with duplicate detection, merge preview, deletion, and raw category editing
+* Generating and saving source package reports from confirmed structured knowledge
 * Exposing retrieval mode and score breakdown for debugging/learning
 * Organizing pasted reference text and URL pages into structured retrieval-ready entries before ingestion
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
@@ -287,7 +293,9 @@ UI features:
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
 * Long-form source importer for txt/md upload, pasted text, chapter/title splitting, batch indexing, and limited batch extraction
+* Long-form source batch manager for progress metrics, filtered segment lists, continue extraction, and failure retries
 * Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
+* Source package report panel for generating a searchable project reference report
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Pipeline page can now inspect persisted run snapshots, transition logs, and structured workflow errors
 * Resource browser with left-side file navigation, right-side editor/detail panel, and lightweight volume / arc filtering
@@ -914,7 +922,7 @@ Stores review results.
 
 analysis/
 
-Stores consistency, character, timeline, and foreshadowing analysis reports.
+Stores consistency, character, timeline, and foreshadowing analysis reports. Also stores `source_package.md`, a project-level source package report generated from confirmed structured knowledge.
 
 evaluation/
 
@@ -938,6 +946,11 @@ Stores confirmed structured knowledge extracted from source material. Current ca
 * `constraints.json`
 
 `knowledge/pending.json` stores extracted knowledge items waiting for user confirmation. Confirmed items are moved into the category files above and then indexed for retrieval.
+
+long_reference_batches/
+
+Stores whole-source processing batches for uploaded or pasted long-form material. Each batch records segment content, import state, extraction state, queued knowledge count, source metadata, and retry errors.
+Batch metadata also stores source file name, content fingerprint, total character count, and segment count to identify repeated uploads.
 
 retrieval/
 
@@ -1180,11 +1193,14 @@ Current implementation status:
 * Implemented: pasted reference organization into structured retrieval-ready entries
 * Implemented: single-page URL fetch and organization for controlled canon/reference ingestion
 * Implemented: long-form source importer with chapter-title splitting, length fallback splitting, batch source indexing, and limited batch extraction
+* Implemented: long-form source batch manager with progress tracking, continue import/extraction actions, and failed extraction retry
+* Implemented: repeated-upload detection using long-form source fingerprints and similarity hints
 * Implemented: structured knowledge extraction from pasted material into typed categories
 * Implemented: pending structured-knowledge queue with batch confirmation/discard and raw-data editing
 * Implemented: human-confirmed knowledge persistence under project `knowledge/`
 * Implemented: structured-knowledge organizer with duplicate detection, manual merge, deletion, and raw category editing
 * Implemented: retrieval indexing for confirmed structured knowledge
+* Implemented: source package report generation from confirmed structured knowledge, saved under `analysis/source_package.md`
 * Pending: dedicated external vector database backend
 * Pending: deeper fact-level conflict recommendation logic
 

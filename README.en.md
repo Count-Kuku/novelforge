@@ -53,8 +53,11 @@ Current maturity can be summarized as:
 - core story state page for short, high-priority settings injected into generation
 - source ingestion page for importing canon/reference/sample text and extracting structured knowledge
 - long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing
+- long-form source batch manager for tracking whole-txt splitting, indexing, extraction, failures, and resume progress
+- long-form source fingerprinting to detect repeated uploads and continue existing batches
 - pending structured-knowledge queue for reviewing extracted items before persistence
 - structured-knowledge organizer for duplicate detection, merging, deletion, and raw editing
+- source package report generated from confirmed structured knowledge
 - retrieval center for index rebuilds, recall tests, debug inspection, and conflict handling
 - project creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 - creative task wizard for turning Chinese task goals into project creative settings
@@ -137,14 +140,19 @@ The app separates three related concepts:
 - `Project Resources`: file-level management for outlines, chapters, reports, run snapshots, and source files.
 - `Core State`: compact story settings that are injected with high priority, such as key canon mode, relationships, timeline items, and hard constraints.
 - `Source Ingestion` / `Retrieval Center`: ingestion imports and structures material; retrieval rebuilds indexes, tests recall, inspects debug output, and stores conflict decisions.
+- `Long-Form Source Batches`: after a full txt upload, each segment records whether it has been indexed, extracted, failed, or is still pending.
+- `Source Fingerprint`: stores content hash, file name, total length, and segment count to detect repeated full-source uploads.
 - `Pending Structured Knowledge`: extracted items can be staged for review before they become indexed structured knowledge.
 - `Structured Knowledge Organizer`: after long-form extraction, duplicate characters, abilities, locations, and other repeated entries can be merged or removed.
+- `Source Package Report`: confirmed structured knowledge can be rendered into a saved and searchable project reference report.
 
 Current retrieval capabilities include:
 
 - project knowledge retrieval
 - canon and reference retrieval
 - long-form text splitting by chapter title or length before batch import
+- long-form batch progress tracking with continue-indexing, continue-extraction, and retry-failed actions
+- repeated-upload detection with an option to bind to an existing batch
 - document chunk indexing
 - semantic embedding retrieval
 - hybrid lexical + semantic ranking
@@ -157,6 +165,7 @@ Current retrieval capabilities include:
 - pending review queue for accepting, discarding, or editing extracted knowledge before indexing
 - category-level structured-knowledge organization with duplicate detection, merge preview, deletion, and raw editing
 - batched structured-knowledge extraction from selected long-form source segments
+- source package report generation from confirmed knowledge, saved into the retrieval index
 - confirmed structured knowledge is indexed for later generation, review, analysis, and evaluation
 
 ## Creative Profile
@@ -217,6 +226,7 @@ Newer persisted artifacts include:
 - `creative_profile.json`: project-level creative profile
 - `knowledge/*.json`: confirmed structured knowledge records
 - `knowledge/pending.json`: pending structured-knowledge review queue
+- `analysis/source_package.md`: source package report generated from structured knowledge
 - `evaluation/chapter_xxx.md` / `.json`: chapter evaluation reports and structured scores
 - `retrieval/conflict_resolutions.json`: saved retrieval conflict decisions
 - `runs/*.json`: resumable pipeline run snapshots

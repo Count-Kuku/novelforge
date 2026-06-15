@@ -1,5 +1,6 @@
 import json
 import re
+import hashlib
 
 import streamlit as st
 from urllib.parse import urlparse
@@ -8,6 +9,7 @@ from memory import (
     load_chapter_discussion_artifact,
     create_project,
     delete_llm_profile,
+    delete_long_reference_batch,
     delete_arc,
     delete_retrieval_source_file,
     delete_volume,
@@ -27,8 +29,11 @@ from memory import (
     load_creative_profile,
     load_knowledge_base,
     load_knowledge_category,
+    load_source_package_report,
+    load_long_reference_batch,
     load_pending_knowledge_items,
     list_projects,
+    list_long_reference_batches,
     list_retrieval_source_files,
     list_volumes,
     load_chapter,
@@ -46,6 +51,8 @@ from memory import (
     load_volume_outline,
     save_chapter,
     save_creative_profile,
+    save_source_package_report,
+    save_long_reference_batch,
     save_chapter_outline,
     save_chapter_outline_metadata,
     save_global_rules,
@@ -58,6 +65,7 @@ from memory import (
     save_pending_knowledge_items,
     save_outline,
     save_project_rules,
+    create_long_reference_batch,
     set_active_llm_profile,
     save_arc_metadata,
     save_arc_outline,
@@ -357,6 +365,19 @@ def label_step_name(value: str) -> str:
 
 def label_knowledge_category(value: str) -> str:
     return KNOWLEDGE_CATEGORY_LABELS.get(str(value or ""), str(value or "未知知识"))
+
+
+def label_batch_segment_status(value: str) -> str:
+    labels = {
+        "pending": "待处理",
+        "imported": "已导入",
+        "queued": "已加入待确认",
+        "extracted": "已提取",
+        "failed": "失败",
+        "skipped": "已跳过",
+        "": "待处理",
+    }
+    return labels.get(str(value or ""), str(value or "未知"))
 
 
 def recommended_workflow_for_profile(profile: dict) -> list[str]:
@@ -1356,13 +1377,14 @@ def render_project_overview_page(project_name: str):
     col4.metric("分析报告", summary.get("analysis_count", 0))
     col5.metric("评估报告", summary.get("evaluation_count", 0))
 
-    col6, col7, col8, col9, col12, col13 = st.columns(6)
+    col6, col7, col8, col9, col12, col13, col14 = st.columns(7)
     col6.metric("分卷数量", summary.get("volume_count", 0))
     col7.metric("剧情段数量", summary.get("arc_count", 0))
     col8.metric("流水线记录", summary.get("run_count", 0))
     col9.metric("外部资料", summary.get("retrieval_source_count", 0))
     col12.metric("结构化知识", summary.get("knowledge_item_count", 0))
     col13.metric("待确认知识", summary.get("pending_knowledge_count", 0))
+    col14.metric("资料批次", summary.get("long_reference_batch_count", 0))
 
     col10, col11 = st.columns(2)
     col10.metric("已批准分卷讨论", summary.get("approved_volume_count", 0))
@@ -1942,6 +1964,114 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
                 except json.JSONDecodeError as exc:
                     st.error(f"结构化数据格式错误：{exc}")
 
+
+def format_knowledge_item_for_report(item: dict) -> list[str]:
+    lines = [f"### {item.get('name', '未命名')}"]
+    if item.get("summary"):
+        lines.extend(["", str(item.get("summary", "")).strip()])
+    meta_parts = []
+    if item.get("scope"):
+        meta_parts.append(f"范围：{label_scope(item.get('scope'))}")
+    if item.get("authority"):
+        meta_parts.append(f"可信度：{label_authority(item.get('authority'))}")
+    if item.get("source_title"):
+        meta_parts.append(f"来源：{item.get('source_title')}")
+    if meta_parts:
+        lines.extend(["", "- " + " / ".join(meta_parts)])
+    details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+    for key, value in list(details.items())[:8]:
+        if str(value).strip():
+            lines.append(f"- {key}：{value}")
+    tags = item.get("tags", []) if isinstance(item.get("tags"), list) else []
+    if tags:
+        lines.append(f"- 标签：{', '.join(str(tag) for tag in tags[:12])}")
+    return lines
+
+
+def build_source_package_report(project_name: str, max_items_per_category: int = 30) -> str:
+    knowledge_base = load_knowledge_base(project_name)
+    total_items = sum(len(items) for items in knowledge_base.values())
+    lines = [
+        f"# {project_name} 资料包报告",
+        "",
+        "## 总览",
+        "",
+        f"- 已确认结构化知识：{total_items} 条",
+    ]
+    for category, items in knowledge_base.items():
+        lines.append(f"- {label_knowledge_category(category)}：{len(items)} 条")
+
+    missing_categories = [label_knowledge_category(category) for category, items in knowledge_base.items() if not items]
+    if missing_categories:
+        lines.extend(["", "## 资料缺口", ""])
+        lines.append("以下分类当前没有已确认知识，后续可以补充资料或重新提取：")
+        lines.extend([f"- {item}" for item in missing_categories])
+
+    for category, items in knowledge_base.items():
+        if not items:
+            continue
+        lines.extend(["", f"## {label_knowledge_category(category)}", ""])
+        shown_items = items[:max_items_per_category]
+        for item in shown_items:
+            lines.extend(format_knowledge_item_for_report(item))
+            lines.append("")
+        if len(items) > max_items_per_category:
+            lines.append(f"> 当前分类仅列出前 {max_items_per_category} 条，共 {len(items)} 条。")
+
+    constraints = knowledge_base.get("constraints", [])
+    style_items = knowledge_base.get("writing_style", []) + knowledge_base.get("dialogue_style", []) + knowledge_base.get("narrative_techniques", [])
+    if constraints or style_items:
+        lines.extend(["", "## 同人写作注意事项", ""])
+        for item in constraints[:20]:
+            lines.append(f"- 硬性约束：{item.get('name', '未命名')}。{item.get('summary', '')}")
+        for item in style_items[:20]:
+            lines.append(f"- 风格参考：{item.get('name', '未命名')}。{item.get('summary', '')}")
+
+    lines.extend([
+        "",
+        "## 后续整理建议",
+        "",
+        "- 如果角色、能力或地点存在重复条目，先在“结构化知识整理”中合并。",
+        "- 如果关键分类为空，回到“长篇资料批次管理”继续提取对应分类。",
+        "- 如果资料来自不同版本或存在冲突，优先在“检索中心”做冲突裁决。",
+    ])
+    return "\n".join(lines).strip() + "\n"
+
+
+def render_source_package_report_page(project_name: str):
+    with st.expander("资料包报告", expanded=False):
+        st.caption("基于已确认结构化知识生成项目资料总览，可保存为分析报告并进入检索索引。")
+        knowledge_base = load_knowledge_base(project_name)
+        total_items = sum(len(items) for items in knowledge_base.values())
+        st.caption(f"当前已确认结构化知识：{total_items} 条")
+        max_items = st.slider("每类最多写入条目数", min_value=5, max_value=100, value=30, step=5, key="source_package_max_items")
+        if st.button("生成资料包报告"):
+            report = build_source_package_report(project_name, max_items_per_category=max_items)
+            st.session_state["source_package_report_preview"] = report
+
+        existing_report = load_source_package_report(project_name)
+        report_text = st.text_area(
+            "资料包报告",
+            value=st.session_state.get("source_package_report_preview", existing_report),
+            height=520,
+            key="source_package_report_text",
+        )
+        col_save, col_refresh = st.columns(2)
+        if col_save.button("保存资料包报告"):
+            if not report_text.strip():
+                st.error("报告内容不能为空。")
+            else:
+                save_source_package_report(project_name, report_text)
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success("资料包报告已保存，并重建检索索引。")
+                st.rerun()
+        if col_refresh.button("用当前知识重新生成并覆盖预览"):
+            st.session_state["source_package_report_preview"] = build_source_package_report(
+                project_name,
+                max_items_per_category=max_items,
+            )
+            st.rerun()
+
         if selected_items:
             if st.button("删除所选结构化知识", key=f"knowledge_organizer_delete_{category}"):
                 selected_set = set(selected_indices)
@@ -1990,6 +2120,51 @@ def decode_uploaded_text(uploaded_file) -> str:
         except UnicodeDecodeError:
             continue
     return data.decode("utf-8", errors="ignore")
+
+
+def normalize_text_for_fingerprint(text: str) -> str:
+    return re.sub(r"\s+", "\n", str(text or "").strip())
+
+
+def calculate_text_fingerprint(text: str) -> str:
+    normalized = normalize_text_for_fingerprint(text)
+    if not normalized:
+        return ""
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def find_matching_long_reference_batches(
+    project_name: str,
+    *,
+    fingerprint: str,
+    source_file_name: str,
+    char_count: int,
+    segment_count: int,
+) -> list[dict]:
+    matches = []
+    for batch in list_long_reference_batches(project_name):
+        score = 0
+        reasons = []
+        if fingerprint and batch.get("content_fingerprint") == fingerprint:
+            score += 100
+            reasons.append("内容指纹完全一致")
+        if source_file_name and batch.get("source_file_name") == source_file_name:
+            score += 20
+            reasons.append("文件名一致")
+        batch_char_count = int(batch.get("content_char_count") or 0)
+        if char_count and batch_char_count and abs(batch_char_count - char_count) <= max(20, int(char_count * 0.01)):
+            score += 20
+            reasons.append("总字数接近")
+        batch_segment_count = int(batch.get("summary", {}).get("segment_count") or 0)
+        if segment_count and batch_segment_count == segment_count:
+            score += 10
+            reasons.append("切分片段数一致")
+        if score >= 40:
+            item = dict(batch)
+            item["match_score"] = score
+            item["match_reasons"] = reasons
+            matches.append(item)
+    return sorted(matches, key=lambda item: item.get("match_score", 0), reverse=True)
 
 
 def split_long_reference_text(source_title: str, raw_text: str, max_chars: int = 6000) -> list[dict]:
@@ -2079,6 +2254,265 @@ def split_long_reference_text(source_title: str, raw_text: str, max_chars: int =
     return normalized
 
 
+def build_long_reference_source_name(base_title: str, segment: dict, fallback_order: int) -> str:
+    short_title = re.sub(r"\s+", "_", str(segment.get("title", "segment")))[:40]
+    return f"{base_title}_{int(segment.get('index', fallback_order)):04d}_{short_title}"
+
+
+def import_long_reference_segments(
+    project_name: str,
+    batch: dict,
+    segment_indices: list[int],
+) -> tuple[dict, int]:
+    imported = 0
+    segments = batch.get("segments", [])
+    base_title = str(batch.get("title") or "长篇资料")
+    total_selected = len(segment_indices)
+    for order, index in enumerate(segment_indices, start=1):
+        if index < 0 or index >= len(segments):
+            continue
+        segment = segments[index]
+        payload = build_structured_external_source_payload(
+            source_type=batch.get("source_type", "external_source"),
+            scope=batch.get("scope", "reference"),
+            title=segment.get("title", f"{base_title} 片段 {order:03d}"),
+            summary=f"长篇资料片段 {segment.get('index')} / 共 {len(segments)} 段 / 字符数 {segment.get('char_count')}",
+            content=segment.get("content", ""),
+            tags=["长篇资料", "自动切分"],
+            metadata={
+                "authority": batch.get("authority", "curated"),
+                "source_origin": batch.get("source_origin", ""),
+                "long_reference": True,
+                "batch_id": batch.get("batch_id", ""),
+                "part_index": segment.get("index"),
+                "part_count": len(segments),
+                "split_method": segment.get("split_method"),
+                "selected_order": order,
+                "selected_count": total_selected,
+            },
+        )
+        source_name = build_long_reference_source_name(base_title, segment, order)
+        ingest_external_source_file(project_name, source_name, json.dumps(payload, ensure_ascii=False, indent=2))
+        segment["import_status"] = "imported"
+        segment["imported_source_name"] = source_name
+        segment["import_error"] = ""
+        imported += 1
+    if imported:
+        batch = save_long_reference_batch(project_name, batch)
+        rebuild_retrieval_assets(project_name, build_vectors=True)
+    return batch, imported
+
+
+def extract_long_reference_segments_to_queue(
+    project_name: str,
+    batch: dict,
+    segment_indices: list[int],
+    enabled_categories: list[str],
+) -> tuple[dict, int, int, list[str]]:
+    queued_total = 0
+    processed = 0
+    failed_titles = []
+    segments = batch.get("segments", [])
+    for index in segment_indices:
+        if index < 0 or index >= len(segments):
+            continue
+        segment = segments[index]
+        try:
+            result = extract_reference_knowledge(
+                project_name,
+                segment.get("title", batch.get("title", "长篇资料")),
+                segment.get("content", ""),
+                enabled_categories,
+            )
+            payload = result.get("data", {}).get("knowledge_extraction", {})
+            items = payload.get("items", []) if isinstance(payload, dict) else []
+            queued_count = queue_pending_knowledge_items(
+                project_name,
+                items,
+                scope=batch.get("scope", "reference"),
+                authority=batch.get("authority", "curated"),
+                source_title=payload.get("source_title", "") or segment.get("title", ""),
+                source_origin=batch.get("source_origin", ""),
+            )
+            segment["extract_status"] = "queued"
+            segment["queued_knowledge_count"] = int(segment.get("queued_knowledge_count") or 0) + queued_count
+            segment["extract_error"] = ""
+            queued_total += queued_count
+            processed += 1
+        except Exception as exc:
+            segment["extract_status"] = "failed"
+            segment["extract_error"] = str(exc)
+            failed_titles.append(f"{segment.get('title', '未命名片段')}：{exc}")
+    batch = save_long_reference_batch(project_name, batch)
+    return batch, processed, queued_total, failed_titles
+
+
+def render_long_reference_batch_manager(project_name: str, knowledge_category_options: list[str]):
+    with st.expander("长篇资料批次管理", expanded=False):
+        batches = list_long_reference_batches(project_name)
+        if not batches:
+            st.caption("当前还没有长篇资料批次。请先在“长篇资料导入器”里上传或粘贴整本资料并创建批次。")
+            return
+
+        selected_batch_id = st.selectbox(
+            "选择资料批次",
+            options=[batch.get("batch_id", "") for batch in batches],
+            format_func=lambda batch_id: next(
+                (
+                    f"{batch.get('title', '未命名批次')} / {batch.get('summary', {}).get('segment_count', 0)} 段 / 更新时间 {batch.get('updated_at', '-')}"
+                    for batch in batches if batch.get("batch_id") == batch_id
+                ),
+                batch_id,
+            ),
+            key="long_reference_batch_select",
+        )
+        batch = load_long_reference_batch(project_name, selected_batch_id)
+        if not batch:
+            st.warning("批次记录读取失败。")
+            return
+
+        summary = batch.get("summary", {})
+        cols = st.columns(5)
+        cols[0].metric("总片段", summary.get("segment_count", 0))
+        cols[1].metric("已导入", summary.get("imported_count", 0))
+        cols[2].metric("待导入", summary.get("import_pending_count", 0))
+        cols[3].metric("已提取", summary.get("extract_queued_count", 0))
+        cols[4].metric("失败", summary.get("extract_failed_count", 0))
+        st.caption(
+            f"范围={label_scope(batch.get('scope', 'reference'))} / 可信度={label_authority(batch.get('authority', 'curated'))} / 来源={batch.get('source_origin', '-') or '-'}"
+        )
+        if batch.get("source_file_name") or batch.get("content_fingerprint"):
+            st.caption(
+                f"文件={batch.get('source_file_name', '-') or '-'} / 资料指纹={str(batch.get('content_fingerprint', ''))[:12] or '-'} / 字符数={batch.get('content_char_count', 0)}"
+            )
+
+        segments = batch.get("segments", [])
+        filter_mode = st.selectbox(
+            "片段过滤",
+            options=["全部", "未导入", "未提取", "提取失败", "已提取"],
+            key="long_reference_batch_filter",
+        )
+        filtered_indices = []
+        for index, segment in enumerate(segments):
+            if filter_mode == "未导入" and segment.get("import_status") == "imported":
+                continue
+            if filter_mode == "未提取" and segment.get("extract_status", "pending") not in {"pending", ""}:
+                continue
+            if filter_mode == "提取失败" and segment.get("extract_status") != "failed":
+                continue
+            if filter_mode == "已提取" and segment.get("extract_status") not in {"queued", "extracted"}:
+                continue
+            filtered_indices.append(index)
+
+        selected_indices = st.multiselect(
+            "选择要继续处理的片段",
+            options=filtered_indices,
+            default=filtered_indices[: min(20, len(filtered_indices))],
+            format_func=lambda index: (
+                f"{segments[index].get('index')}. {segments[index].get('title')}"
+                f" / 导入={label_batch_segment_status(segments[index].get('import_status', 'pending'))}"
+                f" / 提取={label_batch_segment_status(segments[index].get('extract_status', 'pending'))}"
+            ),
+            key=f"long_reference_batch_selected_segments_{selected_batch_id}",
+        )
+
+        for index in filtered_indices[:12]:
+            segment = segments[index]
+            st.markdown(f"#### {segment.get('index')}. {segment.get('title')}")
+            st.caption(
+                f"字符数={segment.get('char_count')} / 导入={label_batch_segment_status(segment.get('import_status', 'pending'))} / 提取={label_batch_segment_status(segment.get('extract_status', 'pending'))} / 待确认知识={segment.get('queued_knowledge_count', 0)}"
+            )
+            if segment.get("extract_error"):
+                st.warning(segment.get("extract_error"))
+        if len(filtered_indices) > 12:
+            st.caption(f"仅预览前 12 个匹配片段，共 {len(filtered_indices)} 个。")
+
+        col_import, col_extract, col_retry = st.columns(3)
+        if col_import.button("导入所选未导入片段", key=f"batch_import_{selected_batch_id}"):
+            target_indices = [index for index in selected_indices if segments[index].get("import_status") != "imported"]
+            if not target_indices:
+                st.error("没有可导入的未导入片段。")
+            else:
+                _, imported = import_long_reference_segments(project_name, batch, target_indices)
+                st.success(f"已导入 {imported} 个片段，并重建检索索引。")
+                st.rerun()
+
+        extract_limit = st.number_input("本次最多提取片段数", min_value=1, max_value=50, value=5, key=f"batch_extract_limit_{selected_batch_id}")
+        enabled_categories = st.multiselect(
+            "提取分类",
+            options=knowledge_category_options,
+            default=["characters", "items", "abilities", "world_rules", "timeline_events", "relationships"],
+            format_func=label_knowledge_category,
+            key=f"batch_extract_categories_{selected_batch_id}",
+        )
+        if col_extract.button("提取所选未提取片段", key=f"batch_extract_{selected_batch_id}"):
+            target_indices = [
+                index for index in selected_indices
+                if segments[index].get("extract_status", "pending") in {"pending", ""}
+            ][: int(extract_limit)]
+            if not target_indices:
+                st.error("没有可提取的未提取片段。")
+            elif not enabled_categories:
+                st.error("请至少选择一个提取分类。")
+            else:
+                _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+                    project_name,
+                    batch,
+                    target_indices,
+                    enabled_categories,
+                )
+                st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
+                for failure in failures[:5]:
+                    st.warning(f"提取失败：{failure}")
+                if not failures:
+                    st.rerun()
+
+        if col_retry.button("重试失败片段", key=f"batch_retry_{selected_batch_id}"):
+            target_indices = [
+                index for index in selected_indices
+                if segments[index].get("extract_status") == "failed"
+            ][: int(extract_limit)]
+            if not target_indices:
+                st.error("没有选中的失败片段。")
+            elif not enabled_categories:
+                st.error("请至少选择一个提取分类。")
+            else:
+                _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+                    project_name,
+                    batch,
+                    target_indices,
+                    enabled_categories,
+                )
+                st.success(f"已重试 {processed} 个片段，加入 {queued_total} 条待确认知识。")
+                for failure in failures[:5]:
+                    st.warning(f"重试失败：{failure}")
+                if not failures:
+                    st.rerun()
+
+        with st.expander("高级操作", expanded=False):
+            if st.button("删除当前批次记录", key=f"batch_delete_{selected_batch_id}"):
+                delete_long_reference_batch(project_name, selected_batch_id)
+                st.success("已删除批次记录。已导入的资料文件和结构化知识不会被删除。")
+                st.rerun()
+            raw_batch_json = st.text_area(
+                "批次原始数据",
+                value=json.dumps(batch, ensure_ascii=False, indent=2),
+                height=360,
+                key=f"batch_raw_json_{selected_batch_id}",
+            )
+            if st.button("保存批次原始数据", key=f"batch_save_raw_{selected_batch_id}"):
+                try:
+                    parsed = json.loads(raw_batch_json)
+                    if not isinstance(parsed, dict):
+                        st.error("批次数据必须是对象结构。")
+                    else:
+                        save_long_reference_batch(project_name, parsed)
+                        st.success("批次数据已保存。")
+                        st.rerun()
+                except json.JSONDecodeError as exc:
+                    st.error(f"结构化数据格式错误：{exc}")
+
+
 def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str]):
     with st.expander("长篇资料导入器", expanded=False):
         st.caption("适合导入长篇网文、原作正文或大段参考资料。建议先切分并导入索引，再分批提取结构化知识。")
@@ -2115,6 +2549,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             title = long_title.strip() or (uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料")
             segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
             st.session_state["long_reference_segments"] = segments
+            st.session_state.pop("long_reference_batch_id", None)
             if segments:
                 st.success(f"已切分为 {len(segments)} 个资料片段。")
             else:
@@ -2125,7 +2560,41 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             return
 
         total_chars = sum(int(item.get("char_count", 0)) for item in segments)
+        source_file_name = uploaded_file.name if uploaded_file else ""
+        content_fingerprint = calculate_text_fingerprint(pasted_text)
+        matching_batches = find_matching_long_reference_batches(
+            project_name,
+            fingerprint=content_fingerprint,
+            source_file_name=source_file_name,
+            char_count=len(normalize_text_for_fingerprint(pasted_text)),
+            segment_count=len(segments),
+        )
         st.caption(f"当前预览：{len(segments)} 个片段 / 共 {total_chars} 字符。")
+        if content_fingerprint:
+            st.caption(f"资料指纹：`{content_fingerprint[:12]}`")
+        if matching_batches:
+            best_match = matching_batches[0]
+            st.warning(
+                f"检测到可能已存在的资料批次：{best_match.get('title', '未命名批次')}。"
+                f"匹配原因：{'、'.join(best_match.get('match_reasons', [])) or '相似'}。"
+            )
+            match_options = [batch.get("batch_id", "") for batch in matching_batches]
+            selected_match_id = st.selectbox(
+                "选择已有批次继续处理",
+                options=match_options,
+                format_func=lambda batch_id: next(
+                    (
+                        f"{batch.get('title', '未命名批次')} / 匹配分={batch.get('match_score', 0)} / {batch.get('summary', {}).get('segment_count', 0)} 段"
+                        for batch in matching_batches if batch.get("batch_id") == batch_id
+                    ),
+                    batch_id,
+                ),
+                key="long_reference_matching_batch",
+            )
+            if st.button("使用已有批次继续处理"):
+                st.session_state["long_reference_batch_id"] = selected_match_id
+                st.success("已绑定到已有批次。请在“长篇资料批次管理”里继续导入、提取或重试。")
+                st.rerun()
         for segment in segments[:10]:
             st.markdown(f"#### {segment.get('index')}. {segment.get('title')}")
             st.caption(f"切分方式={segment.get('split_method')} / 字符数={segment.get('char_count')}")
@@ -2142,39 +2611,39 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             key="long_reference_selected_segments",
         )
 
+        def get_or_create_preview_batch() -> dict:
+            batch_id = st.session_state.get("long_reference_batch_id")
+            if batch_id:
+                existing = load_long_reference_batch(project_name, batch_id)
+                if existing:
+                    return existing
+            batch = create_long_reference_batch(
+                project_name,
+                title=long_title.strip() or "长篇资料",
+                scope=long_scope,
+                authority=long_authority,
+                source_type=long_source_type,
+                source_origin=long_origin.strip(),
+                source_file_name=source_file_name,
+                content_fingerprint=content_fingerprint,
+                content_char_count=len(normalize_text_for_fingerprint(pasted_text)),
+                segments=segments,
+            )
+            st.session_state["long_reference_batch_id"] = batch.get("batch_id")
+            return batch
+
+        if st.button("创建资料处理批次"):
+            batch = get_or_create_preview_batch()
+            st.success(f"已创建批次：{batch.get('title')} / {batch.get('summary', {}).get('segment_count', 0)} 个片段。")
+            st.rerun()
+
         col_import, col_extract = st.columns(2)
         if col_import.button("批量导入所选片段到资料索引"):
             if not selected_indices:
                 st.error("请先选择片段。")
             else:
-                imported = 0
-                total_selected = len(selected_indices)
-                base_title = long_title.strip() or "长篇资料"
-                for order, index in enumerate(selected_indices, start=1):
-                    segment = segments[index]
-                    payload = build_structured_external_source_payload(
-                        source_type=long_source_type,
-                        scope=long_scope,
-                        title=segment.get("title", f"{base_title} 片段 {order:03d}"),
-                        summary=f"长篇资料片段 {segment.get('index')} / 共 {len(segments)} 段 / 字符数 {segment.get('char_count')}",
-                        content=segment.get("content", ""),
-                        tags=["长篇资料", "自动切分"],
-                        metadata={
-                            "authority": long_authority,
-                            "source_origin": long_origin.strip(),
-                            "long_reference": True,
-                            "part_index": segment.get("index"),
-                            "part_count": len(segments),
-                            "split_method": segment.get("split_method"),
-                            "selected_order": order,
-                            "selected_count": total_selected,
-                        },
-                    )
-                    short_title = re.sub(r"\s+", "_", str(segment.get("title", "segment")))[:40]
-                    source_name = f"{base_title}_{int(segment.get('index', order)):04d}_{short_title}"
-                    ingest_external_source_file(project_name, source_name, json.dumps(payload, ensure_ascii=False, indent=2))
-                    imported += 1
-                rebuild_retrieval_assets(project_name, build_vectors=True)
+                batch = get_or_create_preview_batch()
+                _, imported = import_long_reference_segments(project_name, batch, selected_indices)
                 st.success(f"已导入 {imported} 个长篇资料片段，并重建检索索引。")
                 st.rerun()
 
@@ -2192,32 +2661,14 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             elif not enabled_categories:
                 st.error("请至少选择一个提取分类。")
             else:
-                queued_total = 0
-                processed = 0
-                failed_titles = []
                 with st.spinner("正在分批提取结构化知识..."):
-                    for index in selected_indices[: int(batch_limit)]:
-                        segment = segments[index]
-                        try:
-                            result = extract_reference_knowledge(
-                                project_name,
-                                segment.get("title", long_title.strip() or "长篇资料"),
-                                segment.get("content", ""),
-                                enabled_categories,
-                            )
-                            payload = result.get("data", {}).get("knowledge_extraction", {})
-                            items = payload.get("items", []) if isinstance(payload, dict) else []
-                            queued_total += queue_pending_knowledge_items(
-                                project_name,
-                                items,
-                                scope=long_scope,
-                                authority=long_authority,
-                                source_title=payload.get("source_title", "") or segment.get("title", ""),
-                                source_origin=long_origin.strip(),
-                            )
-                            processed += 1
-                        except Exception as exc:
-                            failed_titles.append(f"{segment.get('title', '未命名片段')}：{exc}")
+                    batch = get_or_create_preview_batch()
+                    _, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
+                        project_name,
+                        batch,
+                        selected_indices[: int(batch_limit)],
+                        enabled_categories,
+                    )
                 st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
                 for failure in failed_titles[:5]:
                     st.warning(f"提取失败：{failure}")
@@ -2512,7 +2963,7 @@ def _save_browser_resource(project_name: str, resource: dict, edited_content: st
         save_review_resources(project_name, int(resource.get("chapter_no", 0)), edited_content, parsed)
         return
     if group == "analysis":
-        save_analysis_resource(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no", 0)), edited_content)
+        save_analysis_resource(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no") or 0), edited_content)
         return
     if group == "evaluation":
         parsed = json.loads(edited_json_text) if edited_json_text.strip() else {}
@@ -2550,7 +3001,7 @@ def _delete_browser_resource(project_name: str, resource: dict):
     if group == "review":
         return delete_chapter_review(project_name, int(resource.get("chapter_no", 0)))
     if group == "analysis":
-        return delete_analysis_report(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no", 0)))
+        return delete_analysis_report(project_name, str(resource.get("analysis_type", "unknown")), int(resource.get("chapter_no") or 0))
     if group == "evaluation":
         return delete_evaluation_report(project_name, int(resource.get("chapter_no", 0)))
     if group == "run":
@@ -3677,7 +4128,9 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
         source_dir = retrieval_sources_path(project_name)
         st.caption(f"外部资料保存目录：`{source_dir}`")
         render_pending_knowledge_queue(project_name)
+        render_long_reference_batch_manager(project_name, knowledge_category_options)
         render_knowledge_organizer(project_name, knowledge_category_options)
+        render_source_package_report_page(project_name)
         render_long_reference_importer(project_name, source_type_options, knowledge_category_options)
 
     if mode == "ingestion":
