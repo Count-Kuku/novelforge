@@ -5,6 +5,8 @@ from urllib.request import Request, urlopen
 from llm import call_llm
 from pydantic import ValidationError
 from prompts import (
+    discuss_creative_profile_prompt,
+    discuss_creative_profile_turn_prompt,
     discuss_chapter_prompt,
     discuss_chapter_turn_prompt,
     discuss_arc_prompt,
@@ -35,6 +37,7 @@ from prompts import (
 )
 from memory import (
     chapter_count,
+    delete_creative_profile_discussion_artifact,
     delete_chapter_discussion_artifact,
     delete_arc_discussion_artifact,
     delete_outline_discussion_artifact,
@@ -63,6 +66,7 @@ from memory import (
     save_chapter_discussion_artifact,
     save_chapter_outline,
     save_chapter_outline_metadata,
+    save_creative_profile_discussion_artifact,
     save_global_rules,
     save_analysis_report,
     save_conflict_resolution,
@@ -83,6 +87,7 @@ from schemas import (
     ChapterWritingGuidance,
     ArcChapterPlanResult,
     ArcDiscussionResult,
+    CreativeProfileDiscussionResult,
     ChapterPipelineState,
     ChapterEvaluationResult,
     CharacterAnalysisResult,
@@ -187,6 +192,7 @@ KNOWLEDGE_SOURCE_TYPES = [
 
 COMMON_RETRIEVAL_SOURCE_TYPES = [
     "outline",
+    "creative_profile_discussion",
     "outline_discussion",
     "volume_outline",
     "volume_discussion",
@@ -850,6 +856,32 @@ def discuss_outline(project_name: str, user_idea: str) -> dict:
     ).model_dump()
 
 
+def discuss_creative_profile(project_name: str, user_idea: str) -> dict:
+    memory = load_memory(project_name)
+    current_profile = load_creative_profile(project_name)
+    prompt = discuss_creative_profile_prompt(memory, current_profile, user_idea, _build_rules_text(project_name, "all"))
+    payload = _call_json_llm(prompt, "模型没有返回创作配置讨论结果。")
+    try:
+        result = CreativeProfileDiscussionResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"创作配置讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "discuss_creative_profile",
+        success=True,
+        status="completed",
+        data={
+            "discussion": result.model_dump(),
+            "report_markdown": render_discussion_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="CreativeProfileDiscussionResult",
+            message="创作配置讨论结果已通过结构校验。",
+        ),
+    ).model_dump()
+
+
 def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str) -> dict:
     memory = load_memory(project_name)
     outline = load_outline(project_name)
@@ -1014,6 +1046,50 @@ def discuss_chapter_turn(
             status="passed",
             schema_name="ChapterDiscussionResult",
             message="本轮章节讨论结果已通过结构校验。",
+        ),
+    ).model_dump()
+
+
+def discuss_creative_profile_turn(
+    project_name: str,
+    user_idea: str,
+    messages: list[dict],
+    current_discussion: dict | None,
+    latest_user_message: str,
+) -> dict:
+    memory = load_memory(project_name)
+    current_profile = load_creative_profile(project_name)
+    prompt = discuss_creative_profile_turn_prompt(
+        memory,
+        current_profile,
+        user_idea,
+        messages,
+        current_discussion,
+        latest_user_message,
+        _build_rules_text(project_name, "all"),
+    )
+    payload = _call_json_llm(prompt, "模型没有返回本轮创作配置讨论结果。")
+    assistant_message = str(payload.get("assistant_message", "") or "").strip()
+    discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
+
+    try:
+        result = CreativeProfileDiscussionResult.model_validate(discussion_payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"本轮创作配置讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "discuss_creative_profile_turn",
+        success=True,
+        status="completed",
+        data={
+            "assistant_message": assistant_message,
+            "discussion": result.model_dump(),
+            "report_markdown": render_discussion_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="CreativeProfileDiscussionResult",
+            message="本轮创作配置讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -1269,6 +1345,29 @@ def approve_outline_discussion(project_name: str, discussion_step: dict) -> dict
 
 def clear_outline_discussion_approval(project_name: str) -> bool:
     return delete_outline_discussion_artifact(project_name)
+
+
+def approve_creative_profile_discussion(project_name: str, discussion_step: dict) -> dict:
+    discussion = discussion_step.get("data", {}).get("discussion", {}) if isinstance(discussion_step, dict) else {}
+    report_markdown = discussion_step.get("data", {}).get("report_markdown", "") if isinstance(discussion_step, dict) else ""
+    if not isinstance(discussion, dict) or not discussion:
+        raise RuntimeError("没有可批准的创作配置讨论结果。")
+    if not discussion.get("approval_ready"):
+        raise RuntimeError("创作配置讨论结果尚未达到可批准状态。")
+    discussion_result = CreativeProfileDiscussionResult.model_validate(discussion)
+    recommended_profile = discussion_result.recommended_profile.model_dump()
+    save_creative_profile(project_name, recommended_profile)
+    save_creative_profile_discussion_artifact(project_name, discussion_result.model_dump(), report_markdown)
+    return {
+        "discussion": discussion_result.model_dump(),
+        "report_markdown": report_markdown,
+        "saved_profile": recommended_profile,
+        "saved_path": f"data/projects/{project_name}/creative_profile.discussion.json",
+    }
+
+
+def clear_creative_profile_discussion_approval(project_name: str) -> bool:
+    return delete_creative_profile_discussion_artifact(project_name)
 
 
 def approve_chapter_discussion(project_name: str, chapter_no: int, discussion_step: dict) -> dict:
@@ -1697,6 +1796,7 @@ def generate_chapter_outline(
         f"第{chapter_no}章 {user_requirement} {outline} {volume_outline} {arc_outline} {volume_discussion_context} {arc_discussion_context} {chapter_discussion_context}",
         allowed_source_types=[
             "outline",
+            "creative_profile_discussion",
             "outline_discussion",
             "volume_outline",
             "volume_discussion",
@@ -1761,6 +1861,7 @@ def write_chapter(
         project_name,
         f"第{chapter_no}章 {chapter_outline} {normalized_guidance}",
         allowed_source_types=[
+            "creative_profile_discussion",
             "chapter_summary",
             "chapter_outline",
             "chapter_discussion",

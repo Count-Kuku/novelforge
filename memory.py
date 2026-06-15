@@ -445,6 +445,46 @@ def save_creative_profile(project_name: str, profile: dict) -> dict:
     return normalized
 
 
+def _creative_profile_discussion_path(project_name: str) -> Path:
+    return project_path(project_name) / "creative_profile.discussion.json"
+
+
+def save_creative_profile_discussion_artifact(project_name: str, discussion: dict, report_markdown: str):
+    path = _creative_profile_discussion_path(project_name)
+    payload = {
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(report_markdown or ""),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_creative_profile_discussion_artifact(project_name: str) -> dict:
+    path = _creative_profile_discussion_path(project_name)
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    discussion = payload.get("discussion", {})
+    return {
+        "discussion": discussion if isinstance(discussion, dict) else {},
+        "report_markdown": str(payload.get("report_markdown", "") or ""),
+    }
+
+
+def delete_creative_profile_discussion_artifact(project_name: str) -> bool:
+    path = _creative_profile_discussion_path(project_name)
+    if not path.exists():
+        return False
+    path.unlink()
+    sync_project_retrieval_assets(project_name)
+    return True
+
+
 def knowledge_dir_path(project_name: str) -> Path:
     path = project_path(project_name) / "knowledge"
     path.mkdir(parents=True, exist_ok=True)

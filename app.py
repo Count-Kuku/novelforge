@@ -28,6 +28,7 @@ from memory import (
     load_evaluation_report,
     load_global_rules,
     load_creative_profile,
+    load_creative_profile_discussion_artifact,
     load_knowledge_base,
     load_knowledge_category,
     load_source_package_report,
@@ -103,6 +104,7 @@ from retrieval import build_structured_external_source_payload, debug_retrieve_c
 from skills import (
     approve_chapter_discussion,
     approve_arc_discussion,
+    approve_creative_profile_discussion,
     approve_outline_discussion,
     approve_volume_discussion,
     analyze_characters,
@@ -110,6 +112,7 @@ from skills import (
     analyze_timeline,
     clear_chapter_discussion_approval,
     clear_arc_discussion_approval,
+    clear_creative_profile_discussion_approval,
     clear_outline_discussion_approval,
     clear_volume_discussion_approval,
     compact_memory,
@@ -118,6 +121,8 @@ from skills import (
     discuss_arc_turn,
     discuss_chapter,
     discuss_chapter_turn,
+    discuss_creative_profile,
+    discuss_creative_profile_turn,
     discuss_outline,
     discuss_outline_turn,
     discuss_volume,
@@ -189,6 +194,7 @@ RETRIEVAL_MODE_LABELS = {
 SOURCE_TYPE_LABELS = {
     "outline": "全书大纲",
     "outline_discussion": "全书讨论工件",
+    "creative_profile_discussion": "创作配置讨论工件",
     "volume_outline": "分卷大纲",
     "volume_discussion": "分卷讨论工件",
     "arc_outline": "剧情段大纲",
@@ -288,6 +294,7 @@ DEFAULT_PAGE = "项目总览"
 SCHEMA_LABELS = {
     "OrganizedReferenceResult": "资料整理结果",
     "OutlineDiscussionResult": "全书讨论结果",
+    "CreativeProfileDiscussionResult": "创作配置讨论结果",
     "ChapterDiscussionResult": "章节讨论结果",
     "VolumeDiscussionResult": "分卷讨论结果",
     "ArcDiscussionResult": "剧情段讨论结果",
@@ -690,6 +697,108 @@ def select_with_custom(container, label: str, options: list[str], current_value:
         placeholder=f"输入自己的{label}",
     )
     return custom_value.strip() or cleaned_value or options[0]
+
+
+CREATIVE_PROFILE_FORM_KEYS = {
+    "story_mode": "creative_story_mode",
+    "target_length": "creative_target_length",
+    "target_word_count": "creative_form_target_word_count",
+    "workflow_depth": "creative_workflow_depth",
+    "reference_strength": "creative_reference_strength",
+    "conflict_policy": "creative_conflict_policy",
+    "custom_reference_focus": "creative_form_custom_reference_focus",
+    "allow_canon_deviation": "creative_form_allow_canon_deviation",
+    "notes": "creative_form_notes",
+    "reference_focus": "creative_form_reference_focus",
+}
+
+
+def _normalize_creative_form_state(profile: dict | None) -> dict:
+    payload = dict(profile or {})
+    existing_focus = payload.get("reference_focus", []) if isinstance(payload.get("reference_focus", []), list) else []
+    focus_options = ["角色", "世界观", "剧情事件", "道具能力", "时间线", "写作风格", "对白风格", "写作手法", "硬性约束"]
+    preset_focus = [item for item in existing_focus if item in focus_options]
+    custom_focus = [item for item in existing_focus if item not in focus_options]
+    return {
+        "story_mode": payload.get("story_mode", "主线故事"),
+        "target_length": payload.get("target_length", "长篇"),
+        "target_word_count": payload.get("target_word_count", ""),
+        "workflow_depth": payload.get("workflow_depth", "完整长篇流程"),
+        "reference_strength": payload.get("reference_strength", "中参考"),
+        "conflict_policy": payload.get("conflict_policy", "优先项目设定"),
+        "allow_canon_deviation": bool(payload.get("allow_canon_deviation", True)),
+        "notes": payload.get("notes", ""),
+        "reference_focus": preset_focus or ["角色", "世界观", "剧情事件"],
+        "custom_reference_focus": "，".join(custom_focus),
+    }
+
+
+def _init_creative_profile_form_state(project_name: str, profile: dict):
+    state_key = f"creative_profile_form_state:{project_name}"
+    if state_key in st.session_state:
+        return
+    st.session_state[state_key] = _normalize_creative_form_state(profile)
+
+
+def _get_creative_profile_form_state(project_name: str) -> dict:
+    return dict(st.session_state.get(f"creative_profile_form_state:{project_name}", {}))
+
+
+def _set_creative_profile_form_state(project_name: str, profile: dict):
+    normalized = _normalize_creative_form_state(profile)
+    st.session_state[f"creative_profile_form_state:{project_name}"] = normalized
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['story_mode']}_select"] = normalized["story_mode"] if normalized["story_mode"] in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['story_mode']}_custom"] = normalized["story_mode"] if normalized["story_mode"] not in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"} else ""
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['target_length']}_select"] = normalized["target_length"] if normalized["target_length"] in {"片段", "短篇", "中篇", "长篇", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['target_length']}_custom"] = normalized["target_length"] if normalized["target_length"] not in {"片段", "短篇", "中篇", "长篇"} else ""
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['workflow_depth']}_select"] = normalized["workflow_depth"] if normalized["workflow_depth"] in {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['workflow_depth']}_custom"] = normalized["workflow_depth"] if normalized["workflow_depth"] not in {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"} else ""
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['reference_strength']}_select"] = normalized["reference_strength"] if normalized["reference_strength"] in {"轻参考", "中参考", "强参考", "严格原作", "主要参考文风", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['reference_strength']}_custom"] = normalized["reference_strength"] if normalized["reference_strength"] not in {"轻参考", "中参考", "强参考", "严格原作", "主要参考文风"} else ""
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['conflict_policy']}_select"] = normalized["conflict_policy"] if normalized["conflict_policy"] in {"优先项目设定", "优先原作资料", "人工确认", "保留多版本", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['conflict_policy']}_custom"] = normalized["conflict_policy"] if normalized["conflict_policy"] not in {"优先项目设定", "优先原作资料", "人工确认", "保留多版本"} else ""
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["target_word_count"]] = normalized["target_word_count"]
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["reference_focus"]] = normalized["reference_focus"]
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["custom_reference_focus"]] = normalized["custom_reference_focus"]
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["allow_canon_deviation"]] = normalized["allow_canon_deviation"]
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["notes"]] = normalized["notes"]
+
+
+def _build_creative_profile_from_form_values(
+    story_mode: str,
+    target_length: str,
+    target_word_count: str,
+    workflow_depth: str,
+    reference_strength: str,
+    conflict_policy: str,
+    reference_focus: list[str],
+    custom_reference_focus: str,
+    allow_canon_deviation: bool,
+    notes: str,
+) -> dict:
+    custom_focus_items = [
+        item.strip()
+        for item in str(custom_reference_focus or "").replace("，", ",").split(",")
+        if item.strip()
+    ]
+    merged_reference_focus = []
+    seen_focus = set()
+    for item in list(reference_focus or []) + custom_focus_items:
+        if item in seen_focus:
+            continue
+        seen_focus.add(item)
+        merged_reference_focus.append(item)
+    return {
+        "story_mode": story_mode,
+        "target_length": target_length,
+        "target_word_count": target_word_count,
+        "workflow_depth": workflow_depth,
+        "reference_strength": reference_strength,
+        "reference_focus": merged_reference_focus,
+        "allow_canon_deviation": allow_canon_deviation,
+        "conflict_policy": conflict_policy,
+        "notes": notes,
+    }
 
 
 def _discussion_messages_key(kind: str, suffix: str = "") -> str:
@@ -1772,12 +1881,14 @@ def render_project_overview_page(project_name: str):
 
 def render_creative_profile_page(project_name: str):
     st.subheader("创作配置")
-    st.caption("配置本项目的任务性质、目标篇幅、生成层级和资料参考强度。预设只是快捷入口，每一项都可以自定义。")
+    st.caption("配置本项目的任务性质、目标篇幅、生成层级和资料参考强度。你可以直接手动选择，也可以先讨论再把推荐配置回填到表单。")
 
     render_creative_task_wizard(project_name)
     st.divider()
 
     profile = load_creative_profile(project_name)
+    _init_creative_profile_form_state(project_name, profile)
+    form_state = _get_creative_profile_form_state(project_name)
     story_modes = ["主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"]
     target_lengths = ["片段", "短篇", "中篇", "长篇"]
     workflow_depths = ["只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"]
@@ -1785,97 +1896,216 @@ def render_creative_profile_page(project_name: str):
     focus_options = ["角色", "世界观", "剧情事件", "道具能力", "时间线", "写作风格", "对白风格", "写作手法", "硬性约束"]
     conflict_policies = ["优先项目设定", "优先原作资料", "人工确认", "保留多版本"]
 
+    creative_discussion_suffix = project_name
+    discussion_messages_key = _discussion_messages_key("creative_profile", creative_discussion_suffix)
+    discussion_result_key = _discussion_result_key("creative_profile", creative_discussion_suffix)
+    discussion_input_key = _discussion_input_key("creative_profile", creative_discussion_suffix)
+    clear_input_flag_key = _discussion_input_clear_flag_key("creative_profile", creative_discussion_suffix)
+    _consume_discussion_input_clear("creative_profile", creative_discussion_suffix)
+    discussion_step = st.session_state.get(discussion_result_key, {})
+    approved_artifact = load_creative_profile_discussion_artifact(project_name)
+
+    st.markdown("### 讨论辅助")
+    st.caption("如果你还不确定该选什么，可以先用自然语言描述目标，系统会给出推荐配置和待确认问题。")
+    user_idea = st.text_area(
+        "这次想写什么",
+        height=140,
+        key=f"creative_profile_discussion_seed_{project_name}",
+        placeholder="例如：想写一个偏伤感的现代都市 AU 续写，只保留原作人物关系和说话风格，不保留原作结局。",
+    )
+    discuss_action_col1, discuss_action_col2 = st.columns(2)
+    if discuss_action_col1.button("开始讨论创作配置", key="start_creative_profile_discussion"):
+        if not user_idea.strip():
+            st.warning("请先描述这次想写什么。")
+        else:
+            try:
+                result = discuss_creative_profile(project_name, user_idea)
+                st.session_state[discussion_result_key] = result
+                st.session_state[discussion_messages_key] = []
+                assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、推荐配置方向和待确认问题，我们可以继续细化。"
+                _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
+                st.rerun()
+            except Exception as exc:
+                st.error(f"讨论失败：{exc}")
+    if discuss_action_col2.button("重置创作配置讨论", key="reset_creative_profile_discussion"):
+        st.session_state[discussion_result_key] = {}
+        st.session_state[discussion_messages_key] = []
+        st.session_state[clear_input_flag_key] = True
+        st.rerun()
+
+    summary_col, chat_col = st.columns([1, 1])
+    with summary_col:
+        st.markdown("#### 当前讨论结论")
+        _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前收敛出的创作配置建议。")
+        discussion_payload = discussion_step.get("data", {}).get("discussion", {}) if discussion_step else {}
+        recommended_profile = discussion_payload.get("recommended_profile", {}) if isinstance(discussion_payload, dict) else {}
+        action_col1, action_col2 = st.columns(2)
+        if action_col1.button("应用推荐到表单", key="apply_creative_profile_recommendation"):
+            if not recommended_profile:
+                st.warning("当前还没有可应用的推荐配置。")
+            else:
+                _set_creative_profile_form_state(project_name, recommended_profile)
+                st.success("已将推荐配置回填到下方表单，你可以继续微调后保存。")
+                st.rerun()
+        if action_col2.button("批准并写入当前配置", key="approve_creative_profile_discussion"):
+            try:
+                result = approve_creative_profile_discussion(project_name, discussion_step)
+                _set_creative_profile_form_state(project_name, result.get("saved_profile", {}))
+                st.success(f"已保存创作配置讨论工件，并写入当前配置：{result.get('saved_path', '')}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"批准失败：{exc}")
+        clear_col, empty_col = st.columns(2)
+        if clear_col.button("清除已批准讨论", key="clear_creative_profile_discussion"):
+            if clear_creative_profile_discussion_approval(project_name):
+                st.success("已清除创作配置已批准讨论工件。")
+                st.rerun()
+            else:
+                st.warning("当前没有可清除的已批准创作配置讨论工件。")
+        st.markdown("#### 已批准讨论版本")
+        _render_approved_discussion_artifact(approved_artifact, "当前创作配置还没有已批准讨论工件。")
+
+    with chat_col:
+        st.markdown("#### 讨论对话")
+        messages = st.session_state.get(discussion_messages_key, [])
+        _render_discussion_chat(messages)
+        follow_up = st.text_area(
+            "继续讨论",
+            key=discussion_input_key,
+            height=120,
+            placeholder="例如：我希望重点保留人物关系，但剧情走向可以明显偏离原作。",
+        )
+        if st.button("发送讨论消息", key="send_creative_profile_discussion"):
+            if not follow_up.strip():
+                st.warning("讨论消息不能为空。")
+            elif not user_idea.strip():
+                st.warning("请先填写这次想写什么。")
+            else:
+                try:
+                    _append_discussion_message(discussion_messages_key, "user", follow_up)
+                    messages = st.session_state.get(discussion_messages_key, [])
+                    result = discuss_creative_profile_turn(
+                        project_name,
+                        user_idea,
+                        messages,
+                        discussion_step.get("data", {}).get("discussion", {}),
+                        follow_up,
+                    )
+                    st.session_state[discussion_result_key] = result
+                    assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了当前创作配置建议。"
+                    _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
+                    st.session_state[clear_input_flag_key] = True
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"继续讨论失败：{exc}")
+
+    st.divider()
+    st.markdown("### 直接配置")
+
     with st.form("creative_profile_form"):
         col_a, col_b = st.columns(2)
         story_mode = select_with_custom(
             col_a,
             "任务性质",
             story_modes,
-            profile.get("story_mode", "主线故事"),
-            "creative_story_mode",
+            form_state.get("story_mode", "主线故事"),
+            CREATIVE_PROFILE_FORM_KEYS["story_mode"],
             "例如：半 AU 续写、原角色现代都市篇、只补某角色死亡前一晚。",
         )
         target_length = select_with_custom(
             col_b,
             "目标篇幅",
             target_lengths,
-            profile.get("target_length", "长篇"),
-            "creative_target_length",
+            form_state.get("target_length", "长篇"),
+            CREATIVE_PROFILE_FORM_KEYS["target_length"],
             "例如：1.5 万字中短篇、五个小节、三幕式短篇。",
         )
-        target_word_count = col_a.text_input("目标字数（可选）", value=profile.get("target_word_count", ""), placeholder="例如：8000、2万、20万")
+        target_word_count = col_a.text_input(
+            "目标字数（可选）",
+            value=form_state.get("target_word_count", ""),
+            placeholder="例如：8000、2万、20万",
+            key=CREATIVE_PROFILE_FORM_KEYS["target_word_count"],
+        )
         workflow_depth = select_with_custom(
             col_b,
             "生成层级",
             workflow_depths,
-            profile.get("workflow_depth", "完整长篇流程"),
-            "creative_workflow_depth",
+            form_state.get("workflow_depth", "完整长篇流程"),
+            CREATIVE_PROFILE_FORM_KEYS["workflow_depth"],
             "例如：先三幕式结构，再分 5 个小节写正文。",
         )
         reference_strength = select_with_custom(
             col_a,
             "资料参考强度",
             reference_strengths,
-            profile.get("reference_strength", "中参考"),
-            "creative_reference_strength",
+            form_state.get("reference_strength", "中参考"),
+            CREATIVE_PROFILE_FORM_KEYS["reference_strength"],
             "例如：强参考角色语气，弱参考世界观；只借人物关系。",
         )
         conflict_policy = select_with_custom(
             col_b,
             "资料冲突处理",
             conflict_policies,
-            profile.get("conflict_policy", "优先项目设定"),
-            "creative_conflict_policy",
+            form_state.get("conflict_policy", "优先项目设定"),
+            CREATIVE_PROFILE_FORM_KEYS["conflict_policy"],
             "例如：原作性格优先，但世界观以本项目为准。",
         )
-        existing_focus = profile.get("reference_focus", []) if isinstance(profile.get("reference_focus", []), list) else []
-        preset_focus = [item for item in existing_focus if item in focus_options]
-        custom_focus = [item for item in existing_focus if item not in focus_options]
         reference_focus = st.multiselect(
             "重点参考方向",
             options=focus_options,
-            default=preset_focus or ["角色", "世界观", "剧情事件"],
+            default=form_state.get("reference_focus", ["角色", "世界观", "剧情事件"]),
+            key=CREATIVE_PROFILE_FORM_KEYS["reference_focus"],
         )
         custom_reference_focus = st.text_input(
             "自定义参考方向（用逗号分隔，可选）",
-            value="，".join(custom_focus),
+            value=form_state.get("custom_reference_focus", ""),
             placeholder="例如：人物关系、能力代价、心理活动、转场方式、口癖",
+            key=CREATIVE_PROFILE_FORM_KEYS["custom_reference_focus"],
         )
-        allow_canon_deviation = st.checkbox("允许根据需求改写原设", value=bool(profile.get("allow_canon_deviation", True)))
+        allow_canon_deviation = st.checkbox(
+            "允许根据需求改写原设",
+            value=bool(form_state.get("allow_canon_deviation", True)),
+            key=CREATIVE_PROFILE_FORM_KEYS["allow_canon_deviation"],
+        )
         notes = st.text_area(
             "自由说明",
-            value=profile.get("notes", ""),
+            value=form_state.get("notes", ""),
             height=140,
             placeholder="这里可以写任何复杂规则。例如：这次是半 AU 续写，只保留角色关系和说话风格，不保留原作结局；世界观改成现代都市，但能力体系保留原作限制。",
+            key=CREATIVE_PROFILE_FORM_KEYS["notes"],
         )
         submitted = st.form_submit_button("保存创作配置")
 
     if submitted:
-        custom_focus_items = [
-            item.strip()
-            for item in custom_reference_focus.replace("，", ",").split(",")
-            if item.strip()
-        ]
-        merged_reference_focus = []
-        seen_focus = set()
-        for item in reference_focus + custom_focus_items:
-            if item in seen_focus:
-                continue
-            seen_focus.add(item)
-            merged_reference_focus.append(item)
-        saved = save_creative_profile(project_name, {
-            "story_mode": story_mode,
-            "target_length": target_length,
-            "target_word_count": target_word_count,
-            "workflow_depth": workflow_depth,
-            "reference_strength": reference_strength,
-            "reference_focus": merged_reference_focus,
-            "allow_canon_deviation": allow_canon_deviation,
-            "conflict_policy": conflict_policy,
-            "notes": notes,
-        })
+        saved = save_creative_profile(project_name, _build_creative_profile_from_form_values(
+            story_mode,
+            target_length,
+            target_word_count,
+            workflow_depth,
+            reference_strength,
+            conflict_policy,
+            reference_focus,
+            custom_reference_focus,
+            allow_canon_deviation,
+            notes,
+        ))
+        _set_creative_profile_form_state(project_name, saved)
         st.success("创作配置已保存。")
         profile = saved
+    else:
+        preview_profile = _build_creative_profile_from_form_values(
+            story_mode,
+            target_length,
+            target_word_count,
+            workflow_depth,
+            reference_strength,
+            conflict_policy,
+            reference_focus,
+            custom_reference_focus,
+            allow_canon_deviation,
+            notes,
+        )
+        profile = preview_profile
 
     st.markdown("### 推荐生成路径")
     workflow = recommended_workflow_for_profile(profile)
@@ -2061,6 +2291,7 @@ def render_creative_task_wizard(project_name: str):
 
     if st.button("保存向导配置"):
         saved = save_creative_profile(project_name, preview_profile)
+        _set_creative_profile_form_state(project_name, saved)
         st.success("已根据向导保存创作配置。")
         st.session_state["task_wizard_last_profile"] = saved
         st.rerun()
@@ -3030,6 +3261,7 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
 
     outline = load_outline(project_name)
     outline_discussion = load_outline_discussion_artifact(project_name)
+    creative_profile_discussion = load_creative_profile_discussion_artifact(project_name)
     items.append({
         "id": "outline:root",
         "group": "outline",
@@ -3053,6 +3285,20 @@ def _build_resource_browser_items(project_name: str) -> list[dict]:
             "chapter_no": None,
             "analysis_type": "",
             "relative_path": "outline.discussion.json",
+            "editable": False,
+            "deletable": True,
+        })
+    if creative_profile_discussion.get("discussion"):
+        items.append({
+            "id": "creative-profile-discussion:root",
+            "group": "creative_profile_discussion",
+            "label": "creative_profile.discussion.json [已批准]",
+            "path_label": "创作配置讨论工件 / creative_profile.discussion.json / 已批准=是",
+            "content": creative_profile_discussion.get("report_markdown", ""),
+            "discussion_payload": creative_profile_discussion.get("discussion", {}),
+            "chapter_no": None,
+            "analysis_type": "",
+            "relative_path": "creative_profile.discussion.json",
             "editable": False,
             "deletable": True,
         })
@@ -3329,6 +3575,8 @@ def _delete_browser_resource(project_name: str, resource: dict):
         return delete_outline(project_name)
     if group == "outline_discussion":
         return clear_outline_discussion_approval(project_name)
+    if group == "creative_profile_discussion":
+        return clear_creative_profile_discussion_approval(project_name)
     if group == "volume_outline":
         return delete_volume(project_name, int(resource.get("volume_no", 0)))
     if group == "volume_discussion":
@@ -3379,7 +3627,7 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
                 st.rerun()
         return
 
-    if group in {"outline_discussion", "volume_discussion", "arc_discussion", "chapter_discussion", "arc_chapter_plan"}:
+    if group in {"outline_discussion", "creative_profile_discussion", "volume_discussion", "arc_discussion", "chapter_discussion", "arc_chapter_plan"}:
         if resource.get("content"):
             st.markdown(resource.get("content", ""))
         render_step_json_expander("结构化数据", resource.get("discussion_payload", {}) or resource.get("chapter_plan_payload", {}))
@@ -3551,6 +3799,7 @@ def render_resource_management_page(project_name: str):
         groups = [
             ("outline", "全书大纲"),
             ("outline_discussion", "全书讨论工件"),
+            ("creative_profile_discussion", "创作配置讨论工件"),
             ("volume_outline", "分卷大纲"),
             ("volume_discussion", "分卷讨论工件"),
             ("arc_outline", "剧情段大纲"),
@@ -3578,7 +3827,7 @@ def render_resource_management_page(project_name: str):
                         item_volume_no = (item.get("arc_metadata") or {}).get("volume_no")
                     if item_volume_no is None:
                         item_volume_no = (item.get("chapter_metadata") or {}).get("volume_no")
-                    if item.get("group") in {"outline", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
+                    if item.get("group") in {"outline", "creative_profile_discussion", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
                         filtered_items.append(item)
                     elif item_volume_no == browser_volume_filter:
                         filtered_items.append(item)
@@ -3591,7 +3840,7 @@ def render_resource_management_page(project_name: str):
                         item_arc_no = (item.get("arc_metadata") or {}).get("arc_no")
                     if item_arc_no is None:
                         item_arc_no = (item.get("chapter_metadata") or {}).get("arc_no")
-                    if item.get("group") in {"outline", "outline_discussion", "volume_outline", "volume_discussion", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
+                    if item.get("group") in {"outline", "outline_discussion", "creative_profile_discussion", "volume_outline", "volume_discussion", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
                         filtered_items.append(item)
                     elif item_arc_no == browser_arc_filter:
                         filtered_items.append(item)
@@ -3635,6 +3884,11 @@ def render_project_files_page(project_name: str):
         with st.expander("outline.discussion.json", expanded=False):
             st.markdown(outline_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
             render_step_json_expander("全书讨论结构化数据", outline_discussion.get("discussion", {}))
+    creative_profile_discussion = load_creative_profile_discussion_artifact(project_name)
+    if creative_profile_discussion.get("discussion"):
+        with st.expander("creative_profile.discussion.json", expanded=False):
+            st.markdown(creative_profile_discussion.get("report_markdown", "") or "（无可用 Markdown 预览）")
+            render_step_json_expander("创作配置讨论结构化数据", creative_profile_discussion.get("discussion", {}))
 
     volumes = list_volumes(project_name)
     for volume in volumes:

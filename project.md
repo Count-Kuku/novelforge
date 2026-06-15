@@ -85,6 +85,7 @@ Current practical status:
 * Grouped workspace navigation in the sidebar so planning, writing, resources, and system pages are separated by work area
 * Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
 * Project overview page upgraded into a quick-action home screen for generation, pipeline, ingestion, and resource browsing
+* Creative-profile discussion assist for clarifying ambiguous task intent before saving recommended structured project settings
 * Resumable chapter pipeline runs from persisted workflow snapshots
 * Arc-level chapter allocation planning with persisted structured plans
 * Retrieval debug preview with query terms, filters, candidate counts, and rerank inspection
@@ -233,6 +234,7 @@ novelforge/
 
         Note:
 
+        * `creative_profile.discussion.json` stores approved creative-profile discussion artifacts when available
         * `outline.discussion.json` stores approved full-story discussion artifacts when available
         * `volumes/volume_xxx.md` stores per-volume outline content
         * `volumes/volume_xxx.meta.json` stores per-volume metadata such as title / summary / status
@@ -316,6 +318,7 @@ UI features:
 * Chapter writing page now includes lightweight writing-guidance controls instead of a heavier second discussion layer
 * Dedicated model configuration page for saving multiple endpoint/key/model profiles and switching the active runtime profile from the UI
 * Creative task wizard that saves project creative settings from task type, length, output goal, reference strength, conflict policy, and notes
+* Creative profile page can now combine direct option selection with discussion-assisted recommended settings, one-click form backfill, and approval-based persistence of a creative-profile discussion artifact
 
 Business logic should remain minimal.
 
@@ -529,7 +532,7 @@ Current retrieval design notes:
 * Scope priority currently prefers `project`, then `canon`, then `reference`
 * Retrieval is already injected into outline, chapter planning, writing, review, memory update, and analysis steps
 * Project volume outlines and arc outlines are now indexed as first-class retrieval documents so chapter planning can use story-level, volume-level, and arc-level context together
-* Approved outline / volume / arc / chapter discussion artifacts are now indexed as first-class retrieval documents so planning approvals remain visible to retrieval-aware workflows
+* Approved creative-profile / outline / volume / arc / chapter discussion artifacts are now indexed as first-class retrieval documents so configuration and planning approvals remain visible to retrieval-aware workflows
 * Planning metadata saves now trigger retrieval asset refresh so hierarchy changes stay visible to later retrieval-augmented planning steps
 * Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
 * Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows

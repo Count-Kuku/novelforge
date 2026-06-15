@@ -10,6 +10,7 @@ from pathlib import Path
 
 from llm import get_embedding
 from memory import (
+    load_creative_profile_discussion_artifact,
     load_chapter_discussion_artifact,
     load_arc_discussion_artifact,
     load_arc_chapter_plan,
@@ -70,6 +71,7 @@ STRUCTURED_SOURCE_TYPES = {
     "review_world_check",
     "review_timeline_check",
     "review_foreshadowing_check",
+    "creative_profile_discussion",
     "outline_discussion",
     "volume_discussion",
     "arc_discussion",
@@ -408,6 +410,7 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
     base_path = project_path(project_name)
 
     outline = load_outline(project_name)
+    creative_profile_discussion_artifact = load_creative_profile_discussion_artifact(project_name)
     outline_discussion_artifact = load_outline_discussion_artifact(project_name)
     doc = _make_document(
         project_name,
@@ -418,6 +421,24 @@ def _documents_from_project_files(project_name: str) -> list[RetrievalDocument]:
         path=str(base_path / "outline.md"),
         tags=["outline"],
         metadata={"authority": "project"},
+    )
+    if doc:
+        documents.append(doc)
+
+    creative_profile_discussion = creative_profile_discussion_artifact.get("report_markdown", "")
+    doc = _make_document(
+        project_name,
+        "creative_profile_discussion",
+        "creative_profile_discussion",
+        "Approved Creative Profile Discussion",
+        creative_profile_discussion,
+        path=str(base_path / "creative_profile.discussion.json"),
+        tags=["creative_profile_discussion", "approved_discussion", "creative_profile"],
+        metadata={
+            "authority": "project",
+            "approval_ready": bool((creative_profile_discussion_artifact.get("discussion") or {}).get("approval_ready")),
+            "recommended_profile": (creative_profile_discussion_artifact.get("discussion") or {}).get("recommended_profile", {}),
+        },
     )
     if doc:
         documents.append(doc)

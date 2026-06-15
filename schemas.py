@@ -396,6 +396,23 @@ class ArcDiscussionResult(NovelForgeSchema):
         return _normalize_string_list(value)
 
 
+class CreativeProfileDiscussionResult(NovelForgeSchema):
+    title: str = "创作配置讨论"
+    current_understanding: str = ""
+    key_constraints: list[str] = Field(default_factory=list)
+    options: list[PlanningOption] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    recommended_direction: str = ""
+    recommended_profile: CreativeProfile = Field(default_factory=CreativeProfile)
+    approval_ready: bool = False
+
+    @field_validator("key_constraints", "open_questions", "risks", mode="before")
+    @classmethod
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
 class VolumeOutlineMetadata(NovelForgeSchema):
     volume_no: int
     title: str = ""
@@ -808,7 +825,7 @@ def render_knowledge_extraction_markdown(result: KnowledgeExtractionResult) -> s
 
 
 def render_discussion_markdown(
-    result: OutlineDiscussionResult | ChapterDiscussionResult | VolumeDiscussionResult | ArcDiscussionResult,
+    result: OutlineDiscussionResult | ChapterDiscussionResult | VolumeDiscussionResult | ArcDiscussionResult | CreativeProfileDiscussionResult,
 ) -> str:
     lines = [f"# {result.title}"]
 
@@ -857,6 +874,21 @@ def render_discussion_markdown(
 
     if result.recommended_direction:
         lines.extend(["", "## 推荐方向", "", result.recommended_direction])
+
+    recommended_profile = getattr(result, "recommended_profile", None)
+    if isinstance(recommended_profile, CreativeProfile):
+        lines.extend(["", "## 推荐创作配置", ""])
+        lines.extend([
+            f"- 任务性质：{recommended_profile.story_mode or '-'}",
+            f"- 目标篇幅：{recommended_profile.target_length or '-'}",
+            f"- 目标字数：{recommended_profile.target_word_count or '未设置'}",
+            f"- 生成层级：{recommended_profile.workflow_depth or '-'}",
+            f"- 资料参考强度：{recommended_profile.reference_strength or '-'}",
+            f"- 重点参考方向：{', '.join(recommended_profile.reference_focus or []) or '未设置'}",
+            f"- 允许改写原设：{'是' if recommended_profile.allow_canon_deviation else '否'}",
+            f"- 资料冲突处理：{recommended_profile.conflict_policy or '-'}",
+            f"- 自由说明：{recommended_profile.notes or '无'}",
+        ])
 
     lines.extend(["", f"是否可批准：`{result.approval_ready}`"])
     return "\n".join(lines)
