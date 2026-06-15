@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 class NovelForgeSchema(BaseModel):
@@ -59,6 +59,22 @@ def _normalize_string_list(value: Any) -> list[str]:
         if text:
             normalized.append(text)
     return normalized
+
+
+SOURCE_TYPE_LABELS = {
+    "external_source": "通用外部资料",
+    "external_character_sheet": "角色资料",
+    "external_location_sheet": "地点资料",
+    "external_organization_sheet": "组织资料",
+    "external_timeline_note": "时间线资料",
+    "external_canon_event": "原作事件",
+    "external_world_rule": "世界规则",
+    "external_artifact_note": "道具资料",
+}
+
+
+def _label_source_type(value: str) -> str:
+    return SOURCE_TYPE_LABELS.get(str(value or ""), str(value or "未知资料"))
 
 
 class ConsistencyChecks(NovelForgeSchema):
@@ -204,6 +220,94 @@ class OrganizedReferenceResult(NovelForgeSchema):
     source_title: str = ""
     source_summary: str = ""
     entries: list[OrganizedReferenceEntry] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _normalize_notes(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class CreativeProfile(NovelForgeSchema):
+    story_mode: str = "主线故事"
+    target_length: str = "长篇"
+    target_word_count: str = ""
+    workflow_depth: str = "完整长篇流程"
+    reference_strength: str = "中参考"
+    reference_focus: list[str] = Field(default_factory=lambda: ["角色", "世界观", "剧情事件"])
+    allow_canon_deviation: bool = True
+    conflict_policy: str = "优先项目设定"
+    notes: str = ""
+
+    @field_validator("reference_focus", mode="before")
+    @classmethod
+    def _normalize_reference_focus(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @model_validator(mode="after")
+    def _migrate_legacy_length_modes(self):
+        if self.story_mode in {"短篇", "中篇", "长篇"}:
+            if not self.target_length or self.target_length == "长篇":
+                self.target_length = self.story_mode
+            self.story_mode = "主线故事"
+        elif self.story_mode == "片段":
+            if not self.target_length or self.target_length == "长篇":
+                self.target_length = "片段"
+            self.story_mode = "单场景片段"
+        return self
+
+
+class KnowledgeEvidence(NovelForgeSchema):
+    source_title: str = ""
+    quote: str = ""
+    note: str = ""
+
+
+class ExtractedKnowledgeItem(NovelForgeSchema):
+    category: Literal[
+        "characters",
+        "items",
+        "abilities",
+        "world_rules",
+        "locations",
+        "organizations",
+        "timeline_events",
+        "relationships",
+        "writing_style",
+        "dialogue_style",
+        "narrative_techniques",
+        "constraints",
+    ]
+    name: str
+    summary: str = ""
+    details: dict[str, str] = Field(default_factory=dict)
+    evidence: list[KnowledgeEvidence] = Field(default_factory=list)
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    tags: list[str] = Field(default_factory=list)
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def _normalize_details(cls, value: Any) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        normalized = {}
+        for key, item in value.items():
+            cleaned_key = str(key).strip()
+            cleaned_value = _stringify_item(item)
+            if cleaned_key and cleaned_value:
+                normalized[cleaned_key] = cleaned_value
+        return normalized
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _normalize_tags(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class KnowledgeExtractionResult(NovelForgeSchema):
+    source_title: str = ""
+    source_summary: str = ""
+    items: list[ExtractedKnowledgeItem] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
     @field_validator("notes", mode="before")
@@ -620,26 +724,87 @@ def render_consistency_analysis_markdown(result: ConsistencyAnalysisResult) -> s
 def render_organized_reference_markdown(result: OrganizedReferenceResult) -> str:
     lines = [f"# {result.source_title or '资料整理结果'}"]
     if result.source_summary:
-        lines.extend(["", "## Source Summary", "", result.source_summary])
+        lines.extend(["", "## 资料摘要", "", result.source_summary])
     if result.notes:
-        lines.extend(["", "## Notes", ""])
+        lines.extend(["", "## 备注", ""])
         lines.extend([f"- {item}" for item in result.notes])
 
     for index, entry in enumerate(result.entries, start=1):
         lines.extend(["", f"## [{index}] {entry.title}", ""])
-        lines.append(f"- type: `{entry.source_type}`")
+        lines.append(f"- 资料类型：{_label_source_type(entry.source_type)}")
         if entry.tags:
-            lines.append(f"- tags: {', '.join(entry.tags)}")
+            lines.append(f"- 标签：{', '.join(entry.tags)}")
         if entry.summary:
-            lines.extend(["", "### Summary", "", entry.summary])
+            lines.extend(["", "### 摘要", "", entry.summary])
         if entry.content:
-            lines.extend(["", "### Details", "", entry.content])
+            lines.extend(["", "### 详细内容", "", entry.content])
         if entry.extra_fields:
-            lines.extend(["", "### Extra Fields", ""])
+            lines.extend(["", "### 补充字段", ""])
             for key, value in entry.extra_fields.items():
                 lines.append(f"- {key}: {value}")
 
     return "\n".join(lines)
+
+
+KNOWLEDGE_CATEGORY_LABELS = {
+    "characters": "角色知识",
+    "items": "物品与道具",
+    "abilities": "技能与能力",
+    "world_rules": "世界观规则",
+    "locations": "地点资料",
+    "organizations": "组织资料",
+    "timeline_events": "事件与时间线",
+    "relationships": "角色关系",
+    "writing_style": "写作风格",
+    "dialogue_style": "对白风格",
+    "narrative_techniques": "写作手法",
+    "constraints": "硬性约束",
+}
+
+
+def label_knowledge_category(value: str) -> str:
+    return KNOWLEDGE_CATEGORY_LABELS.get(str(value or ""), str(value or "未知知识"))
+
+
+def render_knowledge_extraction_markdown(result: KnowledgeExtractionResult) -> str:
+    lines = [f"# {result.source_title or '资料知识提取结果'}"]
+    if result.source_summary:
+        lines.extend(["", "## 资料摘要", "", result.source_summary])
+
+    grouped: dict[str, list[ExtractedKnowledgeItem]] = {}
+    for item in result.items:
+        grouped.setdefault(item.category, []).append(item)
+
+    if not grouped:
+        lines.extend(["", "## 提取结果", "", "- 未提取到可保存知识。"])
+
+    for category, items in grouped.items():
+        lines.extend(["", f"## {label_knowledge_category(category)}", ""])
+        for index, item in enumerate(items, start=1):
+            lines.append(f"### [{index}] {item.name}")
+            if item.summary:
+                lines.extend(["", item.summary])
+            lines.append(f"- 可信度：{item.confidence:.2f}")
+            if item.tags:
+                lines.append(f"- 标签：{', '.join(item.tags)}")
+            if item.details:
+                lines.append("- 细节：")
+                for key, value in item.details.items():
+                    lines.append(f"  - {key}：{value}")
+            evidence_lines = [evidence for evidence in item.evidence if evidence.quote or evidence.note]
+            if evidence_lines:
+                lines.append("- 证据：")
+                for evidence in evidence_lines[:3]:
+                    source = evidence.source_title or result.source_title or "未标明来源"
+                    quote = evidence.quote or evidence.note
+                    lines.append(f"  - {source}：{quote}")
+            lines.append("")
+
+    if result.notes:
+        lines.extend(["", "## 备注", ""])
+        lines.extend([f"- {item}" for item in result.notes])
+
+    return "\n".join(lines).strip()
 
 
 def render_discussion_markdown(
@@ -648,9 +813,9 @@ def render_discussion_markdown(
     lines = [f"# {result.title}"]
 
     goal_sections = [
-        ("chapter_goal", "Chapter Goal"),
-        ("volume_goal", "Volume Goal"),
-        ("arc_goal", "Arc Goal"),
+        ("chapter_goal", "章节目标"),
+        ("volume_goal", "分卷目标"),
+        ("arc_goal", "剧情段目标"),
     ]
     for attr_name, label in goal_sections:
         goal = getattr(result, attr_name, "")
@@ -658,87 +823,87 @@ def render_discussion_markdown(
             lines.extend(["", f"## {label}", "", goal])
 
     if result.current_understanding:
-        lines.extend(["", "## Current Understanding", "", result.current_understanding])
+        lines.extend(["", "## 当前理解", "", result.current_understanding])
 
     if getattr(result, "core_goals", []):
-        lines.extend(["", "## Core Goals", ""])
+        lines.extend(["", "## 核心目标", ""])
         lines.extend([f"- {item}" for item in result.core_goals])
 
     if result.key_constraints:
-        lines.extend(["", "## Key Constraints", ""])
+        lines.extend(["", "## 关键约束", ""])
         lines.extend([f"- {item}" for item in result.key_constraints])
 
     if result.options:
-        lines.extend(["", "## Options", ""])
+        lines.extend(["", "## 可选方案", ""])
         for index, option in enumerate(result.options, start=1):
             lines.append(f"### [{index}] {option.title}")
             if option.summary:
                 lines.extend(["", option.summary, ""])
             if option.strengths:
-                lines.append("Strengths:")
+                lines.append("优点：")
                 lines.extend([f"- {item}" for item in option.strengths])
             if option.risks:
-                lines.append("Risks:")
+                lines.append("风险：")
                 lines.extend([f"- {item}" for item in option.risks])
             lines.append("")
 
     if result.open_questions:
-        lines.extend(["", "## Open Questions", ""])
+        lines.extend(["", "## 待确认问题", ""])
         lines.extend([f"- {item}" for item in result.open_questions])
 
     if result.risks:
-        lines.extend(["", "## Risks", ""])
+        lines.extend(["", "## 风险", ""])
         lines.extend([f"- {item}" for item in result.risks])
 
     if result.recommended_direction:
-        lines.extend(["", "## Recommended Direction", "", result.recommended_direction])
+        lines.extend(["", "## 推荐方向", "", result.recommended_direction])
 
-    lines.extend(["", f"Approval Ready: `{result.approval_ready}`"])
+    lines.extend(["", f"是否可批准：`{result.approval_ready}`"])
     return "\n".join(lines)
 
 
 def render_arc_chapter_plan_markdown(result: ArcChapterPlanResult) -> str:
     lines = [f"# {result.title}"]
     if result.arc_goal:
-        lines.extend(["", "## Arc Goal", "", result.arc_goal])
+        lines.extend(["", "## 剧情段目标", "", result.arc_goal])
     if result.planning_assumptions:
-        lines.extend(["", "## Planning Assumptions", ""])
+        lines.extend(["", "## 规划假设", ""])
         lines.extend([f"- {item}" for item in result.planning_assumptions])
     if result.chapters:
-        lines.extend(["", "## Chapter Allocation", ""])
+        lines.extend(["", "## 章节分配", ""])
         for item in result.chapters:
-            lines.append(f"### Chapter {item.chapter_no:03d}: {item.title or 'Untitled'}")
-            lines.extend(["", f"- Goal: {item.chapter_goal or '无'}"])
-            lines.append(f"- Conflict: {item.conflict or '无'}")
-            lines.append(f"- Expected Word Count: {item.expected_word_count or '未设置'}")
+            lines.append(f"### 第 {item.chapter_no:03d} 章：{item.title or '未命名'}")
+            lines.extend(["", f"- 目标：{item.chapter_goal or '无'}"])
+            lines.append(f"- 冲突：{item.conflict or '无'}")
+            lines.append(f"- 预计字数：{item.expected_word_count or '未设置'}")
             if item.key_events:
-                lines.append("- Key Events:")
+                lines.append("- 关键事件：")
                 lines.extend([f"  - {event}" for event in item.key_events])
             if item.foreshadowing_dependencies:
-                lines.append("- Foreshadowing Dependencies:")
+                lines.append("- 伏笔依赖：")
                 lines.extend([f"  - {dependency}" for dependency in item.foreshadowing_dependencies])
             lines.append("")
     if result.risks:
-        lines.extend(["", "## Risks", ""])
+        lines.extend(["", "## 风险", ""])
         lines.extend([f"- {item}" for item in result.risks])
     return "\n".join(lines).strip()
 
 
 def render_chapter_evaluation_markdown(result: ChapterEvaluationResult) -> str:
     score_lines = [
-        f"- Overall: {result.overall_score}",
-        f"- Character Consistency: {result.character_consistency_score}",
-        f"- Plot Progression: {result.plot_progression_score}",
-        f"- Information Density: {result.information_density_score}",
-        f"- Emotional Impact: {result.emotional_impact_score}",
-        f"- Foreshadowing: {result.foreshadowing_score}",
-        f"- Prose Quality: {result.prose_quality_score}",
+        f"- 总分：{result.overall_score}",
+        f"- 角色一致性：{result.character_consistency_score}",
+        f"- 剧情推进：{result.plot_progression_score}",
+        f"- 信息密度：{result.information_density_score}",
+        f"- 情绪冲击：{result.emotional_impact_score}",
+        f"- 伏笔处理：{result.foreshadowing_score}",
+        f"- 文笔质量：{result.prose_quality_score}",
     ]
     return "\n\n".join([
         f"# {result.title}",
-        "## Scores\n\n" + "\n".join(score_lines),
-        f"## Summary\n\n{result.summary or '无'}",
-        _markdown_section("Strengths", result.strengths),
-        _markdown_section("Issues", result.issues),
-        _markdown_section("Revision Priorities", result.revision_priorities),
+        "## 评分\n\n" + "\n".join(score_lines),
+        f"## 总结\n\n{result.summary or '无'}",
+        _markdown_section("优点", result.strengths),
+        _markdown_section("问题", result.issues),
+        _markdown_section("优先修改项", result.revision_priorities),
     ])

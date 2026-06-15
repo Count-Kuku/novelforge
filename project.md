@@ -56,9 +56,14 @@ Current practical status:
 * Pydantic schema validation for core LLM outputs
 * Retrieval document/chunk schema for RAG workflows
 * Searchable project/external knowledge index with scoped retrieval
+* Clear UI separation between project resources, core story state, source ingestion, and retrieval testing/debugging
 * Hybrid retrieval with lexical + semantic scoring
 * Retrieval evidence grouping, authority weighting, conflict warnings, and reranking
 * Structured pasted-reference organization and single-page URL reference ingestion for canon/reference knowledge
+* Project-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
+* First dynamic generation entry that can execute direct prose, short-form structure + prose, or chapter-plan + prose based on the creative profile
+* Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
+* Confirmed structured knowledge persisted under project `knowledge/` storage and indexed for retrieval
 * Discussion-first planning support for full-story outline and chapter direction before formal generation
 * Approval-based planning artifacts for outline / volume / arc / chapter discussions
 * Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
@@ -77,6 +82,12 @@ Current practical status:
 * Chapter-level evaluation reports with structured scoring and saved Markdown/JSON artifacts
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
+
+Recent direction update:
+
+* NovelForge is now moving toward configurable fan-fiction generation rather than one fixed long-form pipeline.
+* The first implementation step is a creative profile, a lightweight dynamic generation entry, and structured knowledge ingestion.
+* True multi-agent ingestion is still deferred; the current implementation uses a modular extractor workflow that can later be wrapped as specialist agents.
 
 ---
 
@@ -241,11 +252,12 @@ Responsibilities:
 * Managing UI state
 * Consuming structured review/update results produced by the schema layer
 * Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
-* Managing retrieval sources, index rebuilds, and retrieval preview
+* Managing source ingestion, retrieval sources, index rebuilds, and retrieval preview
 * Exposing retrieval mode and score breakdown for debugging/learning
 * Organizing pasted reference text and URL pages into structured retrieval-ready entries before ingestion
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
 * Listing and deleting imported external source files from the retrieval center, with automatic index rebuild after removal
+* Separating project resource browsing, core story state editing, source ingestion, and retrieval testing into distinct UI pages
 * Providing a project overview page with project-level statistics, rename, and delete operations
 * Managing project resources through an IDE-style browser with unified preview/edit/save/delete behavior
 * Supporting direct CRUD for outlines, chapter files, review artifacts, analysis artifacts, run snapshots, and external sources from the UI
@@ -257,7 +269,7 @@ Responsibilities:
 
 UI features:
 
-* Memory editing via structured form (title, genre, world, characters, etc.)
+* Core story state editing via structured form (title, genre, world, characters, etc.)
   with raw JSON fallback in collapsible section
 * Word count configuration per chapter
 * Pipeline page shows per-step success/error status with partial results
@@ -841,6 +853,17 @@ Stores project-scoped prompt rules by capability:
 * review
 * memory_update
 
+creative_profile.json
+
+Stores project-level creative intent and generation preferences:
+
+* task nature
+* target length / word count
+* workflow depth
+* reference strength
+* reference focus
+* canon-deviation and conflict policy
+
 outline.md
 
 Stores the global story outline.
@@ -887,6 +910,23 @@ evaluation/
 
 Stores chapter quality evaluation reports and structured score JSON files.
 
+knowledge/
+
+Stores confirmed structured knowledge extracted from source material. Current category files include:
+
+* `characters.json`
+* `items.json`
+* `abilities.json`
+* `world_rules.json`
+* `locations.json`
+* `organizations.json`
+* `timeline_events.json`
+* `relationships.json`
+* `writing_style.json`
+* `dialogue_style.json`
+* `narrative_techniques.json`
+* `constraints.json`
+
 retrieval/
 
 Stores retrieval index artifacts and external knowledge sources.
@@ -901,6 +941,7 @@ Files:
 * `manifest.json` — project-scoped retrieval documents and chunks
 * `vectors.json` — chunk embedding vectors for semantic retrieval
 * `sources/` — externally added canon/reference materials
+* `knowledge/` records are indexed as project/canon/reference retrieval documents according to their saved scope
 * `runs/` stores structured pipeline state snapshots keyed by run id
 
 Note:
@@ -1106,7 +1147,8 @@ Current implementation status:
 * Implemented: retrieval document/chunk/index manifest schemas
 * Implemented: project/external source ingestion into retrieval storage
 * Implemented: lexical scoped retrieval with prompt injection across major skills
-* Implemented: in-app retrieval center for index rebuild, source management, and retrieval preview
+* Implemented: in-app source ingestion page for importing and structuring external material
+* Implemented: in-app retrieval center for index rebuild, source management, retrieval preview, debug inspection, and conflict handling
 * Implemented: project-scoped embedding generation via `llm.py`
 * Implemented: embedding-backed `vectors.json` storage for semantic retrieval
 * Implemented: lexical / semantic / hybrid retrieval modes with score breakdown in UI
@@ -1125,6 +1167,9 @@ Current implementation status:
 * Implemented: persisted conflict resolutions for recurring evidence disagreements
 * Implemented: pasted reference organization into structured retrieval-ready entries
 * Implemented: single-page URL fetch and organization for controlled canon/reference ingestion
+* Implemented: structured knowledge extraction from pasted material into typed categories
+* Implemented: human-confirmed knowledge persistence under project `knowledge/`
+* Implemented: retrieval indexing for confirmed structured knowledge
 * Pending: dedicated external vector database backend
 * Pending: deeper fact-level conflict recommendation logic
 
@@ -1159,6 +1204,8 @@ Features:
 Current implementation status:
 
 * Implemented: one-click chapter pipeline across planning, writing, review, and memory update
+* Implemented: project-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
+* Implemented: first dynamic generation page for direct prose, short-form structure + prose, and chapter-plan + prose tasks
 * Implemented: per-step error isolation with partial result recovery
 * Implemented: explicit `ChapterPipelineState`-style workflow object
 * Implemented: structured `WorkflowError` records with typed categories
@@ -1166,6 +1213,7 @@ Current implementation status:
 * Implemented: transition logs and resumable workflow hints in the UI
 * Implemented: resumable failed chapter runs from the last successful step
 * Pending: full LangGraph or equivalent workflow runtime adoption
+* Pending: full long-form dynamic orchestration that can automatically branch across outline, volume, arc, chapter plan, writing, review, and memory update
 * Pending: first-class branching, retry policy, and richer resume execution
 
 Workflow:
@@ -1199,6 +1247,12 @@ ReviewAgent
 MemoryAgent
 
 ResearchAgent
+
+Current implementation note:
+
+* True multi-agent orchestration is not implemented yet.
+* The structured knowledge extractor is the first practical pre-agent step: it separates source ingestion into typed knowledge categories that can later become specialist extraction agents.
+* Planned specialist ingestion agents include character, item/ability, world, timeline/event, style, and audit agents.
 
 ---
 

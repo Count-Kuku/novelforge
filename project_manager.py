@@ -12,6 +12,7 @@ from memory import (
     load_chapter_outline_metadata,
     load_evaluation_json,
     load_evaluation_report,
+    load_knowledge_base,
     load_memory,
     load_outline,
     load_review,
@@ -336,6 +337,7 @@ def load_text_file(path: Path, fallback: str = "") -> str:
 def get_project_summary(project_name: str) -> dict:
     base = _project_dir(project_name)
     memory = load_memory(project_name)
+    knowledge_base = load_knowledge_base(project_name)
     files = [item for item in base.rglob("*") if item.is_file()]
     analysis_reports = list_analysis_reports(project_name)
     evaluation_reports = list_evaluation_reports(project_name)
@@ -362,6 +364,7 @@ def get_project_summary(project_name: str) -> dict:
         "evaluation_count": len(evaluation_reports),
         "run_count": len(runs),
         "retrieval_source_count": retrieval_file_count,
+        "knowledge_item_count": sum(len(items) for items in knowledge_base.values()),
         "outline_exists": bool(load_outline(project_name).strip()),
         "chapter_summary_count": len(memory.get("chapter_summaries", [])),
         "updated_at": _timestamp_or_empty(_latest_mtime(files)),

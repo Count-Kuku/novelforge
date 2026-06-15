@@ -5,7 +5,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, ConflictResolution, VolumeOutlineMetadata
+from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, ConflictResolution, CreativeProfile, VolumeOutlineMetadata
 
 BASE_DIR = Path("data/projects")
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
@@ -35,6 +35,20 @@ DEFAULT_MEMORY = {
     "foreshadowing": [],
     "active_constraints": [],
     "chapter_summaries": []
+}
+KNOWLEDGE_CATEGORIES = {
+    "characters": "角色知识",
+    "items": "物品与道具",
+    "abilities": "技能与能力",
+    "world_rules": "世界观规则",
+    "locations": "地点资料",
+    "organizations": "组织资料",
+    "timeline_events": "事件与时间线",
+    "relationships": "角色关系",
+    "writing_style": "写作风格",
+    "dialogue_style": "对白风格",
+    "narrative_techniques": "写作手法",
+    "constraints": "硬性约束",
 }
 
 
@@ -330,7 +344,9 @@ def create_project(project_name: str) -> str:
 
     project_path(normalized_name)
     load_memory(normalized_name)
+    load_creative_profile(normalized_name)
     load_project_rules(normalized_name)
+    knowledge_dir_path(normalized_name)
     retrieval_sources_path(normalized_name)
     return normalized_name
 
@@ -395,6 +411,121 @@ def save_memory(project_name: str, memory: dict):
         encoding="utf-8"
     )
     sync_project_retrieval_assets(project_name)
+
+
+def creative_profile_path(project_name: str) -> Path:
+    return project_path(project_name) / "creative_profile.json"
+
+
+def load_creative_profile(project_name: str) -> dict:
+    path = creative_profile_path(project_name)
+    if not path.exists():
+        profile = CreativeProfile().model_dump()
+        save_creative_profile(project_name, profile)
+        return profile
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        raw = {}
+    profile = CreativeProfile.model_validate(raw).model_dump()
+    if profile != raw:
+        save_creative_profile(project_name, profile)
+    return profile
+
+
+def save_creative_profile(project_name: str, profile: dict) -> dict:
+    normalized = CreativeProfile.model_validate(profile or {}).model_dump()
+    path = creative_profile_path(project_name)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def knowledge_dir_path(project_name: str) -> Path:
+    path = project_path(project_name) / "knowledge"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def knowledge_category_path(project_name: str, category: str) -> Path:
+    safe_category = str(category or "").strip()
+    if safe_category not in KNOWLEDGE_CATEGORIES:
+        raise ValueError(f"未知知识分类：{category}")
+    return knowledge_dir_path(project_name) / f"{safe_category}.json"
+
+
+def _load_json_list(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return value if isinstance(value, list) else []
+
+
+def load_knowledge_category(project_name: str, category: str) -> list[dict]:
+    return _load_json_list(knowledge_category_path(project_name, category))
+
+
+def save_knowledge_category(project_name: str, category: str, items: list[dict]):
+    path = knowledge_category_path(project_name, category)
+    normalized = [item for item in items if isinstance(item, dict)]
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_knowledge_base(project_name: str) -> dict[str, list[dict]]:
+    return {
+        category: load_knowledge_category(project_name, category)
+        for category in KNOWLEDGE_CATEGORIES
+    }
+
+
+def _make_knowledge_id(category: str, index: int) -> str:
+    return f"{category}_{index:04d}"
+
+
+def append_knowledge_items(
+    project_name: str,
+    items: list[dict],
+    *,
+    scope: str,
+    authority: str,
+    source_title: str = "",
+    source_origin: str = "",
+    status: str = "confirmed",
+) -> int:
+    grouped: dict[str, list[dict]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        if category not in KNOWLEDGE_CATEGORIES:
+            continue
+        grouped.setdefault(category, []).append(item)
+
+    saved_count = 0
+    for category, category_items in grouped.items():
+        existing = load_knowledge_category(project_name, category)
+        next_index = len(existing) + 1
+        for item in category_items:
+            normalized = dict(item)
+            normalized.setdefault("name", "")
+            if not str(normalized.get("name", "")).strip():
+                continue
+            normalized["id"] = normalized.get("id") or _make_knowledge_id(category, next_index)
+            normalized["category"] = category
+            normalized["scope"] = scope
+            normalized["authority"] = authority
+            normalized["source_title"] = source_title or normalized.get("source_title", "")
+            normalized["source_origin"] = source_origin
+            normalized["status"] = status
+            existing.append(normalized)
+            next_index += 1
+            saved_count += 1
+        save_knowledge_category(project_name, category, existing)
+    return saved_count
 
 
 def load_global_rules() -> dict:

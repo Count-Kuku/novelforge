@@ -30,6 +30,7 @@ from memory import (
     load_conflict_resolutions,
     load_evaluation_report,
     load_evaluation_json,
+    load_knowledge_base,
     list_arcs,
     list_volumes,
     load_retrieval_manifest,
@@ -348,6 +349,56 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
         )
         if doc:
             documents.append(doc)
+
+    return documents
+
+
+def _documents_from_knowledge(project_name: str) -> list[RetrievalDocument]:
+    knowledge_base = load_knowledge_base(project_name)
+    documents: list[RetrievalDocument] = []
+
+    for category, items in knowledge_base.items():
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip() or f"{category}_{index:04d}"
+            summary = str(item.get("summary", "")).strip()
+            details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+            evidence = item.get("evidence", []) if isinstance(item.get("evidence"), list) else []
+            detail_lines = [f"{key}: {value}" for key, value in details.items() if str(value).strip()]
+            evidence_lines = []
+            for evidence_item in evidence[:5]:
+                if not isinstance(evidence_item, dict):
+                    continue
+                quote = str(evidence_item.get("quote", "") or evidence_item.get("note", "")).strip()
+                if quote:
+                    evidence_lines.append(f"evidence: {quote}")
+            content = "\n".join([
+                f"name: {name}",
+                f"summary: {summary}",
+                *detail_lines,
+                *evidence_lines,
+            ])
+            doc = _make_document(
+                project_name,
+                f"knowledge_{category}",
+                str(item.get("id") or index),
+                name,
+                content,
+                scope=str(item.get("scope") or "project"),
+                path=str(project_path(project_name) / "knowledge" / f"{category}.json"),
+                tags=[str(tag) for tag in item.get("tags", []) if str(tag).strip()] if isinstance(item.get("tags"), list) else [],
+                metadata={
+                    "knowledge_category": category,
+                    "authority": str(item.get("authority") or "project"),
+                    "source_title": str(item.get("source_title") or ""),
+                    "source_origin": str(item.get("source_origin") or ""),
+                    "confidence": item.get("confidence", 0.7),
+                    "status": str(item.get("status") or "confirmed"),
+                },
+            )
+            if doc:
+                documents.append(doc)
 
     return documents
 
@@ -766,12 +817,13 @@ def gather_retrieval_documents(project_name: str) -> list[RetrievalDocument]:
     documents = []
     documents.extend(_documents_from_memory(project_name))
     documents.extend(_documents_from_project_files(project_name))
+    documents.extend(_documents_from_knowledge(project_name))
     documents.extend(_documents_from_external_sources(project_name))
     return documents
 
 
 def chunk_document(document: RetrievalDocument) -> list[RetrievalChunk]:
-    if document.source_type in STRUCTURED_SOURCE_TYPES:
+    if document.source_type in STRUCTURED_SOURCE_TYPES or document.source_type.startswith("knowledge_"):
         parts = [(document.title, document.content.strip())] if document.content.strip() else []
     elif document.source_type.startswith("analysis_"):
         parts = _chunk_markdown_sections(document.content)

@@ -1214,6 +1214,143 @@ def organize_reference_prompt(
     """
 
 
+def extract_reference_knowledge_prompt(
+    source_title: str,
+    raw_text: str,
+    enabled_categories: list[str],
+    rules_text: str = "当前无额外规则。",
+) -> str:
+    categories_text = ", ".join(enabled_categories) if enabled_categories else "全部分类"
+    return f"""
+你是同人小说资料知识提取总管。
+
+你的任务不是改写资料，而是从资料中提取后续写作可复用的结构化知识。请保守提取，必须能从原文找到依据。
+
+规则约束：
+{rules_text}
+
+资料标题：
+{source_title}
+
+启用的知识分类：
+{categories_text}
+
+可用分类说明：
+- characters：角色知识，包含身份、性格、动机、行为习惯、说话风格、角色禁忌
+- items：物品与道具，包含武器、装备、特殊物品、来源、使用限制
+- abilities：技能与能力，包含能力效果、代价、弱点、成长路线、使用条件
+- world_rules：世界观规则，包含制度、文化、规则、阵营、历史背景
+- locations：地点资料，包含场景、地理、氛围、重要设施
+- organizations：组织资料，包含组织目标、成员、制度、阵营关系
+- timeline_events：事件与时间线，包含事件时间、因果、后续影响
+- relationships：角色关系，包含亲密、冲突、权力、依赖、关系变化
+- writing_style：写作风格，包含叙事视角、节奏、氛围、描写习惯
+- dialogue_style：对白风格，包含口癖、语气、句式、称呼习惯
+- narrative_techniques：写作手法，包含铺垫、反转、悬念、情绪推进、场景切换
+- constraints：硬性约束，包含不能违背的原作规则、设定边界、禁用写法
+
+原始资料：
+{raw_text}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式如下：
+{{
+  "source_title": "",
+  "source_summary": "",
+  "items": [
+    {{
+      "category": "characters|items|abilities|world_rules|locations|organizations|timeline_events|relationships|writing_style|dialogue_style|narrative_techniques|constraints",
+      "name": "",
+      "summary": "",
+      "details": {{
+        "字段名": "字段内容"
+      }},
+      "evidence": [
+        {{
+          "source_title": "",
+          "quote": "",
+          "note": ""
+        }}
+      ],
+      "confidence": 0.7,
+      "tags": []
+    }}
+  ],
+  "notes": []
+}}
+
+要求：
+1. 只输出启用分类中的内容；如果启用分类为空，则可按全部分类提取
+2. 每条知识必须有明确 name 和 summary
+3. evidence.quote 尽量摘录短证据，不要大段复制原文
+4. confidence 表示你对该条提取的确信程度，范围 0-1
+5. 对写作风格、对白风格、写作手法也要尽量提取，但不要把剧情设定误塞进去
+6. 遇到资料含混、互相矛盾或需要用户判断的地方，写入 notes
+7. 不要发明原文没有的信息
+"""
+
+
+def creative_structure_prompt(
+    memory: dict,
+    creative_profile: dict,
+    user_requirement: str,
+    rules_text: str = "当前无额外规则。",
+) -> str:
+    return f"""
+你是同人小说动态创作规划助手。
+
+请根据项目创作配置，为当前需求生成一个适配长度的创作结构。你的目标是给后续正文写作提供足够清晰的计划，但不要强行使用分卷、剧情段等长篇层级。
+
+规则约束：
+{rules_text}
+
+项目设定：
+{memory}
+
+创作配置：
+{creative_profile}
+
+用户需求：
+{user_requirement}
+
+请输出 Markdown，不要输出 JSON。结构建议如下：
+
+# 创作结构
+
+## 创作目标
+
+## 参考策略
+
+说明这次应如何使用原作资料、项目设定、参考资料和文风资料。
+
+## 核心设定取舍
+
+说明哪些设定必须保留，哪些可以按需求改写。
+
+## 主要角色与关系
+
+## 剧情结构
+
+根据目标长度选择合适结构：
+- 片段：场景目标、冲突点、收束点
+- 短篇：开端、推进、转折、高潮、余韵
+- 中篇：主要章节或段落安排
+- 续写：承接点、状态变化、下一步冲突
+- 前传：时间边界、原设约束、因果铺垫
+- 穿越/新环境：原角色核心、新环境规则、适配冲突
+
+## 风格与写法要求
+
+## 风险与注意事项
+
+要求：
+1. 根据创作配置决定规划粒度，不要机械套用长篇流程
+2. 明确资料参考强度如何影响本次生成
+3. 如果是轻参考或穿越/新环境，说明哪些原设可以弱化
+4. 如果是强参考、严格原作、续写或前传，说明哪些设定不能违背
+5. 输出要能直接作为后续正文写作依据
+"""
+
+
 def arc_chapter_plan_prompt(
     memory: dict,
     story_outline: str,

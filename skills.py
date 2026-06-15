@@ -16,6 +16,8 @@ from prompts import (
     discuss_outline_turn_prompt,
     discuss_volume_prompt,
     discuss_volume_turn_prompt,
+    creative_structure_prompt,
+    extract_reference_knowledge_prompt,
     organize_reference_prompt,
     character_analysis_prompt,
     consistency_check_prompt,
@@ -45,6 +47,7 @@ from memory import (
     load_arc_outline,
     load_chapter_outline,
     load_chapter_outline_metadata,
+    load_creative_profile,
     load_global_rules,
     load_memory,
     load_outline,
@@ -88,6 +91,7 @@ from schemas import (
     ConsistencyAnalysisResult,
     ForeshadowingAnalysisResult,
     OutlineDiscussionResult,
+    KnowledgeExtractionResult,
     OrganizedReferenceResult,
     VolumeDiscussionResult,
     WorkflowError,
@@ -105,6 +109,7 @@ from schemas import (
     render_consistency_analysis_markdown,
     render_foreshadowing_analysis_markdown,
     render_discussion_markdown,
+    render_knowledge_extraction_markdown,
     render_organized_reference_markdown,
     render_timeline_analysis_markdown,
     validate_memory_update_result,
@@ -114,6 +119,122 @@ from retrieval import format_retrieval_context, retrieve_context
 
 
 _LAST_RETRIEVAL_TRACES: dict[str, list[dict]] = {}
+
+SCOPE_LABELS = {
+    "project": "项目资料",
+    "canon": "原作资料",
+    "reference": "参考资料",
+}
+
+AUTHORITY_LABELS = {
+    "project": "项目设定",
+    "official": "官方资料",
+    "curated": "人工整理",
+    "community": "社区资料",
+    "unknown": "未标明",
+}
+
+SOURCE_TYPE_LABELS = {
+    "outline": "全书大纲",
+    "volume_outline": "分卷大纲",
+    "arc_outline": "剧情段大纲",
+    "arc_chapter_plan": "剧情段章节分配",
+    "chapter_outline": "章节细纲",
+    "chapter_content": "章节正文",
+    "chapter_summary": "章节摘要",
+    "review_issue": "审阅问题",
+    "analysis_consistency": "一致性分析",
+    "analysis_characters": "角色分析",
+    "analysis_timeline": "时间线分析",
+    "analysis_foreshadowing": "伏笔分析",
+    "evaluation_chapter": "章节评估",
+    "conflict_resolution": "冲突裁决",
+    "memory_character": "角色设定",
+    "memory_world": "世界观设定",
+    "memory_au_rule": "改写规则",
+    "memory_relationship": "角色关系",
+    "memory_timeline": "时间线设定",
+    "memory_foreshadowing": "伏笔设定",
+    "memory_active_constraint": "当前硬性约束",
+    "external_source": "通用外部资料",
+    "knowledge_characters": "知识库：角色",
+    "knowledge_items": "知识库：物品与道具",
+    "knowledge_abilities": "知识库：技能与能力",
+    "knowledge_world_rules": "知识库：世界观规则",
+    "knowledge_locations": "知识库：地点",
+    "knowledge_organizations": "知识库：组织",
+    "knowledge_timeline_events": "知识库：事件与时间线",
+    "knowledge_relationships": "知识库：角色关系",
+    "knowledge_writing_style": "知识库：写作风格",
+    "knowledge_dialogue_style": "知识库：对白风格",
+    "knowledge_narrative_techniques": "知识库：写作手法",
+    "knowledge_constraints": "知识库：硬性约束",
+}
+
+KNOWLEDGE_SOURCE_TYPES = [
+    "knowledge_characters",
+    "knowledge_items",
+    "knowledge_abilities",
+    "knowledge_world_rules",
+    "knowledge_locations",
+    "knowledge_organizations",
+    "knowledge_timeline_events",
+    "knowledge_relationships",
+    "knowledge_writing_style",
+    "knowledge_dialogue_style",
+    "knowledge_narrative_techniques",
+    "knowledge_constraints",
+]
+
+COMMON_RETRIEVAL_SOURCE_TYPES = [
+    "outline",
+    "outline_discussion",
+    "volume_outline",
+    "volume_discussion",
+    "arc_outline",
+    "arc_discussion",
+    "arc_chapter_plan",
+    "chapter_summary",
+    "chapter_outline",
+    "chapter_discussion",
+    "chapter_content",
+    "memory_character",
+    "memory_world",
+    "memory_au_rule",
+    "memory_relationship",
+    "memory_timeline",
+    "memory_foreshadowing",
+    "memory_active_constraint",
+    "review_issue",
+    "analysis_consistency",
+    "analysis_characters",
+    "analysis_timeline",
+    "analysis_foreshadowing",
+    "conflict_resolution",
+    "external_source",
+] + KNOWLEDGE_SOURCE_TYPES
+
+KNOWN_WORKFLOW_DEPTHS = {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"}
+LIGHTWEIGHT_STORY_KEYWORDS = {"短篇", "中篇", "番外", "续写", "前传", "穿越", "转生", "异世界", "平行世界", "AU", "补完", "补全", "片段", "场景"}
+
+
+def _is_lightweight_story_profile(profile: dict) -> bool:
+    story_mode = str(profile.get("story_mode", "") or "")
+    target_length = str(profile.get("target_length", "") or "")
+    combined = f"{story_mode} {target_length}"
+    return any(keyword in combined for keyword in LIGHTWEIGHT_STORY_KEYWORDS)
+
+
+def _label_scope(value: str) -> str:
+    return SCOPE_LABELS.get(str(value or ""), str(value or "未知范围"))
+
+
+def _label_authority(value: str) -> str:
+    return AUTHORITY_LABELS.get(str(value or ""), str(value or "未标明"))
+
+
+def _label_source_type(value: str) -> str:
+    return SOURCE_TYPE_LABELS.get(str(value or ""), str(value or "未知资料"))
 
 
 def _set_retrieval_trace(trace_key: str | None, hits: list) -> None:
@@ -408,48 +529,42 @@ def _select_supporting_sources(hits: list[dict], limit: int = 4) -> list[dict]:
     return selected
 
 
-def _format_supporting_sources_markdown(hits: list[dict], title: str = "Supporting Sources") -> str:
+def _format_supporting_sources_markdown(hits: list[dict], title: str = "支持来源") -> str:
     selected = _select_supporting_sources(hits)
     if not selected:
         return ""
 
     grouped = _group_hits_by_scope_and_type(selected)
     scope_order = ["project", "canon", "reference"]
-    scope_labels = {
-        "project": "Project Sources",
-        "canon": "Canon Sources",
-        "reference": "Reference Sources",
-    }
-
     lines = [f"## {title}", ""]
     item_index = 1
     for scope in scope_order:
         source_groups = grouped.get(scope)
         if not source_groups:
             continue
-        lines.append(f"### {scope_labels.get(scope, scope.title())}")
+        lines.append(f"### {_label_scope(scope)}")
         lines.append("")
         for source_type, source_hits in source_groups.items():
-            lines.append(f"- {source_type}")
+            lines.append(f"- {_label_source_type(source_type)}")
             for hit in source_hits:
                 chunk = hit.get("chunk", {})
-                authority = str(chunk.get("metadata", {}).get("authority", "unknown") or "unknown")
+                authority = _label_authority(str(chunk.get("metadata", {}).get("authority", "unknown") or "unknown"))
                 detail = f"  - [{item_index}]"
                 if chunk.get("title"):
                     detail += f" {chunk.get('title')}"
                 else:
-                    detail += f" {source_type}"
+                    detail += f" {_label_source_type(source_type)}"
                 if chunk.get("chapter_no") is not None:
-                    detail += f" / chapter {int(chunk.get('chapter_no')):03d}"
-                detail += f" / authority={authority}"
-                detail += f" / score={hit.get('score', 0):.2f}"
+                    detail += f" / 第 {int(chunk.get('chapter_no')):03d} 章"
+                detail += f" / 可信度={authority}"
+                detail += f" / 相关度={hit.get('score', 0):.2f}"
                 lines.append(detail)
                 item_index += 1
             lines.append("")
     return "\n".join(lines)
 
 
-def _format_potential_conflicts_markdown(hits: list[dict], title: str = "Potential Conflicts") -> str:
+def _format_potential_conflicts_markdown(hits: list[dict], title: str = "潜在冲突") -> str:
     conflicts = _detect_potential_conflicts(hits)
     if not conflicts:
         return ""
@@ -459,14 +574,15 @@ def _format_potential_conflicts_markdown(hits: list[dict], title: str = "Potenti
         shared_terms = ", ".join(conflict.shared_terms) or "(无)"
         project_chunk = conflict.project_hit.chunk.model_dump()
         external_chunk = conflict.external_hit.chunk.model_dump()
-        lines.append(f"- [{index}] severity={conflict.severity} / shared_terms={shared_terms}")
+        severity = {"low": "低", "medium": "中", "high": "高"}.get(conflict.severity, conflict.severity)
+        lines.append(f"- [{index}] 严重程度={severity} / 共同命中词={shared_terms}")
         lines.append(
-            f"  - project: {project_chunk.get('source_type', 'unknown')} / {project_chunk.get('title', 'untitled')} / authority={conflict.project_authority}"
+            f"  - 项目资料：{_label_source_type(project_chunk.get('source_type', 'unknown'))} / {project_chunk.get('title', '未命名')} / 可信度={_label_authority(conflict.project_authority)}"
         )
         lines.append(
-            f"  - external: {external_chunk.get('scope', 'reference')} / {external_chunk.get('source_type', 'unknown')} / {external_chunk.get('title', 'untitled')} / authority={conflict.external_authority}"
+            f"  - 外部资料：{_label_scope(external_chunk.get('scope', 'reference'))} / {_label_source_type(external_chunk.get('source_type', 'unknown'))} / {external_chunk.get('title', '未命名')} / 可信度={_label_authority(conflict.external_authority)}"
         )
-        lines.append(f"  - rationale: {conflict.rationale}")
+        lines.append(f"  - 判断理由：{conflict.rationale}")
     return "\n".join(lines)
 
 
@@ -497,7 +613,29 @@ def _dedupe_list_items(items: list) -> list:
 def _build_rules_text(project_name: str, scope: str) -> str:
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
-    return format_rules_for_prompt(global_rules, project_rules, scope)
+    rules_text = format_rules_for_prompt(global_rules, project_rules, scope)
+    try:
+        profile = load_creative_profile(project_name)
+    except Exception:
+        profile = {}
+    if not profile:
+        return rules_text
+
+    profile_lines = [
+        "项目创作配置：",
+        f"- 任务性质：{profile.get('story_mode', '-')}",
+        f"- 目标篇幅：{profile.get('target_length', '-')}",
+        f"- 目标字数：{profile.get('target_word_count', '') or '未设置'}",
+        f"- 生成层级：{profile.get('workflow_depth', '-')}",
+        f"- 资料参考强度：{profile.get('reference_strength', '-')}",
+        f"- 重点参考方向：{', '.join(profile.get('reference_focus', []) or []) or '未设置'}",
+        f"- 允许改写原设：{'是' if profile.get('allow_canon_deviation', True) else '否'}",
+        f"- 资料冲突处理：{profile.get('conflict_policy', '-')}",
+    ]
+    notes = str(profile.get("notes", "") or "").strip()
+    if notes:
+        profile_lines.append(f"- 补充说明：{notes}")
+    return f"{rules_text}\n\n" + "\n".join(profile_lines)
 
 
 def _build_retrieval_context(
@@ -615,11 +753,11 @@ def organize_reference_text(project_name: str, source_title: str, raw_text: str)
         raw_text,
         _build_rules_text(project_name, "all"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty organized reference result.")
+    payload = _call_json_llm(prompt, "模型没有返回可整理的资料结果。")
     try:
         result = OrganizedReferenceResult.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Reference organization schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"资料整理结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "organize_reference",
@@ -632,7 +770,41 @@ def organize_reference_text(project_name: str, source_title: str, raw_text: str)
         validation=_make_validation_status(
             status="passed",
             schema_name="OrganizedReferenceResult",
-            message="Reference text was structured successfully.",
+            message="资料已成功整理为结构化数据。",
+        ),
+    ).model_dump()
+
+
+def extract_reference_knowledge(
+    project_name: str,
+    source_title: str,
+    raw_text: str,
+    enabled_categories: list[str] | None = None,
+) -> dict:
+    prompt = extract_reference_knowledge_prompt(
+        source_title.strip() or "未命名资料",
+        raw_text,
+        enabled_categories or [],
+        _build_rules_text(project_name, "all"),
+    )
+    payload = _call_json_llm(prompt, "模型没有返回可提取的知识结果。")
+    try:
+        result = KnowledgeExtractionResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"知识提取结构校验失败：{format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "extract_reference_knowledge",
+        success=True,
+        status="completed",
+        data={
+            "knowledge_extraction": result.model_dump(),
+            "report_markdown": render_knowledge_extraction_markdown(result),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="KnowledgeExtractionResult",
+            message="资料知识提取结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -640,7 +812,7 @@ def organize_reference_text(project_name: str, source_title: str, raw_text: str)
 def organize_reference_html(project_name: str, source_title: str, html: str, source_url: str) -> dict:
     extracted_text = _extract_web_text_from_html(html)
     if not extracted_text.strip():
-        raise RuntimeError("No readable text could be extracted from the fetched page.")
+        raise RuntimeError("抓取到的页面中没有提取出可阅读文本。")
 
     result = organize_reference_text(project_name, source_title, extracted_text)
     result.setdefault("artifacts", {})
@@ -657,11 +829,11 @@ def organize_reference_url(project_name: str, source_title: str, source_url: str
 def discuss_outline(project_name: str, user_idea: str) -> dict:
     memory = load_memory(project_name)
     prompt = discuss_outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline"))
-    payload = _call_json_llm(prompt, "LLM returned empty outline discussion result.")
+    payload = _call_json_llm(prompt, "模型没有返回全书讨论结果。")
     try:
         result = OutlineDiscussionResult.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Outline discussion schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"全书讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_outline",
@@ -674,7 +846,7 @@ def discuss_outline(project_name: str, user_idea: str) -> dict:
         validation=_make_validation_status(
             status="passed",
             schema_name="OutlineDiscussionResult",
-            message="Outline discussion result validated.",
+            message="全书讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -713,11 +885,11 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str) -
         user_requirement,
         _build_rules_text(project_name, "chapter_outline"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty chapter discussion result.")
+    payload = _call_json_llm(prompt, "模型没有返回章节讨论结果。")
     try:
         result = ChapterDiscussionResult.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Chapter discussion schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"章节讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_chapter",
@@ -730,7 +902,7 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str) -
         validation=_make_validation_status(
             status="passed",
             schema_name="ChapterDiscussionResult",
-            message="Chapter discussion result validated.",
+            message="章节讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -751,14 +923,14 @@ def discuss_outline_turn(
         latest_user_message,
         _build_rules_text(project_name, "outline"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty outline discussion turn result.")
+    payload = _call_json_llm(prompt, "模型没有返回本轮全书讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
     try:
         result = OutlineDiscussionResult.model_validate(discussion_payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Outline discussion turn schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"本轮全书讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_outline_turn",
@@ -772,7 +944,7 @@ def discuss_outline_turn(
         validation=_make_validation_status(
             status="passed",
             schema_name="OutlineDiscussionResult",
-            message="Outline discussion turn result validated.",
+            message="本轮全书讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -821,14 +993,14 @@ def discuss_chapter_turn(
         latest_user_message,
         _build_rules_text(project_name, "chapter_outline"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty chapter discussion turn result.")
+    payload = _call_json_llm(prompt, "模型没有返回本轮章节讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
     try:
         result = ChapterDiscussionResult.model_validate(discussion_payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Chapter discussion turn schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"本轮章节讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_chapter_turn",
@@ -842,7 +1014,7 @@ def discuss_chapter_turn(
         validation=_make_validation_status(
             status="passed",
             schema_name="ChapterDiscussionResult",
-            message="Chapter discussion turn result validated.",
+            message="本轮章节讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -865,11 +1037,11 @@ def discuss_volume(
         user_requirement,
         _build_rules_text(project_name, "outline"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty volume discussion result.")
+    payload = _call_json_llm(prompt, "模型没有返回分卷讨论结果。")
     try:
         result = VolumeDiscussionResult.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Volume discussion schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"分卷讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_volume",
@@ -882,7 +1054,7 @@ def discuss_volume(
         validation=_make_validation_status(
             status="passed",
             schema_name="VolumeDiscussionResult",
-            message="Volume discussion result validated.",
+            message="分卷讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -911,14 +1083,14 @@ def discuss_volume_turn(
         latest_user_message,
         _build_rules_text(project_name, "outline"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty volume discussion turn result.")
+    payload = _call_json_llm(prompt, "模型没有返回本轮分卷讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
     try:
         result = VolumeDiscussionResult.model_validate(discussion_payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Volume discussion turn schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"本轮分卷讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_volume_turn",
@@ -932,7 +1104,7 @@ def discuss_volume_turn(
         validation=_make_validation_status(
             status="passed",
             schema_name="VolumeDiscussionResult",
-            message="Volume discussion turn result validated.",
+            message="本轮分卷讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -962,11 +1134,11 @@ def discuss_arc(
         user_requirement,
         _build_rules_text(project_name, "outline"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty arc discussion result.")
+    payload = _call_json_llm(prompt, "模型没有返回剧情段讨论结果。")
     try:
         result = ArcDiscussionResult.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Arc discussion schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"剧情段讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_arc",
@@ -979,7 +1151,7 @@ def discuss_arc(
         validation=_make_validation_status(
             status="passed",
             schema_name="ArcDiscussionResult",
-            message="Arc discussion result validated.",
+            message="剧情段讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -1015,14 +1187,14 @@ def discuss_arc_turn(
         latest_user_message,
         _build_rules_text(project_name, "outline"),
     )
-    payload = _call_json_llm(prompt, "LLM returned empty arc discussion turn result.")
+    payload = _call_json_llm(prompt, "模型没有返回本轮剧情段讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
     try:
         result = ArcDiscussionResult.model_validate(discussion_payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Arc discussion turn schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"本轮剧情段讨论结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     return _make_step_result(
         "discuss_arc_turn",
@@ -1036,7 +1208,7 @@ def discuss_arc_turn(
         validation=_make_validation_status(
             status="passed",
             schema_name="ArcDiscussionResult",
-            message="Arc discussion turn result validated.",
+            message="本轮剧情段讨论结果已通过结构校验。",
         ),
     ).model_dump()
 
@@ -1045,9 +1217,9 @@ def approve_volume_discussion(project_name: str, volume_no: int, discussion_step
     discussion = discussion_step.get("data", {}).get("discussion", {}) if isinstance(discussion_step, dict) else {}
     report_markdown = discussion_step.get("data", {}).get("report_markdown", "") if isinstance(discussion_step, dict) else ""
     if not isinstance(discussion, dict) or not discussion:
-        raise RuntimeError("No volume discussion result available to approve.")
+        raise RuntimeError("没有可批准的分卷讨论结果。")
     if not discussion.get("approval_ready"):
-        raise RuntimeError("Volume discussion is not approval-ready yet.")
+        raise RuntimeError("分卷讨论结果尚未达到可批准状态。")
     save_volume_discussion_artifact(project_name, volume_no, discussion, report_markdown)
     return {
         "volume_no": volume_no,
@@ -1065,9 +1237,9 @@ def approve_arc_discussion(project_name: str, arc_no: int, discussion_step: dict
     discussion = discussion_step.get("data", {}).get("discussion", {}) if isinstance(discussion_step, dict) else {}
     report_markdown = discussion_step.get("data", {}).get("report_markdown", "") if isinstance(discussion_step, dict) else ""
     if not isinstance(discussion, dict) or not discussion:
-        raise RuntimeError("No arc discussion result available to approve.")
+        raise RuntimeError("没有可批准的剧情段讨论结果。")
     if not discussion.get("approval_ready"):
-        raise RuntimeError("Arc discussion is not approval-ready yet.")
+        raise RuntimeError("剧情段讨论结果尚未达到可批准状态。")
     save_arc_discussion_artifact(project_name, arc_no, discussion, report_markdown)
     return {
         "arc_no": arc_no,
@@ -1085,9 +1257,9 @@ def approve_outline_discussion(project_name: str, discussion_step: dict) -> dict
     discussion = discussion_step.get("data", {}).get("discussion", {}) if isinstance(discussion_step, dict) else {}
     report_markdown = discussion_step.get("data", {}).get("report_markdown", "") if isinstance(discussion_step, dict) else ""
     if not isinstance(discussion, dict) or not discussion:
-        raise RuntimeError("No outline discussion result available to approve.")
+        raise RuntimeError("没有可批准的全书讨论结果。")
     if not discussion.get("approval_ready"):
-        raise RuntimeError("Outline discussion is not approval-ready yet.")
+        raise RuntimeError("全书讨论结果尚未达到可批准状态。")
     save_outline_discussion_artifact(project_name, discussion, report_markdown)
     return {
         "discussion": discussion,
@@ -1104,9 +1276,9 @@ def approve_chapter_discussion(project_name: str, chapter_no: int, discussion_st
     discussion = discussion_step.get("data", {}).get("discussion", {}) if isinstance(discussion_step, dict) else {}
     report_markdown = discussion_step.get("data", {}).get("report_markdown", "") if isinstance(discussion_step, dict) else ""
     if not isinstance(discussion, dict) or not discussion:
-        raise RuntimeError("No chapter discussion result available to approve.")
+        raise RuntimeError("没有可批准的章节讨论结果。")
     if not discussion.get("approval_ready"):
-        raise RuntimeError("Chapter discussion is not approval-ready yet.")
+        raise RuntimeError("章节讨论结果尚未达到可批准状态。")
     save_chapter_discussion_artifact(project_name, chapter_no, discussion, report_markdown)
     return {
         "chapter_no": chapter_no,
@@ -1127,34 +1299,40 @@ def _format_review_markdown(review: ReviewResult | dict) -> str:
     strengths = "\n".join([f"- {item}" for item in review["strengths"]]) or "- 无"
     issues = "\n".join([f"- {item}" for item in review["issues"]]) or "- 无"
 
-    return f"""# Chapter Review
+    status_label = {
+        "pass": "通过",
+        "revise": "需要修改",
+        "blocked": "阻塞",
+    }.get(review["status"], review["status"])
 
-Status: `{review['status']}`
+    return f"""# 章节审阅
 
-## Summary
+状态：`{status_label}`
+
+## 摘要
 
 {review['summary'] or '无'}
 
-## Strengths
+## 优点
 
 {strengths}
 
-## Issues
+## 问题
 
 {issues}
 
-## Consistency Checks
+## 一致性检查
 
-- Characters: {review['consistency_checks']['characters'] or '无'}
-- World: {review['consistency_checks']['world'] or '无'}
-- Timeline: {review['consistency_checks']['timeline'] or '无'}
-- Foreshadowing: {review['consistency_checks']['foreshadowing'] or '无'}
+- 角色：{review['consistency_checks']['characters'] or '无'}
+- 世界观：{review['consistency_checks']['world'] or '无'}
+- 时间线：{review['consistency_checks']['timeline'] or '无'}
+- 伏笔：{review['consistency_checks']['foreshadowing'] or '无'}
 
-## Pacing
+## 节奏
 
 {review['pacing'] or '无'}
 
-## Next Action
+## 下一步建议
 
 {review['next_action'] or '无'}
 """
@@ -1169,7 +1347,7 @@ def generate_outline(project_name: str, user_idea: str) -> dict:
     retrieval_context = _build_retrieval_context(
         project_name,
         f"{user_idea} {approved_discussion_context}",
-        allowed_source_types=["outline", "outline_discussion", "memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "external_source"],
+        allowed_source_types=["outline", "outline_discussion", "memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1179,7 +1357,7 @@ def generate_outline(project_name: str, user_idea: str) -> dict:
     )
     outline = call_llm(prompt)
     if not outline.strip():
-        raise RuntimeError("LLM returned empty outline.")
+        raise RuntimeError("模型没有返回全书大纲。")
     save_outline(project_name, outline)
     return _make_step_result(
         "outline",
@@ -1224,7 +1402,7 @@ def generate_volume_outline(
             "memory_foreshadowing",
             "memory_active_constraint",
             "external_source",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1243,7 +1421,7 @@ def generate_volume_outline(
     )
     outline = call_llm(prompt)
     if not outline.strip():
-        raise RuntimeError("LLM returned empty volume outline.")
+        raise RuntimeError("模型没有返回分卷大纲。")
     save_volume_outline(project_name, volume_no, outline)
     save_volume_metadata(project_name, volume_no, {"title": volume_title, "summary": volume_summary, "status": status})
     return _make_step_result(
@@ -1280,7 +1458,7 @@ def generate_arc_outline(
     trace_key = f"arc_outline:{project_name}:{arc_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
-        f"Arc {arc_no:03d} 第{volume_no or 0}卷 {arc_title} {arc_summary} {approved_discussion_context} {user_requirement} {story_outline} {volume_outline}",
+        f"剧情段 {arc_no:03d} 第{volume_no or 0}卷 {arc_title} {arc_summary} {approved_discussion_context} {user_requirement} {story_outline} {volume_outline}",
         allowed_source_types=[
             "outline",
             "volume_outline",
@@ -1297,7 +1475,7 @@ def generate_arc_outline(
             "memory_foreshadowing",
             "memory_active_constraint",
             "external_source",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1319,7 +1497,7 @@ def generate_arc_outline(
     )
     outline = call_llm(prompt)
     if not outline.strip():
-        raise RuntimeError("LLM returned empty arc outline.")
+        raise RuntimeError("模型没有返回剧情段大纲。")
     save_arc_outline(project_name, arc_no, outline)
     save_arc_metadata(
         project_name,
@@ -1373,7 +1551,7 @@ def generate_arc_chapter_plan(
     trace_key = f"arc_chapter_plan:{project_name}:{arc_no}"
     retrieval_context = _build_retrieval_context(
         project_name,
-        f"Arc {arc_no:03d} 章节分配 {arc_meta.get('title', '')} {arc_meta.get('summary', '')} {arc_outline} {user_requirement}",
+        f"剧情段 {arc_no:03d} 章节分配 {arc_meta.get('title', '')} {arc_meta.get('summary', '')} {arc_outline} {user_requirement}",
         allowed_source_types=[
             "outline",
             "volume_outline",
@@ -1390,7 +1568,7 @@ def generate_arc_chapter_plan(
             "memory_active_constraint",
             "external_source",
             "conflict_resolution",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1409,11 +1587,11 @@ def generate_arc_chapter_plan(
         ),
         retrieval_context,
     )
-    payload = _call_json_llm(prompt, "LLM returned empty arc chapter plan.")
+    payload = _call_json_llm(prompt, "模型没有返回剧情段章节分配计划。")
     try:
         result = ArcChapterPlanResult.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Arc chapter plan schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"剧情段章节分配计划结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     report_markdown = render_arc_chapter_plan_markdown(result)
     save_arc_chapter_plan(project_name, arc_no, result.model_dump(), report_markdown)
@@ -1429,11 +1607,61 @@ def generate_arc_chapter_plan(
         validation=_make_validation_status(
             status="passed",
             schema_name="ArcChapterPlanResult",
-            message="Arc chapter plan validated and persisted.",
+            message="剧情段章节分配计划已通过结构校验并保存。",
         ),
         artifacts={
             "saved_path": f"data/projects/{project_name}/arcs/arc_{arc_no:03d}.chapter_plan.json",
         },
+    ).model_dump()
+
+
+def generate_creative_structure(
+    project_name: str,
+    chapter_no: int,
+    user_requirement: str,
+    *,
+    save_as_chapter_outline: bool = True,
+) -> dict:
+    memory = load_memory(project_name)
+    profile = load_creative_profile(project_name)
+    trace_key = f"creative_structure:{project_name}:{chapter_no}"
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        f"{profile} {user_requirement}",
+        allowed_source_types=COMMON_RETRIEVAL_SOURCE_TYPES,
+        allowed_scopes=["project", "canon", "reference"],
+        top_k=8,
+        trace_key=trace_key,
+    )
+    prompt = merge_retrieval_context(
+        creative_structure_prompt(
+            memory,
+            profile,
+            user_requirement,
+            _build_rules_text(project_name, "chapter_outline"),
+        ),
+        retrieval_context,
+    )
+    structure = call_llm(prompt)
+    if not structure.strip():
+        raise RuntimeError("模型没有返回创作结构。")
+
+    artifacts = {}
+    if save_as_chapter_outline:
+        save_chapter_outline(project_name, chapter_no, structure)
+        artifacts["saved_path"] = f"data/projects/{project_name}/chapter_outlines/chapter_{chapter_no:03d}.md"
+
+    return _make_step_result(
+        "creative_structure",
+        success=True,
+        status="completed",
+        data={
+            "creative_structure": structure,
+            "creative_profile": profile,
+            "chapter_no": chapter_no,
+        },
+        retrieval_hits=get_retrieval_trace(trace_key),
+        artifacts=artifacts,
     ).model_dump()
 
 
@@ -1486,7 +1714,7 @@ def generate_chapter_outline(
             "memory_foreshadowing",
             "memory_active_constraint",
             "external_source",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1505,7 +1733,7 @@ def generate_chapter_outline(
     ), retrieval_context)
     outline = call_llm(prompt)
     if not outline.strip():
-        raise RuntimeError("LLM returned empty chapter outline.")
+        raise RuntimeError("模型没有返回章节细纲。")
     save_chapter_outline(project_name, chapter_no, outline)
     save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": effective_volume_no, "arc_no": effective_arc_no})
     return _make_step_result(
@@ -1551,7 +1779,7 @@ def write_chapter(
             "analysis_timeline",
             "analysis_foreshadowing",
             "external_source",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1561,7 +1789,7 @@ def write_chapter(
     )
     chapter = call_llm(prompt)
     if not chapter.strip():
-        raise RuntimeError("LLM returned empty chapter content.")
+        raise RuntimeError("模型没有返回章节正文。")
     save_chapter(project_name, chapter_no, chapter)
     return _make_step_result(
         "write_chapter",
@@ -1571,6 +1799,125 @@ def write_chapter(
         retrieval_hits=get_retrieval_trace(trace_key),
         artifacts={"saved_path": f"data/projects/{project_name}/chapters/chapter_{chapter_no:03d}.md"},
     ).model_dump()
+
+
+def run_dynamic_generation_task(
+    project_name: str,
+    chapter_no: int,
+    user_requirement: str,
+    word_count: str = "",
+    workflow_depth: str = "按创作配置",
+) -> dict:
+    profile = load_creative_profile(project_name)
+    using_profile_depth = not workflow_depth or workflow_depth == "按创作配置"
+    effective_depth = workflow_depth if not using_profile_depth else profile.get("workflow_depth", "短篇结构+正文")
+    effective_word_count = word_count.strip() or profile.get("target_word_count", "") or "2000-2500"
+    steps: dict[str, dict] = {}
+    warnings: list[str] = []
+
+    if effective_depth == "只生成正文":
+        direct_outline = "\n\n".join([
+            "# 直接正文生成任务",
+            f"创作配置：{json.dumps(profile, ensure_ascii=False)}",
+            f"用户需求：{user_requirement}",
+            "请根据创作配置和检索上下文直接写正文，不需要输出大纲。",
+        ])
+        write_step = write_chapter(project_name, chapter_no, direct_outline, None, effective_word_count)
+        steps["write_chapter"] = write_step
+        return {
+            "success": bool(write_step.get("success")),
+            "status": write_step.get("status", "completed"),
+            "workflow_depth": effective_depth,
+            "chapter_no": chapter_no,
+            "word_count": effective_word_count,
+            "steps": steps,
+            "creative_structure": "",
+            "chapter": write_step.get("data", {}).get("chapter", ""),
+            "warnings": warnings,
+        }
+
+    is_custom_depth = effective_depth not in KNOWN_WORKFLOW_DEPTHS
+
+    if effective_depth in {"短篇结构+正文", "分卷/剧情段/章节"} or is_custom_depth or (
+        using_profile_depth and _is_lightweight_story_profile(profile)
+    ):
+        structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True)
+        steps["creative_structure"] = structure_step
+        if not structure_step.get("success"):
+            return {
+                "success": False,
+                "status": structure_step.get("status", "failed"),
+                "workflow_depth": effective_depth,
+                "chapter_no": chapter_no,
+                "word_count": effective_word_count,
+                "steps": steps,
+                "creative_structure": "",
+                "chapter": "",
+                "warnings": warnings,
+            }
+        structure_text = structure_step.get("data", {}).get("creative_structure", "")
+        if effective_depth == "分卷/剧情段/章节":
+            warnings.append("当前动态入口先生成可执行创作结构；完整分卷/剧情段拆分请继续使用对应长篇页面。")
+        if is_custom_depth:
+            warnings.append("本次使用自定义生成层级，系统会先生成适配结构，再继续生成正文。")
+        write_step = write_chapter(project_name, chapter_no, structure_text, None, effective_word_count)
+        steps["write_chapter"] = write_step
+        return {
+            "success": bool(write_step.get("success")),
+            "status": write_step.get("status", "completed"),
+            "workflow_depth": effective_depth,
+            "chapter_no": chapter_no,
+            "word_count": effective_word_count,
+            "steps": steps,
+            "creative_structure": structure_text,
+            "chapter": write_step.get("data", {}).get("chapter", ""),
+            "warnings": warnings,
+        }
+
+    if effective_depth == "章节计划+正文":
+        outline_step = generate_chapter_outline(project_name, chapter_no, user_requirement)
+        steps["chapter_outline"] = outline_step
+        if not outline_step.get("success"):
+            return {
+                "success": False,
+                "status": outline_step.get("status", "failed"),
+                "workflow_depth": effective_depth,
+                "chapter_no": chapter_no,
+                "word_count": effective_word_count,
+                "steps": steps,
+                "creative_structure": "",
+                "chapter": "",
+                "warnings": warnings,
+            }
+        outline_text = outline_step.get("data", {}).get("chapter_outline", "")
+        write_step = write_chapter(project_name, chapter_no, outline_text, None, effective_word_count)
+        steps["write_chapter"] = write_step
+        return {
+            "success": bool(write_step.get("success")),
+            "status": write_step.get("status", "completed"),
+            "workflow_depth": effective_depth,
+            "chapter_no": chapter_no,
+            "word_count": effective_word_count,
+            "steps": steps,
+            "creative_structure": outline_text,
+            "chapter": write_step.get("data", {}).get("chapter", ""),
+            "warnings": warnings,
+        }
+
+    warnings.append("完整长篇流程建议继续使用全书大纲、分卷、剧情段、章节细纲和一键流水线页面分步执行。")
+    structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True)
+    steps["creative_structure"] = structure_step
+    return {
+        "success": bool(structure_step.get("success")),
+        "status": "completed" if structure_step.get("success") else structure_step.get("status", "failed"),
+        "workflow_depth": effective_depth,
+        "chapter_no": chapter_no,
+        "word_count": effective_word_count,
+        "steps": steps,
+        "creative_structure": structure_step.get("data", {}).get("creative_structure", ""),
+        "chapter": "",
+        "warnings": warnings,
+    }
 
 def update_memory_from_chapter(
     project_name: str,
@@ -1582,7 +1929,7 @@ def update_memory_from_chapter(
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章设定更新 {chapter}",
-        allowed_source_types=["memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "chapter_summary", "external_source"],
+        allowed_source_types=["memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "chapter_summary", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1606,7 +1953,7 @@ def update_memory_from_chapter(
             validation=_make_validation_status(
                 status="failed",
                 schema_name="MemoryUpdateResult",
-                message="Memory update payload validation failed.",
+                message="设定更新结构校验失败。",
                 errors=[reason],
             ),
             artifacts={"raw_response": result},
@@ -1621,7 +1968,7 @@ def update_memory_from_chapter(
             validation=_make_validation_status(
                 status="failed",
                 schema_name="MemoryUpdateResult",
-                message="Memory update payload extraction failed.",
+                message="设定更新结果提取失败。",
                 errors=[str(exc)],
             ),
             artifacts={"raw_response": result},
@@ -1657,7 +2004,7 @@ def update_memory_from_chapter(
         validation=_make_validation_status(
             status="passed",
             schema_name="MemoryUpdateResult",
-            message="Memory update payload validated and applied.",
+            message="设定更新已通过结构校验并应用。",
         ),
         artifacts={"memory_saved": True},
     ).model_dump()
@@ -1689,7 +2036,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
             "analysis_timeline",
             "analysis_foreshadowing",
             "external_source",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1708,7 +2055,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
             status="blocked",
             summary=f"审阅结果解析失败：{reason}",
             strengths=[],
-            issues=["模型未按要求返回合法 Schema 的审阅结果。"],
+            issues=["模型未按要求返回合法结构的审阅结果。"],
             pacing="未知",
             next_action="检查原始审阅结果并重新生成。",
         )
@@ -1719,7 +2066,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
             markdown += f"\n\n{sources_md}"
         if conflict_md:
             markdown += f"\n\n{conflict_md}"
-        markdown += f"\n\n## Raw Response\n\n```text\n{result}\n```"
+        markdown += f"\n\n## 模型原始返回\n\n```text\n{result}\n```"
         save_review_json(project_name, chapter_no, fallback_review.model_dump())
         save_review(project_name, chapter_no, markdown)
         return _make_step_result(
@@ -1731,12 +2078,12 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
                 "review_markdown": markdown,
             },
             error=reason,
-            warnings=["Review markdown fallback was generated and persisted."],
+            warnings=["已生成并保存审阅报告的兜底版本。"],
             retrieval_hits=retrieval_hits,
             validation=_make_validation_status(
                 status="failed",
                 schema_name="ReviewResult",
-                message="Review payload schema validation failed.",
+                message="审阅结果结构校验失败。",
                 errors=[reason],
             ),
             artifacts={"review_saved": True, "raw_response": result},
@@ -1746,7 +2093,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
             status="blocked",
             summary=f"审阅结果解析失败：{exc}",
             strengths=[],
-            issues=["模型未按要求返回合法 JSON 审阅结果。"],
+            issues=["模型未按要求返回合法结构化审阅结果。"],
             pacing="未知",
             next_action="检查原始审阅结果并重新生成。",
         )
@@ -1757,7 +2104,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
             markdown += f"\n\n{sources_md}"
         if conflict_md:
             markdown += f"\n\n{conflict_md}"
-        markdown += f"\n\n## Raw Response\n\n```text\n{result}\n```"
+        markdown += f"\n\n## 模型原始返回\n\n```text\n{result}\n```"
         save_review_json(project_name, chapter_no, fallback_review.model_dump())
         save_review(project_name, chapter_no, markdown)
         return _make_step_result(
@@ -1769,12 +2116,12 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
                 "review_markdown": markdown,
             },
             error=str(exc),
-            warnings=["Review markdown fallback was generated and persisted."],
+            warnings=["已生成并保存审阅报告的兜底版本。"],
             retrieval_hits=retrieval_hits,
             validation=_make_validation_status(
                 status="failed",
                 schema_name="ReviewResult",
-                message="Review payload extraction failed.",
+                message="审阅结果提取失败。",
                 errors=[str(exc)],
             ),
             artifacts={"review_saved": True, "raw_response": result},
@@ -1801,7 +2148,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
         validation=_make_validation_status(
             status="passed",
             schema_name="ReviewResult",
-            message="Review payload validated and persisted.",
+            message="审阅结果已通过结构校验并保存。",
         ),
         artifacts={"review_saved": True},
     ).model_dump()
@@ -1831,7 +2178,7 @@ def _run_analysis(
     try:
         result = schema.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Analysis schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"分析结果结构校验失败：{format_schema_validation_error(exc)}") from exc
     return result, renderer(result)
 
 
@@ -1868,7 +2215,7 @@ def _finalize_analysis_step(
         validation=_make_validation_status(
             status="passed",
             schema_name=schema_name,
-            message="Analysis payload validated and report persisted.",
+            message="分析结果已通过结构校验并保存报告。",
         ),
         artifacts={
             "report_saved": True,
@@ -1883,7 +2230,7 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> dict
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章角色分析 {chapter}",
-        allowed_source_types=["chapter_summary", "chapter_content", "memory_character", "memory_relationship", "memory_active_constraint", "review_issue", "analysis_characters", "external_source"],
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_character", "memory_relationship", "memory_active_constraint", "review_issue", "analysis_characters", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1893,7 +2240,7 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str) -> dict
     )
     result_model, markdown = _run_analysis(
         prompt,
-        "LLM returned empty character analysis.",
+        "模型没有返回角色分析结果。",
         CharacterAnalysisResult,
         render_character_analysis_markdown,
     )
@@ -1915,7 +2262,7 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> dict:
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章时间线分析 {chapter}",
-        allowed_source_types=["chapter_summary", "chapter_content", "memory_timeline", "memory_active_constraint", "review_timeline_check", "analysis_timeline", "external_source"],
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_timeline", "memory_active_constraint", "review_timeline_check", "analysis_timeline", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1925,7 +2272,7 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str) -> dict:
     )
     result_model, markdown = _run_analysis(
         prompt,
-        "LLM returned empty timeline analysis.",
+        "模型没有返回时间线分析结果。",
         TimelineAnalysisResult,
         render_timeline_analysis_markdown,
     )
@@ -1947,7 +2294,7 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> d
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章伏笔分析 {chapter}",
-        allowed_source_types=["chapter_summary", "chapter_content", "memory_foreshadowing", "memory_active_constraint", "review_foreshadowing_check", "analysis_foreshadowing", "external_source"],
+        allowed_source_types=["chapter_summary", "chapter_content", "memory_foreshadowing", "memory_active_constraint", "review_foreshadowing_check", "analysis_foreshadowing", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -1957,7 +2304,7 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str) -> d
     )
     result_model, markdown = _run_analysis(
         prompt,
-        "LLM returned empty foreshadowing analysis.",
+        "模型没有返回伏笔分析结果。",
         ForeshadowingAnalysisResult,
         render_foreshadowing_analysis_markdown,
     )
@@ -2004,7 +2351,7 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str) -> d
     )
     result_model, markdown = _run_analysis(
         prompt,
-        "LLM returned empty consistency check.",
+        "模型没有返回一致性检查结果。",
         ConsistencyAnalysisResult,
         render_consistency_analysis_markdown,
     )
@@ -2048,7 +2395,7 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
             "analysis_foreshadowing",
             "conflict_resolution",
             "external_source",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
     )
@@ -2056,11 +2403,11 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
         evaluate_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review")),
         retrieval_context,
     )
-    payload = _call_json_llm(prompt, "LLM returned empty chapter evaluation.")
+    payload = _call_json_llm(prompt, "模型没有返回章节评估结果。")
     try:
         result = ChapterEvaluationResult.model_validate(payload)
     except ValidationError as exc:
-        raise RuntimeError(f"Chapter evaluation schema validation failed: {format_schema_validation_error(exc)}") from exc
+        raise RuntimeError(f"章节评估结构校验失败：{format_schema_validation_error(exc)}") from exc
 
     retrieval_hits = get_retrieval_trace(trace_key)
     report_markdown = render_chapter_evaluation_markdown(result)
@@ -2084,7 +2431,7 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str) -> dict:
         validation=_make_validation_status(
             status="passed",
             schema_name="ChapterEvaluationResult",
-            message="Chapter evaluation validated and persisted.",
+            message="章节评估已通过结构校验并保存。",
         ),
         artifacts={
             "report_saved": True,
@@ -2246,14 +2593,14 @@ def pipeline_plan_write_review_update(
 def resume_chapter_pipeline(project_name: str, run_id: str) -> dict:
     raw = load_pipeline_run(project_name, run_id)
     if not raw.strip():
-        raise RuntimeError("Pipeline run not found.")
+        raise RuntimeError("没有找到该流水线运行记录。")
     previous = json.loads(raw)
     if not previous.get("resumable"):
-        raise RuntimeError("Selected pipeline run is not marked as resumable.")
+        raise RuntimeError("选中的流水线运行记录没有标记为可恢复。")
 
     chapter_no = int(previous.get("chapter_no", 0))
     if chapter_no <= 0:
-        raise RuntimeError("Previous run does not contain a valid chapter number.")
+        raise RuntimeError("上一条运行记录缺少有效章节编号。")
 
     started_at = datetime.now().isoformat(timespec="seconds")
     resumed_run_id = f"chapter_{chapter_no:03d}_resume_{started_at.replace(':', '').replace('-', '').replace('T', '_')}"

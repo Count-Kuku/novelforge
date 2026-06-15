@@ -49,7 +49,13 @@ Current maturity can be summarized as:
 - configurable chapter target word count
 - memory compaction for long-running projects
 - layered global and project rules
-- retrieval center for project and external knowledge
+- project resources page for browsing, editing, and cleaning project files
+- core story state page for short, high-priority settings injected into generation
+- source ingestion page for importing canon/reference/sample text and extracting structured knowledge
+- retrieval center for index rebuilds, recall tests, debug inspection, and conflict handling
+- project creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
+- dynamic generation entry that can run direct prose, short-form structure, or chapter-plan based generation from the creative profile
+- structured knowledge ingestion from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 - lexical, semantic, and hybrid retrieval
 - authority-aware and conflict-aware evidence presentation
 - retrieval debug preview for query terms, candidate chunks, and reranked hits
@@ -118,9 +124,15 @@ The system also supports a combined pipeline:
 Plan -> Write -> Review -> Update Memory
 ```
 
-## Retrieval And Knowledge Support
+## Sources, Core State, And Retrieval
 
 NovelForge includes a project-scoped retrieval layer that works across both internal writing assets and external reference material.
+
+The app separates three related concepts:
+
+- `Project Resources`: file-level management for outlines, chapters, reports, run snapshots, and source files.
+- `Core State`: compact story settings that are injected with high priority, such as key canon mode, relationships, timeline items, and hard constraints.
+- `Source Ingestion` / `Retrieval Center`: ingestion imports and structures material; retrieval rebuilds indexes, tests recall, inspects debug output, and stores conflict decisions.
 
 Current retrieval capabilities include:
 
@@ -134,6 +146,29 @@ Current retrieval capabilities include:
 - conflict warnings when project evidence and external evidence overlap
 - persisted conflict resolutions that can be recalled as project knowledge
 - optional retrieval debug output for inspecting recall and ranking behavior
+- structured knowledge extraction from pasted material with human confirmation before persistence
+- confirmed structured knowledge is indexed for later generation, review, analysis, and evaluation
+
+## Creative Profile
+
+Each project can store a creative profile describing the intended generation path:
+
+- task nature: main story, side story, continuation, prequel, transmigration/AU, completion, scene fragment, or a custom value
+- target length and optional word count, both customizable
+- workflow depth, from direct prose generation to full long-form outline hierarchy
+- reference strength: light, medium, strong, strict canon, or style-focused
+- reference focus such as characters, worldbuilding, events, abilities, timeline, writing style, dialogue style, techniques, and hard constraints, with custom tags supported
+
+This profile is injected into major generation, discussion, review, and analysis prompts so model behavior can adapt to length, workflow depth, and reference strength.
+
+The in-app `动态生成` page now provides a first executable dynamic path:
+
+- direct prose generation
+- short-form structure plus prose
+- chapter plan plus prose
+- lightweight flows for short stories, side stories, continuations, prequels, transmigration/AU stories, completion pieces, and scene fragments
+
+Full automatic orchestration for long-form volume/arc/chapter pipelines is still planned.
 
 ## Project Storage Structure
 
@@ -148,7 +183,9 @@ data/
     your_project/
       memory.json
       rules.json
+      creative_profile.json
       outline.md
+      knowledge/
       volumes/
       arcs/
       chapter_outlines/
@@ -165,6 +202,8 @@ This keeps planning, draft chapters, reviews, analysis, and retrieval artifacts 
 Newer persisted artifacts include:
 
 - `arcs/arc_xxx.chapter_plan.json`: arc-level chapter allocation plans
+- `creative_profile.json`: project-level creative profile
+- `knowledge/*.json`: confirmed structured knowledge records
 - `evaluation/chapter_xxx.md` / `.json`: chapter evaluation reports and structured scores
 - `retrieval/conflict_resolutions.json`: saved retrieval conflict decisions
 - `runs/*.json`: resumable pipeline run snapshots
@@ -291,6 +330,8 @@ Planned roles include:
 - ReviewAgent
 - MemoryAgent
 - ResearchAgent
+
+The first pre-agent step is implemented: source material can be split into typed structured knowledge and confirmed by the user before indexing. These extractors can later become specialist ingestion agents.
 
 ### V5 evaluation system
 
