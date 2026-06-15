@@ -84,7 +84,7 @@ Current practical status:
 * Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, SiliconFlow) for quick endpoint/model fill
 * Connection testing for model profiles before saving
 * Local launcher and portable-build scripts for desktop-style localhost packaging
-* Grouped workspace navigation in the sidebar so configuration pages live in the workbench alongside project overview, while planning and writing remain separate by work area
+* Grouped workspace navigation in the sidebar: workbench pages stay focused on overview/config/resources, while story creative configuration lives in planning and unlocks the relevant planning pages for the current story
 * Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
 * Project overview page upgraded into a quick-action home screen for generation, pipeline, ingestion, and resource browsing
 * Story spaces support：one project can hold multiple independent stories, each with its own creative profile, memory overrides, outlines, chapters, reviews, evaluations, analysis reports, pipeline runs, and chapter summaries, while sharing project-level base memory, structured knowledge, source materials, rules, and retrieval index
@@ -95,6 +95,15 @@ Current practical status:
 * Retrieval debug preview with query terms, filters, candidate counts, and rerank inspection
 * Persisted retrieval conflict resolutions for project-vs-canon/reference decisions
 * Chapter-level evaluation reports with structured scoring and saved Markdown/JSON artifacts
+* Story-level rule overrides (rules_overrides.json) with three-level injection: global → project → story
+* Unified settings page with tab-based switching between story-level and project-level core settings
+* Settings merge engine with conflict detection and per-field resolution for cross-scope copy (story↔project, story↔story)
+* Settings copy functions: copy_story_settings, merge_story_to_project_memory, merge_project_to_story_memory, merge_story_rules_to_project, merge_project_rules_to_story
+* Full story copy (copy_story) and archive (archive_story) with optional discussion/chapter/summary inclusion
+* Creative-profile-driven retrieval: reference_focus and reference_strength now control retrieval source types, top_k, and mode
+* Memory field expansion: locations, organizations, power_systems, relationship_graph with retrieval indexing
+* Renamed "交互规则" to "生成规则" (generation rules) for clearer intent
+* Consolidated creative profile page: removed separate task wizard, discussion auto-fills form values directly
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
@@ -176,6 +185,8 @@ novelforge/
 ├── memory.py
 
 ├── retrieval.py
+
+├── merge.py
 
 ├── schemas.py
 
@@ -320,6 +331,7 @@ UI features:
 * Source package report panel for generating a searchable project reference report
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Grouped sidebar navigation that separates workspace pages into workbench / planning / writing / resources areas
+* Planning navigation is profile-aware: a new story initially shows only creative configuration, then expands to long-form or short-form planning pages based on target length and workflow depth
 * Project overview home screen with quick actions for dynamic generation, chapter pipeline, source ingestion, and resource browsing
 * Project-aware page header that surfaces project title, genre, canon mode, and current page description
 * Save buttons in structured story-state forms stay disabled until the user actually changes form content

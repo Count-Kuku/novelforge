@@ -58,6 +58,25 @@ AUTHORITY_WEIGHTS = {
     "community": 0.5,
     "unknown": 0.0,
 }
+REFERENCE_FOCUS_SOURCE_MAP = {
+    "角色": ["knowledge_characters", "memory_character"],
+    "世界观": ["knowledge_world_rules", "knowledge_locations", "memory_world"],
+    "剧情事件": ["knowledge_timeline_events", "memory_timeline"],
+    "道具能力": ["knowledge_items", "knowledge_abilities"],
+    "时间线": ["knowledge_timeline_events", "memory_timeline"],
+    "写作风格": ["knowledge_writing_style", "knowledge_dialogue_style", "knowledge_narrative_techniques"],
+    "硬性约束": ["knowledge_constraints"],
+}
+
+REFERENCE_STRENGTH_PARAMS = {
+    "轻参考": {"top_k": 3, "mode": "lexical", "scopes": None, "source_types": None},
+    "中参考": {"top_k": 6, "mode": "hybrid", "scopes": None, "source_types": None},
+    "强参考": {"top_k": 10, "mode": "hybrid", "scopes": None, "source_types": None},
+    "严格原作": {"top_k": 15, "mode": "hybrid", "scopes": ["canon", "reference"], "source_types": None},
+    "主要参考文风": {"top_k": 8, "mode": "hybrid", "scopes": None,
+                     "source_types": ["knowledge_writing_style", "knowledge_dialogue_style", "knowledge_narrative_techniques"]},
+}
+
 STRUCTURED_SOURCE_TYPES = {
     "memory_character",
     "memory_world",
@@ -282,7 +301,7 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
             project_name,
             "memory_au_rule",
             str(index),
-            f"AU Rule {index}",
+            f"架空规则 {index}",
             str(item),
             tags=["au_rule"],
             metadata={"memory_field": "au_rules", "authority": "project"},
@@ -350,6 +369,41 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
             str(item),
             tags=["constraint"],
             metadata={"memory_field": "active_constraints", "authority": "project"},
+        )
+        if doc:
+            documents.append(doc)
+
+    for field_name, source_type, tag in [
+        ("locations", "memory_location", "location"),
+        ("organizations", "memory_organization", "organization"),
+        ("power_systems", "memory_power_system", "power_system"),
+    ]:
+        for index, item in enumerate(memory.get(field_name, []), start=1):
+            doc = _make_document(
+                project_name,
+                source_type,
+                str(index),
+                f"{field_name.title()} {index}",
+                str(item),
+                tags=[tag],
+                metadata={"memory_field": field_name, "authority": "project"},
+            )
+            if doc:
+                documents.append(doc)
+
+    for index, item in enumerate(memory.get("relationship_graph", []), start=1):
+        if isinstance(item, dict):
+            content = f"{item.get('source', '')} -> {item.get('target', '')}: {item.get('relation', '')}"
+        else:
+            content = str(item)
+        doc = _make_document(
+            project_name,
+            "memory_relationship_graph",
+            str(index),
+            f"Relationship Graph {index}",
+            content,
+            tags=["relationship_graph"],
+            metadata={"memory_field": "relationship_graph", "authority": "project"},
         )
         if doc:
             documents.append(doc)
@@ -1058,6 +1112,46 @@ def _rerank_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
     return reranked
 
 
+def resolve_retrieval_params(
+    reference_focus: list[str] | None = None,
+    reference_strength: str | None = None,
+    allowed_source_types: list[str] | None = None,
+    allowed_scopes: list[str] | None = None,
+    top_k: int | None = None,
+    retrieval_mode: str | None = None,
+) -> dict:
+    params: dict = {
+        "allowed_source_types": list(allowed_source_types) if allowed_source_types else None,
+        "allowed_scopes": list(allowed_scopes) if allowed_scopes else None,
+        "top_k": top_k or DEFAULT_TOP_K,
+        "retrieval_mode": retrieval_mode or "hybrid",
+    }
+
+    if reference_strength and reference_strength in REFERENCE_STRENGTH_PARAMS:
+        sp = REFERENCE_STRENGTH_PARAMS[reference_strength]
+        if sp["top_k"]:
+            params["top_k"] = sp["top_k"]
+        if sp["mode"]:
+            params["retrieval_mode"] = sp["mode"]
+        if sp["scopes"]:
+            params["allowed_scopes"] = list(sp["scopes"])
+        if sp["source_types"]:
+            params["allowed_source_types"] = list(sp["source_types"])
+
+    if reference_focus:
+        focus_types: list[str] = []
+        for focus in reference_focus:
+            focus_types.extend(REFERENCE_FOCUS_SOURCE_MAP.get(focus, []))
+        if focus_types:
+            existing = params.get("allowed_source_types")
+            if existing:
+                params["allowed_source_types"] = [t for t in existing if t in focus_types] or focus_types
+            else:
+                params["allowed_source_types"] = focus_types
+
+    return params
+
+
 def retrieve_context(
     project_name: str,
     query: str,
@@ -1066,7 +1160,16 @@ def retrieve_context(
     allowed_scopes: list[str] | None = None,
     allowed_source_types: list[str] | None = None,
     retrieval_mode: str = "hybrid",
+    reference_focus: list[str] | None = None,
+    reference_strength: str | None = None,
 ) -> list[RetrievalHit]:
+    if reference_focus or reference_strength:
+        resolved = resolve_retrieval_params(reference_focus, reference_strength, allowed_source_types, allowed_scopes, top_k, retrieval_mode)
+        top_k = resolved["top_k"]
+        retrieval_mode = resolved["retrieval_mode"]
+        allowed_scopes = resolved.get("allowed_scopes")
+        allowed_source_types = resolved.get("allowed_source_types")
+
     index = load_retrieval_index(project_name)
     query_terms = _expand_query_terms(query)
     if not query_terms and retrieval_mode == "lexical":

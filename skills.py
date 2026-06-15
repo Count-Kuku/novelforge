@@ -57,6 +57,7 @@ from memory import (
     load_outline_discussion_artifact,
     load_pipeline_run,
     load_project_rules,
+    load_story_rules,
     load_volume_discussion_artifact,
     load_volume_outline,
     save_arc_metadata,
@@ -162,6 +163,10 @@ SOURCE_TYPE_LABELS = {
     "memory_timeline": "时间线设定",
     "memory_foreshadowing": "伏笔设定",
     "memory_active_constraint": "当前硬性约束",
+    "memory_location": "地点设定",
+    "memory_organization": "组织设定",
+    "memory_power_system": "能力体系设定",
+    "memory_relationship_graph": "关系图设定",
     "external_source": "通用外部资料",
     "knowledge_characters": "知识库：角色",
     "knowledge_items": "知识库：物品与道具",
@@ -212,6 +217,10 @@ COMMON_RETRIEVAL_SOURCE_TYPES = [
     "memory_timeline",
     "memory_foreshadowing",
     "memory_active_constraint",
+    "memory_location",
+    "memory_organization",
+    "memory_power_system",
+    "memory_relationship_graph",
     "review_issue",
     "analysis_consistency",
     "analysis_characters",
@@ -222,7 +231,7 @@ COMMON_RETRIEVAL_SOURCE_TYPES = [
 ] + KNOWLEDGE_SOURCE_TYPES
 
 KNOWN_WORKFLOW_DEPTHS = {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"}
-LIGHTWEIGHT_STORY_KEYWORDS = {"短篇", "中篇", "番外", "续写", "前传", "穿越", "转生", "异世界", "平行世界", "AU", "补完", "补全", "片段", "场景"}
+LIGHTWEIGHT_STORY_KEYWORDS = {"短篇", "中篇", "番外", "续写", "前传", "穿越", "转生", "异世界", "平行世界", "AU", "架空", "补完", "补全", "片段", "场景"}
 
 
 def _is_lightweight_story_profile(profile: dict) -> bool:
@@ -620,7 +629,8 @@ def _dedupe_list_items(items: list) -> list:
 def _build_rules_text(project_name: str, scope: str, story_id: str = "default") -> str:
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
-    rules_text = format_rules_for_prompt(global_rules, project_rules, scope)
+    story_rules = load_story_rules(project_name, story_id)
+    rules_text = format_rules_for_prompt(global_rules, project_rules, scope, story_rules=story_rules)
     try:
         profile = load_creative_profile(project_name, story_id)
     except Exception:
@@ -655,7 +665,18 @@ def _build_retrieval_context(
     top_k: int = 6,
     retrieval_mode: str = "hybrid",
     trace_key: str | None = None,
+    reference_focus: list[str] | None = None,
+    reference_strength: str | None = None,
 ) -> str:
+    if reference_focus is None or reference_strength is None:
+        try:
+            profile = load_creative_profile(project_name, story_id)
+            if reference_focus is None:
+                reference_focus = profile.get("reference_focus")
+            if reference_strength is None:
+                reference_strength = profile.get("reference_strength")
+        except Exception:
+            pass
     hits = retrieve_context(
         project_name,
         query,
@@ -663,6 +684,8 @@ def _build_retrieval_context(
         allowed_scopes=allowed_scopes,
         allowed_source_types=allowed_source_types,
         retrieval_mode=retrieval_mode,
+        reference_focus=reference_focus,
+        reference_strength=reference_strength,
     )
     _set_retrieval_trace(trace_key, hits)
     return format_retrieval_context(hits)
@@ -719,10 +742,16 @@ def _extract_rule_lines(text: str) -> list[str]:
 
 
 def save_rule_text(project_name: str, scope: str, target: str, rule_text: str, story_id: str = "default") -> dict:
-    if target not in {"global", "project"}:
-        raise ValueError("Rule target must be 'global' or 'project'.")
+    if target not in {"global", "project", "story"}:
+        raise ValueError("Rule target must be 'global', 'project', or 'story'.")
 
-    rules = load_global_rules() if target == "global" else load_project_rules(project_name)
+    if target == "story":
+        rules = load_story_rules(project_name, story_id)
+    elif target == "global":
+        rules = load_global_rules()
+    else:
+        rules = load_project_rules(project_name)
+
     if scope not in rules:
         raise ValueError(f"Unknown rule scope: {scope}")
 
@@ -743,6 +772,8 @@ def save_rule_text(project_name: str, scope: str, target: str, rule_text: str, s
 
     if target == "global":
         save_global_rules(rules)
+    elif target == "story":
+        save_story_rules(project_name, story_id, rules)
     else:
         save_project_rules(project_name, rules)
 
@@ -863,7 +894,20 @@ def discuss_outline(project_name: str, user_idea: str, story_id: str = "default"
 def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = "default") -> dict:
     memory = load_story_memory(project_name, story_id)
     current_profile = load_creative_profile(project_name, story_id)
-    prompt = discuss_creative_profile_prompt(memory, current_profile, user_idea, _build_rules_text(project_name, "all", story_id=story_id))
+    trace_key = f"creative_profile_discuss:{project_name}"
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        user_idea,
+        allowed_source_types=COMMON_RETRIEVAL_SOURCE_TYPES,
+        allowed_scopes=["project", "canon", "reference"],
+        trace_key=trace_key,
+        story_id=story_id,
+    )
+    prompt = discuss_creative_profile_prompt(
+        memory, current_profile, user_idea,
+        _build_rules_text(project_name, "all", story_id=story_id),
+        retrieval_context=retrieval_context,
+    )
     payload = _call_json_llm(prompt, "模型没有返回创作配置讨论结果。")
     try:
         result = CreativeProfileDiscussionResult.model_validate(payload)
@@ -878,6 +922,7 @@ def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = 
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="CreativeProfileDiscussionResult",
@@ -1066,6 +1111,15 @@ def discuss_creative_profile_turn(
 ) -> dict:
     memory = load_story_memory(project_name, story_id)
     current_profile = load_creative_profile(project_name, story_id)
+    trace_key = f"creative_profile_discuss_turn:{project_name}"
+    retrieval_context = _build_retrieval_context(
+        project_name,
+        latest_user_message,
+        allowed_source_types=COMMON_RETRIEVAL_SOURCE_TYPES,
+        allowed_scopes=["project", "canon", "reference"],
+        trace_key=trace_key,
+        story_id=story_id,
+    )
     prompt = discuss_creative_profile_turn_prompt(
         memory,
         current_profile,
@@ -1074,6 +1128,7 @@ def discuss_creative_profile_turn(
         current_discussion,
         latest_user_message,
         _build_rules_text(project_name, "all", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回本轮创作配置讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
@@ -1093,6 +1148,7 @@ def discuss_creative_profile_turn(
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="CreativeProfileDiscussionResult",
@@ -1367,7 +1423,7 @@ def approve_creative_profile_discussion(project_name: str, discussion_step: dict
         raise RuntimeError("创作配置讨论结果尚未达到可批准状态。")
     discussion_result = CreativeProfileDiscussionResult.model_validate(discussion)
     recommended_profile = discussion_result.recommended_profile.model_dump()
-    save_creative_profile(project_name, recommended_profile, story_id)
+    save_creative_profile(project_name, recommended_profile, story_id, mark_configured=True)
     save_creative_profile_discussion_artifact(project_name, discussion_result.model_dump(), report_markdown, story_id)
     return {
         "discussion": discussion_result.model_dump(),

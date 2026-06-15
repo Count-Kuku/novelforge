@@ -1,8 +1,9 @@
-import json
+﻿import json
 import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 from dotenv import dotenv_values
@@ -36,7 +37,11 @@ DEFAULT_MEMORY = {
     "timeline": [],
     "foreshadowing": [],
     "active_constraints": [],
-    "chapter_summaries": []
+    "chapter_summaries": [],
+    "locations": [],
+    "organizations": [],
+    "power_systems": [],
+    "relationship_graph": [],
 }
 KNOWLEDGE_CATEGORIES = {
     "characters": "角色知识",
@@ -370,7 +375,7 @@ def normalize_memory(project_name: str, memory: dict | None) -> dict:
 
     normalized["title"] = normalized.get("title") or project_name
 
-    for key in ["au_rules", "world", "characters", "relationships", "timeline", "foreshadowing", "active_constraints", "chapter_summaries"]:
+    for key in ["au_rules", "world", "characters", "relationships", "timeline", "foreshadowing", "active_constraints", "chapter_summaries", "locations", "organizations", "power_systems", "relationship_graph"]:
         value = normalized.get(key)
         normalized[key] = value if isinstance(value, list) else []
 
@@ -433,13 +438,17 @@ def load_creative_profile(project_name: str, story_id: str = "default") -> dict:
     except Exception:
         raw = {}
     profile = CreativeProfile.model_validate(raw).model_dump()
+    if isinstance(raw, dict) and raw and "is_configured" not in raw:
+        profile["is_configured"] = True
     if profile != raw:
         save_creative_profile(project_name, profile, story_id)
     return profile
 
 
-def save_creative_profile(project_name: str, profile: dict, story_id: str = "default") -> dict:
+def save_creative_profile(project_name: str, profile: dict, story_id: str = "default", mark_configured: bool | None = None) -> dict:
     normalized = CreativeProfile.model_validate(profile or {}).model_dump()
+    if mark_configured is not None:
+        normalized["is_configured"] = bool(mark_configured)
     path = creative_profile_path(project_name, story_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -512,6 +521,10 @@ def _story_memory_overrides_path(project_name: str, story_id: str) -> Path:
     return story_path(project_name, story_id) / "memory_overrides.json"
 
 
+def _story_rules_overrides_path(project_name: str, story_id: str) -> Path:
+    return story_path(project_name, story_id) / "rules_overrides.json"
+
+
 def load_stories_index(project_name: str) -> dict:
     path = stories_index_path(project_name)
     if not path.exists():
@@ -581,6 +594,145 @@ def create_story(project_name: str, name: str, description: str = "") -> dict:
     sp = story_path(project_name, story_id)
     sp.mkdir(parents=True, exist_ok=True)
     return meta.model_dump()
+
+
+
+def copy_story_settings(project_name: str, source_story_id: str, target_story_id: str):
+    """将源故事的创作配置、创作配置讨论工件和记忆覆盖复制到目标故事。"""
+    from shutil import copy2
+
+    src_profile = creative_profile_path(project_name, source_story_id)
+    if src_profile.exists():
+        dst_profile = creative_profile_path(project_name, target_story_id)
+        dst_profile.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(src_profile), str(dst_profile))
+
+    src_discussion = _creative_profile_discussion_path(project_name, source_story_id)
+    if src_discussion.exists():
+        dst_discussion = _creative_profile_discussion_path(project_name, target_story_id)
+        dst_discussion.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(src_discussion), str(dst_discussion))
+
+    src_overrides = _story_memory_overrides_path(project_name, source_story_id)
+    if src_overrides.exists():
+        dst_overrides = _story_memory_overrides_path(project_name, target_story_id)
+        dst_overrides.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(src_overrides), str(dst_overrides))
+
+    sync_project_retrieval_assets(project_name)
+
+
+def merge_story_to_project_memory(project_name: str, story_id: str, field_resolutions: dict[str, Any] | None = None) -> dict:
+    from merge import build_merge_plan, apply_merge_plan
+
+    base = load_memory(project_name)
+    story = load_story_memory(project_name, story_id)
+    plan = build_merge_plan(story, base, source_label="故事", target_label="项目", base_path="memory")
+    resolved = {}
+    for opt in plan:
+        if not opt.conflict:
+            resolved[opt.path.replace("memory.", "")] = opt.source_value if opt.source_value is not None else opt.target_value
+        elif field_resolutions and opt.path in field_resolutions:
+            resolved[opt.path.replace("memory.", "")] = field_resolutions[opt.path]
+        else:
+            resolved[opt.path.replace("memory.", "")] = opt.source_value
+
+    merged = dict(base)
+    for key, value in resolved.items():
+        merged[key] = value
+    save_memory(project_name, merged)
+
+    overrides_path = _story_memory_overrides_path(project_name, story_id)
+    if overrides_path.exists():
+        overrides_path.unlink()
+    sync_project_retrieval_assets(project_name)
+    return merged
+
+
+def merge_project_to_story_memory(project_name: str, story_id: str, field_resolutions: dict[str, Any] | None = None) -> dict:
+    base = load_memory(project_name)
+    story = load_story_memory(project_name, story_id)
+    overrides: dict = {}
+    for key, value in base.items():
+        story_val = story.get(key)
+        if key == "chapter_summaries":
+            continue
+        if story_val != value:
+            if isinstance(value, list) and isinstance(story_val, list):
+                overrides[key] = value
+            elif value != story_val:
+                overrides[key] = value
+    path = _story_memory_overrides_path(project_name, story_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(overrides, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+    return {**base, **overrides}
+
+
+def merge_story_rules_to_project(project_name: str, story_id: str) -> dict:
+    project_rules = load_project_rules(project_name)
+    story_rules = load_story_rules(project_name, story_id)
+    from merge import _merge_dedup
+    merged = dict(project_rules)
+    for scope in RULE_SCOPES:
+        story_items = story_rules.get(scope, [])
+        if story_items:
+            existing = merged.get(scope, [])
+            merged[scope] = _merge_dedup(existing, story_items)
+    save_project_rules(project_name, merged)
+    path = _story_rules_overrides_path(project_name, story_id)
+    if path.exists():
+        path.unlink()
+    return merged
+
+
+def merge_project_rules_to_story(project_name: str, story_id: str) -> dict:
+    project_rules = load_project_rules(project_name)
+    save_story_rules(project_name, story_id, project_rules)
+    return project_rules
+
+
+def copy_story(project_name: str, source_story_id: str, new_name: str,
+               *, include_discussions: bool = True, include_summaries: bool = True,
+               include_chapters: bool = True) -> dict:
+    from uuid import uuid4
+    import shutil
+
+    meta = create_story(project_name, new_name)
+    target_id = meta["story_id"]
+    src_dir = story_path(project_name, source_story_id)
+    dst_dir = story_path(project_name, target_id)
+    dst_dir.mkdir(parents=True, exist_ok=True)
+
+    copy_story_settings(project_name, source_story_id, target_id)
+
+    for item in src_dir.iterdir():
+        if item.is_dir():
+            if not include_chapters and item.name in {"chapters", "chapter_outlines", "reviews", "analysis", "evaluation", "runs"}:
+                continue
+            if not include_discussions and item.name in {"volumes", "arcs"}:
+                continue
+            shutil.copytree(str(item), str(dst_dir / item.name), dirs_exist_ok=True)
+        elif item.is_file():
+            if not include_summaries and item.name == "chapter_summaries.json":
+                continue
+            if not include_discussions and "discussion" in item.name:
+                continue
+            shutil.copy2(str(item), str(dst_dir / item.name))
+
+    sync_project_retrieval_assets(project_name)
+    return meta
+
+
+def archive_story(project_name: str, story_id: str) -> bool:
+    index = load_stories_index(project_name)
+    for s in index.get("stories", []):
+        if s["story_id"] == story_id:
+            s["status"] = "archived"
+            s["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            save_stories_index(project_name, index)
+            return True
+    return False
 
 
 def delete_story(project_name: str, story_id: str) -> bool:
@@ -926,6 +1078,28 @@ def append_knowledge_items(
             saved_count += 1
         save_knowledge_category(project_name, category, existing)
     return saved_count
+
+
+def load_story_rules(project_name: str, story_id: str) -> dict:
+    path = _story_rules_overrides_path(project_name, story_id)
+    if not path.exists():
+        return normalize_rules(None)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return normalize_rules(raw)
+    except Exception:
+        return normalize_rules(None)
+
+
+def save_story_rules(project_name: str, story_id: str, rules: dict):
+    path = _story_rules_overrides_path(project_name, story_id)
+    normalized = normalize_rules(rules)
+    if all(len(v) == 0 for v in normalized.values()):
+        if path.exists():
+            path.unlink()
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def load_global_rules() -> dict:
@@ -1862,3 +2036,4 @@ def chapter_count(project_name: str, story_id: str = "default") -> int:
     if not chapters_dir.exists():
         return 0
     return len([f for f in chapters_dir.iterdir() if f.suffix == ".md"])
+

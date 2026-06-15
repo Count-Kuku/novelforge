@@ -1,4 +1,4 @@
-import json
+﻿import json
 import re
 import hashlib
 import html
@@ -46,6 +46,7 @@ from memory import (
     list_volumes,
     load_chapter,
     load_chapter_outline,
+    creative_profile_path,
     load_memory,
     load_outline,
     load_outline_discussion_artifact,
@@ -55,6 +56,7 @@ from memory import (
     load_review,
     load_review_json,
     load_story_memory,
+    load_story_rules,
     load_volume_discussion_artifact,
     load_volume_metadata,
     load_volume_outline,
@@ -71,11 +73,16 @@ from memory import (
     save_knowledge_category,
     append_knowledge_items,
     confirm_pending_knowledge_items,
+    copy_story_settings,
+    archive_story,
+    merge_story_to_project_memory,
+    merge_project_to_story_memory,
     discard_pending_knowledge_items,
     queue_pending_knowledge_items,
     save_pending_knowledge_items,
     save_outline,
     save_project_rules,
+    save_story_rules,
     create_long_reference_batch,
     set_active_llm_profile,
     set_active_story,
@@ -270,10 +277,10 @@ SEVERITY_LABELS = {
 }
 
 PAGE_GROUPS = {
-    "工作台": ["项目总览", "模型配置", "创作配置", "交互规则", "项目资源"],
-    "规划": ["生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
+    "工作台": ["项目总览", "模型配置", "生成规则", "项目资源"],
+    "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
     "写作": ["动态生成", "一键流水线", "写章节", "章节审阅", "章节评估", "一致性分析"],
-    "资料": ["核心设定", "资料录入", "检索中心"],
+    "资料": ["设定", "资料录入", "检索中心"],
 }
 
 PAGE_DESCRIPTIONS = {
@@ -282,6 +289,7 @@ PAGE_DESCRIPTIONS = {
     "一键流水线": "按章节串联细纲、正文、审阅和记忆更新。",
     "项目资源": "集中浏览、编辑和清理项目文件。",
     "创作配置": "定义任务类型、篇幅、流程深度和参考强度。",
+    "设定": "管理故事级和项目级的核心设定（角色、世界观、时间线等）。",
     "生成大纲": "规划全书方向并生成全局大纲。",
     "分卷大纲": "维护中层分卷结构。",
     "剧情段大纲": "维护剧情段和章节分配计划。",
@@ -290,10 +298,9 @@ PAGE_DESCRIPTIONS = {
     "章节审阅": "审阅章节并输出结构化修改意见。",
     "章节评估": "生成章节质量评分和评估报告。",
     "一致性分析": "检查设定、角色、时间线和伏笔问题。",
-    "核心设定": "维护会被优先注入的故事状态。",
     "资料录入": "导入原作、参考资料和长篇文本。",
     "检索中心": "调试索引、召回证据和冲突裁决。",
-    "交互规则": "管理全局和项目级生成约束。",
+    "生成规则": "管理全局、项目和故事级的生成约束，控制模型怎么写。",
     "模型配置": "配置模型端点、密钥和档案切换。",
 }
 
@@ -721,7 +728,7 @@ def recommended_workflow_for_profile(profile: dict) -> list[str]:
     keyword_map = [
         (("续写",), "续写"),
         (("前传",), "前传"),
-        (("穿越", "转生", "异世界", "平行世界", "AU"), "穿越"),
+        (("穿越", "转生", "异世界", "平行世界", "AU", "架空"), "穿越"),
         (("番外",), "番外"),
         (("补完", "补全", "补设定"), "补完"),
         (("片段", "场景"), "片段"),
@@ -733,6 +740,49 @@ def recommended_workflow_for_profile(profile: dict) -> list[str]:
         if any(keyword in combined for keyword in keywords):
             return STORY_MODE_WORKFLOWS[workflow_key]
     return STORY_MODE_WORKFLOWS["主线故事"]
+
+
+def is_story_creative_profile_configured(project_name: str | None, story_id: str = "default") -> bool:
+    if not project_name:
+        return False
+    try:
+        if not creative_profile_path(project_name, story_id).exists():
+            return False
+        profile = load_creative_profile(project_name, story_id=story_id)
+        return bool(profile.get("is_configured"))
+    except Exception:
+        return False
+
+
+def planning_pages_for_story(project_name: str | None, story_id: str = "default") -> list[str]:
+    if not is_story_creative_profile_configured(project_name, story_id):
+        return ["创作配置"]
+
+    try:
+        profile = load_creative_profile(project_name, story_id=story_id) if project_name else {}
+    except Exception:
+        profile = {}
+
+    workflow_depth = str(profile.get("workflow_depth", "") or "")
+    target_length = str(profile.get("target_length", "") or "")
+    story_mode = str(profile.get("story_mode", "") or "")
+    combined = f"{workflow_depth} {target_length} {story_mode}"
+
+    if "完整长篇流程" in workflow_depth or "分卷/剧情段/章节" in workflow_depth or "长篇" in combined:
+        return ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"]
+    if "章节计划+正文" in workflow_depth or "中篇" in combined:
+        return ["创作配置", "生成大纲", "生成细纲"]
+    if "短篇结构+正文" in workflow_depth or "短篇" in combined or "片段" in combined or "单场景" in combined:
+        return ["创作配置", "生成细纲"]
+    if "只生成正文" in workflow_depth:
+        return ["创作配置"]
+    return ["创作配置", "生成大纲", "生成细纲"]
+
+
+def page_groups_for_story(project_name: str | None, story_id: str = "default") -> dict[str, list[str]]:
+    groups = {group: list(pages) for group, pages in PAGE_GROUPS.items()}
+    groups["规划"] = planning_pages_for_story(project_name, story_id)
+    return groups
 
 
 def select_with_custom(container, label: str, options: list[str], current_value: str, key: str, help_text: str = "") -> str:
@@ -986,20 +1036,28 @@ def _render_rule_editor(title: str, storage_key: str, rules: dict) -> dict:
 
 
 def render_rules_page(project_name: str):
-    st.subheader("交互规则中心")
-    st.caption("将长期要求存成全局规则或项目规则，系统会在对应能力里自动注入这些约束。")
+    story_id = st.session_state.get("active_story_id", "default")
+    stories = list_stories(project_name)
+    current_story_name = "默认"
+    for s in stories:
+        if s.get("story_id") == story_id:
+            current_story_name = s.get("name", story_id)
+            break
+
+    st.subheader("生成规则")
+    st.caption("将长期要求存成规则，系统会在对应能力里自动注入这些约束，控制模型怎么写。规则生效优先级：故事 > 项目 > 全局。")
 
     with st.expander("快速记录新要求", expanded=True):
         rule_text = st.text_area("输入你的要求", height=140, key="rule_capture_text")
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         scope_label = col1.selectbox("适用能力", options=list(RULE_SCOPE_OPTIONS.values()), key="rule_capture_scope")
-        target_label = col2.selectbox("保存位置", options=["项目规则", "全局规则"], key="rule_capture_target")
+        target_label = col2.selectbox("保存位置", options=["故事规则", "项目规则", "全局规则"], key="rule_capture_target")
 
         if st.button("保存要求为规则"):
             scope = next(key for key, value in RULE_SCOPE_OPTIONS.items() if value == scope_label)
-            target = "project" if target_label == "项目规则" else "global"
+            target = "story" if target_label == "故事规则" else ("project" if target_label == "项目规则" else "global")
             try:
-                result = save_rule_text(project_name, scope, target, rule_text)
+                result = save_rule_text(project_name, scope, target, rule_text, story_id=story_id)
                 if result.get("status") == "saved":
                     st.success(f"已保存到{target_label} / {scope_label}")
                     st.rerun()
@@ -1010,16 +1068,23 @@ def render_rules_page(project_name: str):
 
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
+    story_rules = load_story_rules(project_name, story_id)
 
-    tab1, tab2 = st.tabs(["项目规则", "全局规则"])
+    tab1, tab2, tab3 = st.tabs(["故事规则", "项目规则", "全局规则"])
 
     with tab1:
+        updated_story_rules = _render_rule_editor(f"故事规则：{current_story_name}", f"story_rules_{story_id}", story_rules)
+        if st.button("保存故事规则"):
+            save_story_rules(project_name, story_id, updated_story_rules)
+            st.success(f"已保存 {current_story_name} 的故事规则")
+
+    with tab2:
         updated_project_rules = _render_rule_editor(f"项目规则：{project_name}", "project_rules", project_rules)
         if st.button("保存项目规则"):
             save_project_rules(project_name, updated_project_rules)
             st.success("项目规则已保存")
 
-    with tab2:
+    with tab3:
         updated_global_rules = _render_rule_editor("全局规则", "global_rules", global_rules)
         if st.button("保存全局规则"):
             save_global_rules(updated_global_rules)
@@ -1356,9 +1421,12 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
         with st.sidebar.popover("新故事", use_container_width=True):
             new_story_name = st.text_input("故事名称", key="new_story_name_input")
             new_story_desc = st.text_area("故事描述", key="new_story_desc_input", height=80, placeholder="例如：原作线续写、平行世界、角色穿越...")
+            copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True, key="sidebar_copy_from")
             if st.button("创建故事"):
                 if new_story_name.strip():
                     meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
+                    if copy_from:
+                        copy_story_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
                     set_active_story(project_name, meta["story_id"])
                     st.session_state["active_story_id"] = meta["story_id"]
                     st.success(f"已创建故事：{new_story_name.strip()}")
@@ -1368,7 +1436,9 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
 
     st.sidebar.divider()
 
-    available_pages = [page for pages in PAGE_GROUPS.values() for page in pages]
+    current_story_id = st.session_state.get("active_story_id", "default")
+    visible_page_groups = page_groups_for_story(project_name, current_story_id)
+    available_pages = [page for pages in visible_page_groups.values() for page in pages]
     pending_nav_page = st.session_state.pop("pending_nav_page", "")
     if pending_nav_page in available_pages:
         st.session_state["active_page"] = pending_nav_page
@@ -1376,13 +1446,16 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
 
     active_page = st.session_state.get("active_page", DEFAULT_PAGE)
     if active_page not in available_pages:
-        active_page = DEFAULT_PAGE
+        if active_page in PAGE_GROUPS.get("规划", []) and "创作配置" in available_pages:
+            active_page = "创作配置"
+        else:
+            active_page = DEFAULT_PAGE
 
     active_group = next(
-        (group for group, pages in PAGE_GROUPS.items() if active_page in pages),
+        (group for group, pages in visible_page_groups.items() if active_page in pages),
         "工作台",
     )
-    group_names = list(PAGE_GROUPS.keys())
+    group_names = list(visible_page_groups.keys())
     nav_revision = int(st.session_state.get("nav_revision", 0))
     selected_group = st.sidebar.radio(
         "工作区",
@@ -1390,9 +1463,12 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
         index=group_names.index(active_group),
         key=f"active_page_group_{nav_revision}",
     )
-    group_pages = PAGE_GROUPS[selected_group]
+    group_pages = visible_page_groups[selected_group]
     if active_page not in group_pages:
         active_page = group_pages[0]
+
+    if selected_group == "规划" and project_name and not is_story_creative_profile_configured(project_name, current_story_id):
+        st.sidebar.caption("先完成当前故事的创作配置，规划入口会按篇幅和生成层级自动展开。")
 
     selected_page = st.sidebar.radio(
         "页面",
@@ -1422,36 +1498,45 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
     return selected_page
 
 
-def render_memory_page(project_name: str, memory: dict):
+def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
     current_story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("核心设定")
-    st.caption("这里维护的是生成时始终优先注入的核心状态。长文本资料、原作证据、历史正文与分析报告通过“资料录入”和“检索中心”按需管理与召回。")
+    if not embedded:
+        stories = list_stories(project_name)
+        current_story_name = "默认"
+        for s in stories:
+            if s.get("story_id") == current_story_id:
+                current_story_name = s.get("name", current_story_id)
+                break
+        st.subheader(f"核心设定 · {current_story_name}")
+        st.caption("生成时始终优先注入的核心状态。故事级别的设定只影响当前故事，项目级别的资料库（知识库、原材料、规则）为所有故事共享。")
 
     changed = False
     new_memory = dict(memory)
 
-    new_title = st.text_input("书名", value=memory.get("title", ""))
+    new_title = st.text_input("书名", value=memory.get("title", ""), key=f"memory_title_{current_story_id}")
     if new_title != memory.get("title"):
         new_memory["title"] = new_title
         changed = True
 
-    new_genre = st.text_input("类型", value=memory.get("genre", ""))
+    new_genre = st.text_input("类型", value=memory.get("genre", ""), key=f"memory_genre_{current_story_id}")
     if new_genre != memory.get("genre"):
         new_memory["genre"] = new_genre
         changed = True
 
     new_canon_mode = st.text_input(
-        "原作对齐方式（如：严格贴合 / 轻度 AU / 完全 AU）",
-        value=memory.get("canon_mode", "")
+        "原作对齐方式（如：严格贴合 / 轻度架空 / 完全架空）",
+        value=memory.get("canon_mode", ""),
+        key=f"memory_canon_{current_story_id}"
     )
     if new_canon_mode != memory.get("canon_mode", ""):
         new_memory["canon_mode"] = new_canon_mode
         changed = True
 
     new_au_rules = st.text_area(
-        "AU 规则（每行一条）",
+        "架空规则（每行一条）",
         value="\n".join(memory.get("au_rules", [])),
-        height=100
+        height=100,
+        key=f"memory_au_{current_story_id}"
     )
     au_rule_items = [line.strip() for line in new_au_rules.split("\n") if line.strip()]
     if au_rule_items != memory.get("au_rules", []):
@@ -1461,7 +1546,8 @@ def render_memory_page(project_name: str, memory: dict):
     new_world = st.text_area(
         "世界观（每行一条）",
         value="\n".join(memory.get("world", [])),
-        height=120
+        height=120,
+        key=f"memory_world_{current_story_id}"
     )
     world_items = [line.strip() for line in new_world.split("\n") if line.strip()]
     if world_items != memory.get("world", []):
@@ -1471,7 +1557,8 @@ def render_memory_page(project_name: str, memory: dict):
     new_characters = st.text_area(
         "角色（每行一条）",
         value="\n".join(memory.get("characters", [])),
-        height=150
+        height=150,
+        key=f"memory_characters_{current_story_id}"
     )
     character_items = [line.strip() for line in new_characters.split("\n") if line.strip()]
     if character_items != memory.get("characters", []):
@@ -1481,7 +1568,8 @@ def render_memory_page(project_name: str, memory: dict):
     new_relationships = st.text_area(
         "角色关系（每行一条）",
         value="\n".join(memory.get("relationships", [])),
-        height=120
+        height=120,
+        key=f"memory_relationships_{current_story_id}"
     )
     relationship_items = [line.strip() for line in new_relationships.split("\n") if line.strip()]
     if relationship_items != memory.get("relationships", []):
@@ -1491,7 +1579,8 @@ def render_memory_page(project_name: str, memory: dict):
     new_timeline = st.text_area(
         "时间线（每行一条）",
         value="\n".join(memory.get("timeline", [])),
-        height=120
+        height=120,
+        key=f"memory_timeline_{current_story_id}"
     )
     timeline_items = [line.strip() for line in new_timeline.split("\n") if line.strip()]
     if timeline_items != memory.get("timeline", []):
@@ -1501,7 +1590,8 @@ def render_memory_page(project_name: str, memory: dict):
     new_foreshadowing = st.text_area(
         "伏笔（每行一条）",
         value="\n".join(memory.get("foreshadowing", [])),
-        height=120
+        height=120,
+        key=f"memory_foreshadowing_{current_story_id}"
     )
     foreshadowing_items = [line.strip() for line in new_foreshadowing.split("\n") if line.strip()]
     if foreshadowing_items != memory.get("foreshadowing", []):
@@ -1511,7 +1601,8 @@ def render_memory_page(project_name: str, memory: dict):
     new_constraints = st.text_area(
         "当前硬性约束（每行一条）",
         value="\n".join(memory.get("active_constraints", [])),
-        height=100
+        height=100,
+        key=f"memory_constraints_{current_story_id}"
     )
     constraint_items = [line.strip() for line in new_constraints.split("\n") if line.strip()]
     if constraint_items != memory.get("active_constraints", []):
@@ -2091,13 +2182,224 @@ def render_project_overview_page(project_name: str):
                     st.error("项目删除失败，目标项目可能不存在。")
 
 
-def render_creative_profile_page(project_name: str):
+def render_settings_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("创作配置")
-    st.caption("配置本项目的任务性质、目标篇幅、生成层级和资料参考强度。你可以直接手动选择，也可以先讨论再把推荐配置回填到表单。")
+    stories = list_stories(project_name)
+    current_story_name = "默认"
+    for s in stories:
+        if s.get("story_id") == story_id:
+            current_story_name = s.get("name", story_id)
+            break
 
-    render_creative_task_wizard(project_name, story_id=story_id)
+    st.subheader(f"设定 · {current_story_name}")
+    st.caption("故事级设定仅影响当前故事；项目级设定为所有故事共享。创意方向和生成流程请到「创作配置」页面配置。")
+
+    story_tab, project_tab = st.tabs(["故事设定", "项目设定"])
+
+    with story_tab:
+        _render_story_settings_tab(project_name, story_id, current_story_name)
+
+    with project_tab:
+        _render_project_settings_tab(project_name)
+
+
+def _render_story_settings_tab(project_name: str, story_id: str, story_name: str):
+    st.markdown("#### 设定复制与导入")
+
+    merge_key = f"merge_preview_{story_id}"
+    pending_merge = st.session_state.get(merge_key)
+
+    if pending_merge:
+        st.markdown("##### 合并预览")
+        for opt in pending_merge:
+            if opt.conflict:
+                st.markdown(f"**{opt.label}**")
+                st.caption(f"来源：`{opt.source_value}`　目标：`{opt.target_value}`")
+                choice = st.radio(
+                    "保留",
+                    options=["source", "target", "merged"] if opt.field_type == "list" else ["source", "target"],
+                    format_func=lambda c: {"source": f"来源值", "target": f"目标值", "merged": "合并去重"}.get(c, c),
+                    horizontal=True,
+                    key=f"merge_{opt.path}",
+                )
+                opt.resolution_choice = choice
+                opt.resolution = {"source": opt.source_value, "target": opt.target_value, "merged": (
+                    list(dict.fromkeys(str(v) for v in (opt.source_value or []) + (opt.target_value or [])))
+                    if opt.field_type == "list" else opt.source_value
+                )}.get(choice, opt.source_value)
+            else:
+                opt.resolution = opt.source_value if opt.source_value is not None else opt.target_value
+                opt.resolution_choice = "source"
+
+        confirm_col, cancel_col = st.columns(2)
+        if confirm_col.button("确认合并", use_container_width=True):
+            action = pending_merge[0].path.split(".")[0] if pending_merge else ""
+            if action == "project_to_story":
+                merged = merge_project_to_story_memory(project_name, story_id)
+                st.success("已从项目导入设定到当前故事")
+            elif action == "story_to_project":
+                merged = merge_story_to_project_memory(project_name, story_id)
+                st.success("已合并当前故事设定到项目基础设定")
+            elif action == "story_to_story":
+                copy_story_settings(project_name, pending_merge[0].path.split(".")[1] if len(pending_merge[0].path.split(".")) > 1 else "", story_id)
+                st.success("已从其他故事导入设定")
+            st.session_state.pop(merge_key)
+            st.rerun()
+        if cancel_col.button("取消", use_container_width=True):
+            st.session_state.pop(merge_key)
+            st.rerun()
+    else:
+        col_a, col_b, col_c = st.columns(3)
+        if col_a.button("从项目导入设定", use_container_width=True):
+            from merge import build_merge_plan
+            base = load_memory(project_name)
+            story = load_story_memory(project_name, story_id)
+            plan = build_merge_plan(base, story, source_label="项目", target_label="故事")
+            for opt in plan:
+                opt.path = f"project_to_story.{opt.path}"
+            st.session_state[merge_key] = plan
+            st.rerun()
+
+        other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
+        if other_stories:
+            sel_story = col_b.selectbox("从其他故事导入", options=[s.get("story_id") for s in other_stories],
+                                         format_func=lambda sid: next((s.get("name", sid) for s in other_stories if s["story_id"] == sid), sid),
+                                         key="settings_import_story", label_visibility="collapsed")
+            if col_b.button("导入", use_container_width=True, key="import_other_story"):
+                copy_story_settings(project_name, sel_story, story_id)
+                st.success(f"已从其他故事导入设定到当前故事")
+                st.rerun()
+
+        if col_c.button("设为项目默认", use_container_width=True):
+            from merge import build_merge_plan
+            base = load_memory(project_name)
+            story = load_story_memory(project_name, story_id)
+            plan = build_merge_plan(story, base, source_label="故事", target_label="项目")
+            for opt in plan:
+                opt.path = f"story_to_project.{opt.path}"
+            st.session_state[merge_key] = plan
+            st.rerun()
+
     st.divider()
+    st.markdown(f"#### {story_name} 的核心设定")
+    memory = load_story_memory(project_name, story_id)
+    render_memory_page(project_name, memory, embedded=True)
+
+
+def _render_project_settings_tab(project_name: str):
+    base_memory = load_memory(project_name)
+    st.markdown("#### 项目基础设定（所有故事共享）")
+    changed = False
+    new_memory = dict(base_memory)
+
+    new_title = st.text_input("书名", value=base_memory.get("title", ""), key="project_title")
+    if new_title != base_memory.get("title"):
+        new_memory["title"] = new_title
+        changed = True
+    new_genre = st.text_input("类型", value=base_memory.get("genre", ""), key="project_genre")
+    if new_genre != base_memory.get("genre"):
+        new_memory["genre"] = new_genre
+        changed = True
+
+    for field in ["world", "characters", "relationships", "timeline", "foreshadowing", "active_constraints"]:
+        label_map = {
+            "world": "世界观", "characters": "角色", "relationships": "角色关系",
+            "timeline": "时间线", "foreshadowing": "伏笔", "active_constraints": "硬性约束",
+        }
+        value = "\n".join(base_memory.get(field, []))
+        new_value = st.text_area(label_map.get(field, field), value=value, height=100, key=f"project_{field}")
+        new_items = [line.strip() for line in new_value.split("\n") if line.strip()]
+        if new_items != base_memory.get(field, []):
+            new_memory[field] = new_items
+            changed = True
+
+    if st.button("保存项目设定", disabled=not changed):
+        save_memory(project_name, new_memory)
+        st.success("已保存")
+        st.rerun()
+    if not changed:
+        st.caption("当前表单没有未保存改动。")
+
+    st.divider()
+    st.markdown("#### 项目知识库")
+    knowledge = load_knowledge_base(project_name)
+    total_items = sum(len(items) for items in knowledge.values())
+    st.caption(f"共 {len(knowledge)} 个分类，{total_items} 条知识条目。详细信息请到「资料录入」页面管理。")
+    for cat, items in knowledge.items():
+        if items:
+            with st.expander(f"{label_knowledge_category(cat)}（{len(items)} 条）", expanded=False):
+                for item in items:
+                    st.markdown(f"- **{item.get('name', '-')}**：{str(item.get('content', ''))[:200]}")
+    if st.button("前往资料录入", use_container_width=True, key="goto_ingestion"):
+        navigate_to("资料录入")
+
+
+def _render_story_management_tab(project_name: str):
+    stories = list_stories(project_name)
+    st.markdown(f"#### 故事列表（共 {len(stories)} 个）")
+
+    for s in stories:
+        cols = st.columns([3, 1, 1, 1, 1])
+        cols[0].write(f"**{s.get('name', s['story_id'])}**  ({s['story_id']})")
+        cols[1].write(s.get("status", "active"))
+        cols[2].write(s.get("created_at", "")[:10])
+
+        is_active = s["story_id"] == st.session_state.get("active_story_id", "default")
+        if cols[3].button("切换", key=f"switch_{s['story_id']}", disabled=is_active, use_container_width=True):
+            set_active_story(project_name, s["story_id"])
+            st.session_state["active_story_id"] = s["story_id"]
+            st.rerun()
+
+        if cols[4].button("复制", key=f"copy_{s['story_id']}", use_container_width=True):
+            from uuid import uuid4
+            new_id = f"{s['story_id']}_copy_{uuid4().hex[:6]}"
+            try:
+                copy_story_settings(project_name, s["story_id"], new_id)
+                st.success(f"已复制设定到新故事：{new_id}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"复制失败：{exc}")
+
+    st.divider()
+    st.markdown("#### 创建新故事")
+    with st.popover("新故事", use_container_width=True):
+        new_story_name = st.text_input("故事名称", key="settings_new_story_name")
+        new_story_desc = st.text_area("故事描述", height=80, key="settings_new_story_desc",
+                                       placeholder="例如：原作线续写、平行世界、角色穿越...")
+        copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True)
+        if st.button("创建故事"):
+            if new_story_name.strip():
+                meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
+                if copy_from:
+                    copy_story_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
+                set_active_story(project_name, meta["story_id"])
+                st.session_state["active_story_id"] = meta["story_id"]
+                st.success(f"已创建故事：{new_story_name.strip()}")
+                st.rerun()
+            else:
+                st.error("故事名称不能为空。")
+
+    st.divider()
+    st.markdown("#### 模型配置")
+    render_llm_settings_page()
+
+
+def render_creative_profile_page(project_name: str, embedded: bool = False):
+    story_id = st.session_state.get("active_story_id", "default")
+    stories = list_stories(project_name)
+    current_story_name = "默认"
+    for s in stories:
+        if s.get("story_id") == story_id:
+            current_story_name = s.get("name", story_id)
+            break
+    if not embedded:
+        st.subheader(f"创作配置 · {current_story_name}")
+        st.info(
+            f"当前正在配置 **{current_story_name}** 的创作参数。"
+            "创作配置是故事级别的——同一项目不同故事可以设置各自的篇幅、参考强度和生成层级。"
+            "项目级别的资料（知识库、原材料、规则）为所有故事共享。",
+            icon="📖",
+        )
 
     profile = load_creative_profile(project_name, story_id=story_id)
     _init_creative_profile_form_state(project_name, profile)
@@ -2118,103 +2420,101 @@ def render_creative_profile_page(project_name: str):
     discussion_step = st.session_state.get(discussion_result_key, {})
     approved_artifact = load_creative_profile_discussion_artifact(project_name, story_id=story_id)
 
-    st.markdown("### 讨论辅助")
-    st.caption("如果你还不确定该选什么，可以先用自然语言描述目标，系统会给出推荐配置和待确认问题。")
-    user_idea = st.text_area(
-        "这次想写什么",
-        height=140,
-        key=f"creative_profile_discussion_seed_{project_name}",
-        placeholder="例如：想写一个偏伤感的现代都市 AU 续写，只保留原作人物关系和说话风格，不保留原作结局。",
-    )
-    discuss_action_col1, discuss_action_col2 = st.columns(2)
-    if discuss_action_col1.button("开始讨论创作配置", key="start_creative_profile_discussion"):
-        if not user_idea.strip():
-            st.warning("请先描述这次想写什么。")
-        else:
-            try:
-                result = discuss_creative_profile(project_name, user_idea, story_id=story_id)
-                st.session_state[discussion_result_key] = result
+    with st.expander("💬 讨论辅助", expanded=not form_state.get("story_mode") or form_state["story_mode"] == "主线故事"):
+        st.caption("用自然语言描述目标，讨论结果会自动填入下方表单。")
+        col_seed, col_action = st.columns([3, 1])
+        with col_seed:
+            user_idea = st.text_area(
+                "这次想写什么",
+                height=100,
+                key=f"creative_profile_discussion_seed_{project_name}",
+                placeholder="例如：想写一个偏伤感的现代都市架空续写，只保留原作人物关系和说话风格，不保留原作结局。",
+                label_visibility="collapsed",
+            )
+        with col_action:
+            st.write("")
+            st.write("")
+            if st.button("开始讨论", key="start_creative_profile_discussion", use_container_width=True):
+                if not user_idea.strip():
+                    st.warning("请先描述这次想写什么。")
+                else:
+                    try:
+                        result = discuss_creative_profile(project_name, user_idea, story_id=story_id)
+                        st.session_state[discussion_result_key] = result
+                        st.session_state[discussion_messages_key] = []
+                        assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、推荐配置方向和待确认问题，我们可以继续细化。"
+                        _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
+                        recommended = result.get("data", {}).get("discussion", {}).get("recommended_profile", {})
+                        if recommended:
+                            _set_creative_profile_form_state(project_name, recommended)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"讨论失败：{exc}")
+            if st.button("重置", key="reset_creative_profile_discussion", use_container_width=True):
+                st.session_state[discussion_result_key] = {}
                 st.session_state[discussion_messages_key] = []
-                assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、推荐配置方向和待确认问题，我们可以继续细化。"
-                _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
+                st.session_state[clear_input_flag_key] = True
                 st.rerun()
-            except Exception as exc:
-                st.error(f"讨论失败：{exc}")
-    if discuss_action_col2.button("重置创作配置讨论", key="reset_creative_profile_discussion"):
-        st.session_state[discussion_result_key] = {}
-        st.session_state[discussion_messages_key] = []
-        st.session_state[clear_input_flag_key] = True
-        st.rerun()
 
-    summary_col, chat_col = st.columns([1, 1])
-    with summary_col:
-        st.markdown("#### 当前讨论结论")
-        _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前收敛出的创作配置建议。")
-        discussion_payload = discussion_step.get("data", {}).get("discussion", {}) if discussion_step else {}
-        recommended_profile = discussion_payload.get("recommended_profile", {}) if isinstance(discussion_payload, dict) else {}
-        action_col1, action_col2 = st.columns(2)
-        if action_col1.button("应用推荐到表单", key="apply_creative_profile_recommendation"):
-            if not recommended_profile:
-                st.warning("当前还没有可应用的推荐配置。")
-            else:
-                _set_creative_profile_form_state(project_name, recommended_profile)
-                st.success("已将推荐配置回填到下方表单，你可以继续微调后保存。")
-                st.rerun()
-        if action_col2.button("批准并写入当前配置", key="approve_creative_profile_discussion"):
-            try:
-                result = approve_creative_profile_discussion(project_name, discussion_step, story_id=story_id)
-                _set_creative_profile_form_state(project_name, result.get("saved_profile", {}))
-                st.success(f"已保存创作配置讨论工件，并写入当前配置：{result.get('saved_path', '')}")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"批准失败：{exc}")
-        clear_col, empty_col = st.columns(2)
-        if clear_col.button("清除已批准讨论", key="clear_creative_profile_discussion"):
-            if clear_creative_profile_discussion_approval(project_name, story_id=story_id):
-                st.success("已清除创作配置已批准讨论工件。")
-                st.rerun()
-            else:
-                st.warning("当前没有可清除的已批准创作配置讨论工件。")
-        st.markdown("#### 已批准讨论版本")
-        _render_approved_discussion_artifact(approved_artifact, "当前创作配置还没有已批准讨论工件。")
-
-    with chat_col:
-        st.markdown("#### 讨论对话")
-        messages = st.session_state.get(discussion_messages_key, [])
-        _render_discussion_chat(messages)
-        follow_up = st.text_area(
-            "继续讨论",
-            key=discussion_input_key,
-            height=120,
-            placeholder="例如：我希望重点保留人物关系，但剧情走向可以明显偏离原作。",
-        )
-        if st.button("发送讨论消息", key="send_creative_profile_discussion"):
-            if not follow_up.strip():
-                st.warning("讨论消息不能为空。")
-            elif not user_idea.strip():
-                st.warning("请先填写这次想写什么。")
-            else:
-                try:
-                    _append_discussion_message(discussion_messages_key, "user", follow_up)
-                    messages = st.session_state.get(discussion_messages_key, [])
-                    result = discuss_creative_profile_turn(
-                        project_name,
-                        user_idea,
-                        messages,
-                        discussion_step.get("data", {}).get("discussion", {}),
-                        follow_up,
-                        story_id=story_id,
-                    )
-                    st.session_state[discussion_result_key] = result
-                    assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了当前创作配置建议。"
-                    _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
-                    st.session_state[clear_input_flag_key] = True
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"继续讨论失败：{exc}")
-
-    st.divider()
-    st.markdown("### 直接配置")
+        if discussion_step or st.session_state.get(discussion_messages_key, []):
+            summary_col, chat_col = st.columns([1, 1])
+            with summary_col:
+                st.markdown("##### 当前结论")
+                _render_discussion_summary(discussion_step, "")
+                render_step_retrieval(discussion_step, "讨论参考的上传资料")
+                discussion_payload = discussion_step.get("data", {}).get("discussion", {}) if discussion_step else {}
+                recommended_profile = discussion_payload.get("recommended_profile", {}) if isinstance(discussion_payload, dict) else {}
+                action_col1, action_col2 = st.columns(2)
+                if action_col1.button("应用推荐到表单", use_container_width=True, key="apply_profile_rec"):
+                    if not recommended_profile:
+                        st.warning("当前还没有可应用的推荐配置。")
+                    else:
+                        _set_creative_profile_form_state(project_name, recommended_profile)
+                        st.success("已将推荐配置回填到表单。")
+                        st.rerun()
+                if action_col2.button("批准并保存", use_container_width=True, key="approve_profile_rec"):
+                    try:
+                        result = approve_creative_profile_discussion(project_name, discussion_step, story_id=story_id)
+                        _set_creative_profile_form_state(project_name, result.get("saved_profile", {}))
+                        st.success("已保存创作配置。")
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"批准失败：{exc}")
+            with chat_col:
+                st.markdown("##### 对话")
+                messages = st.session_state.get(discussion_messages_key, [])
+                _render_discussion_chat(messages)
+                follow_up = st.text_area(
+                    "继续讨论",
+                    key=discussion_input_key,
+                    height=80,
+                    placeholder="例如：我希望重点保留人物关系，但剧情走向可以明显偏离原作。",
+                    label_visibility="collapsed",
+                )
+                if st.button("发送", key="send_creative_profile_discussion", use_container_width=True):
+                    if not follow_up.strip():
+                        st.warning("讨论消息不能为空。")
+                    elif not user_idea.strip():
+                        st.warning("请先填写这次想写什么。")
+                    else:
+                        try:
+                            _append_discussion_message(discussion_messages_key, "user", follow_up)
+                            messages = st.session_state.get(discussion_messages_key, [])
+                            result = discuss_creative_profile_turn(
+                                project_name, user_idea, messages,
+                                discussion_step.get("data", {}).get("discussion", {}),
+                                follow_up, story_id=story_id,
+                            )
+                            st.session_state[discussion_result_key] = result
+                            assistant_message = result.get("data", {}).get("assistant_message", "") or "已更新创作配置建议。"
+                            _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
+                            recommended = result.get("data", {}).get("discussion", {}).get("recommended_profile", {})
+                            if recommended:
+                                _set_creative_profile_form_state(project_name, recommended)
+                            st.session_state[clear_input_flag_key] = True
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"继续讨论失败：{exc}")
 
     with st.form("creative_profile_form"):
         col_a, col_b = st.columns(2)
@@ -2224,7 +2524,7 @@ def render_creative_profile_page(project_name: str):
             story_modes,
             form_state.get("story_mode", "主线故事"),
             CREATIVE_PROFILE_FORM_KEYS["story_mode"],
-            "例如：半 AU 续写、原角色现代都市篇、只补某角色死亡前一晚。",
+            "例如：半架空续写、原角色现代都市篇、只补某角色死亡前一晚。",
         )
         target_length = select_with_custom(
             col_b,
@@ -2285,10 +2585,11 @@ def render_creative_profile_page(project_name: str):
             "自由说明",
             value=form_state.get("notes", ""),
             height=140,
-            placeholder="这里可以写任何复杂规则。例如：这次是半 AU 续写，只保留角色关系和说话风格，不保留原作结局；世界观改成现代都市，但能力体系保留原作限制。",
+            placeholder="这里可以写任何复杂规则。例如：这次是半架空续写，只保留角色关系和说话风格，不保留原作结局；世界观改成现代都市，但能力体系保留原作限制。",
             key=CREATIVE_PROFILE_FORM_KEYS["notes"],
         )
-        submitted = st.form_submit_button("保存创作配置")
+        form_actions = st.columns([1, 1, 3])
+        submitted = form_actions[0].form_submit_button("保存创作配置", use_container_width=True)
 
     if submitted:
         saved = save_creative_profile(project_name, _build_creative_profile_from_form_values(
@@ -2302,7 +2603,7 @@ def render_creative_profile_page(project_name: str):
             custom_reference_focus,
             allow_canon_deviation,
             notes,
-        ), story_id=story_id)
+        ), story_id=story_id, mark_configured=True)
         _set_creative_profile_form_state(project_name, saved)
         st.success("创作配置已保存。")
         profile = saved
@@ -2506,7 +2807,7 @@ def render_creative_task_wizard(project_name: str, story_id: str = "default"):
     render_step_json_expander("向导生成的配置预览", preview_profile)
 
     if st.button("保存向导配置"):
-        saved = save_creative_profile(project_name, preview_profile, story_id=story_id)
+        saved = save_creative_profile(project_name, preview_profile, story_id=story_id, mark_configured=True)
         _set_creative_profile_form_state(project_name, saved)
         st.success("已根据向导保存创作配置。")
         st.session_state["task_wizard_last_profile"] = saved
@@ -5341,17 +5642,17 @@ elif page == "项目总览":
     render_project_overview_page(project_name)
 elif page == "创作配置":
     render_creative_profile_page(project_name)
+elif page == "设定":
+    render_settings_page(project_name)
 elif page == "动态生成":
     render_dynamic_generation_page(project_name)
 elif page == "项目资源":
     render_resource_management_page(project_name)
-elif page == "核心设定":
-    render_memory_page(project_name, memory)
 elif page == "资料录入":
     render_retrieval_page(project_name, mode="ingestion")
 elif page == "检索中心":
     render_retrieval_page(project_name, mode="center")
-elif page == "交互规则":
+elif page == "生成规则":
     render_rules_page(project_name)
 elif page == "生成大纲":
     render_outline_page(project_name)
@@ -5371,3 +5672,4 @@ elif page == "章节评估":
     render_evaluation_page(project_name)
 elif page == "一键流水线":
     render_pipeline_page(project_name)
+

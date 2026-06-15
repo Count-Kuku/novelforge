@@ -229,6 +229,7 @@ class OrganizedReferenceResult(NovelForgeSchema):
 
 
 class CreativeProfile(NovelForgeSchema):
+    is_configured: bool = False
     story_mode: str = "主线故事"
     target_length: str = "长篇"
     target_word_count: str = ""
