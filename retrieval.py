@@ -6,7 +6,6 @@ import os
 import re
 from collections import Counter
 from datetime import datetime
-from pathlib import Path
 
 from llm import get_embedding
 from memory import (
@@ -20,6 +19,9 @@ from memory import (
     load_chapter,
     load_chapter_outline,
     load_chapter_outline_metadata,
+    load_character_entities,
+    load_entity_aliases,
+    load_setting_entities,
     load_memory,
     load_outline,
     load_outline_discussion_artifact,
@@ -59,13 +61,13 @@ AUTHORITY_WEIGHTS = {
     "unknown": 0.0,
 }
 REFERENCE_FOCUS_SOURCE_MAP = {
-    "角色": ["knowledge_characters", "memory_character"],
-    "世界观": ["knowledge_world_rules", "knowledge_locations", "memory_world"],
+    "角色": ["entity_character_card", "entity_alias_group", "knowledge_characters", "memory_character"],
+    "世界观": ["entity_setting_card", "knowledge_world_rules", "knowledge_locations", "knowledge_organizations", "memory_world"],
     "剧情事件": ["knowledge_timeline_events", "memory_timeline"],
-    "道具能力": ["knowledge_items", "knowledge_abilities"],
+    "道具能力": ["entity_setting_card", "knowledge_items", "knowledge_abilities"],
     "时间线": ["knowledge_timeline_events", "memory_timeline"],
     "写作风格": ["knowledge_writing_style", "knowledge_dialogue_style", "knowledge_narrative_techniques"],
-    "硬性约束": ["knowledge_constraints"],
+    "硬性约束": ["entity_setting_card", "knowledge_constraints"],
 }
 
 REFERENCE_STRENGTH_PARAMS = {
@@ -461,6 +463,149 @@ def _documents_from_knowledge(project_name: str) -> list[RetrievalDocument]:
     return documents
 
 
+def _documents_from_character_entities(project_name: str) -> list[RetrievalDocument]:
+    documents: list[RetrievalDocument] = []
+    for index, card in enumerate(load_character_entities(project_name), start=1):
+        if not isinstance(card, dict):
+            continue
+        name = str(card.get("name", "")).strip() or f"角色实体卡 {index}"
+        profile = card.get("profile", {}) if isinstance(card.get("profile"), dict) else {}
+        profile_lines = [f"{key}: {value}" for key, value in profile.items() if str(value).strip()]
+        list_fields = [
+            ("relationships", "relationship"),
+            ("abilities_and_items", "ability_or_item"),
+            ("dialogue_style", "dialogue_style"),
+            ("constraints", "constraint"),
+            ("timeline", "timeline"),
+        ]
+        content_lines = [
+            f"name: {name}",
+            "aliases: " + " / ".join(str(value) for value in card.get("aliases", []) if str(value).strip()) if isinstance(card.get("aliases", []), list) else "",
+            f"summary: {str(card.get('summary', '')).strip()}",
+            *profile_lines,
+        ]
+        for field_name, label in list_fields:
+            values = card.get(field_name, [])
+            if not isinstance(values, list):
+                continue
+            for value in values:
+                text = str(value or "").strip()
+                if text:
+                    content_lines.append(f"{label}: {text}")
+        evidence = card.get("evidence", []) if isinstance(card.get("evidence"), list) else []
+        for evidence_item in evidence[:5]:
+            if not isinstance(evidence_item, dict):
+                continue
+            quote = str(evidence_item.get("quote", "") or evidence_item.get("note", "")).strip()
+            if quote:
+                content_lines.append(f"evidence: {quote}")
+        doc = _make_document(
+            project_name,
+            "entity_character_card",
+            str(card.get("id") or index),
+            name,
+            "\n".join(content_lines),
+            scope=str(card.get("scope") or "project"),
+            path=str(project_path(project_name) / "knowledge" / "entities" / "characters.json"),
+            tags=[str(tag) for tag in card.get("tags", []) if str(tag).strip()] if isinstance(card.get("tags"), list) else ["character_entity"],
+            metadata={
+                "entity_type": "character",
+                "authority": str(card.get("authority") or "project"),
+                "confidence": card.get("confidence", 0.7),
+                "importance": card.get("importance", 0.5),
+                "canon_status": str(card.get("canon_status") or "unknown"),
+                "source_knowledge_ids": card.get("source_knowledge_ids", []),
+            },
+        )
+        if doc:
+            documents.append(doc)
+    return documents
+
+
+def _documents_from_entity_aliases(project_name: str) -> list[RetrievalDocument]:
+    documents: list[RetrievalDocument] = []
+    for index, group in enumerate(load_entity_aliases(project_name), start=1):
+        if not isinstance(group, dict):
+            continue
+        canonical_name = str(group.get("canonical_name") or "").strip()
+        aliases = [str(value).strip() for value in group.get("aliases", []) if str(value).strip()] if isinstance(group.get("aliases", []), list) else []
+        if not canonical_name and not aliases:
+            continue
+        title = canonical_name or aliases[0]
+        content_lines = [
+            f"canonical_name: {title}",
+            f"category: {group.get('category', '')}",
+            "aliases: " + " / ".join(aliases),
+        ]
+        if group.get("notes"):
+            content_lines.append(f"notes: {group.get('notes')}")
+        doc = _make_document(
+            project_name,
+            "entity_alias_group",
+            str(group.get("id") or index),
+            title,
+            "\n".join(content_lines),
+            scope="project",
+            path=str(project_path(project_name) / "knowledge" / "entities" / "aliases.json"),
+            tags=["entity_alias", str(group.get("category") or "")],
+            metadata={
+                "entity_type": "alias_group",
+                "knowledge_category": str(group.get("category") or ""),
+                "aliases": aliases,
+                "source_pending_ids": group.get("source_pending_ids", []),
+                "authority": "project",
+            },
+        )
+        if doc:
+            documents.append(doc)
+    return documents
+
+
+def _documents_from_setting_entities(project_name: str) -> list[RetrievalDocument]:
+    documents: list[RetrievalDocument] = []
+    for index, card in enumerate(load_setting_entities(project_name), start=1):
+        if not isinstance(card, dict):
+            continue
+        name = str(card.get("name") or "").strip()
+        if not name:
+            continue
+        content_lines = [
+            f"name: {name}",
+            f"setting_type: {card.get('setting_type', '')}",
+            f"summary: {card.get('summary', '')}",
+        ]
+        for field in ["rules", "locations", "organizations", "abilities", "constraints", "timeline", "related_entities"]:
+            values = card.get(field, [])
+            if isinstance(values, list) and values:
+                content_lines.append(f"{field}: " + "；".join(str(item) for item in values[:12]))
+            elif isinstance(values, dict) and values:
+                content_lines.append(f"{field}: " + json.dumps(values, ensure_ascii=False))
+        doc = _make_document(
+            project_name,
+            "entity_setting_card",
+            str(card.get("id") or index),
+            name,
+            "\n".join(content_lines),
+            scope=str(card.get("scope") or "project"),
+            path=str(project_path(project_name) / "knowledge" / "entities" / "settings.json"),
+            tags=[str(tag) for tag in card.get("tags", []) if str(tag).strip()] if isinstance(card.get("tags"), list) else ["setting_entity"],
+            metadata={
+                "entity_type": "setting",
+                "setting_type": str(card.get("setting_type") or ""),
+                "authority": str(card.get("authority") or "project"),
+                "confidence": card.get("confidence", 0.7),
+                "importance": card.get("importance", 0.5),
+                "canon_status": str(card.get("canon_status") or "unknown"),
+                "worldline_id": str(card.get("worldline_id") or ""),
+                "version_scope": str(card.get("version_scope") or ""),
+                "source_knowledge_ids": card.get("source_knowledge_ids", []),
+            },
+        )
+        if doc:
+            documents.append(doc)
+    return documents
+
+
 def _documents_from_project_files(project_name: str, story_id: str = "default") -> list[RetrievalDocument]:
     documents: list[RetrievalDocument] = []
     base_path = story_path(project_name, story_id)
@@ -820,28 +965,6 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
             if doc:
                 documents.append(doc)
 
-    conflict_resolutions = load_conflict_resolutions(project_name)
-    for item in conflict_resolutions:
-        content = "\n".join([
-            f"decision: {item.get('decision', '')}",
-            f"note: {item.get('note', '')}",
-            f"shared_terms: {', '.join(item.get('shared_terms', []))}",
-            f"project_source: {item.get('project_source', '')}",
-            f"external_source: {item.get('external_source', '')}",
-        ])
-        doc = _make_document(
-            project_name,
-            "conflict_resolution",
-            str(item.get("conflict_id", "")),
-            f"Conflict Resolution {item.get('conflict_id', '')}",
-            content,
-            path=str(base_path / "retrieval" / "conflict_resolutions.json"),
-            tags=["conflict_resolution"],
-            metadata={"authority": "project", "decision": item.get("decision", "")},
-        )
-        if doc:
-            documents.append(doc)
-
     return documents
 
 
@@ -895,7 +1018,34 @@ def gather_retrieval_documents(project_name: str) -> list[RetrievalDocument]:
     documents = []
     documents.extend(_documents_from_memory(project_name))
     documents.extend(_documents_from_knowledge(project_name))
+    documents.extend(_documents_from_character_entities(project_name))
+    documents.extend(_documents_from_entity_aliases(project_name))
+    documents.extend(_documents_from_setting_entities(project_name))
     documents.extend(_documents_from_external_sources(project_name))
+
+    # Project-level conflict resolutions are added once, not per story
+    conflict_resolutions = load_conflict_resolutions(project_name)
+    for item in conflict_resolutions:
+        content = "\n".join([
+            f"decision: {item.get('decision', '')}",
+            f"note: {item.get('note', '')}",
+            f"shared_terms: {', '.join(item.get('shared_terms', []))}",
+            f"project_source: {item.get('project_source', '')}",
+            f"external_source: {item.get('external_source', '')}",
+        ])
+        doc = _make_document(
+            project_name,
+            "conflict_resolution",
+            str(item.get("conflict_id", "")),
+            f"Conflict Resolution {item.get('conflict_id', '')}",
+            content,
+            path=str(project_path(project_name) / "retrieval" / "conflict_resolutions.json"),
+            tags=["conflict_resolution"],
+            metadata={"authority": "project", "decision": item.get("decision", "")},
+        )
+        if doc:
+            documents.append(doc)
+
     for story in list_stories(project_name):
         story_id = story.get("story_id", "default")
         try:
@@ -906,7 +1056,7 @@ def gather_retrieval_documents(project_name: str) -> list[RetrievalDocument]:
 
 
 def chunk_document(document: RetrievalDocument) -> list[RetrievalChunk]:
-    if document.source_type in STRUCTURED_SOURCE_TYPES or document.source_type.startswith("knowledge_"):
+    if document.source_type in STRUCTURED_SOURCE_TYPES or document.source_type.startswith("knowledge_") or document.source_type.startswith("entity_"):
         parts = [(document.title, document.content.strip())] if document.content.strip() else []
     elif document.source_type.startswith("analysis_"):
         parts = _chunk_markdown_sections(document.content)

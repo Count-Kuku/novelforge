@@ -55,9 +55,15 @@ def _launch_url(port: int) -> str:
 
 
 def _python_candidates(root: Path) -> list[Path]:
+    if os.name == "nt":
+        return [
+            root / ".venv" / "Scripts" / "pythonw.exe",
+            root / ".venv" / "Scripts" / "python.exe",
+            Path(sys.executable),
+        ]
     return [
-        root / ".venv" / "Scripts" / "pythonw.exe",
-        root / ".venv" / "Scripts" / "python.exe",
+        root / ".venv" / "bin" / "python3",
+        root / ".venv" / "bin" / "python",
         Path(sys.executable),
     ]
 
@@ -66,7 +72,7 @@ def _resolve_python(root: Path) -> Path:
     for candidate in _python_candidates(root):
         if candidate.exists():
             return candidate
-    raise RuntimeError("No bundled Python runtime found. Expected .venv\\Scripts\\pythonw.exe or python.exe.")
+    raise RuntimeError("No bundled Python runtime found. Expected .venv/Scripts/pythonw.exe or python.exe (Windows) or .venv/bin/python3 or python (Unix).")
 
 
 def _is_port_open(host: str, port: int) -> bool:

@@ -1,7 +1,8 @@
-﻿import json
+import json
 import re
 import hashlib
 import html
+from datetime import datetime, timezone
 
 import streamlit as st
 from urllib.parse import urlparse
@@ -22,7 +23,6 @@ from memory import (
     list_stories,
     load_arc_discussion_artifact,
     list_arcs,
-    load_analysis_report,
     load_arc_metadata,
     load_arc_chapter_plan,
     load_arc_outline,
@@ -36,6 +36,10 @@ from memory import (
     load_creative_profile_discussion_artifact,
     load_knowledge_base,
     load_knowledge_category,
+    load_character_entities,
+    load_entity_aliases,
+    load_extraction_plan_templates,
+    load_setting_entities,
     load_source_package_report,
     load_long_reference_batch,
     load_pending_knowledge_items,
@@ -69,6 +73,10 @@ from memory import (
     save_memory,
     save_story_memory,
     save_knowledge_category,
+    save_character_entities,
+    save_entity_aliases,
+    save_extraction_plan_templates,
+    save_setting_entities,
     append_knowledge_items,
     confirm_pending_knowledge_items,
     copy_story_settings,
@@ -134,6 +142,7 @@ from skills import (
     clear_outline_discussion_approval,
     clear_volume_discussion_approval,
     compact_memory,
+    consolidate_extracted_knowledge,
     detect_potential_conflicts,
     discuss_arc,
     discuss_arc_turn,
@@ -206,6 +215,136 @@ RETRIEVAL_MODE_LABELS = {
     "semantic": "语义检索",
 }
 
+KNOWLEDGE_EXTRACTION_MODE_LABELS = {
+    "general": "通用提取",
+    "deep": "深度提取",
+    "characters": "角色专用",
+    "relationships": "关系专用",
+    "timeline": "时间线专用",
+    "world": "设定专用",
+    "style": "文风专用",
+    "strict_canon": "严格原作",
+    "fanfic_reference": "同人参考",
+}
+
+KNOWLEDGE_EXTRACTION_MODE_HELP = {
+    "general": "均衡抽取主要角色、设定、事件、关系、物品能力、地点组织、文风和约束。适合第一次试跑或资料类型不明确的片段，输出通常更克制。",
+    "deep": "面向同人写作地基的深入抽取，会更积极地保留长期可复用信息。适合正式整理原作正文，但可能产生更多需要人工审核的候选条目。",
+    "characters": "优先抽取角色身份、性格、动机、底线、口癖、称呼和稳定互动模式。",
+    "relationships": "优先抽取角色之间的亲密、冲突、权力、依赖、误解、保护、利用、师徒、阵营等关系。",
+    "timeline": "优先抽取事件、因果、时间顺序、前置条件、后续影响和角色状态变化。",
+    "world": "优先抽取世界规则、组织制度、地点、阵营、能力体系、物品限制和不能违背的设定边界。",
+    "style": "优先抽取叙事视角、句式节奏、氛围、描写偏好、对白风格和场景推进方式。",
+    "strict_canon": "只抽取原文明确支持、后续同人不能轻易违背的事实、关系、事件和硬性约束。",
+    "fanfic_reference": "抽取对改写有帮助的角色感觉、关系张力、文风氛围、可复用桥段和可改写边界。",
+}
+
+KNOWLEDGE_EXTRACTION_EXPERT_PRESETS = {
+    "balanced": {
+        "label": "平衡总管",
+        "mode": "deep",
+        "categories": ["characters", "items", "abilities", "world_rules", "locations", "organizations", "timeline_events", "relationships", "writing_style", "dialogue_style", "constraints"],
+    },
+    "character_expert": {
+        "label": "角色专家",
+        "mode": "characters",
+        "categories": ["characters", "dialogue_style", "relationships", "constraints", "timeline_events"],
+    },
+    "relationship_expert": {
+        "label": "关系专家",
+        "mode": "relationships",
+        "categories": ["relationships", "characters", "timeline_events", "dialogue_style", "constraints"],
+    },
+    "timeline_expert": {
+        "label": "时间线专家",
+        "mode": "timeline",
+        "categories": ["timeline_events", "relationships", "characters", "world_rules", "constraints"],
+    },
+    "world_expert": {
+        "label": "设定专家",
+        "mode": "world",
+        "categories": ["world_rules", "locations", "organizations", "abilities", "items", "constraints"],
+    },
+    "style_expert": {
+        "label": "文风专家",
+        "mode": "style",
+        "categories": ["writing_style", "dialogue_style", "narrative_techniques", "constraints"],
+    },
+    "canon_auditor": {
+        "label": "原作审计",
+        "mode": "strict_canon",
+        "categories": ["characters", "relationships", "timeline_events", "world_rules", "abilities", "items", "constraints"],
+    },
+    "fanfic_researcher": {
+        "label": "同人参考研究",
+        "mode": "fanfic_reference",
+        "categories": ["characters", "relationships", "writing_style", "dialogue_style", "narrative_techniques", "constraints"],
+    },
+}
+
+KNOWLEDGE_EXTRACTION_PLAN_PRESETS = {
+    "fanfic_foundation": {
+        "label": "同人地基全流程",
+        "steps": ["character_expert", "relationship_expert", "timeline_expert", "world_expert", "canon_auditor"],
+    },
+    "character_relationship": {
+        "label": "角色关系优先",
+        "steps": ["character_expert", "relationship_expert", "style_expert"],
+    },
+    "world_timeline": {
+        "label": "设定时间线优先",
+        "steps": ["world_expert", "timeline_expert", "canon_auditor"],
+    },
+    "style_reference": {
+        "label": "文风参考优先",
+        "steps": ["style_expert", "fanfic_researcher"],
+    },
+    "strict_canon_audit": {
+        "label": "严格原作审计",
+        "steps": ["canon_auditor", "character_expert", "relationship_expert", "timeline_expert"],
+    },
+    "custom": {
+        "label": "自定义计划",
+        "steps": ["character_expert", "relationship_expert", "timeline_expert"],
+    },
+}
+
+KNOWLEDGE_CONSOLIDATION_MODE_LABELS = {
+    "balanced": "平衡整理",
+    "character_cards": "角色卡优先",
+    "timeline": "时间线优先",
+    "strict_canon": "严格原作",
+    "style": "文风优先",
+}
+
+WEB_REFERENCE_INGESTION_ENABLED = False
+
+VERSION_SCOPE_LABELS = {
+    "canon": "原作/官方",
+    "project_main": "本项目主线",
+    "au": "AU/分支",
+    "mixed": "混合/待拆分",
+    "unknown": "未标明",
+}
+
+DEFAULT_WORLDLINE_ID = "main"
+DEFAULT_WORLDLINE_LABEL = "本项目主线"
+
+CORE_SETTING_KNOWLEDGE_FIELDS = {
+    "canon_mode": ("constraints", "原作对齐方式"),
+    "au_rules": ("constraints", "架空规则"),
+    "world": ("world_rules", "世界观"),
+    "characters": ("characters", "角色"),
+    "relationships": ("relationships", "角色关系"),
+    "timeline": ("timeline_events", "时间线"),
+    "foreshadowing": ("narrative_techniques", "伏笔"),
+    "active_constraints": ("constraints", "硬性约束"),
+    "locations": ("locations", "地点"),
+    "organizations": ("organizations", "组织"),
+    "power_systems": ("world_rules", "能力体系"),
+    "relationship_graph": ("relationships", "关系图"),
+}
+
 SOURCE_TYPE_LABELS = {
     "outline": "全书大纲",
     "outline_discussion": "全书讨论工件",
@@ -259,6 +398,9 @@ SOURCE_TYPE_LABELS = {
     "knowledge_dialogue_style": "结构化知识：对白风格",
     "knowledge_narrative_techniques": "结构化知识：写作手法",
     "knowledge_constraints": "结构化知识：硬性约束",
+    "entity_character_card": "实体卡：角色",
+    "entity_setting_card": "实体卡：设定",
+    "entity_alias_group": "实体别名组",
 }
 
 DECISION_LABELS = {
@@ -413,6 +555,14 @@ def label_step_name(value: str) -> str:
 
 def label_knowledge_category(value: str) -> str:
     return KNOWLEDGE_CATEGORY_LABELS.get(str(value or ""), str(value or "未知知识"))
+
+
+def default_extraction_categories(strategy: str, preset: dict, category_options: list[str]) -> list[str]:
+    if strategy == "all":
+        return list(category_options)
+    if strategy == "none":
+        return []
+    return [category for category in preset.get("categories", []) if category in category_options]
 
 
 def label_batch_segment_status(value: str) -> str:
@@ -649,6 +799,21 @@ def apply_app_style():
             border-radius: 8px;
             border: 1px solid var(--nf-border);
             background: var(--nf-panel);
+        }
+
+        .stButton > button[kind="primary"],
+        .stButton > button[data-kind="primary"] {
+            background: #c9302c !important;
+            color: #ffffff !important;
+            border-color: #b02824 !important;
+            font-weight: 650 !important;
+        }
+
+        .stButton > button[kind="primary"]:hover,
+        .stButton > button[data-kind="primary"]:hover {
+            background: #b02824 !important;
+            color: #ffffff !important;
+            border-color: #90201c !important;
         }
 
         .stButton > button:hover {
@@ -1770,6 +1935,25 @@ def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
         new_memory["active_constraints"] = constraint_items
         changed = True
 
+    expanded_setting_fields = [
+        ("locations", "地点资料（每行一条）"),
+        ("organizations", "组织资料（每行一条）"),
+        ("power_systems", "能力体系（每行一条）"),
+        ("relationship_graph", "关系图补充（每行一条）"),
+    ]
+    for field_name, label in expanded_setting_fields:
+        value = "\n".join(str(item) for item in memory.get(field_name, []))
+        new_value = st.text_area(
+            label,
+            value=value,
+            height=90,
+            key=f"memory_{field_name}_{current_story_id}",
+        )
+        items = [line.strip() for line in new_value.split("\n") if line.strip()]
+        if items != memory.get(field_name, []):
+            new_memory[field_name] = items
+            changed = True
+
     col1, col2 = st.columns(2)
     if col1.button("保存设定", disabled=not changed):
         save_story_memory(project_name, current_story_id, new_memory)
@@ -1787,6 +1971,13 @@ def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
         else:
             st.error(f"精简失败：{result.get('reason', 'unknown')}")
 
+    render_core_setting_to_knowledge_tool(
+        project_name,
+        new_memory,
+        f"故事核心设定：{current_story_id}",
+        f"story_{current_story_id}",
+    )
+
     with st.expander("原始结构化数据（高级编辑）", expanded=False):
         raw_json = st.text_area(
             "memory.json",
@@ -1801,6 +1992,99 @@ def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
                 st.rerun()
             except json.JSONDecodeError as exc:
                 st.error(f"结构化数据格式错误：{exc}")
+
+
+def _short_knowledge_name(text: str, fallback: str) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned:
+        return fallback
+    for separator in ["：", ":", "，", ",", "。", ".", "；", ";"]:
+        if separator in cleaned:
+            head = cleaned.split(separator, 1)[0].strip()
+            if head:
+                cleaned = head
+                break
+    return cleaned[:36].rstrip() or fallback
+
+
+def build_core_setting_knowledge_items(memory: dict, source_title: str, selected_fields: list[str]) -> list[dict]:
+    items: list[dict] = []
+    for field_name in selected_fields:
+        if field_name not in CORE_SETTING_KNOWLEDGE_FIELDS:
+            continue
+        category, label = CORE_SETTING_KNOWLEDGE_FIELDS[field_name]
+        raw_value = memory.get(field_name, "")
+        values = raw_value if isinstance(raw_value, list) else ([raw_value] if raw_value else [])
+        for index, value in enumerate(values, start=1):
+            if isinstance(value, dict):
+                summary = json.dumps(value, ensure_ascii=False)
+                name_seed = value.get("name") or value.get("title") or value.get("source") or value.get("relation") or summary
+                details = {str(key): str(item) for key, item in value.items() if str(item).strip()}
+            else:
+                summary = str(value or "").strip()
+                name_seed = summary
+                details = {"原始设定": summary}
+            if not summary:
+                continue
+            items.append({
+                "category": category,
+                "name": _short_knowledge_name(str(name_seed), f"{label} {index}"),
+                "summary": summary,
+                "details": {
+                    **details,
+                    "来源字段": field_name,
+                    "设定层级": source_title,
+                },
+                "evidence": [{
+                    "source_title": source_title,
+                    "quote": summary[:160],
+                    "note": "由核心设定转入结构化知识库，便于长期检索和跨故事复用。",
+                }],
+                "confidence": 1.0,
+                "importance": 0.8,
+                "evidence_strength": 1.0,
+                "canon_status": "user_override",
+                "extraction_mode": "core_setting",
+                "tags": ["核心设定", label, field_name],
+            })
+    return items
+
+
+def render_core_setting_to_knowledge_tool(project_name: str, memory: dict, source_title: str, key_prefix: str):
+    with st.expander("核心设定转入知识库", expanded=False):
+        st.caption("适合把稳定、长期复用的设定转成结构化知识。结果会先进入待确认队列，不会直接写入正式知识库。")
+        available_fields = [
+            field for field in CORE_SETTING_KNOWLEDGE_FIELDS
+            if memory.get(field) and (not isinstance(memory.get(field), list) or len(memory.get(field)) > 0)
+        ]
+        if not available_fields:
+            st.caption("当前没有可转入知识库的核心设定。")
+            return
+        selected_fields = st.multiselect(
+            "选择要转入的设定字段",
+            options=available_fields,
+            default=[field for field in available_fields if field in {"world", "characters", "relationships", "timeline", "active_constraints"}],
+            format_func=lambda field: CORE_SETTING_KNOWLEDGE_FIELDS[field][1],
+            key=f"{key_prefix}_setting_knowledge_fields",
+        )
+        preview_items = build_core_setting_knowledge_items(memory, source_title, selected_fields)
+        st.caption(f"将生成 {len(preview_items)} 条待确认知识。")
+        if preview_items:
+            render_step_json_expander("设定入库预览", {"items": preview_items[:20]})
+        if st.button("加入待确认知识队列", key=f"{key_prefix}_queue_setting_knowledge", use_container_width=True):
+            if not preview_items:
+                st.error("没有可加入队列的设定条目。")
+            else:
+                queued_count = queue_pending_knowledge_items(
+                    project_name,
+                    preview_items,
+                    scope="project",
+                    authority="project",
+                    source_title=source_title,
+                    source_origin="core_settings",
+                )
+                st.success(f"已加入 {queued_count} 条待确认知识。请到“资料录入 -> 待确认知识”审核确认。")
+                st.rerun()
 
 
 def render_outline_page(project_name: str):
@@ -2322,7 +2606,7 @@ def render_chapter_page(project_name: str):
     with save_col:
         if st.button("保存正文", use_container_width=True):
             save_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-            st.success(f"正文已保存")
+            st.success("正文已保存")
 
     with review_col:
         has_chapter = bool(chapter_text.strip())
@@ -2514,7 +2798,7 @@ def _render_story_settings_tab(project_name: str, story_id: str, story_name: str
                 choice = st.radio(
                     "保留",
                     options=["source", "target", "merged"] if opt.field_type == "list" else ["source", "target"],
-                    format_func=lambda c: {"source": f"来源值", "target": f"目标值", "merged": "合并去重"}.get(c, c),
+                    format_func=lambda c: {"source": "来源值", "target": "目标值", "merged": "合并去重"}.get(c, c),
                     horizontal=True,
                     key=f"merge_{opt.path}",
                 )
@@ -2530,11 +2814,17 @@ def _render_story_settings_tab(project_name: str, story_id: str, story_name: str
         confirm_col, cancel_col = st.columns(2)
         if confirm_col.button("确认合并", use_container_width=True):
             action = pending_merge[0].path.split(".")[0] if pending_merge else ""
+            field_resolutions = {}
+            for opt in pending_merge:
+                parts = opt.path.split(".", 1)
+                if len(parts) != 2:
+                    continue
+                field_resolutions[f"memory.{parts[1]}"] = opt.resolution
             if action == "project_to_story":
-                merged = merge_project_to_story_memory(project_name, story_id)
+                merge_project_to_story_memory(project_name, story_id, field_resolutions=field_resolutions)
                 st.success("已从项目导入设定到当前故事")
             elif action == "story_to_project":
-                merged = merge_story_to_project_memory(project_name, story_id)
+                merge_story_to_project_memory(project_name, story_id, field_resolutions=field_resolutions)
                 st.success("已合并当前故事设定到项目基础设定")
             elif action == "story_to_story":
                 copy_story_settings(project_name, pending_merge[0].path.split(".")[1] if len(pending_merge[0].path.split(".")) > 1 else "", story_id)
@@ -2563,7 +2853,7 @@ def _render_story_settings_tab(project_name: str, story_id: str, story_name: str
                                          key="settings_import_story", label_visibility="collapsed")
             if col_b.button("导入", use_container_width=True, key="import_other_story"):
                 copy_story_settings(project_name, sel_story, story_id)
-                st.success(f"已从其他故事导入设定到当前故事")
+                st.success("已从其他故事导入设定到当前故事")
                 st.rerun()
 
         if col_c.button("设为项目默认", use_container_width=True):
@@ -2597,17 +2887,40 @@ def _render_project_settings_tab(project_name: str):
         new_memory["genre"] = new_genre
         changed = True
 
-    for field in ["world", "characters", "relationships", "timeline", "foreshadowing", "active_constraints"]:
+    for field in [
+        "canon_mode",
+        "au_rules",
+        "world",
+        "characters",
+        "relationships",
+        "timeline",
+        "foreshadowing",
+        "active_constraints",
+        "locations",
+        "organizations",
+        "power_systems",
+        "relationship_graph",
+    ]:
         label_map = {
+            "canon_mode": "原作对齐方式",
+            "au_rules": "架空规则",
             "world": "世界观", "characters": "角色", "relationships": "角色关系",
             "timeline": "时间线", "foreshadowing": "伏笔", "active_constraints": "硬性约束",
+            "locations": "地点资料", "organizations": "组织资料", "power_systems": "能力体系",
+            "relationship_graph": "关系图补充",
         }
-        value = "\n".join(base_memory.get(field, []))
+        raw_value = base_memory.get(field, "")
+        value = raw_value if isinstance(raw_value, str) else "\n".join(str(item) for item in raw_value)
         new_value = st.text_area(label_map.get(field, field), value=value, height=100, key=f"project_{field}")
-        new_items = [line.strip() for line in new_value.split("\n") if line.strip()]
-        if new_items != base_memory.get(field, []):
-            new_memory[field] = new_items
-            changed = True
+        if isinstance(raw_value, str):
+            if new_value != raw_value:
+                new_memory[field] = new_value
+                changed = True
+        else:
+            new_items = [line.strip() for line in new_value.split("\n") if line.strip()]
+            if new_items != base_memory.get(field, []):
+                new_memory[field] = new_items
+                changed = True
 
     if st.button("保存项目设定", disabled=not changed):
         save_memory(project_name, new_memory)
@@ -2615,6 +2928,13 @@ def _render_project_settings_tab(project_name: str):
         st.rerun()
     if not changed:
         st.caption("当前表单没有未保存改动。")
+
+    render_core_setting_to_knowledge_tool(
+        project_name,
+        new_memory,
+        "项目基础设定",
+        "project_base",
+    )
 
     st.divider()
     st.markdown("#### 项目知识库")
@@ -2714,8 +3034,6 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
     clear_input_flag_key = _discussion_input_clear_flag_key("creative_profile", creative_discussion_suffix)
     _consume_discussion_input_clear("creative_profile", creative_discussion_suffix)
     discussion_step = st.session_state.get(discussion_result_key, {})
-    approved_artifact = load_creative_profile_discussion_artifact(project_name, story_id=story_id)
-
     with st.expander("💬 讨论辅助", expanded=not form_state.get("story_mode") or form_state["story_mode"] == "主线故事"):
         st.caption("用自然语言描述目标，讨论结果会自动填入下方表单。")
         col_seed, col_action = st.columns([3, 1])
@@ -3180,30 +3498,74 @@ def render_pending_knowledge_queue(project_name: str):
             st.caption("当前没有待确认的知识条目。")
             return
 
-        option_indices = list(range(pending_count))
+        render_pending_knowledge_quality_panel(project_name, pending_items)
+
+        quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
+        issue_map = build_pending_issue_map(quality_issues)
+        filtered_indices = filter_pending_knowledge_indices(pending_items, issue_map)
+
+        st.caption(f"当前筛选结果：{len(filtered_indices)} / {pending_count} 条")
+        if filtered_indices:
+            metric_cols = st.columns(4)
+            metric_cols[0].metric("高风险", sum(1 for index in filtered_indices if issue_map.get(str(pending_items[index].get("pending_id", "")), {}).get("severity") == "高"))
+            metric_cols[1].metric("低证据", sum(1 for index in filtered_indices if safe_confidence(pending_items[index].get("evidence_strength", 0.5)) < 0.45))
+            metric_cols[2].metric("低置信", sum(1 for index in filtered_indices if safe_confidence(pending_items[index].get("confidence", 0.7)) < 0.55))
+            metric_cols[3].metric("正式库重叠", sum(1 for index in filtered_indices if "confirmed_overlap" in issue_map.get(str(pending_items[index].get("pending_id", "")), {}).get("types", set())))
+
         selected_indices = st.multiselect(
             "选择要处理的条目",
-            options=option_indices,
-            default=option_indices[: min(10, pending_count)],
+            options=filtered_indices,
+            default=filtered_indices[: min(10, len(filtered_indices))],
             format_func=lambda index: (
                 f"{index + 1}. {label_knowledge_category(pending_items[index].get('category', ''))}"
                 f" / {pending_items[index].get('name', '未命名')}"
+                f" / {pending_quality_label(issue_map.get(str(pending_items[index].get('pending_id', '')), {}))}"
                 f" / {label_scope(pending_items[index].get('scope', 'reference'))}"
             ),
             key="pending_knowledge_selected_indices",
         )
 
-        for index, item in enumerate(pending_items[:30], start=1):
-            st.markdown(f"#### {index}. {label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}")
+        preview_limit = st.slider(
+            "预览条目数",
+            min_value=5,
+            max_value=80,
+            value=min(30, max(5, len(filtered_indices))),
+            step=5,
+            key="pending_knowledge_preview_limit",
+        )
+        for index in filtered_indices[: int(preview_limit)]:
+            item = pending_items[index]
+            pending_id = str(item.get("pending_id", ""))
+            issue_info = issue_map.get(pending_id, {})
+            st.markdown(f"#### {index + 1}. {label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}")
             st.caption(
-                f"范围={label_scope(item.get('scope', 'reference'))} / 可信度={label_authority(item.get('authority', 'curated'))} / 来源={item.get('source_title', '-') or '-'}"
+                f"{pending_quality_label(issue_info)} / 范围={label_scope(item.get('scope', 'reference'))} / "
+                f"可信度={safe_confidence(item.get('confidence', 0.7)):.2f} / 证据={safe_confidence(item.get('evidence_strength', 0.5)):.2f} / "
+                f"权威={label_authority(item.get('authority', 'curated'))} / 来源={item.get('source_title', '-') or '-'}"
             )
+            if item.get("source_segment_title") or item.get("source_segment_index") is not None:
+                st.caption(f"片段：{item.get('source_segment_index', '-')}. {item.get('source_segment_title', '-')}")
             if item.get("summary"):
                 st.write(item.get("summary"))
+            evidence_lines = summarize_item_evidence(item)
+            if evidence_lines:
+                st.caption("证据：" + "；".join(evidence_lines[:2]))
+            evidence_contexts = item.get("evidence_contexts", []) if isinstance(item.get("evidence_contexts", []), list) else []
+            if evidence_contexts:
+                context = evidence_contexts[0]
+                st.caption(
+                    f"证据定位：段落 {context.get('paragraph_index', '-') or '-'} / 字符位置 {context.get('char_index', '-') if context.get('char_index') is not None else '-'}"
+                )
+                if context.get("context"):
+                    st.caption("上下文：" + str(context.get("context"))[:260])
+            if issue_info.get("descriptions"):
+                st.warning(" / ".join(issue_info.get("descriptions", [])[:2]))
             if item.get("tags"):
-                st.caption(f"标签：{', '.join(item.get('tags', []))}")
-        if len(pending_items) > 30:
-            st.caption(f"仅预览前 30 条，共 {pending_count} 条。")
+                st.caption(f"标签：{', '.join(str(tag) for tag in item.get('tags', []))}")
+        if len(filtered_indices) > int(preview_limit):
+            st.caption(f"仅预览前 {int(preview_limit)} 条筛选结果，共 {len(filtered_indices)} 条。")
+
+        render_pending_knowledge_item_editor(project_name, pending_items, filtered_indices)
 
         selected_ids = [
             str(pending_items[index].get("pending_id", ""))
@@ -3248,10 +3610,380 @@ def render_pending_knowledge_queue(project_name: str):
                     st.error(f"结构化数据格式错误：{exc}")
 
 
+def parse_comma_tags(value: str) -> list[str]:
+    return [item.strip() for item in str(value or "").replace("，", ",").split(",") if item.strip()]
+
+
+def update_pending_knowledge_item(project_name: str, pending_id: str, updated_item: dict) -> bool:
+    pending_items = load_pending_knowledge_items(project_name)
+    changed = False
+    normalized_pending_id = str(pending_id or "")
+    for index, item in enumerate(pending_items):
+        if str(item.get("pending_id", "")) != normalized_pending_id:
+            continue
+        merged = {
+            **item,
+            **updated_item,
+            "pending_id": normalized_pending_id,
+            "status": "pending",
+        }
+        pending_items[index] = merged
+        changed = True
+        break
+    if changed:
+        save_pending_knowledge_items(project_name, pending_items)
+    return changed
+
+
+def save_confirmed_knowledge_item(
+    project_name: str,
+    original_category: str,
+    original_index: int,
+    updated_item: dict,
+    *,
+    delete_only: bool = False,
+) -> bool:
+    category = str(original_category or "").strip()
+    if category not in KNOWLEDGE_CATEGORY_LABELS:
+        return False
+    items = load_knowledge_category(project_name, category)
+    if original_index < 0 or original_index >= len(items):
+        return False
+
+    target_category = str(updated_item.get("category") or category).strip()
+    if target_category not in KNOWLEDGE_CATEGORY_LABELS:
+        target_category = category
+
+    remaining = [item for index, item in enumerate(items) if index != original_index]
+    save_knowledge_category(project_name, category, remaining)
+    if delete_only:
+        return True
+
+    normalized = dict(updated_item)
+    normalized["category"] = target_category
+    normalized["status"] = normalized.get("status") or "confirmed"
+    if target_category == category:
+        target_items = remaining
+    else:
+        target_items = load_knowledge_category(project_name, target_category)
+    target_items.append(normalized)
+    save_knowledge_category(project_name, target_category, target_items)
+    return True
+
+
+def render_pending_knowledge_item_editor(project_name: str, pending_items: list[dict], filtered_indices: list[int]):
+    with st.expander("表单编辑：单条待确认知识", expanded=False):
+        if not filtered_indices:
+            st.caption("当前筛选结果为空，没有可编辑条目。")
+            return
+
+        selected_index = st.selectbox(
+            "选择要编辑的条目",
+            options=filtered_indices,
+            format_func=lambda index: (
+                f"{index + 1}. {label_knowledge_category(pending_items[index].get('category', ''))}"
+                f" / {pending_items[index].get('name', '未命名')}"
+                f" / {pending_items[index].get('source_title', '-') or '-'}"
+            ),
+            key="pending_item_editor_select",
+        )
+        item = dict(pending_items[selected_index])
+        pending_id = str(item.get("pending_id") or "")
+        if not pending_id:
+            st.warning("该条目缺少 pending_id，无法通过表单保存。")
+            return
+
+        details_value = json.dumps(item.get("details", {}) if isinstance(item.get("details", {}), dict) else {}, ensure_ascii=False, indent=2)
+        evidence_value = json.dumps(item.get("evidence", []) if isinstance(item.get("evidence", []), list) else [], ensure_ascii=False, indent=2)
+        evidence_contexts_value = json.dumps(item.get("evidence_contexts", []) if isinstance(item.get("evidence_contexts", []), list) else [], ensure_ascii=False, indent=2)
+        tags_value = ", ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags"), list) else ""
+
+        with st.form(key=f"pending_item_editor_form_{pending_id}"):
+            col_a, col_b = st.columns(2)
+            category = col_a.selectbox(
+                "分类",
+                options=list(KNOWLEDGE_CATEGORY_LABELS.keys()),
+                index=list(KNOWLEDGE_CATEGORY_LABELS.keys()).index(item.get("category")) if item.get("category") in KNOWLEDGE_CATEGORY_LABELS else 0,
+                format_func=label_knowledge_category,
+            )
+            name = col_b.text_input("名称", value=str(item.get("name") or ""))
+            summary = st.text_area("摘要", value=str(item.get("summary") or ""), height=110)
+
+            col_scope, col_authority, col_canon = st.columns(3)
+            scope_options = ["project", "canon", "reference"]
+            scope = col_scope.selectbox(
+                "范围",
+                options=scope_options,
+                index=scope_options.index(item.get("scope")) if item.get("scope") in scope_options else 2,
+                format_func=label_scope,
+            )
+            authority_options = ["project", "official", "curated", "community", "unknown"]
+            authority = col_authority.selectbox(
+                "可信度/权威",
+                options=authority_options,
+                index=authority_options.index(item.get("authority")) if item.get("authority") in authority_options else 2,
+                format_func=label_authority,
+            )
+            canon_options = ["canon", "inferred", "ambiguous", "fanon", "user_override", "unknown"]
+            canon_status = col_canon.selectbox(
+                "原作状态",
+                options=canon_options,
+                index=canon_options.index(item.get("canon_status")) if item.get("canon_status") in canon_options else 5,
+            )
+
+            col_version, col_worldline = st.columns(2)
+            version_scope = col_version.selectbox(
+                "版本 / 世界线范围",
+                options=list(VERSION_SCOPE_LABELS.keys()),
+                index=list(VERSION_SCOPE_LABELS.keys()).index(item.get("version_scope")) if item.get("version_scope") in VERSION_SCOPE_LABELS else 4,
+                format_func=lambda value: VERSION_SCOPE_LABELS.get(value, value),
+            )
+            worldline_value = str(item.get("worldline_id") or DEFAULT_WORLDLINE_ID)
+            worldline_label_value = str(item.get("worldline_label") or DEFAULT_WORLDLINE_LABEL)
+            worldline_id = col_worldline.text_input("世界线 ID", value=worldline_value)
+            worldline_label = st.text_input("世界线名称", value=worldline_label_value)
+
+            col_conf, col_imp, col_ev = st.columns(3)
+            confidence = col_conf.slider("置信度", 0.0, 1.0, safe_confidence(item.get("confidence", 0.7)), 0.05)
+            importance = col_imp.slider("重要性", 0.0, 1.0, safe_confidence(item.get("importance", 0.5)), 0.05)
+            evidence_strength = col_ev.slider("证据强度", 0.0, 1.0, safe_confidence(item.get("evidence_strength", 0.5)), 0.05)
+
+            col_source, col_origin = st.columns(2)
+            source_title = col_source.text_input("来源标题", value=str(item.get("source_title") or ""))
+            source_origin = col_origin.text_input("来源标识/链接", value=str(item.get("source_origin") or ""))
+            tags = st.text_input("标签（逗号分隔）", value=tags_value)
+
+            col_seg_a, col_seg_b = st.columns(2)
+            source_segment_title = col_seg_a.text_input("来源片段标题", value=str(item.get("source_segment_title") or ""))
+            source_segment_id = col_seg_b.text_input("来源片段 ID", value=str(item.get("source_segment_id") or ""))
+
+            details_json = st.text_area("details JSON", value=details_value, height=180)
+            evidence_json = st.text_area("evidence JSON", value=evidence_value, height=180)
+            evidence_contexts_json = st.text_area("evidence_contexts JSON", value=evidence_contexts_value, height=120)
+
+            col_save, col_confirm = st.columns(2)
+            save_clicked = col_save.form_submit_button("保存修改到待确认队列", use_container_width=True)
+            confirm_clicked = col_confirm.form_submit_button("保存修改并确认入库", use_container_width=True)
+
+        if not (save_clicked or confirm_clicked):
+            return
+
+        if not name.strip():
+            st.error("名称不能为空。")
+            return
+        try:
+            parsed_details = json.loads(details_json or "{}")
+            if not isinstance(parsed_details, dict):
+                st.error("details 必须是 JSON 对象。")
+                return
+            parsed_evidence = json.loads(evidence_json or "[]")
+            if not isinstance(parsed_evidence, list):
+                st.error("evidence 必须是 JSON 列表。")
+                return
+            parsed_evidence_contexts = json.loads(evidence_contexts_json or "[]")
+            if not isinstance(parsed_evidence_contexts, list):
+                st.error("evidence_contexts 必须是 JSON 列表。")
+                return
+        except json.JSONDecodeError as exc:
+            st.error(f"JSON 格式错误：{exc}")
+            return
+
+        updated_item = {
+            **item,
+            "category": category,
+            "name": name.strip(),
+            "summary": summary.strip(),
+            "details": parsed_details,
+            "evidence": parsed_evidence,
+            "evidence_contexts": parsed_evidence_contexts,
+            "confidence": confidence,
+            "importance": importance,
+            "evidence_strength": evidence_strength,
+            "canon_status": canon_status,
+            "version_scope": version_scope,
+            "worldline_id": worldline_id.strip() or DEFAULT_WORLDLINE_ID,
+            "worldline_label": worldline_label.strip() or DEFAULT_WORLDLINE_LABEL,
+            "scope": scope,
+            "authority": authority,
+            "source_title": source_title.strip(),
+            "source_origin": source_origin.strip(),
+            "source_segment_title": source_segment_title.strip(),
+            "source_segment_id": source_segment_id.strip(),
+            "tags": parse_comma_tags(tags),
+            "edited_in_ui": True,
+        }
+        if not update_pending_knowledge_item(project_name, pending_id, updated_item):
+            st.error("保存失败：待确认条目不存在，可能已被其他操作处理。")
+            return
+        if confirm_clicked:
+            saved_count = confirm_pending_knowledge_items(project_name, [pending_id])
+            if saved_count:
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+            st.success(f"已保存修改并确认 {saved_count} 条结构化知识。")
+        else:
+            st.success("已保存修改到待确认队列。")
+        st.rerun()
+
+
+def render_confirmed_knowledge_item_editor(
+    project_name: str,
+    category: str,
+    items: list[dict],
+    candidate_indices: list[int],
+):
+    with st.expander("表单编辑：正式知识库单条知识", expanded=False):
+        if not candidate_indices:
+            st.caption("当前分类没有可编辑条目。")
+            return
+
+        selected_index = st.selectbox(
+            "选择要编辑的正式知识",
+            options=candidate_indices,
+            format_func=lambda index: (
+                f"{index + 1}. {label_knowledge_category(items[index].get('category', category))}"
+                f" / {items[index].get('name', '未命名')}"
+                f" / {items[index].get('source_title', '-') or '-'}"
+            ),
+            key=f"confirmed_item_editor_select_{category}",
+        )
+        item = dict(items[selected_index])
+        details_value = json.dumps(item.get("details", {}) if isinstance(item.get("details", {}), dict) else {}, ensure_ascii=False, indent=2)
+        evidence_value = json.dumps(item.get("evidence", []) if isinstance(item.get("evidence", []), list) else [], ensure_ascii=False, indent=2)
+        evidence_contexts_value = json.dumps(item.get("evidence_contexts", []) if isinstance(item.get("evidence_contexts", []), list) else [], ensure_ascii=False, indent=2)
+        tags_value = ", ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags"), list) else ""
+
+        with st.form(key=f"confirmed_item_editor_form_{category}_{selected_index}"):
+            col_a, col_b = st.columns(2)
+            target_category = col_a.selectbox(
+                "分类",
+                options=list(KNOWLEDGE_CATEGORY_LABELS.keys()),
+                index=list(KNOWLEDGE_CATEGORY_LABELS.keys()).index(item.get("category")) if item.get("category") in KNOWLEDGE_CATEGORY_LABELS else list(KNOWLEDGE_CATEGORY_LABELS.keys()).index(category),
+                format_func=label_knowledge_category,
+            )
+            name = col_b.text_input("名称", value=str(item.get("name") or ""))
+            summary = st.text_area("摘要", value=str(item.get("summary") or ""), height=110)
+
+            col_scope, col_authority, col_canon = st.columns(3)
+            scope_options = ["project", "canon", "reference"]
+            scope = col_scope.selectbox(
+                "范围",
+                options=scope_options,
+                index=scope_options.index(item.get("scope")) if item.get("scope") in scope_options else 2,
+                format_func=label_scope,
+            )
+            authority_options = ["project", "official", "curated", "community", "unknown"]
+            authority = col_authority.selectbox(
+                "可信度/权威",
+                options=authority_options,
+                index=authority_options.index(item.get("authority")) if item.get("authority") in authority_options else 2,
+                format_func=label_authority,
+            )
+            canon_options = ["canon", "inferred", "ambiguous", "fanon", "user_override", "unknown"]
+            canon_status = col_canon.selectbox(
+                "原作状态",
+                options=canon_options,
+                index=canon_options.index(item.get("canon_status")) if item.get("canon_status") in canon_options else 5,
+            )
+
+            col_version, col_worldline = st.columns(2)
+            version_scope = col_version.selectbox(
+                "版本 / 世界线范围",
+                options=list(VERSION_SCOPE_LABELS.keys()),
+                index=list(VERSION_SCOPE_LABELS.keys()).index(item.get("version_scope")) if item.get("version_scope") in VERSION_SCOPE_LABELS else 4,
+                format_func=lambda value: VERSION_SCOPE_LABELS.get(value, value),
+            )
+            worldline_id = col_worldline.text_input("世界线 ID", value=str(item.get("worldline_id") or DEFAULT_WORLDLINE_ID))
+            worldline_label = st.text_input("世界线名称", value=str(item.get("worldline_label") or DEFAULT_WORLDLINE_LABEL))
+
+            col_conf, col_imp, col_ev = st.columns(3)
+            confidence = col_conf.slider("置信度", 0.0, 1.0, safe_confidence(item.get("confidence", 0.7)), 0.05)
+            importance = col_imp.slider("重要性", 0.0, 1.0, safe_confidence(item.get("importance", 0.5)), 0.05)
+            evidence_strength = col_ev.slider("证据强度", 0.0, 1.0, safe_confidence(item.get("evidence_strength", 0.5)), 0.05)
+
+            col_source, col_origin = st.columns(2)
+            source_title = col_source.text_input("来源标题", value=str(item.get("source_title") or ""))
+            source_origin = col_origin.text_input("来源标识/链接", value=str(item.get("source_origin") or ""))
+            tags = st.text_input("标签（逗号分隔）", value=tags_value)
+
+            col_seg_a, col_seg_b = st.columns(2)
+            source_segment_title = col_seg_a.text_input("来源片段标题", value=str(item.get("source_segment_title") or ""))
+            source_segment_id = col_seg_b.text_input("来源片段 ID", value=str(item.get("source_segment_id") or ""))
+
+            details_json = st.text_area("details JSON", value=details_value, height=180)
+            evidence_json = st.text_area("evidence JSON", value=evidence_value, height=180)
+            evidence_contexts_json = st.text_area("evidence_contexts JSON", value=evidence_contexts_value, height=120)
+
+            col_save, col_delete = st.columns(2)
+            save_clicked = col_save.form_submit_button("保存正式知识并重建索引", use_container_width=True)
+            delete_clicked = col_delete.form_submit_button("删除该条正式知识", use_container_width=True)
+
+        if not (save_clicked or delete_clicked):
+            return
+
+        if delete_clicked:
+            if save_confirmed_knowledge_item(project_name, category, selected_index, item, delete_only=True):
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success("已删除该条正式知识，并重建检索索引。")
+                st.rerun()
+            st.error("删除失败：条目不存在或分类无效。")
+            return
+
+        if not name.strip():
+            st.error("名称不能为空。")
+            return
+        try:
+            parsed_details = json.loads(details_json or "{}")
+            if not isinstance(parsed_details, dict):
+                st.error("details 必须是 JSON 对象。")
+                return
+            parsed_evidence = json.loads(evidence_json or "[]")
+            if not isinstance(parsed_evidence, list):
+                st.error("evidence 必须是 JSON 列表。")
+                return
+            parsed_evidence_contexts = json.loads(evidence_contexts_json or "[]")
+            if not isinstance(parsed_evidence_contexts, list):
+                st.error("evidence_contexts 必须是 JSON 列表。")
+                return
+        except json.JSONDecodeError as exc:
+            st.error(f"JSON 格式错误：{exc}")
+            return
+
+        updated_item = {
+            **item,
+            "category": target_category,
+            "name": name.strip(),
+            "summary": summary.strip(),
+            "details": parsed_details,
+            "evidence": parsed_evidence,
+            "evidence_contexts": parsed_evidence_contexts,
+            "confidence": confidence,
+            "importance": importance,
+            "evidence_strength": evidence_strength,
+            "canon_status": canon_status,
+            "version_scope": version_scope,
+            "worldline_id": worldline_id.strip() or DEFAULT_WORLDLINE_ID,
+            "worldline_label": worldline_label.strip() or DEFAULT_WORLDLINE_LABEL,
+            "scope": scope,
+            "authority": authority,
+            "source_title": source_title.strip(),
+            "source_origin": source_origin.strip(),
+            "source_segment_title": source_segment_title.strip(),
+            "source_segment_id": source_segment_id.strip(),
+            "tags": parse_comma_tags(tags),
+            "edited_in_ui": True,
+            "status": item.get("status") or "confirmed",
+        }
+        if save_confirmed_knowledge_item(project_name, category, selected_index, updated_item):
+            rebuild_retrieval_assets(project_name, build_vectors=True)
+            move_note = "，并移动分类" if target_category != category else ""
+            st.success(f"已保存正式知识{move_note}，并重建检索索引。")
+            st.rerun()
+        st.error("保存失败：条目不存在或分类无效。")
+
+
 def normalize_knowledge_match_name(value: str) -> str:
     cleaned = str(value or "").lower()
-    cleaned = re.sub(r"[\s　·・,，。.!！?？:：;；'\"“”‘’《》〈〉（）()\[\]【】_\-—]+", "", cleaned)
-    return cleaned.strip()
+    return "".join(re.findall(r"[a-z0-9\u4e00-\u9fff]+", cleaned))
 
 
 def find_duplicate_knowledge_groups(items: list[dict]) -> list[list[int]]:
@@ -3262,6 +3994,649 @@ def find_duplicate_knowledge_groups(items: list[dict]) -> list[list[int]]:
             continue
         groups.setdefault(key, []).append(index)
     return [indices for indices in groups.values() if len(indices) > 1]
+
+
+def normalized_knowledge_key(item: dict) -> tuple[str, str]:
+    return (
+        str(item.get("category") or "").strip(),
+        normalize_knowledge_match_name(item.get("name", "")),
+    )
+
+
+def normalized_summary_tokens(item: dict) -> set[str]:
+    text = normalize_knowledge_match_name(" ".join([
+        str(item.get("name", "") or ""),
+        str(item.get("summary", "") or ""),
+    ]))
+    if not text:
+        return set()
+    cjk_chars = set(re.findall(r"[\u4e00-\u9fff]", text))
+    ascii_words = set(re.findall(r"[a-z0-9]{2,}", text))
+    return cjk_chars | ascii_words
+
+
+def details_conflicts(left: dict, right: dict) -> list[str]:
+    left_details = left.get("details", {}) if isinstance(left.get("details", {}), dict) else {}
+    right_details = right.get("details", {}) if isinstance(right.get("details", {}), dict) else {}
+    conflicts = []
+    for key in sorted(set(left_details.keys()) & set(right_details.keys()), key=str):
+        left_value = normalize_knowledge_match_name(left_details.get(key, ""))
+        right_value = normalize_knowledge_match_name(right_details.get(key, ""))
+        if left_value and right_value and left_value != right_value:
+            conflicts.append(str(key))
+    return conflicts
+
+
+def canon_status_conflict(left: dict, right: dict) -> bool:
+    left_status = str(left.get("canon_status") or "unknown")
+    right_status = str(right.get("canon_status") or "unknown")
+    if "unknown" in {left_status, right_status}:
+        return False
+    return left_status != right_status
+
+
+FACT_FIELD_GROUPS = {
+    "身份/职位": ["身份", "职位", "职业", "头衔", "称号", "role", "identity", "job", "title", "position"],
+    "年龄/阶段": ["年龄", "年纪", "阶段", "时期", "age", "stage"],
+    "阵营/归属": ["阵营", "归属", "所属", "组织", "派系", "立场", "affiliation", "faction", "side", "organization"],
+    "关系状态": ["关系", "亲属", "恋人", "伴侣", "敌对", "relationship", "relation", "status"],
+    "能力/限制": ["能力", "技能", "限制", "弱点", "代价", "条件", "ability", "power", "limit", "weakness", "cost"],
+    "时间/顺序": ["时间", "日期", "顺序", "前后", "发生", "timeline", "time", "date", "order"],
+    "地点/位置": ["地点", "位置", "所在地", "场景", "location", "place"],
+    "性格/动机": ["性格", "动机", "目标", "态度", "personality", "motivation", "goal"],
+}
+
+
+def normalize_fact_value(value) -> str:
+    if isinstance(value, list):
+        text = " ".join(str(item) for item in value if str(item).strip())
+    elif isinstance(value, dict):
+        text = " ".join(f"{key}:{item}" for key, item in value.items() if str(item).strip())
+    else:
+        text = str(value or "")
+    text = re.sub(r"\s+", "", text.lower())
+    return "".join(re.findall(r"[a-z0-9\u4e00-\u9fff]+", text))
+
+
+def fact_field_label(key: str) -> str | None:
+    normalized_key = normalize_knowledge_match_name(key)
+    if not normalized_key:
+        return None
+    for label, keywords in FACT_FIELD_GROUPS.items():
+        for keyword in keywords:
+            normalized_keyword = normalize_knowledge_match_name(keyword)
+            if normalized_keyword and normalized_keyword in normalized_key:
+                return label
+    return None
+
+
+def extract_fact_claims(item: dict) -> dict[str, list[dict]]:
+    details = item.get("details", {}) if isinstance(item.get("details", {}), dict) else {}
+    claims: dict[str, list[dict]] = {}
+    for key, value in details.items():
+        label = fact_field_label(str(key))
+        normalized_value = normalize_fact_value(value)
+        if not label or not normalized_value:
+            continue
+        raw_value = str(value)
+        if len(raw_value) > 240:
+            raw_value = raw_value[:240] + "..."
+        claims.setdefault(label, []).append({
+            "field": str(key),
+            "value": raw_value,
+            "normalized": normalized_value,
+        })
+    return claims
+
+
+def fact_conflicts(left: dict, right: dict) -> list[dict]:
+    left_claims = extract_fact_claims(left)
+    right_claims = extract_fact_claims(right)
+    conflicts = []
+    for label in sorted(set(left_claims) & set(right_claims)):
+        left_values = {claim["normalized"] for claim in left_claims[label]}
+        right_values = {claim["normalized"] for claim in right_claims[label]}
+        if not left_values or not right_values or left_values == right_values:
+            continue
+        conflicts.append({
+            "fact": label,
+            "left": "；".join(f"{claim['field']}={claim['value']}" for claim in left_claims[label][:3]),
+            "right": "；".join(f"{claim['field']}={claim['value']}" for claim in right_claims[label][:3]),
+        })
+    return conflicts
+
+
+def recommend_fact_conflict_resolution(left: dict, right: dict) -> str:
+    left_score = safe_confidence(left.get("evidence_strength", 0.5)) + safe_confidence(left.get("confidence", 0.7))
+    right_score = safe_confidence(right.get("evidence_strength", 0.5)) + safe_confidence(right.get("confidence", 0.7))
+    left_status = str(left.get("canon_status") or "unknown")
+    right_status = str(right.get("canon_status") or "unknown")
+    if left_status == "canon" and right_status != "canon":
+        return f"建议优先保留《{left.get('source_title') or left.get('name') or '左侧条目'}》中的 canon 事实，把另一条降为 inferred/ambiguous 或作为备注。"
+    if right_status == "canon" and left_status != "canon":
+        return f"建议优先保留《{right.get('source_title') or right.get('name') or '右侧条目'}》中的 canon 事实，把另一条降为 inferred/ambiguous 或作为备注。"
+    if abs(left_score - right_score) >= 0.2:
+        winner = left if left_score > right_score else right
+        return f"建议优先核对并保留证据更强的一条：{winner.get('source_title') or winner.get('name') or '未命名来源'}。"
+    return "建议人工核对原文证据；若属于不同时间点或不同版本，请拆成时间线/版本限定事实，而不是直接覆盖。"
+
+
+def possible_alias_pair(left: dict, right: dict) -> bool:
+    if str(left.get("category") or "") != str(right.get("category") or ""):
+        return False
+    left_name = normalize_knowledge_match_name(left.get("name", ""))
+    right_name = normalize_knowledge_match_name(right.get("name", ""))
+    if not left_name or not right_name or left_name == right_name:
+        return False
+    if len(left_name) >= 2 and len(right_name) >= 2 and (left_name in right_name or right_name in left_name):
+        return True
+    left_chars = set(re.findall(r"[\u4e00-\u9fff]", left_name))
+    right_chars = set(re.findall(r"[\u4e00-\u9fff]", right_name))
+    if left_chars and right_chars:
+        overlap_ratio = len(left_chars & right_chars) / max(min(len(left_chars), len(right_chars)), 1)
+        if overlap_ratio >= 0.5:
+            left_tokens = normalized_summary_tokens(left)
+            right_tokens = normalized_summary_tokens(right)
+            return bool(left_tokens & right_tokens)
+    return False
+
+
+def make_alias_id(category: str, canonical_name: str) -> str:
+    key = normalize_knowledge_match_name(f"{category}_{canonical_name}")
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10] if key else hashlib.sha1(canonical_name.encode("utf-8")).hexdigest()[:10]
+    return f"alias_{digest}"
+
+
+def upsert_entity_alias_group(
+    project_name: str,
+    *,
+    category: str,
+    canonical_name: str,
+    aliases: list[str],
+    notes: str = "",
+    source_pending_ids: list[str] | None = None,
+) -> dict:
+    clean_category = str(category or "characters").strip()
+    clean_canonical = str(canonical_name or "").strip()
+    clean_aliases = []
+    seen = set()
+    for value in [clean_canonical] + list(aliases or []):
+        cleaned = str(value or "").strip()
+        key = normalize_knowledge_match_name(cleaned)
+        if not cleaned or not key or key in seen:
+            continue
+        seen.add(key)
+        clean_aliases.append(cleaned)
+    if not clean_canonical and clean_aliases:
+        clean_canonical = clean_aliases[0]
+    if not clean_canonical:
+        raise ValueError("别名组主名称不能为空。")
+
+    alias_groups = load_entity_aliases(project_name)
+    target_key = normalize_knowledge_match_name(clean_canonical)
+    alias_keys = {normalize_knowledge_match_name(value) for value in clean_aliases}
+    matched_index = None
+    for index, group in enumerate(alias_groups):
+        if str(group.get("category") or "") != clean_category:
+            continue
+        group_names = [group.get("canonical_name", "")] + list(group.get("aliases", []) if isinstance(group.get("aliases", []), list) else [])
+        group_keys = {normalize_knowledge_match_name(value) for value in group_names if normalize_knowledge_match_name(value)}
+        if target_key in group_keys or group_keys & alias_keys:
+            matched_index = index
+            break
+
+    payload = {
+        "id": make_alias_id(clean_category, clean_canonical),
+        "category": clean_category,
+        "canonical_name": clean_canonical,
+        "aliases": clean_aliases,
+        "notes": notes.strip(),
+        "source_pending_ids": merge_list_values([source_pending_ids or []]),
+        "status": "active",
+    }
+    if matched_index is None:
+        alias_groups.append(payload)
+    else:
+        existing = dict(alias_groups[matched_index])
+        existing_aliases = existing.get("aliases", []) if isinstance(existing.get("aliases", []), list) else []
+        existing["canonical_name"] = existing.get("canonical_name") or clean_canonical
+        existing["aliases"] = merge_list_values([existing_aliases, clean_aliases])
+        existing["notes"] = merge_text_values([existing.get("notes", ""), payload["notes"]])
+        existing["source_pending_ids"] = merge_list_values([existing.get("source_pending_ids", []), payload["source_pending_ids"]])
+        existing["status"] = "active"
+        payload = existing
+        alias_groups[matched_index] = existing
+    save_entity_aliases(project_name, alias_groups)
+    return payload
+
+
+def build_pending_knowledge_quality_issues(project_name: str, pending_items: list[dict]) -> list[dict]:
+    issues: list[dict] = []
+    by_key: dict[tuple[str, str], list[tuple[int, dict]]] = {}
+    for index, item in enumerate(pending_items):
+        key = normalized_knowledge_key(item)
+        if key[0] and key[1]:
+            by_key.setdefault(key, []).append((index, item))
+
+    for (category, _), indexed_items in by_key.items():
+        if len(indexed_items) < 2:
+            continue
+        items = [item for _, item in indexed_items]
+        names = [str(item.get("name") or "未命名") for item in items]
+        pending_ids = [str(item.get("pending_id") or "") for item in items if item.get("pending_id")]
+        pair_conflicts = []
+        for left_index in range(len(items)):
+            for right_index in range(left_index + 1, len(items)):
+                fields = details_conflicts(items[left_index], items[right_index])
+                if fields:
+                    pair_conflicts.append(f"字段差异：{', '.join(fields[:4])}")
+                if canon_status_conflict(items[left_index], items[right_index]):
+                    pair_conflicts.append("原作状态不一致")
+                fact_diffs = fact_conflicts(items[left_index], items[right_index])
+                if fact_diffs:
+                    pair_conflicts.append("事实冲突：" + "、".join(diff["fact"] for diff in fact_diffs[:4]))
+        issues.append({
+            "type": "same_name_conflict" if pair_conflicts else "duplicate",
+            "severity": "高" if pair_conflicts else "中",
+            "category": category,
+            "title": f"{label_knowledge_category(category)} / {names[0]}",
+            "description": "；".join(pair_conflicts[:4]) if pair_conflicts else f"同分类同名待确认条目 {len(items)} 条，建议合并或只保留证据更强的一条。",
+            "pending_ids": pending_ids,
+            "indices": [index for index, _ in indexed_items],
+        })
+
+        for left_index, left_item in indexed_items:
+            for right_index, right_item in indexed_items:
+                if left_index >= right_index:
+                    continue
+                fact_diffs = fact_conflicts(left_item, right_item)
+                if not fact_diffs:
+                    continue
+                diff_text = "；".join(
+                    f"{diff['fact']}：{diff['left']} <> {diff['right']}"
+                    for diff in fact_diffs[:3]
+                )
+                issues.append({
+                    "type": "fact_conflict",
+                    "severity": "高",
+                    "category": category,
+                    "title": f"{label_knowledge_category(category)} / {left_item.get('name') or right_item.get('name') or '未命名'}",
+                    "description": diff_text,
+                    "recommendation": recommend_fact_conflict_resolution(left_item, right_item),
+                    "pending_ids": [
+                        str(left_item.get("pending_id") or ""),
+                        str(right_item.get("pending_id") or ""),
+                    ],
+                    "indices": [left_index, right_index],
+                })
+
+    for left_index in range(len(pending_items)):
+        left = pending_items[left_index]
+        for right_index in range(left_index + 1, len(pending_items)):
+            right = pending_items[right_index]
+            if possible_alias_pair(left, right):
+                issues.append({
+                    "type": "alias_candidate",
+                    "severity": "低",
+                    "category": left.get("category", ""),
+                    "title": f"{left.get('name', '未命名')} / {right.get('name', '未命名')}",
+                    "description": "名称或文本高度相近，可能是同一实体的别名、称呼或拆分条目。",
+                    "pending_ids": [
+                        str(left.get("pending_id") or ""),
+                        str(right.get("pending_id") or ""),
+                    ],
+                    "indices": [left_index, right_index],
+                })
+
+    confirmed_by_key: dict[tuple[str, str], list[dict]] = {}
+    for category, items in load_knowledge_base(project_name).items():
+        for item in items:
+            if isinstance(item, dict):
+                key = (category, normalize_knowledge_match_name(item.get("name", "")))
+                if key[1]:
+                    confirmed_by_key.setdefault(key, []).append(item)
+
+    for index, item in enumerate(pending_items):
+        key = normalized_knowledge_key(item)
+        matches = confirmed_by_key.get(key, [])
+        if not matches:
+            continue
+        conflicts = []
+        for confirmed in matches[:3]:
+            fields = details_conflicts(item, confirmed)
+            if fields:
+                conflicts.append(f"与已确认条目字段差异：{', '.join(fields[:4])}")
+            if canon_status_conflict(item, confirmed):
+                conflicts.append("与已确认条目原作状态不一致")
+            fact_diffs = fact_conflicts(item, confirmed)
+            if fact_diffs:
+                issues.append({
+                    "type": "fact_conflict",
+                    "severity": "高",
+                    "category": item.get("category", ""),
+                    "title": f"{label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}",
+                    "description": "；".join(
+                        f"与正式库事实冲突：{diff['fact']}：{diff['left']} <> {diff['right']}"
+                        for diff in fact_diffs[:3]
+                    ),
+                    "recommendation": recommend_fact_conflict_resolution(item, confirmed),
+                    "pending_ids": [str(item.get("pending_id") or "")],
+                    "indices": [index],
+                    "confirmed_count": len(matches),
+                })
+        issues.append({
+            "type": "confirmed_overlap",
+            "severity": "高" if conflicts else "中",
+            "category": item.get("category", ""),
+            "title": f"{label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}",
+            "description": "；".join(conflicts[:4]) if conflicts else f"正式知识库已有 {len(matches)} 条同名知识，确认前建议核对是否重复。",
+            "pending_ids": [str(item.get("pending_id") or "")],
+            "indices": [index],
+            "confirmed_count": len(matches),
+        })
+
+    severity_order = {"高": 0, "中": 1, "低": 2}
+    type_order = {"fact_conflict": 0, "same_name_conflict": 1, "confirmed_overlap": 2, "duplicate": 3, "alias_candidate": 4}
+    return sorted(issues, key=lambda issue: (
+        severity_order.get(issue.get("severity", "低"), 9),
+        type_order.get(issue.get("type", ""), 9),
+        issue.get("title", ""),
+    ))
+
+
+def build_pending_issue_map(issues: list[dict]) -> dict[str, dict]:
+    severity_rank = {"高": 3, "中": 2, "低": 1}
+    mapped: dict[str, dict] = {}
+    for issue in issues:
+        severity = str(issue.get("severity") or "低")
+        issue_type = str(issue.get("type") or "")
+        description = str(issue.get("description") or "")
+        for pending_id in issue.get("pending_ids", []):
+            pending_id = str(pending_id or "")
+            if not pending_id:
+                continue
+            current = mapped.setdefault(pending_id, {
+                "severity": severity,
+                "types": set(),
+                "descriptions": [],
+            })
+            if severity_rank.get(severity, 0) > severity_rank.get(current.get("severity", "低"), 0):
+                current["severity"] = severity
+            if issue_type:
+                current["types"].add(issue_type)
+            if description and description not in current["descriptions"]:
+                current["descriptions"].append(description)
+    return mapped
+
+
+def pending_quality_label(issue_info: dict) -> str:
+    if not issue_info:
+        return "质检=正常"
+    type_labels = {
+        "duplicate": "重复",
+        "same_name_conflict": "冲突",
+        "fact_conflict": "事实冲突",
+        "alias_candidate": "别名",
+        "confirmed_overlap": "已存在",
+    }
+    labels = [
+        type_labels.get(issue_type, issue_type)
+        for issue_type in sorted(issue_info.get("types", []))
+    ]
+    return f"质检={issue_info.get('severity', '低')}:{'/'.join(labels) if labels else '线索'}"
+
+
+def summarize_item_evidence(item: dict) -> list[str]:
+    evidence = item.get("evidence", [])
+    if not isinstance(evidence, list):
+        return []
+    lines = []
+    for evidence_item in evidence:
+        if isinstance(evidence_item, dict):
+            quote = str(evidence_item.get("quote") or evidence_item.get("text") or evidence_item.get("note") or "").strip()
+            source_title = str(evidence_item.get("source_title") or "").strip()
+            text = f"{source_title}: {quote}" if source_title and quote else quote
+        else:
+            text = str(evidence_item or "").strip()
+        if text:
+            lines.append(text[:180])
+    return lines
+
+
+def filter_pending_knowledge_indices(pending_items: list[dict], issue_map: dict[str, dict]) -> list[int]:
+    categories = sorted({
+        str(item.get("category") or "")
+        for item in pending_items
+        if str(item.get("category") or "").strip()
+    })
+    source_titles = sorted({
+        str(item.get("source_title") or "")
+        for item in pending_items
+        if str(item.get("source_title") or "").strip()
+    })
+    worldlines = sorted({
+        str(item.get("worldline_label") or item.get("worldline_id") or "")
+        for item in pending_items
+        if str(item.get("worldline_label") or item.get("worldline_id") or "").strip()
+    })
+    col_a, col_b, col_c = st.columns(3)
+    selected_categories = col_a.multiselect(
+        "筛选分类",
+        options=categories,
+        default=[],
+        format_func=label_knowledge_category,
+        key="pending_filter_categories",
+    )
+    risk_filter = col_b.multiselect(
+        "筛选质检线索",
+        options=["fact_conflict", "same_name_conflict", "confirmed_overlap", "duplicate", "alias_candidate", "low_evidence", "low_confidence", "no_evidence"],
+        default=[],
+        format_func=lambda value: {
+            "fact_conflict": "事实冲突",
+            "same_name_conflict": "同名冲突",
+            "confirmed_overlap": "正式库已有",
+            "duplicate": "同名重复",
+            "alias_candidate": "疑似别名",
+            "low_evidence": "低证据强度",
+            "low_confidence": "低置信度",
+            "no_evidence": "无证据摘录",
+        }.get(value, value),
+        key="pending_filter_risks",
+    )
+    sort_mode = col_c.selectbox(
+        "排序",
+        options=["risk_first", "low_evidence", "low_confidence", "high_importance", "newest", "category"],
+        format_func=lambda value: {
+            "risk_first": "高风险优先",
+            "low_evidence": "低证据优先",
+            "low_confidence": "低置信优先",
+            "high_importance": "高重要性优先",
+            "newest": "新加入优先",
+            "category": "按分类/名称",
+        }.get(value, value),
+        key="pending_sort_mode",
+    )
+
+    keyword = st.text_input("搜索待确认知识", key="pending_filter_keyword", placeholder="名称、摘要、来源、标签、片段标题")
+    selected_source_titles = st.multiselect(
+        "筛选来源",
+        options=source_titles,
+        default=[],
+        key="pending_filter_sources",
+    )
+    selected_worldlines = st.multiselect(
+        "筛选世界线",
+        options=worldlines,
+        default=[],
+        key="pending_filter_worldlines",
+    )
+
+    filtered = []
+    keyword_value = keyword.strip().lower()
+    for index, item in enumerate(pending_items):
+        if selected_categories and item.get("category") not in selected_categories:
+            continue
+        if selected_source_titles and item.get("source_title") not in selected_source_titles:
+            continue
+        item_worldline = str(item.get("worldline_label") or item.get("worldline_id") or "")
+        if selected_worldlines and item_worldline not in selected_worldlines:
+            continue
+        pending_id = str(item.get("pending_id") or "")
+        issue_info = issue_map.get(pending_id, {})
+        issue_types = set(issue_info.get("types", set()))
+        derived_risks = set(issue_types)
+        if safe_confidence(item.get("evidence_strength", 0.5)) < 0.45:
+            derived_risks.add("low_evidence")
+        if safe_confidence(item.get("confidence", 0.7)) < 0.55:
+            derived_risks.add("low_confidence")
+        if not summarize_item_evidence(item):
+            derived_risks.add("no_evidence")
+        if risk_filter and not (set(risk_filter) & derived_risks):
+            continue
+        if keyword_value:
+            search_text = " ".join([
+                str(item.get("name", "")),
+                str(item.get("summary", "")),
+                str(item.get("source_title", "")),
+                str(item.get("source_origin", "")),
+                str(item.get("source_segment_title", "")),
+                " ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags"), list) else "",
+            ]).lower()
+            if keyword_value not in search_text:
+                continue
+        filtered.append(index)
+
+    severity_rank = {"高": 0, "中": 1, "低": 2}
+
+    def sort_key(index: int):
+        item = pending_items[index]
+        issue_info = issue_map.get(str(item.get("pending_id") or ""), {})
+        if sort_mode == "risk_first":
+            return (
+                severity_rank.get(issue_info.get("severity", ""), 3),
+                safe_confidence(item.get("evidence_strength", 0.5)),
+                safe_confidence(item.get("confidence", 0.7)),
+                str(item.get("category") or ""),
+                str(item.get("name") or ""),
+            )
+        if sort_mode == "low_evidence":
+            return (safe_confidence(item.get("evidence_strength", 0.5)), str(item.get("name") or ""))
+        if sort_mode == "low_confidence":
+            return (safe_confidence(item.get("confidence", 0.7)), str(item.get("name") or ""))
+        if sort_mode == "high_importance":
+            return (-safe_confidence(item.get("importance", 0.5)), str(item.get("name") or ""))
+        if sort_mode == "newest":
+            return (-(index + 1),)
+        return (str(item.get("category") or ""), str(item.get("name") or ""))
+
+    return sorted(filtered, key=sort_key)
+
+
+def render_pending_knowledge_quality_panel(project_name: str, pending_items: list[dict]):
+    issues = build_pending_knowledge_quality_issues(project_name, pending_items)
+    with st.expander(f"提取质检：重复 / 冲突 / 别名线索（{len(issues)}）", expanded=bool(issues)):
+        st.caption("用于在确认入库前发现同名重复、字段冲突、疑似别名和已存在正式知识。这里只给出线索，正式入库仍由你确认。")
+        if not issues:
+            st.caption("当前没有发现明显的重复、冲突或别名线索。")
+            return
+        issue_rows = []
+        type_labels = {
+            "duplicate": "同名重复",
+            "same_name_conflict": "同名冲突",
+            "fact_conflict": "事实冲突",
+            "alias_candidate": "疑似别名",
+            "confirmed_overlap": "正式库已有",
+        }
+        for index, issue in enumerate(issues, start=1):
+            issue_rows.append({
+                "序号": index,
+                "级别": issue.get("severity", ""),
+                "类型": type_labels.get(issue.get("type", ""), issue.get("type", "")),
+                "对象": issue.get("title", ""),
+                "说明": issue.get("description", ""),
+                "关联待确认": len([item for item in issue.get("pending_ids", []) if item]),
+            })
+        st.dataframe(issue_rows, use_container_width=True, hide_index=True)
+
+        selected_issue_index = st.selectbox(
+            "查看质检线索",
+            options=list(range(len(issues))),
+            format_func=lambda index: f"{index + 1}. {type_labels.get(issues[index].get('type', ''), issues[index].get('type', ''))} / {issues[index].get('title', '')}",
+            key="pending_quality_issue_select",
+        )
+        issue = issues[selected_issue_index]
+        if issue.get("recommendation"):
+            st.info(str(issue.get("recommendation")))
+        selected_items = [
+            pending_items[index]
+            for index in issue.get("indices", [])
+            if 0 <= index < len(pending_items)
+        ]
+        for item in selected_items:
+            st.markdown(f"**{label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}**")
+            st.caption(
+                f"pending_id={item.get('pending_id', '-')} / 可信度={safe_confidence(item.get('confidence', 0.7)):.2f} / "
+                f"证据强度={safe_confidence(item.get('evidence_strength', 0.5)):.2f} / 来源={item.get('source_title', '-') or '-'}"
+            )
+            if item.get("summary"):
+                st.write(str(item.get("summary"))[:500])
+            details = item.get("details", {})
+            if isinstance(details, dict) and details:
+                st.caption("详情：" + "；".join(f"{key}={value}" for key, value in list(details.items())[:8]))
+
+        can_merge = issue.get("type") in {"duplicate", "same_name_conflict", "fact_conflict"} and len(selected_items) >= 2
+        can_save_alias = issue.get("type") == "alias_candidate" and len(selected_items) >= 2
+        if can_save_alias:
+            alias_names = [str(item.get("name") or "").strip() for item in selected_items if str(item.get("name") or "").strip()]
+            default_canonical = alias_names[0] if alias_names else ""
+            alias_col_a, alias_col_b = st.columns(2)
+            canonical_name = alias_col_a.text_input(
+                "别名组主名称",
+                value=default_canonical,
+                key="pending_quality_alias_canonical",
+            )
+            alias_notes = alias_col_b.text_input(
+                "别名备注",
+                value="由待确认质检的疑似别名线索保存。",
+                key="pending_quality_alias_notes",
+            )
+            if st.button("保存为实体别名组", key="pending_quality_save_alias_group", use_container_width=True):
+                try:
+                    alias_group = upsert_entity_alias_group(
+                        project_name,
+                        category=str(selected_items[0].get("category") or "characters"),
+                        canonical_name=canonical_name,
+                        aliases=alias_names,
+                        notes=alias_notes,
+                        source_pending_ids=[
+                            str(item.get("pending_id") or "") for item in selected_items if item.get("pending_id")
+                        ],
+                    )
+                    st.success(f"已保存别名组：{alias_group.get('canonical_name')} / {', '.join(alias_group.get('aliases', []))}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"保存别名组失败：{exc}")
+
+        if can_merge and st.button("将这组同名条目合并为新的待确认条目", key="pending_quality_merge_issue", use_container_width=True):
+            category = str(selected_items[0].get("category") or "")
+            merged_item = build_merged_knowledge_item(category, selected_items)
+            merged_item["status"] = "pending"
+            merged_item["tags"] = merge_list_values([merged_item.get("tags", []), ["质检合并"]])
+            merged_item["merged_from_pending_ids"] = [
+                str(item.get("pending_id") or "") for item in selected_items if item.get("pending_id")
+            ]
+            target_ids = [str(item.get("pending_id") or "") for item in selected_items if item.get("pending_id")]
+            discard_pending_knowledge_items(project_name, target_ids)
+            queued_count = queue_pending_knowledge_items(
+                project_name,
+                [merged_item],
+                scope=merged_item.get("scope", selected_items[0].get("scope", "reference")),
+                authority=merged_item.get("authority", selected_items[0].get("authority", "curated")),
+                source_title=merged_item.get("source_title", ""),
+                source_origin=merged_item.get("source_origin", ""),
+            )
+            st.success(f"已合并 {len(target_ids)} 条，生成 {queued_count} 条新的待确认知识。")
+            st.rerun()
 
 
 def merge_text_values(values: list[str], separator: str = "\n\n") -> str:
@@ -3349,9 +4724,429 @@ def build_merged_knowledge_item(category: str, selected_items: list[dict]) -> di
     }
 
 
+def item_search_text(item: dict) -> str:
+    if not isinstance(item, dict):
+        return ""
+    parts = [
+        item.get("name", ""),
+        item.get("summary", ""),
+        item.get("source_title", ""),
+        " ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags"), list) else "",
+    ]
+    details = item.get("details", {})
+    if isinstance(details, dict):
+        parts.extend([str(key) for key in details.keys()])
+        parts.extend([str(value) for value in details.values()])
+    return "\n".join(str(part) for part in parts if str(part).strip())
+
+
+def related_items_for_character(character_name: str, items: list[dict], aliases: list[str] | None = None) -> list[dict]:
+    match_names = [character_name] + list(aliases or [])
+    normalized_names = [
+        normalize_knowledge_match_name(name)
+        for name in match_names
+        if normalize_knowledge_match_name(name)
+    ]
+    if not normalized_names:
+        return []
+    matched = []
+    for item in items:
+        text = normalize_knowledge_match_name(item_search_text(item))
+        if any(name in text for name in normalized_names):
+            matched.append(item)
+    return matched
+
+
+def aliases_for_entity(alias_groups: list[dict], category: str, name: str) -> list[str]:
+    normalized_name = normalize_knowledge_match_name(name)
+    if not normalized_name:
+        return []
+    aliases = []
+    for group in alias_groups:
+        if str(group.get("category") or "") != category:
+            continue
+        names = [group.get("canonical_name", "")] + list(group.get("aliases", []) if isinstance(group.get("aliases", []), list) else [])
+        normalized_names = {normalize_knowledge_match_name(value) for value in names if normalize_knowledge_match_name(value)}
+        if normalized_name not in normalized_names:
+            continue
+        aliases.extend([str(value).strip() for value in names if str(value).strip()])
+    return merge_list_values([aliases])
+
+
+def collect_character_card_sources(knowledge_base: dict, character_item: dict, alias_groups: list[dict] | None = None) -> dict[str, list[dict]]:
+    name = str(character_item.get("name", "") or "").strip()
+    aliases = aliases_for_entity(alias_groups or [], "characters", name)
+    return {
+        "character_items": [character_item],
+        "relationships": related_items_for_character(name, knowledge_base.get("relationships", []), aliases),
+        "abilities": related_items_for_character(name, knowledge_base.get("abilities", []), aliases),
+        "items": related_items_for_character(name, knowledge_base.get("items", []), aliases),
+        "dialogue_style": related_items_for_character(name, knowledge_base.get("dialogue_style", []), aliases),
+        "constraints": related_items_for_character(name, knowledge_base.get("constraints", []), aliases),
+        "timeline_events": related_items_for_character(name, knowledge_base.get("timeline_events", []), aliases),
+    }
+
+
+def summarize_items_for_card(items: list[dict], max_items: int = 8) -> list[str]:
+    lines = []
+    seen = set()
+    for item in items[:max_items]:
+        name = str(item.get("name", "") or "").strip()
+        summary = str(item.get("summary", "") or "").strip()
+        text = f"{name}：{summary}" if name and summary else (summary or name)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        lines.append(text)
+    return lines
+
+
+def build_character_entity_cards(project_name: str, max_characters: int = 80) -> list[dict]:
+    knowledge_base = load_knowledge_base(project_name)
+    alias_groups = load_entity_aliases(project_name)
+    character_items = [
+        item for item in knowledge_base.get("characters", [])
+        if isinstance(item, dict) and str(item.get("name", "")).strip()
+    ]
+    grouped: dict[str, list[dict]] = {}
+    for item in character_items:
+        key = normalize_knowledge_match_name(item.get("name", ""))
+        if not key:
+            continue
+        grouped.setdefault(key, []).append(item)
+
+    cards = []
+    for index, (_, items) in enumerate(grouped.items(), start=1):
+        if len(cards) >= max_characters:
+            break
+        primary = items[0]
+        name = str(primary.get("name", "") or f"角色 {index}").strip()
+        merged_character = build_merged_knowledge_item("characters", items)
+        aliases = aliases_for_entity(alias_groups, "characters", name)
+        sources = collect_character_card_sources(knowledge_base, primary, alias_groups)
+        related_relationships = summarize_items_for_card(sources["relationships"])
+        related_abilities = summarize_items_for_card(sources["abilities"] + sources["items"])
+        dialogue_notes = summarize_items_for_card(sources["dialogue_style"], max_items=5)
+        constraints = summarize_items_for_card(sources["constraints"], max_items=5)
+        timeline = summarize_items_for_card(sources["timeline_events"], max_items=6)
+        evidence = merge_list_values([
+            item.get("evidence", []) for source_items in sources.values() for item in source_items
+        ])[:8]
+        source_ids = merge_list_values([
+            [item.get("id", "") for source_items in sources.values() for item in source_items if item.get("id")]
+        ])
+        tags = merge_list_values([merged_character.get("tags", []), ["角色实体卡", "entity_character"]])
+        card = {
+            "id": f"character_entity_{index:04d}",
+            "entity_type": "character",
+            "name": name,
+            "aliases": aliases,
+            "summary": merged_character.get("summary", ""),
+            "profile": merged_character.get("details", {}),
+            "relationships": related_relationships,
+            "abilities_and_items": related_abilities,
+            "dialogue_style": dialogue_notes,
+            "constraints": constraints,
+            "timeline": timeline,
+            "evidence": evidence,
+            "confidence": merged_character.get("confidence", 0.7),
+            "importance": max([safe_confidence(item.get("importance", 0.5)) for item in items] or [0.5]),
+            "canon_status": primary.get("canon_status", "unknown"),
+            "source_knowledge_ids": source_ids,
+            "tags": tags,
+            "status": "entity_card",
+        }
+        cards.append(card)
+    return cards
+
+
+def render_character_entity_card_panel(project_name: str):
+    existing_cards = load_character_entities(project_name)
+    st.markdown("#### 角色实体卡")
+    st.caption("从已确认的角色、关系、能力、对白风格、时间线和约束知识中聚合角色资料卡。角色卡保存后会进入检索索引。")
+    col_limit, col_action = st.columns([1, 1])
+    max_characters = col_limit.number_input(
+        "最多生成角色数",
+        min_value=5,
+        max_value=200,
+        value=80,
+        step=5,
+        key="character_entity_max_count",
+    )
+    if col_action.button("生成角色实体卡预览", key="generate_character_entities", use_container_width=True):
+        cards = build_character_entity_cards(project_name, max_characters=int(max_characters))
+        st.session_state["character_entity_preview"] = cards
+        st.success(f"已生成 {len(cards)} 张角色实体卡预览。")
+
+    preview_cards = st.session_state.get("character_entity_preview", existing_cards)
+    st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
+    if preview_cards:
+        for card in preview_cards[:5]:
+            with st.expander(f"{card.get('name', '未命名角色')} · 角色卡预览", expanded=False):
+                if card.get("summary"):
+                    st.write(card.get("summary"))
+                if card.get("relationships"):
+                    st.markdown("**关系**")
+                    st.write("\n".join(f"- {item}" for item in card.get("relationships", [])[:5]))
+                if card.get("dialogue_style"):
+                    st.markdown("**对白/风格**")
+                    st.write("\n".join(f"- {item}" for item in card.get("dialogue_style", [])[:5]))
+                if card.get("constraints"):
+                    st.markdown("**约束**")
+                    st.write("\n".join(f"- {item}" for item in card.get("constraints", [])[:5]))
+
+    raw_cards_json = st.text_area(
+        "角色实体卡 JSON",
+        value=json.dumps(preview_cards, ensure_ascii=False, indent=2),
+        height=320,
+        key="character_entity_cards_json",
+    )
+    col_save, col_clear = st.columns(2)
+    if col_save.button("保存角色实体卡并重建索引", key="save_character_entities", use_container_width=True):
+        try:
+            parsed = json.loads(raw_cards_json)
+            if not isinstance(parsed, list):
+                st.error("角色实体卡必须是列表结构。")
+            else:
+                save_character_entities(project_name, parsed)
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.session_state["character_entity_preview"] = parsed
+                st.success(f"已保存 {len(parsed)} 张角色实体卡。")
+                st.rerun()
+        except json.JSONDecodeError as exc:
+            st.error(f"角色实体卡 JSON 格式错误：{exc}")
+    if col_clear.button("清空预览", key="clear_character_entity_preview", use_container_width=True):
+        st.session_state.pop("character_entity_preview", None)
+        st.rerun()
+
+
+SETTING_ENTITY_CATEGORY_GROUPS = {
+    "world_rules": "世界规则",
+    "locations": "地点",
+    "organizations": "组织",
+    "abilities": "能力体系",
+    "items": "物品道具",
+    "constraints": "硬性约束",
+}
+
+
+def build_setting_entity_cards(project_name: str, max_cards: int = 120) -> list[dict]:
+    knowledge = load_knowledge_base(project_name)
+    cards = []
+    source_categories = ["world_rules", "locations", "organizations", "abilities", "items", "constraints"]
+    index = 1
+    for category in source_categories:
+        items = [item for item in knowledge.get(category, []) if isinstance(item, dict)]
+        groups: dict[str, list[dict]] = {}
+        for item in items:
+            name_key = normalize_knowledge_match_name(item.get("name", ""))
+            if not name_key:
+                continue
+            groups.setdefault(name_key, []).append(item)
+        for _, group_items in sorted(groups.items(), key=lambda pair: -max(safe_confidence(item.get("importance", 0.5)) for item in pair[1])):
+            primary = sorted(
+                group_items,
+                key=lambda item: (
+                    -safe_confidence(item.get("importance", 0.5)),
+                    -safe_confidence(item.get("evidence_strength", 0.5)),
+                    -safe_confidence(item.get("confidence", 0.7)),
+                ),
+            )[0]
+            related_timeline = related_items_for_character(primary.get("name", ""), knowledge.get("timeline_events", []), [])[:6]
+            related_relationships = related_items_for_character(primary.get("name", ""), knowledge.get("relationships", []), [])[:6]
+            details = primary.get("details", {}) if isinstance(primary.get("details", {}), dict) else {}
+            evidence = merge_list_values([item.get("evidence", []) for item in group_items])[:8]
+            card = {
+                "id": f"setting_entity_{index:04d}",
+                "entity_type": "setting",
+                "setting_type": category,
+                "name": primary.get("name", "未命名设定"),
+                "summary": merge_text_values([item.get("summary", "") for item in group_items])[:1200],
+                "profile": details,
+                "rules": summarize_items_for_card(group_items, max_items=8),
+                "timeline": summarize_items_for_card(related_timeline, max_items=6),
+                "related_entities": summarize_items_for_card(related_relationships, max_items=6),
+                "evidence": evidence,
+                "confidence": primary.get("confidence", 0.7),
+                "importance": max([safe_confidence(item.get("importance", 0.5)) for item in group_items] or [0.5]),
+                "canon_status": primary.get("canon_status", "unknown"),
+                "version_scope": primary.get("version_scope", "unknown"),
+                "worldline_id": primary.get("worldline_id", DEFAULT_WORLDLINE_ID),
+                "worldline_label": primary.get("worldline_label", DEFAULT_WORLDLINE_LABEL),
+                "source_knowledge_ids": merge_list_values([[item.get("id", "") for item in group_items if item.get("id")]]),
+                "tags": merge_list_values([[SETTING_ENTITY_CATEGORY_GROUPS.get(category, category), "设定实体卡", "entity_setting"], primary.get("tags", [])]),
+                "status": "entity_card",
+            }
+            cards.append(card)
+            index += 1
+            if len(cards) >= max_cards:
+                return cards
+    return cards
+
+
+def render_setting_entity_card_panel(project_name: str):
+    existing_cards = load_setting_entities(project_name)
+    st.markdown("#### 设定实体卡")
+    st.caption("从已确认的世界规则、地点、组织、能力、物品和硬性约束中聚合设定资料卡。保存后会进入检索索引。")
+    col_limit, col_action = st.columns([1, 1])
+    max_cards = col_limit.number_input(
+        "最多生成设定卡数",
+        min_value=5,
+        max_value=300,
+        value=120,
+        step=5,
+        key="setting_entity_max_count",
+    )
+    if col_action.button("生成设定实体卡预览", key="generate_setting_entities", use_container_width=True):
+        cards = build_setting_entity_cards(project_name, max_cards=int(max_cards))
+        st.session_state["setting_entity_preview"] = cards
+        st.success(f"已生成 {len(cards)} 张设定实体卡预览。")
+
+    preview_cards = st.session_state.get("setting_entity_preview", existing_cards)
+    st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
+    if preview_cards:
+        rows = [
+            {
+                "类型": SETTING_ENTITY_CATEGORY_GROUPS.get(card.get("setting_type", ""), card.get("setting_type", "")),
+                "名称": card.get("name", ""),
+                "重要性": safe_confidence(card.get("importance", 0.5)),
+                "世界线": card.get("worldline_label", ""),
+            }
+            for card in preview_cards[:12]
+        ]
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+        for card in preview_cards[:5]:
+            with st.expander(f"{SETTING_ENTITY_CATEGORY_GROUPS.get(card.get('setting_type', ''), card.get('setting_type', '设定'))} / {card.get('name', '未命名设定')}", expanded=False):
+                if card.get("summary"):
+                    st.write(str(card.get("summary"))[:900])
+                for label, field in [("规则/资料", "rules"), ("时间线", "timeline"), ("关联实体", "related_entities")]:
+                    values = card.get(field, [])
+                    if isinstance(values, list) and values:
+                        st.markdown(f"**{label}**")
+                        st.write("\n".join(f"- {item}" for item in values[:8]))
+                if card.get("profile"):
+                    st.caption("profile")
+                    st.json(card.get("profile"))
+
+    raw_cards_json = st.text_area(
+        "设定实体卡 JSON",
+        value=json.dumps(preview_cards, ensure_ascii=False, indent=2),
+        height=320,
+        key="setting_entity_cards_json",
+    )
+    col_save, col_clear = st.columns(2)
+    if col_save.button("保存设定实体卡并重建索引", key="save_setting_entities", use_container_width=True):
+        try:
+            parsed = json.loads(raw_cards_json)
+            if not isinstance(parsed, list):
+                st.error("设定实体卡必须是列表结构。")
+            else:
+                save_setting_entities(project_name, parsed)
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.session_state["setting_entity_preview"] = parsed
+                st.success(f"已保存 {len(parsed)} 张设定实体卡。")
+                st.rerun()
+        except json.JSONDecodeError as exc:
+            st.error(f"设定实体卡 JSON 格式错误：{exc}")
+    if col_clear.button("清空设定卡预览", key="clear_setting_entity_preview", use_container_width=True):
+        st.session_state.pop("setting_entity_preview", None)
+        st.rerun()
+
+
+def render_entity_alias_panel(project_name: str):
+    alias_groups = load_entity_aliases(project_name)
+    st.markdown("#### 实体别名库")
+    st.caption("沉淀同一实体的不同称呼，后续可辅助提取质检、检索和实体卡整理。")
+    cols = st.columns(3)
+    cols[0].metric("别名组", len(alias_groups))
+    cols[1].metric("别名总数", sum(len(item.get("aliases", [])) for item in alias_groups if isinstance(item.get("aliases", []), list)))
+    cols[2].metric("角色别名组", sum(1 for item in alias_groups if item.get("category") == "characters"))
+
+    with st.expander("新增 / 编辑别名组", expanded=False):
+        edit_options = ["__new__"] + [str(item.get("id") or index) for index, item in enumerate(alias_groups)]
+        selected_alias_id = st.selectbox(
+            "选择别名组",
+            options=edit_options,
+            format_func=lambda value: "新增别名组" if value == "__new__" else next(
+                (
+                    f"{label_knowledge_category(item.get('category', ''))} / {item.get('canonical_name', '')}"
+                    for index, item in enumerate(alias_groups)
+                    if str(item.get("id") or index) == value
+                ),
+                value,
+            ),
+            key="entity_alias_edit_select",
+        )
+        selected_group = {}
+        if selected_alias_id != "__new__":
+            selected_group = next(
+                (item for index, item in enumerate(alias_groups) if str(item.get("id") or index) == selected_alias_id),
+                {},
+            )
+        col_a, col_b = st.columns(2)
+        category = col_a.selectbox(
+            "实体分类",
+            options=list(KNOWLEDGE_CATEGORY_LABELS.keys()),
+            index=list(KNOWLEDGE_CATEGORY_LABELS.keys()).index(selected_group.get("category")) if selected_group.get("category") in KNOWLEDGE_CATEGORY_LABELS else 0,
+            format_func=label_knowledge_category,
+            key="entity_alias_category",
+        )
+        canonical_name = col_b.text_input("主名称", value=str(selected_group.get("canonical_name") or ""), key="entity_alias_canonical")
+        aliases_text = st.text_area(
+            "别名（每行一个）",
+            value="\n".join(str(item) for item in selected_group.get("aliases", []) if str(item).strip()) if isinstance(selected_group.get("aliases", []), list) else "",
+            height=120,
+            key="entity_alias_aliases",
+        )
+        notes = st.text_area("备注", value=str(selected_group.get("notes") or ""), height=80, key="entity_alias_notes")
+        col_save, col_delete = st.columns(2)
+        if col_save.button("保存别名组", key="save_entity_alias_group", use_container_width=True):
+            try:
+                alias_group = upsert_entity_alias_group(
+                    project_name,
+                    category=category,
+                    canonical_name=canonical_name,
+                    aliases=[line.strip() for line in aliases_text.splitlines() if line.strip()],
+                    notes=notes,
+                    source_pending_ids=selected_group.get("source_pending_ids", []) if isinstance(selected_group.get("source_pending_ids", []), list) else [],
+                )
+                st.success(f"已保存别名组：{alias_group.get('canonical_name')}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"保存失败：{exc}")
+        if selected_alias_id != "__new__" and col_delete.button("删除别名组", key="delete_entity_alias_group", use_container_width=True):
+            kept = [
+                item for index, item in enumerate(alias_groups)
+                if str(item.get("id") or index) != selected_alias_id
+            ]
+            save_entity_aliases(project_name, kept)
+            st.success("已删除别名组。")
+            st.rerun()
+
+    if alias_groups:
+        rows = []
+        for item in alias_groups:
+            aliases = item.get("aliases", []) if isinstance(item.get("aliases", []), list) else []
+            rows.append({
+                "分类": label_knowledge_category(item.get("category", "")),
+                "主名称": item.get("canonical_name", ""),
+                "别名": "、".join(str(value) for value in aliases[:8]),
+                "备注": item.get("notes", ""),
+            })
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("当前还没有实体别名组。")
+
+
 def render_knowledge_organizer(project_name: str, knowledge_category_options: list[str]):
     with st.expander("结构化知识整理", expanded=False):
         st.caption("用于处理长篇资料导入后的重复条目。可以按分类查看、合并同名知识，或删除明显错误的条目。")
+        render_character_entity_card_panel(project_name)
+        st.divider()
+        render_setting_entity_card_panel(project_name)
+        st.divider()
+        render_entity_alias_panel(project_name)
+        st.divider()
         category = st.selectbox(
             "知识分类",
             options=knowledge_category_options,
@@ -3372,10 +5167,43 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
             if len(duplicate_groups) > 8:
                 st.caption(f"仅显示前 8 组，共 {len(duplicate_groups)} 组。")
 
+        keyword = st.text_input("搜索正式知识", key=f"knowledge_organizer_keyword_{category}", placeholder="名称、摘要、来源、标签")
+        worldline_options = sorted({
+            str(item.get("worldline_label") or item.get("worldline_id") or "")
+            for item in items
+            if isinstance(item, dict) and str(item.get("worldline_label") or item.get("worldline_id") or "").strip()
+        })
+        selected_worldlines = st.multiselect(
+            "筛选正式知识世界线",
+            options=worldline_options,
+            default=[],
+            key=f"knowledge_organizer_worldlines_{category}",
+        )
+        candidate_indices = []
+        keyword_value = keyword.strip().lower()
+        for index, item in enumerate(items):
+            item_worldline = str(item.get("worldline_label") or item.get("worldline_id") or "")
+            if selected_worldlines and item_worldline not in selected_worldlines:
+                continue
+            if keyword_value:
+                search_text = " ".join([
+                    str(item.get("name", "")),
+                    str(item.get("summary", "")),
+                    str(item.get("source_title", "")),
+                    str(item.get("source_origin", "")),
+                    " ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags"), list) else "",
+                ]).lower()
+                if keyword_value not in search_text:
+                    continue
+            candidate_indices.append(index)
+        st.caption(f"当前筛选结果：{len(candidate_indices)} / {len(items)} 条")
+        render_confirmed_knowledge_item_editor(project_name, category, items, candidate_indices)
+
         default_indices = duplicate_groups[0] if duplicate_groups else []
+        default_indices = [index for index in default_indices if index in candidate_indices]
         selected_indices = st.multiselect(
             "选择要合并或删除的条目",
-            options=list(range(len(items))),
+            options=candidate_indices,
             default=default_indices,
             format_func=lambda index: f"{index + 1}. {items[index].get('name', '未命名')} / {items[index].get('summary', '')[:50]}",
             key=f"knowledge_organizer_selected_{category}",
@@ -3566,9 +5394,11 @@ def decode_uploaded_text(uploaded_file) -> str:
     if uploaded_file is None:
         return ""
     data = uploaded_file.getvalue()
-    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+    for encoding in ("utf-8-sig", "utf-8", "gb18030", "utf-16", "utf-16-le", "utf-16-be"):
         try:
-            return data.decode(encoding)
+            text = data.decode(encoding)
+            if text.strip("\ufeff\x00\r\n\t "):
+                return text.replace("\x00", "")
         except UnicodeDecodeError:
             continue
     return data.decode("utf-8", errors="ignore")
@@ -3760,6 +5590,8 @@ def extract_long_reference_segments_to_queue(
     batch: dict,
     segment_indices: list[int],
     enabled_categories: list[str],
+    extraction_mode: str = "general",
+    custom_instructions: str = "",
 ) -> tuple[dict, int, int, list[str]]:
     queued_total = 0
     processed = 0
@@ -3770,17 +5602,45 @@ def extract_long_reference_segments_to_queue(
             continue
         segment = segments[index]
         try:
+            existing_related = get_segment_related_knowledge_items(project_name, segment, include_confirmed=False)["pending"]
             result = extract_reference_knowledge(
                 project_name,
                 segment.get("title", batch.get("title", "长篇资料")),
                 segment.get("content", ""),
                 enabled_categories,
+                extraction_mode=extraction_mode,
+                custom_instructions=custom_instructions,
             )
             payload = result.get("data", {}).get("knowledge_extraction", {})
             items = payload.get("items", []) if isinstance(payload, dict) else []
+            enriched_items = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                enriched = dict(item)
+                identity_seed = "|".join([
+                    str(segment.get("segment_id") or segment.get("title") or ""),
+                    extraction_mode,
+                    str(enriched.get("category") or ""),
+                    str(enriched.get("name") or ""),
+                    str(enriched.get("summary") or ""),
+                ])
+                enriched["pending_id"] = enriched.get("pending_id") or f"pending_reextract_{hashlib.sha1(identity_seed.encode('utf-8')).hexdigest()[:16]}"
+                enriched["extraction_mode"] = extraction_mode
+                enriched["source_segment_id"] = str(segment.get("segment_id") or "")
+                enriched["source_segment_index"] = segment.get("index")
+                enriched["source_segment_title"] = str(segment.get("title") or "")
+                enriched["version_scope"] = str(enriched.get("version_scope") or ("canon" if batch.get("scope") == "canon" else "project_main"))
+                enriched["worldline_id"] = str(enriched.get("worldline_id") or DEFAULT_WORLDLINE_ID)
+                enriched["worldline_label"] = str(enriched.get("worldline_label") or DEFAULT_WORLDLINE_LABEL)
+                evidence_contexts = locate_evidence_contexts(segment.get("content", ""), enriched.get("evidence", []))
+                if evidence_contexts:
+                    enriched["evidence_contexts"] = evidence_contexts
+                enriched_items.append(enriched)
+            comparison = compare_extracted_items(existing_related, enriched_items)
             queued_count = queue_pending_knowledge_items(
                 project_name,
-                items,
+                enriched_items,
                 scope=batch.get("scope", "reference"),
                 authority=batch.get("authority", "curated"),
                 source_title=payload.get("source_title", "") or segment.get("title", ""),
@@ -3788,15 +5648,1117 @@ def extract_long_reference_segments_to_queue(
             )
             segment["extract_status"] = "queued"
             segment["queued_knowledge_count"] = int(segment.get("queued_knowledge_count") or 0) + queued_count
+            segment["last_extract_mode"] = extraction_mode
+            segment["last_extract_diff"] = comparison
             segment["extract_error"] = ""
+            save_long_reference_batch(project_name, batch)
             queued_total += queued_count
             processed += 1
         except Exception as exc:
             segment["extract_status"] = "failed"
             segment["extract_error"] = str(exc)
+            save_long_reference_batch(project_name, batch)
             failed_titles.append(f"{segment.get('title', '未命名片段')}：{exc}")
     batch = save_long_reference_batch(project_name, batch)
     return batch, processed, queued_total, failed_titles
+
+
+def locate_evidence_contexts(raw_text: str, evidence: list) -> list[dict]:
+    if not raw_text or not isinstance(evidence, list):
+        return []
+    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n+", raw_text) if paragraph.strip()]
+    contexts = []
+    for evidence_item in evidence[:8]:
+        if isinstance(evidence_item, dict):
+            quote = str(evidence_item.get("quote") or evidence_item.get("text") or "").strip()
+        else:
+            quote = str(evidence_item or "").strip()
+        if not quote:
+            continue
+        quote_short = quote[:80]
+        char_index = raw_text.find(quote) if quote in raw_text else raw_text.find(quote_short)
+        paragraph_index = None
+        paragraph_text = ""
+        for index, paragraph in enumerate(paragraphs, start=1):
+            if quote in paragraph or quote_short in paragraph:
+                paragraph_index = index
+                paragraph_text = paragraph
+                break
+        if char_index >= 0 or paragraph_index:
+            start = max(0, char_index - 120) if char_index >= 0 else 0
+            end = min(len(raw_text), char_index + len(quote_short) + 120) if char_index >= 0 else 0
+            contexts.append({
+                "quote": quote[:180],
+                "char_index": char_index if char_index >= 0 else None,
+                "paragraph_index": paragraph_index,
+                "context": (raw_text[start:end] if char_index >= 0 else paragraph_text[:260]).strip(),
+            })
+    return contexts
+
+
+def knowledge_identity(item: dict) -> str:
+    return "|".join([
+        str(item.get("category") or ""),
+        normalize_knowledge_match_name(item.get("name", "")),
+    ])
+
+
+def compare_extracted_items(existing_items: list[dict], new_items: list[dict]) -> dict:
+    existing_by_key = {
+        knowledge_identity(item): item
+        for item in existing_items
+        if isinstance(item, dict) and knowledge_identity(item).strip("|")
+    }
+    new_by_key = {
+        knowledge_identity(item): item
+        for item in new_items
+        if isinstance(item, dict) and knowledge_identity(item).strip("|")
+    }
+    added_keys = [key for key in new_by_key if key not in existing_by_key]
+    matched_keys = [key for key in new_by_key if key in existing_by_key]
+    missing_keys = [key for key in existing_by_key if key not in new_by_key]
+    changed_keys = []
+    for key in matched_keys:
+        old_summary = normalize_knowledge_match_name(existing_by_key[key].get("summary", ""))
+        new_summary = normalize_knowledge_match_name(new_by_key[key].get("summary", ""))
+        old_status = str(existing_by_key[key].get("canon_status") or "unknown")
+        new_status = str(new_by_key[key].get("canon_status") or "unknown")
+        if old_summary and new_summary and old_summary != new_summary:
+            changed_keys.append(key)
+        elif old_status != new_status and "unknown" not in {old_status, new_status}:
+            changed_keys.append(key)
+
+    def compact_diff_item(item: dict) -> dict:
+        details = item.get("details", {}) if isinstance(item.get("details", {}), dict) else {}
+        return {
+            "pending_id": item.get("pending_id", ""),
+            "category": item.get("category", ""),
+            "category_label": label_knowledge_category(item.get("category", "")),
+            "name": item.get("name", "未命名"),
+            "summary": item.get("summary", ""),
+            "canon_status": item.get("canon_status", "unknown"),
+            "confidence": safe_confidence(item.get("confidence", 0.7)),
+            "evidence_strength": safe_confidence(item.get("evidence_strength", 0.5)),
+            "source_title": item.get("source_title", ""),
+            "source_segment_title": item.get("source_segment_title", ""),
+            "details": {str(key): details[key] for key in list(details.keys())[:12]},
+        }
+
+    def changed_fields(old_item: dict, new_item: dict) -> list[str]:
+        fields = []
+        if normalize_knowledge_match_name(old_item.get("summary", "")) != normalize_knowledge_match_name(new_item.get("summary", "")):
+            fields.append("summary")
+        old_status = str(old_item.get("canon_status") or "unknown")
+        new_status = str(new_item.get("canon_status") or "unknown")
+        if old_status != new_status:
+            fields.append("canon_status")
+        fields.extend(f"details.{field}" for field in details_conflicts(old_item, new_item)[:8])
+        fact_diffs = fact_conflicts(old_item, new_item)
+        fields.extend(f"fact.{diff['fact']}" for diff in fact_diffs[:8])
+        return merge_list_values([fields])
+
+    def names_for(keys: list[str], source: dict[str, dict]) -> list[str]:
+        names = []
+        for key in keys[:12]:
+            item = source.get(key, {})
+            label = f"{label_knowledge_category(item.get('category', ''))}/{item.get('name', '未命名')}"
+            names.append(label)
+        return names
+
+    return {
+        "existing_count": len(existing_items),
+        "new_count": len(new_items),
+        "added_count": len(added_keys),
+        "matched_count": len(matched_keys),
+        "missing_count": len(missing_keys),
+        "changed_count": len(changed_keys),
+        "existing_pending_ids": [str(existing_by_key[key].get("pending_id") or "") for key in missing_keys + changed_keys if existing_by_key.get(key, {}).get("pending_id")],
+        "new_pending_ids": [str(new_by_key[key].get("pending_id") or "") for key in added_keys + changed_keys if new_by_key.get(key, {}).get("pending_id")],
+        "added": names_for(added_keys, new_by_key),
+        "missing": names_for(missing_keys, existing_by_key),
+        "changed": names_for(changed_keys, new_by_key),
+        "added_items": [compact_diff_item(new_by_key[key]) for key in added_keys[:20]],
+        "missing_items": [compact_diff_item(existing_by_key[key]) for key in missing_keys[:20]],
+        "changed_items": [
+            {
+                "key": key,
+                "label": f"{label_knowledge_category(new_by_key[key].get('category', ''))}/{new_by_key[key].get('name', '未命名')}",
+                "changed_fields": changed_fields(existing_by_key[key], new_by_key[key]),
+                "old": compact_diff_item(existing_by_key[key]),
+                "new": compact_diff_item(new_by_key[key]),
+            }
+            for key in changed_keys[:20]
+        ],
+    }
+
+
+def render_knowledge_diff_item(item: dict, prefix: str):
+    st.markdown(f"**{item.get('category_label') or label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}**")
+    st.caption(
+        f"原作状态={item.get('canon_status', 'unknown')} / 置信度={safe_confidence(item.get('confidence', 0.7)):.2f} / "
+        f"证据强度={safe_confidence(item.get('evidence_strength', 0.5)):.2f} / 来源={item.get('source_title') or item.get('source_segment_title') or '-'}"
+    )
+    if item.get("summary"):
+        st.write(str(item.get("summary"))[:500])
+    details = item.get("details", {})
+    if isinstance(details, dict) and details:
+        st.caption(f"{prefix} details")
+        st.json(details)
+
+
+def render_extraction_diff_detail(project_name: str, diff: dict, key_prefix: str):
+    if not isinstance(diff, dict) or not diff:
+        return
+    with st.expander("查看重提取差异详情", expanded=False):
+        cols = st.columns(4)
+        cols[0].metric("新增", diff.get("added_count", 0))
+        cols[1].metric("匹配", diff.get("matched_count", 0))
+        cols[2].metric("可能遗漏", diff.get("missing_count", 0))
+        cols[3].metric("变化", diff.get("changed_count", 0))
+        old_ids = [str(item) for item in diff.get("existing_pending_ids", []) if str(item).strip()]
+        new_ids = [str(item) for item in diff.get("new_pending_ids", []) if str(item).strip()]
+        if old_ids or new_ids:
+            action_cols = st.columns(2)
+            if action_cols[0].button("采用新版：删除旧待确认条目", key=f"{key_prefix}_accept_new", use_container_width=True):
+                removed = discard_pending_knowledge_items(project_name, old_ids)
+                st.success(f"已删除旧待确认条目 {removed} 条，保留本次重提取结果。")
+                st.rerun()
+            if action_cols[1].button("保留旧版：删除本次新增条目", key=f"{key_prefix}_keep_old", use_container_width=True):
+                removed = discard_pending_knowledge_items(project_name, new_ids)
+                st.success(f"已删除本次重提取新增/变化条目 {removed} 条，保留旧待确认结果。")
+                st.rerun()
+
+        tabs = st.tabs(["新增", "变化", "可能遗漏"])
+        with tabs[0]:
+            items = diff.get("added_items", [])
+            if not items:
+                st.caption("没有新增条目。")
+            for index, item in enumerate(items[:10], start=1):
+                render_knowledge_diff_item(item, f"{key_prefix}_added_{index}")
+        with tabs[1]:
+            items = diff.get("changed_items", [])
+            if not items:
+                st.caption("没有变化条目。")
+            for index, pair in enumerate(items[:10], start=1):
+                st.markdown(f"**{pair.get('label', '未命名条目')}**")
+                if pair.get("changed_fields"):
+                    st.caption("变化字段：" + "、".join(str(field) for field in pair.get("changed_fields", [])))
+                old_col, new_col = st.columns(2)
+                with old_col:
+                    st.caption("旧提取")
+                    render_knowledge_diff_item(pair.get("old", {}), f"{key_prefix}_old_{index}")
+                with new_col:
+                    st.caption("新提取")
+                    render_knowledge_diff_item(pair.get("new", {}), f"{key_prefix}_new_{index}")
+        with tabs[2]:
+            items = diff.get("missing_items", [])
+            if not items:
+                st.caption("没有可能遗漏条目。")
+            for index, item in enumerate(items[:10], start=1):
+                render_knowledge_diff_item(item, f"{key_prefix}_missing_{index}")
+
+
+def run_long_reference_extraction_plan(
+    project_name: str,
+    batch: dict,
+    segment_indices: list[int],
+    expert_steps: list[str],
+    *,
+    max_segments: int = 5,
+    reextract_completed: bool = False,
+) -> tuple[dict, dict]:
+    segments = batch.get("segments", []) if isinstance(batch.get("segments", []), list) else []
+    target_indices = []
+    for index in segment_indices:
+        if index < 0 or index >= len(segments):
+            continue
+        if not reextract_completed and segments[index].get("extract_status", "pending") not in {"pending", "", "failed"}:
+            continue
+        target_indices.append(index)
+        if len(target_indices) >= max_segments:
+            break
+
+    summary = {
+        "plan_steps": expert_steps,
+        "segment_indices": target_indices,
+        "processed_steps": [],
+        "processed_segments": 0,
+        "queued_total": 0,
+        "failure_count": 0,
+        "failures": [],
+    }
+    if not target_indices or not expert_steps:
+        return batch, summary
+
+    current_batch = batch
+    for step_key in expert_steps:
+        preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.get(step_key)
+        if not preset:
+            continue
+        categories = [category for category in preset.get("categories", []) if category in KNOWLEDGE_CATEGORY_LABELS]
+        if not categories:
+            continue
+        current_batch, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+            project_name,
+            current_batch,
+            target_indices,
+            categories,
+            extraction_mode=str(preset.get("mode") or "general"),
+        )
+        step_summary = {
+            "step": step_key,
+            "label": preset.get("label", step_key),
+            "mode": preset.get("mode", "general"),
+            "categories": categories,
+            "processed": processed,
+            "queued": queued_total,
+            "failures": failures[:10],
+        }
+        summary["processed_steps"].append(step_summary)
+        summary["processed_segments"] += processed
+        summary["queued_total"] += queued_total
+        summary["failure_count"] += len(failures)
+        summary["failures"].extend(failures[:10])
+
+    history = current_batch.get("extraction_plan_runs", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(summary)
+    current_batch["extraction_plan_runs"] = history[-20:]
+    current_batch["last_extraction_plan"] = summary
+    current_batch = save_long_reference_batch(project_name, current_batch)
+    return current_batch, summary
+
+
+def make_extraction_plan_template_id(name: str) -> str:
+    key = normalize_knowledge_match_name(name)
+    digest = hashlib.sha1((key or name or "plan").encode("utf-8")).hexdigest()[:10]
+    return f"extract_plan_{digest}"
+
+
+def upsert_extraction_plan_template(project_name: str, name: str, steps: list[str], notes: str = "") -> dict:
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("模板名称不能为空。")
+    clean_steps = [step for step in steps if step in KNOWLEDGE_EXTRACTION_EXPERT_PRESETS]
+    if not clean_steps:
+        raise ValueError("模板至少需要一个有效专家步骤。")
+    templates = load_extraction_plan_templates(project_name)
+    template_id = make_extraction_plan_template_id(clean_name)
+    payload = {
+        "id": template_id,
+        "name": clean_name,
+        "steps": clean_steps,
+        "notes": str(notes or "").strip(),
+        "status": "active",
+    }
+    replaced = False
+    for index, item in enumerate(templates):
+        if str(item.get("id") or "") == template_id:
+            templates[index] = {**item, **payload}
+            replaced = True
+            break
+    if not replaced:
+        templates.append(payload)
+    save_extraction_plan_templates(project_name, templates)
+    return payload
+
+
+def delete_extraction_plan_template(project_name: str, template_id: str) -> bool:
+    templates = load_extraction_plan_templates(project_name)
+    kept = [item for item in templates if str(item.get("id") or "") != str(template_id or "")]
+    if len(kept) == len(templates):
+        return False
+    save_extraction_plan_templates(project_name, kept)
+    return True
+
+
+def get_batch_pending_knowledge_items(project_name: str, batch: dict) -> list[dict]:
+    segment_ids = {
+        str(segment.get("segment_id") or "")
+        for segment in batch.get("segments", [])
+        if isinstance(segment, dict) and segment.get("segment_id")
+    }
+    segment_titles = {
+        str(segment.get("title") or "")
+        for segment in batch.get("segments", [])
+        if isinstance(segment, dict) and segment.get("title")
+    }
+    batch_title = str(batch.get("title") or "")
+    candidates = []
+    for item in load_pending_knowledge_items(project_name):
+        if not isinstance(item, dict):
+            continue
+        item_segment_id = str(item.get("source_segment_id") or "")
+        item_segment_title = str(item.get("source_segment_title") or "")
+        item_source_title = str(item.get("source_title") or "")
+        if item_segment_id and item_segment_id in segment_ids:
+            candidates.append(item)
+        elif item_segment_title and item_segment_title in segment_titles:
+            candidates.append(item)
+        elif batch_title and item_source_title == batch_title:
+            candidates.append(item)
+    return candidates
+
+
+def build_extraction_coverage_report(project_name: str, batch: dict | None = None) -> dict:
+    if batch:
+        pending_items = get_batch_pending_knowledge_items(project_name, batch)
+        segments = batch.get("segments", []) if isinstance(batch.get("segments", []), list) else []
+        title = str(batch.get("title") or "当前批次")
+    else:
+        pending_items = load_pending_knowledge_items(project_name)
+        segments = []
+        title = "全部待确认知识"
+
+    category_counts = {category: 0 for category in KNOWLEDGE_CATEGORY_LABELS}
+    low_confidence = 0
+    low_evidence = 0
+    no_evidence = 0
+    canon_counts: dict[str, int] = {}
+    mode_counts: dict[str, int] = {}
+    source_segments = set()
+
+    for item in pending_items:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "")
+        if category in category_counts:
+            category_counts[category] += 1
+        if safe_confidence(item.get("confidence", 0.7)) < 0.55:
+            low_confidence += 1
+        if safe_confidence(item.get("evidence_strength", 0.5)) < 0.45:
+            low_evidence += 1
+        if not summarize_item_evidence(item):
+            no_evidence += 1
+        canon_status = str(item.get("canon_status") or "unknown")
+        canon_counts[canon_status] = canon_counts.get(canon_status, 0) + 1
+        extraction_mode = str(item.get("extraction_mode") or "general")
+        mode_counts[extraction_mode] = mode_counts.get(extraction_mode, 0) + 1
+        segment_id = str(item.get("source_segment_id") or "")
+        if segment_id:
+            source_segments.add(segment_id)
+
+    missing_categories = [category for category, count in category_counts.items() if count == 0]
+    weak_categories = [category for category, count in category_counts.items() if 0 < count <= 2]
+    extracted_segments = len([
+        segment for segment in segments
+        if isinstance(segment, dict) and segment.get("extract_status") in {"queued", "extracted"}
+    ])
+    failed_segments = len([
+        segment for segment in segments
+        if isinstance(segment, dict) and segment.get("extract_status") == "failed"
+    ])
+    total_segments = len(segments)
+    return {
+        "title": title,
+        "pending_count": len(pending_items),
+        "category_counts": category_counts,
+        "missing_categories": missing_categories,
+        "weak_categories": weak_categories,
+        "low_confidence": low_confidence,
+        "low_evidence": low_evidence,
+        "no_evidence": no_evidence,
+        "canon_counts": canon_counts,
+        "mode_counts": mode_counts,
+        "total_segments": total_segments,
+        "extracted_segments": extracted_segments,
+        "failed_segments": failed_segments,
+        "covered_source_segments": len(source_segments),
+    }
+
+
+def render_extraction_coverage_report(project_name: str, batch: dict | None = None, key_prefix: str = "coverage"):
+    report = build_extraction_coverage_report(project_name, batch)
+    with st.expander(f"提取覆盖率报告：{report['title']}", expanded=False):
+        cols = st.columns(5)
+        cols[0].metric("待确认知识", report["pending_count"])
+        cols[1].metric("缺失分类", len(report["missing_categories"]))
+        cols[2].metric("低证据", report["low_evidence"])
+        cols[3].metric("低置信", report["low_confidence"])
+        cols[4].metric("无证据", report["no_evidence"])
+        if report["total_segments"]:
+            st.caption(
+                f"批次片段：已提取 {report['extracted_segments']} / {report['total_segments']}，失败 {report['failed_segments']}，"
+                f"已有待确认知识覆盖片段 {report['covered_source_segments']}"
+            )
+
+        category_rows = [
+            {"分类": label_knowledge_category(category), "待确认条目": count}
+            for category, count in report["category_counts"].items()
+        ]
+        st.dataframe(category_rows, use_container_width=True, hide_index=True)
+        if report["missing_categories"]:
+            st.warning("缺失分类：" + "、".join(label_knowledge_category(category) for category in report["missing_categories"]))
+        if report["weak_categories"]:
+            st.caption("薄弱分类：" + "、".join(label_knowledge_category(category) for category in report["weak_categories"]))
+        col_a, col_b = st.columns(2)
+        col_a.json(report["canon_counts"])
+        col_b.json(report["mode_counts"])
+
+
+def build_ingestion_health_report(project_name: str) -> dict:
+    batches = list_long_reference_batches(project_name)
+    pending_items = load_pending_knowledge_items(project_name)
+    knowledge = load_knowledge_base(project_name)
+    quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
+    imported_not_extracted = 0
+    failed_segments = 0
+    total_segments = 0
+    extracted_segments = 0
+    for batch in batches:
+        for segment in batch.get("segments", []):
+            if not isinstance(segment, dict):
+                continue
+            total_segments += 1
+            if segment.get("extract_status") in {"queued", "extracted"}:
+                extracted_segments += 1
+            if segment.get("import_status") == "imported" and segment.get("extract_status", "pending") in {"pending", ""}:
+                imported_not_extracted += 1
+            if segment.get("extract_status") == "failed":
+                failed_segments += 1
+
+    confirmed_counts = {category: len(items) for category, items in knowledge.items()}
+    pending_counts = {category: 0 for category in KNOWLEDGE_CATEGORY_LABELS}
+    low_evidence = 0
+    low_confidence = 0
+    no_evidence = 0
+    worldline_counts: dict[str, int] = {}
+    confirmed_worldline_counts: dict[str, int] = {}
+    for item in pending_items:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "")
+        if category in pending_counts:
+            pending_counts[category] += 1
+        if safe_confidence(item.get("evidence_strength", 0.5)) < 0.45:
+            low_evidence += 1
+        if safe_confidence(item.get("confidence", 0.7)) < 0.55:
+            low_confidence += 1
+        if not summarize_item_evidence(item):
+            no_evidence += 1
+        worldline = str(item.get("worldline_label") or item.get("worldline_id") or "未标明")
+        worldline_counts[worldline] = worldline_counts.get(worldline, 0) + 1
+    for items in knowledge.values():
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            worldline = str(item.get("worldline_label") or item.get("worldline_id") or "未标明")
+            confirmed_worldline_counts[worldline] = confirmed_worldline_counts.get(worldline, 0) + 1
+
+    missing_confirmed = [category for category, count in confirmed_counts.items() if count == 0]
+    weak_confirmed = [category for category, count in confirmed_counts.items() if 0 < count <= 2]
+    high_risk_issues = [issue for issue in quality_issues if issue.get("severity") == "高"]
+    score = 100
+    score -= min(25, len(missing_confirmed) * 3)
+    score -= min(20, failed_segments * 2)
+    score -= min(20, imported_not_extracted)
+    score -= min(20, len(high_risk_issues) * 2)
+    score -= min(15, low_evidence + low_confidence + no_evidence)
+    return {
+        "score": max(0, score),
+        "batch_count": len(batches),
+        "total_segments": total_segments,
+        "extracted_segments": extracted_segments,
+        "imported_not_extracted": imported_not_extracted,
+        "failed_segments": failed_segments,
+        "pending_count": len(pending_items),
+        "confirmed_count": sum(confirmed_counts.values()),
+        "missing_confirmed": missing_confirmed,
+        "weak_confirmed": weak_confirmed,
+        "low_evidence": low_evidence,
+        "low_confidence": low_confidence,
+        "no_evidence": no_evidence,
+        "quality_issue_count": len(quality_issues),
+        "high_risk_issue_count": len(high_risk_issues),
+        "pending_counts": pending_counts,
+        "confirmed_counts": confirmed_counts,
+        "worldline_counts": worldline_counts,
+        "confirmed_worldline_counts": confirmed_worldline_counts,
+        "character_entity_count": len(load_character_entities(project_name)),
+        "setting_entity_count": len(load_setting_entities(project_name)),
+        "alias_group_count": len(load_entity_aliases(project_name)),
+        "extraction_plan_template_count": len(load_extraction_plan_templates(project_name)),
+    }
+
+
+def render_ingestion_health_panel(project_name: str):
+    report = build_ingestion_health_report(project_name)
+    with st.expander("资料健康度总览", expanded=True):
+        cols = st.columns(6)
+        cols[0].metric("健康分", report["score"])
+        cols[1].metric("已确认知识", report["confirmed_count"])
+        cols[2].metric("待确认", report["pending_count"])
+        cols[3].metric("导入未提取", report["imported_not_extracted"])
+        cols[4].metric("提取失败", report["failed_segments"])
+        cols[5].metric("高风险线索", report["high_risk_issue_count"])
+        entity_cols = st.columns(4)
+        entity_cols[0].metric("角色实体卡", report["character_entity_count"])
+        entity_cols[1].metric("设定实体卡", report["setting_entity_count"])
+        entity_cols[2].metric("别名组", report["alias_group_count"])
+        entity_cols[3].metric("计划模板", report["extraction_plan_template_count"])
+        if report["total_segments"]:
+            st.caption(f"长篇片段提取进度：{report['extracted_segments']} / {report['total_segments']}")
+        warning_parts = []
+        if report["missing_confirmed"]:
+            warning_parts.append("正式库缺失分类：" + "、".join(label_knowledge_category(category) for category in report["missing_confirmed"]))
+        if report["weak_confirmed"]:
+            warning_parts.append("正式库薄弱分类：" + "、".join(label_knowledge_category(category) for category in report["weak_confirmed"]))
+        if report["low_evidence"] or report["low_confidence"] or report["no_evidence"]:
+            warning_parts.append(f"待确认质量风险：低证据 {report['low_evidence']} / 低置信 {report['low_confidence']} / 无证据 {report['no_evidence']}")
+        for text in warning_parts[:4]:
+            st.warning(text)
+        col_a, col_b = st.columns(2)
+        col_a.dataframe(
+            [{"分类": label_knowledge_category(category), "正式库": report["confirmed_counts"].get(category, 0), "待确认": report["pending_counts"].get(category, 0)} for category in KNOWLEDGE_CATEGORY_LABELS],
+            use_container_width=True,
+            hide_index=True,
+        )
+        col_b.caption("世界线分布")
+        col_b.json({
+            "待确认": report["worldline_counts"],
+            "正式库": report["confirmed_worldline_counts"],
+        })
+
+
+def get_segment_related_knowledge_items(project_name: str, segment: dict, *, include_confirmed: bool = True) -> dict[str, list[dict]]:
+    segment_id = str(segment.get("segment_id") or "")
+    segment_title = str(segment.get("title") or "")
+    related_pending = []
+    for item in load_pending_knowledge_items(project_name):
+        if not isinstance(item, dict):
+            continue
+        if segment_id and str(item.get("source_segment_id") or "") == segment_id:
+            related_pending.append(item)
+        elif segment_title and str(item.get("source_segment_title") or "") == segment_title:
+            related_pending.append(item)
+
+    related_confirmed = []
+    if include_confirmed:
+        for category, items in load_knowledge_base(project_name).items():
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_segment_ids = [str(value) for value in item.get("source_segment_ids", []) if str(value).strip()]
+                item_segment_titles = [str(value) for value in item.get("source_segment_titles", []) if str(value).strip()]
+                if segment_id and (str(item.get("source_segment_id") or "") == segment_id or segment_id in item_segment_ids):
+                    related = dict(item)
+                    related["category"] = related.get("category") or category
+                    related_confirmed.append(related)
+                elif segment_title and (
+                    str(item.get("source_segment_title") or "") == segment_title
+                    or segment_title in item_segment_titles
+                ):
+                    related = dict(item)
+                    related["category"] = related.get("category") or category
+                    related_confirmed.append(related)
+
+    return {"pending": related_pending, "confirmed": related_confirmed}
+
+
+def summarize_source_knowledge_counts(project_name: str) -> dict[tuple[str, str], dict[str, int]]:
+    counts: dict[tuple[str, str], dict[str, int]] = {}
+
+    def add_count(source_title: str, source_origin: str, field: str):
+        key = (str(source_title or ""), str(source_origin or ""))
+        if not key[0] and not key[1]:
+            return
+        counts.setdefault(key, {"pending": 0, "confirmed": 0})
+        counts[key][field] = counts[key].get(field, 0) + 1
+
+    for item in load_pending_knowledge_items(project_name):
+        if isinstance(item, dict):
+            add_count(item.get("source_title", ""), item.get("source_origin", ""), "pending")
+
+    for items in load_knowledge_base(project_name).values():
+        for item in items:
+            if isinstance(item, dict):
+                add_count(item.get("source_title", ""), item.get("source_origin", ""), "confirmed")
+
+    return counts
+
+
+def read_retrieval_source_payload(project_name: str, relative_path: str) -> dict:
+    base_path = retrieval_sources_path(project_name).resolve()
+    target = (base_path / relative_path).resolve()
+    if base_path not in target.parents and target != base_path:
+        return {}
+    if not target.exists() or not target.is_file():
+        return {}
+    try:
+        raw_text = target.read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    try:
+        payload = json.loads(raw_text)
+    except Exception:
+        return {
+            "title": relative_path,
+            "content": raw_text,
+            "metadata": {},
+            "_raw_char_count": len(raw_text),
+        }
+    if isinstance(payload, dict):
+        payload["_raw_char_count"] = len(raw_text)
+        return payload
+    return {"title": relative_path, "content": raw_text, "metadata": {}, "_raw_char_count": len(raw_text)}
+
+
+def build_ingestion_source_ledger(project_name: str) -> list[dict]:
+    knowledge_counts = summarize_source_knowledge_counts(project_name)
+    records: list[dict] = []
+
+    for batch in list_long_reference_batches(project_name):
+        summary = batch.get("summary", {})
+        key = (str(batch.get("title") or ""), str(batch.get("source_origin") or ""))
+        source_counts = knowledge_counts.get(key, {})
+        records.append({
+            "id": f"batch:{batch.get('batch_id', '')}",
+            "kind": "long_batch",
+            "kind_label": "长篇批次",
+            "title": batch.get("title", "未命名批次"),
+            "scope": batch.get("scope", "reference"),
+            "authority": batch.get("authority", "curated"),
+            "source_type": batch.get("source_type", "external_source"),
+            "source_origin": batch.get("source_origin", ""),
+            "updated_at": batch.get("updated_at", ""),
+            "segment_count": int(summary.get("segment_count") or 0),
+            "imported_count": int(summary.get("imported_count") or 0),
+            "extracted_count": int(summary.get("extract_queued_count") or 0),
+            "failed_count": int(summary.get("extract_failed_count") or 0),
+            "pending_count": int(source_counts.get("pending") or 0),
+            "confirmed_count": int(source_counts.get("confirmed") or 0),
+            "batch_id": batch.get("batch_id", ""),
+            "file_name": batch.get("file_name", ""),
+        })
+
+    for relative_path in list_retrieval_source_files(project_name):
+        payload = read_retrieval_source_payload(project_name, relative_path)
+        metadata = payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}
+        title = str(payload.get("title") or relative_path)
+        origin = str(metadata.get("source_origin") or payload.get("source_origin") or "")
+        key = (title, origin)
+        source_counts = knowledge_counts.get(key, {})
+        records.append({
+            "id": f"source:{relative_path}",
+            "kind": "retrieval_source",
+            "kind_label": "检索资料",
+            "title": title,
+            "scope": payload.get("scope", metadata.get("scope", "reference")),
+            "authority": metadata.get("authority", payload.get("authority", "unknown")),
+            "source_type": payload.get("source_type", metadata.get("template", "external_source")),
+            "source_origin": origin,
+            "updated_at": "",
+            "segment_count": 1,
+            "imported_count": 1,
+            "extracted_count": 0,
+            "failed_count": 0,
+            "pending_count": int(source_counts.get("pending") or 0),
+            "confirmed_count": int(source_counts.get("confirmed") or 0),
+            "relative_path": relative_path,
+            "char_count": int(payload.get("_raw_char_count") or len(str(payload.get("content") or ""))),
+        })
+
+    existing_ids = {record["id"] for record in records}
+    for (source_title, source_origin), source_counts in knowledge_counts.items():
+        synthetic_id = f"knowledge:{source_title}:{source_origin}"
+        if synthetic_id in existing_ids:
+            continue
+        if any(record.get("title") == source_title and record.get("source_origin") == source_origin for record in records):
+            continue
+        records.append({
+            "id": synthetic_id,
+            "kind": "knowledge_only",
+            "kind_label": "知识来源",
+            "title": source_title or source_origin or "未命名来源",
+            "scope": "",
+            "authority": "",
+            "source_type": "knowledge",
+            "source_origin": source_origin,
+            "updated_at": "",
+            "segment_count": 0,
+            "imported_count": 0,
+            "extracted_count": 0,
+            "failed_count": 0,
+            "pending_count": int(source_counts.get("pending") or 0),
+            "confirmed_count": int(source_counts.get("confirmed") or 0),
+        })
+
+    return sorted(records, key=lambda item: (item.get("updated_at") or "", item.get("title") or ""), reverse=True)
+
+
+def render_source_record_detail(project_name: str, record: dict):
+    if record.get("kind") == "long_batch":
+        batch = load_long_reference_batch(project_name, record.get("batch_id", ""))
+        if not batch:
+            st.warning("批次记录读取失败。")
+            return
+        st.caption(
+            f"范围={label_scope(batch.get('scope', 'reference'))} / 可信度={label_authority(batch.get('authority', 'curated'))} / "
+            f"类型={label_source_type(batch.get('source_type', 'external_source'))}"
+        )
+        segments = batch.get("segments", [])
+        segment_options = list(range(len(segments)))
+        selected_index = st.selectbox(
+            "查看片段原文与关联知识",
+            options=segment_options,
+            format_func=lambda index: (
+                f"{segments[index].get('index')}. {segments[index].get('title')} / "
+                f"导入={label_batch_segment_status(segments[index].get('import_status', 'pending'))} / "
+                f"提取={label_batch_segment_status(segments[index].get('extract_status', 'pending'))}"
+            ),
+            key=f"source_ledger_segment_{record.get('id')}",
+        ) if segment_options else None
+        if selected_index is None:
+            return
+        segment = segments[selected_index]
+        st.text_area(
+            "片段原文",
+            value=segment.get("content", ""),
+            height=260,
+            key=f"source_ledger_segment_content_{record.get('id')}_{segment.get('segment_id')}",
+            disabled=True,
+        )
+        related = get_segment_related_knowledge_items(project_name, segment)
+        cols = st.columns(2)
+        cols[0].metric("关联待确认", len(related["pending"]))
+        cols[1].metric("关联已确认", len(related["confirmed"]))
+        for label, items in [("待确认知识", related["pending"][:12]), ("已确认知识", related["confirmed"][:12])]:
+            if not items:
+                continue
+            with st.expander(label, expanded=False):
+                for item in items:
+                    st.markdown(f"**{label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}**")
+                    if item.get("summary"):
+                        st.caption(str(item.get("summary"))[:260])
+        return
+
+    if record.get("kind") == "retrieval_source":
+        payload = read_retrieval_source_payload(project_name, record.get("relative_path", ""))
+        metadata = payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}
+        st.caption(
+            f"文件={record.get('relative_path', '-')} / 范围={label_scope(record.get('scope', 'reference'))} / "
+            f"可信度={label_authority(record.get('authority', 'unknown'))} / 类型={label_source_type(record.get('source_type', 'external_source'))}"
+        )
+        if record.get("source_origin"):
+            st.caption(f"来源：{record.get('source_origin')}")
+        if payload.get("summary"):
+            st.markdown("##### 摘要")
+            st.write(payload.get("summary"))
+        content = str(payload.get("content") or payload.get("body") or "")
+        if metadata:
+            with st.expander("元数据", expanded=False):
+                st.json(metadata)
+        if content:
+            st.text_area(
+                "资料正文",
+                value=content,
+                height=260,
+                key=f"source_ledger_content_{record.get('id')}",
+                disabled=True,
+            )
+        return
+
+    st.caption("这个来源只在待确认或已确认知识中出现，当前没有对应的原文批次或检索资料文件。")
+
+
+def render_source_ledger_page(project_name: str):
+    with st.expander("资料来源台账", expanded=True):
+        records = build_ingestion_source_ledger(project_name)
+        if not records:
+            st.caption("当前还没有可追踪的资料来源。")
+            return
+
+        kind_filter = st.multiselect(
+            "来源类型",
+            options=["long_batch", "retrieval_source", "knowledge_only"],
+            default=["long_batch", "retrieval_source", "knowledge_only"],
+            format_func=lambda value: {
+                "long_batch": "长篇批次",
+                "retrieval_source": "检索资料",
+                "knowledge_only": "知识来源",
+            }.get(value, value),
+            key="source_ledger_kind_filter",
+        )
+        keyword = st.text_input("按标题或来源搜索", key="source_ledger_keyword")
+        filtered_records = []
+        for record in records:
+            if kind_filter and record.get("kind") not in kind_filter:
+                continue
+            search_text = " ".join([
+                str(record.get("title", "")),
+                str(record.get("source_origin", "")),
+                str(record.get("relative_path", "")),
+                str(record.get("file_name", "")),
+            ]).lower()
+            if keyword.strip() and keyword.strip().lower() not in search_text:
+                continue
+            filtered_records.append(record)
+
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("来源记录", len(filtered_records))
+        metric_cols[1].metric("片段/资料", sum(int(item.get("segment_count") or 0) for item in filtered_records))
+        metric_cols[2].metric("待确认", sum(int(item.get("pending_count") or 0) for item in filtered_records))
+        metric_cols[3].metric("已确认", sum(int(item.get("confirmed_count") or 0) for item in filtered_records))
+
+        table_rows = []
+        for record in filtered_records:
+            table_rows.append({
+                "类型": record.get("kind_label", ""),
+                "标题": record.get("title", ""),
+                "范围": label_scope(record.get("scope", "")) if record.get("scope") else "-",
+                "可信度": label_authority(record.get("authority", "")) if record.get("authority") else "-",
+                "资料类型": label_source_type(record.get("source_type", "")),
+                "片段": record.get("segment_count", 0),
+                "已导入": record.get("imported_count", 0),
+                "已提取": record.get("extracted_count", 0),
+                "失败": record.get("failed_count", 0),
+                "待确认": record.get("pending_count", 0),
+                "已确认": record.get("confirmed_count", 0),
+            })
+        st.dataframe(table_rows, use_container_width=True, hide_index=True)
+
+        selected_record_id = st.selectbox(
+            "查看来源详情",
+            options=[record.get("id", "") for record in filtered_records],
+            format_func=lambda record_id: next(
+                (f"{record.get('kind_label')} / {record.get('title')}" for record in filtered_records if record.get("id") == record_id),
+                record_id,
+            ),
+            key="source_ledger_selected_record",
+        )
+        selected_record = next((record for record in filtered_records if record.get("id") == selected_record_id), {})
+        if selected_record:
+            render_source_record_detail(project_name, selected_record)
+
+
+def enrich_consolidated_knowledge_items(items: list[dict], source_items: list[dict], consolidation_mode: str) -> list[dict]:
+    source_pending_ids = [str(item.get("pending_id") or "") for item in source_items if item.get("pending_id")]
+    source_segment_ids = merge_list_values([item.get("source_segment_ids", []) for item in source_items] + [[
+        item.get("source_segment_id", "") for item in source_items if item.get("source_segment_id")
+    ]])
+    source_segment_titles = merge_list_values([item.get("source_segment_titles", []) for item in source_items] + [[
+        item.get("source_segment_title", "") for item in source_items if item.get("source_segment_title")
+    ]])
+    enriched_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        enriched = dict(item)
+        enriched["extraction_mode"] = str(enriched.get("extraction_mode") or f"consolidated:{consolidation_mode}")
+        if not enriched.get("merged_from_pending_ids"):
+            enriched["merged_from_pending_ids"] = source_pending_ids
+        if not enriched.get("source_segment_ids"):
+            enriched["source_segment_ids"] = source_segment_ids
+        if not enriched.get("source_segment_titles"):
+            enriched["source_segment_titles"] = source_segment_titles
+        tags = merge_list_values([enriched.get("tags", []), [f"整理:{KNOWLEDGE_CONSOLIDATION_MODE_LABELS.get(consolidation_mode, consolidation_mode)}"]])
+        enriched["tags"] = tags
+        enriched_items.append(enriched)
+    return enriched_items
+
+
+def consolidate_batch_pending_items(
+    project_name: str,
+    batch: dict,
+    *,
+    categories: list[str],
+    consolidation_mode: str,
+    limit: int,
+) -> dict:
+    batch_pending_items = get_batch_pending_knowledge_items(project_name, batch)
+    target_items = [
+        item for item in batch_pending_items
+        if not categories or item.get("category") in categories
+    ][: int(limit)]
+    if len(target_items) < 2:
+        return {
+            "success": False,
+            "message": "当前批次中可整理的待确认知识不足 2 条。",
+            "source_count": len(target_items),
+            "queued_count": 0,
+            "result": {},
+        }
+
+    result = consolidate_extracted_knowledge(
+        project_name,
+        batch.get("title", "长篇资料批次"),
+        target_items,
+        enabled_categories=categories,
+        consolidation_mode=consolidation_mode,
+    )
+    payload = result.get("data", {}).get("knowledge_extraction", {})
+    consolidated_items = payload.get("items", []) if isinstance(payload, dict) else []
+    enriched_items = enrich_consolidated_knowledge_items(consolidated_items, target_items, consolidation_mode)
+    if not enriched_items:
+        return {
+            "success": False,
+            "message": "整理没有生成可保存的知识条目。",
+            "source_count": len(target_items),
+            "queued_count": 0,
+            "result": result,
+        }
+
+    target_ids = [str(item.get("pending_id", "")) for item in target_items if item.get("pending_id")]
+    discard_pending_knowledge_items(project_name, target_ids)
+    queued_count = queue_pending_knowledge_items(
+        project_name,
+        enriched_items,
+        scope=target_items[0].get("scope", batch.get("scope", "reference")),
+        authority=target_items[0].get("authority", batch.get("authority", "curated")),
+        source_title=batch.get("title", payload.get("source_title", "")),
+        source_origin=batch.get("source_origin", ""),
+    )
+    return {
+        "success": True,
+        "message": f"已整理 {len(target_items)} 条散知识，生成 {queued_count} 条待确认知识。",
+        "source_count": len(target_items),
+        "queued_count": queued_count,
+        "result": result,
+    }
+
+
+def pending_item_has_auto_confirm_risk(item: dict, issue_map: dict) -> bool:
+    pending_id = str(item.get("pending_id") or "")
+    issue = issue_map.get(pending_id, {}) if isinstance(issue_map, dict) else {}
+    if issue:
+        return True
+    try:
+        confidence = float(item.get("confidence") or 0)
+    except (TypeError, ValueError):
+        confidence = 0
+    try:
+        evidence_strength = float(item.get("evidence_strength") or 0)
+    except (TypeError, ValueError):
+        evidence_strength = 0
+    evidence = item.get("evidence", [])
+    if confidence and confidence < 0.45:
+        return True
+    if evidence_strength and evidence_strength < 0.35:
+        return True
+    if not evidence:
+        return True
+    return False
+
+
+def auto_confirm_pending_items_without_risk(project_name: str, candidate_ids: list[str]) -> dict:
+    id_set = {str(item) for item in candidate_ids if item}
+    if not id_set:
+        return {"confirmed_ids": [], "blocked_ids": [], "blocked_reasons": {}}
+    pending_items = load_pending_knowledge_items(project_name)
+    candidate_items = [item for item in pending_items if str(item.get("pending_id") or "") in id_set]
+    quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
+    issue_map = build_pending_issue_map(quality_issues)
+    confirmed_ids = []
+    blocked_ids = []
+    blocked_reasons = {}
+    for item in candidate_items:
+        pending_id = str(item.get("pending_id") or "")
+        issue = issue_map.get(pending_id, {})
+        if pending_item_has_auto_confirm_risk(item, issue_map):
+            blocked_ids.append(pending_id)
+            blocked_reasons[pending_id] = pending_quality_label(issue) if issue else "证据/置信不足"
+        else:
+            confirmed_ids.append(pending_id)
+    saved_count = confirm_pending_knowledge_items(project_name, confirmed_ids)
+    if saved_count:
+        rebuild_retrieval_assets(project_name, build_vectors=True)
+    return {
+        "confirmed_ids": confirmed_ids,
+        "blocked_ids": blocked_ids,
+        "blocked_reasons": blocked_reasons,
+        "saved_count": saved_count,
+    }
+
+
+def append_long_reference_quick_run(batch: dict, summary: dict) -> dict:
+    history = batch.get("quick_process_runs", [])
+    if not isinstance(history, list):
+        history = []
+    run = {
+        **summary,
+        "run_at": datetime.now(timezone.utc).isoformat(),
+    }
+    history.append(run)
+    batch["quick_process_runs"] = history[-20:]
+    batch["last_quick_process_run"] = run
+    return batch
+
+
+def run_long_reference_quick_process(
+    project_name: str,
+    batch: dict,
+    segment_indices: list[int],
+    *,
+    enabled_categories: list[str],
+    extraction_mode: str,
+    extract_limit: int,
+    import_to_index: bool,
+    consolidate_after_extract: bool,
+    auto_confirm_safe_items: bool,
+    custom_instructions: str = "",
+) -> tuple[dict, dict]:
+    selected_indices = list(segment_indices)
+    extract_indices = selected_indices[: int(extract_limit)]
+    before_pending_ids = {str(item.get("pending_id") or "") for item in load_pending_knowledge_items(project_name)}
+    imported = 0
+    processed = 0
+    queued_total = 0
+    failed_titles: list[str] = []
+    consolidation_summary: dict = {}
+    auto_confirm_summary: dict = {}
+
+    if import_to_index:
+        batch, imported = import_long_reference_segments(project_name, batch, selected_indices)
+    if extract_indices:
+        batch, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
+            project_name,
+            batch,
+            extract_indices,
+            enabled_categories,
+            extraction_mode=extraction_mode,
+            custom_instructions=custom_instructions,
+        )
+    if consolidate_after_extract and queued_total:
+        consolidation_summary = consolidate_batch_pending_items(
+            project_name,
+            batch,
+            categories=enabled_categories,
+            consolidation_mode="balanced",
+            limit=max(20, min(120, queued_total)),
+        )
+
+    after_pending_items = load_pending_knowledge_items(project_name)
+    new_pending_ids = [
+        str(item.get("pending_id") or "")
+        for item in after_pending_items
+        if str(item.get("pending_id") or "") and str(item.get("pending_id") or "") not in before_pending_ids
+    ]
+    if auto_confirm_safe_items:
+        auto_confirm_summary = auto_confirm_pending_items_without_risk(project_name, new_pending_ids)
+
+    summary = {
+        "selected_segment_count": len(selected_indices),
+        "extract_segment_count": len(extract_indices),
+        "imported_count": imported,
+        "processed_count": processed,
+        "queued_count": queued_total,
+        "new_pending_count": len(new_pending_ids),
+        "auto_confirmed_count": len(auto_confirm_summary.get("confirmed_ids", [])) if auto_confirm_summary else 0,
+        "blocked_count": len(auto_confirm_summary.get("blocked_ids", [])) if auto_confirm_summary else len(new_pending_ids),
+        "failed_titles": failed_titles,
+        "extraction_mode": extraction_mode,
+        "categories": enabled_categories,
+        "import_to_index": import_to_index,
+        "consolidate_after_extract": consolidate_after_extract,
+        "auto_confirm_safe_items": auto_confirm_safe_items,
+        "custom_instructions": custom_instructions,
+        "auto_confirm": auto_confirm_summary,
+        "consolidation": consolidation_summary,
+    }
+    batch = append_long_reference_quick_run(batch, summary)
+    batch = save_long_reference_batch(project_name, batch)
+    return batch, summary
 
 
 def render_long_reference_batch_manager(project_name: str, knowledge_category_options: list[str]):
@@ -3837,6 +6799,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             st.caption(
                 f"文件={batch.get('source_file_name', '-') or '-'} / 资料指纹={str(batch.get('content_fingerprint', ''))[:12] or '-'} / 字符数={batch.get('content_char_count', 0)}"
             )
+        render_extraction_coverage_report(project_name, batch, key_prefix=f"batch_{selected_batch_id}")
 
         segments = batch.get("segments", [])
         filter_mode = st.selectbox(
@@ -3876,10 +6839,122 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             )
             if segment.get("extract_error"):
                 st.warning(segment.get("extract_error"))
+            extract_diff = segment.get("last_extract_diff", {})
+            if isinstance(extract_diff, dict) and extract_diff:
+                st.caption(
+                    f"上次提取对比：新增 {extract_diff.get('added_count', 0)} / 匹配 {extract_diff.get('matched_count', 0)} / "
+                    f"可能遗漏 {extract_diff.get('missing_count', 0)} / 变化 {extract_diff.get('changed_count', 0)}"
+                )
+                render_extraction_diff_detail(project_name, extract_diff, key_prefix=f"segment_diff_{selected_batch_id}_{index}")
         if len(filtered_indices) > 12:
             st.caption(f"仅预览前 12 个匹配片段，共 {len(filtered_indices)} 个。")
 
-        col_import, col_extract, col_retry = st.columns(3)
+        st.markdown("#### 推荐操作")
+        st.caption("想继续推进这个批次时，优先用一键处理：未导入片段会进入资料索引，片段会被提取成候选知识，低风险条目会自动入库，风险条目保留待确认。")
+        quick_continue_limit = st.number_input(
+            "本次最多一键处理片段数",
+            min_value=1,
+            value=min(5, max(1, len(selected_indices))),
+            key=f"batch_quick_limit_{selected_batch_id}",
+        )
+        quick_continue_high_ok = True
+        if quick_continue_limit > 50:
+            st.warning(f"⚠️ 处理 {quick_continue_limit} 段将产生约 {quick_continue_limit} 次 LLM 调用，预计耗时会较长。")
+            quick_continue_high_ok = st.checkbox(
+                "我确认要大量处理",
+                key=f"batch_quick_high_confirm_{selected_batch_id}",
+            )
+        with st.expander("高级设置：批次一键处理策略", expanded=False):
+            quick_continue_auto_confirm = st.checkbox(
+                "自动审核并保存低风险知识",
+                value=True,
+                key=f"batch_quick_auto_confirm_{selected_batch_id}",
+            )
+            quick_continue_import = st.checkbox(
+                "同时导入资料索引",
+                value=True,
+                key=f"batch_quick_import_{selected_batch_id}",
+            )
+            quick_continue_preset_key = st.selectbox(
+                "专家提取预设",
+                options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
+                index=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()).index("balanced"),
+                format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
+                key=f"batch_quick_preset_{selected_batch_id}",
+            )
+            quick_continue_preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[quick_continue_preset_key]
+            quick_continue_categories = st.multiselect(
+                "提取分类",
+                options=knowledge_category_options,
+                default=default_extraction_categories("preset", quick_continue_preset, knowledge_category_options),
+                format_func=label_knowledge_category,
+                key=f"batch_quick_categories_{selected_batch_id}_{quick_continue_preset_key}",
+            )
+            quick_continue_mode = st.selectbox(
+                "提取模式",
+                options=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()),
+                index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(quick_continue_preset["mode"]) if quick_continue_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
+                format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
+                key=f"batch_quick_mode_{selected_batch_id}_{quick_continue_preset_key}",
+            )
+            st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(quick_continue_mode, "当前模式暂无说明。"))
+            quick_continue_custom_instructions = st.text_area(
+                "补充提取要求（高级，可选）",
+                height=90,
+                key=f"batch_quick_custom_instructions_{selected_batch_id}_{quick_continue_preset_key}",
+                placeholder="例如：只保留稳定设定；角色心理推断必须标为 inferred。",
+            )
+        if "quick_continue_categories" not in locals():
+            quick_continue_preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS["balanced"]
+            quick_continue_categories = default_extraction_categories("preset", quick_continue_preset, knowledge_category_options)
+            quick_continue_mode = quick_continue_preset["mode"]
+            quick_continue_auto_confirm = True
+            quick_continue_import = True
+            quick_continue_custom_instructions = ""
+        if st.button("继续一键处理所选片段", key=f"batch_quick_process_{selected_batch_id}", use_container_width=True):
+            if not selected_indices:
+                st.error("请先选择片段。")
+            elif not quick_continue_categories:
+                st.error("请至少选择一个提取分类。")
+            elif not quick_continue_high_ok:
+                st.error("处理数量超过 50 段，请先勾选确认框。")
+            else:
+                with st.spinner("正在继续处理批次..."):
+                    batch, quick_summary = run_long_reference_quick_process(
+                        project_name,
+                        batch,
+                        selected_indices[: int(quick_continue_limit)],
+                        enabled_categories=quick_continue_categories,
+                        extraction_mode=quick_continue_mode,
+                        extract_limit=int(quick_continue_limit),
+                        import_to_index=quick_continue_import,
+                        consolidate_after_extract=False,
+                        auto_confirm_safe_items=quick_continue_auto_confirm,
+                        custom_instructions=quick_continue_custom_instructions,
+                    )
+                st.session_state[f"batch_quick_result_{selected_batch_id}"] = quick_summary
+                st.success(
+                    f"已处理：导入 {quick_summary.get('imported_count', 0)} 段，"
+                    f"提取 {quick_summary.get('processed_count', 0)} 段，"
+                    f"自动保存 {quick_summary.get('auto_confirmed_count', 0)} 条，"
+                    f"保留待确认 {quick_summary.get('blocked_count', 0)} 条。"
+                )
+                st.rerun()
+        batch_quick_result = st.session_state.get(f"batch_quick_result_{selected_batch_id}", {})
+        if batch_quick_result:
+            with st.expander("上次批次一键处理结果", expanded=bool(batch_quick_result.get("blocked_count"))):
+                st.json({
+                    "导入片段": batch_quick_result.get("imported_count", 0),
+                    "提取片段": batch_quick_result.get("processed_count", 0),
+                    "新增候选": batch_quick_result.get("new_pending_count", 0),
+                    "自动保存": batch_quick_result.get("auto_confirmed_count", 0),
+                    "保留待确认": batch_quick_result.get("blocked_count", 0),
+                    "保留原因": batch_quick_result.get("auto_confirm", {}).get("blocked_reasons", {}),
+                    "失败": batch_quick_result.get("failed_titles", []),
+                })
+
+        st.markdown("#### 高级：手动处理")
+        col_import, col_extract, col_retry, col_reextract = st.columns(4)
         if col_import.button("导入所选未导入片段", key=f"batch_import_{selected_batch_id}"):
             target_indices = [index for index in selected_indices if segments[index].get("import_status") != "imported"]
             if not target_indices:
@@ -3889,35 +6964,72 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 st.success(f"已导入 {imported} 个片段，并重建检索索引。")
                 st.rerun()
 
-        extract_limit = st.number_input("本次最多提取片段数", min_value=1, max_value=50, value=5, key=f"batch_extract_limit_{selected_batch_id}")
+        extract_limit = st.number_input("本次最多提取片段数", min_value=1, value=5, key=f"batch_extract_limit_{selected_batch_id}")
+        batch_extract_high_ok = True
+        if extract_limit > 50:
+            st.warning(f"⚠️ 提取 {extract_limit} 段将产生约 {extract_limit} 次 LLM 调用，预计耗时会较长。")
+            batch_extract_high_ok = st.checkbox(
+                "我确认要大量处理",
+                key=f"batch_extract_high_confirm_{selected_batch_id}",
+            )
+        expert_preset = st.selectbox(
+            "专家提取预设",
+            options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
+            format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
+            key=f"batch_extract_expert_{selected_batch_id}",
+            help="预设会自动推荐提取分类和提取模式。第一次处理长篇资料建议使用“平衡总管”。",
+        )
+        preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[expert_preset]
+        category_default_strategy = st.radio(
+            "提取分类初始策略",
+            options=["preset", "all", "none"],
+            format_func=lambda value: {"preset": "按专家预设", "all": "全选分类", "none": "不预选分类"}.get(value, value),
+            horizontal=True,
+            key=f"batch_extract_category_strategy_{selected_batch_id}_{expert_preset}",
+            help="只影响当前控件的默认勾选。分类越多，覆盖越广；分类越少，输出越聚焦。",
+        )
         enabled_categories = st.multiselect(
             "提取分类",
             options=knowledge_category_options,
-            default=["characters", "items", "abilities", "world_rules", "timeline_events", "relationships"],
+            default=default_extraction_categories(category_default_strategy, preset, knowledge_category_options),
             format_func=label_knowledge_category,
-            key=f"batch_extract_categories_{selected_batch_id}",
+            key=f"batch_extract_categories_{selected_batch_id}_{expert_preset}_{category_default_strategy}",
+            help="决定允许模型输出哪些类型的知识。没有选中的分类不会被主动提取。",
         )
+        extraction_mode = st.selectbox(
+            "提取模式",
+            options=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()),
+            index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(preset["mode"]) if preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
+            format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
+            key=f"batch_extract_mode_{selected_batch_id}_{expert_preset}",
+            help="模式决定模型看资料时的优先级。通用更稳，深度更适合正式搭同人资料地基。",
+        )
+        st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(extraction_mode, "当前模式暂无说明。"))
         if col_extract.button("提取所选未提取片段", key=f"batch_extract_{selected_batch_id}"):
-            target_indices = [
-                index for index in selected_indices
-                if segments[index].get("extract_status", "pending") in {"pending", ""}
-            ][: int(extract_limit)]
-            if not target_indices:
-                st.error("没有可提取的未提取片段。")
-            elif not enabled_categories:
-                st.error("请至少选择一个提取分类。")
+            if not batch_extract_high_ok:
+                st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
-                _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
-                    project_name,
-                    batch,
-                    target_indices,
-                    enabled_categories,
-                )
-                st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
-                for failure in failures[:5]:
-                    st.warning(f"提取失败：{failure}")
-                if not failures:
-                    st.rerun()
+                target_indices = [
+                    index for index in selected_indices
+                    if segments[index].get("extract_status", "pending") in {"pending", ""}
+                ][: int(extract_limit)]
+                if not target_indices:
+                    st.error("没有可提取的未提取片段。")
+                elif not enabled_categories:
+                    st.error("请至少选择一个提取分类。")
+                else:
+                    _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+                        project_name,
+                        batch,
+                        target_indices,
+                        enabled_categories,
+                        extraction_mode=extraction_mode,
+                    )
+                    st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
+                    for failure in failures[:5]:
+                        st.warning(f"提取失败：{failure}")
+                    if not failures:
+                        st.rerun()
 
         if col_retry.button("重试失败片段", key=f"batch_retry_{selected_batch_id}"):
             target_indices = [
@@ -3934,12 +7046,329 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                     batch,
                     target_indices,
                     enabled_categories,
+                    extraction_mode=extraction_mode,
                 )
                 st.success(f"已重试 {processed} 个片段，加入 {queued_total} 条待确认知识。")
                 for failure in failures[:5]:
                     st.warning(f"重试失败：{failure}")
                 if not failures:
                     st.rerun()
+
+        if col_reextract.button("重新提取已提取片段", key=f"batch_reextract_{selected_batch_id}"):
+            target_indices = [
+                index for index in selected_indices
+                if segments[index].get("extract_status") in {"queued", "extracted"}
+            ][: int(extract_limit)]
+            if not target_indices:
+                st.error("没有选中的已提取片段。")
+            elif not enabled_categories:
+                st.error("请至少选择一个提取分类。")
+            else:
+                _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+                    project_name,
+                    batch,
+                    target_indices,
+                    enabled_categories,
+                    extraction_mode=extraction_mode,
+                )
+                st.success(f"已重新提取 {processed} 个片段，加入 {queued_total} 条待确认知识。")
+                for failure in failures[:5]:
+                    st.warning(f"重新提取失败：{failure}")
+                if not failures:
+                    st.rerun()
+
+        st.markdown("#### 多专家提取计划")
+        plan_col_a, plan_col_b, plan_col_c = st.columns(3)
+        plan_key = plan_col_a.selectbox(
+            "计划预设",
+            options=list(KNOWLEDGE_EXTRACTION_PLAN_PRESETS.keys()),
+            format_func=lambda value: KNOWLEDGE_EXTRACTION_PLAN_PRESETS[value]["label"],
+            key=f"batch_extract_plan_{selected_batch_id}",
+        )
+        plan_preset = KNOWLEDGE_EXTRACTION_PLAN_PRESETS[plan_key]
+        project_plan_templates = load_extraction_plan_templates(project_name)
+        template_options = ["__none__"] + [str(item.get("id") or "") for item in project_plan_templates if item.get("id")]
+        selected_template_id = st.selectbox(
+            "项目提取计划模板",
+            options=template_options,
+            format_func=lambda value: "不使用项目模板" if value == "__none__" else next(
+                (f"{item.get('name', value)} / {' -> '.join(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.get(step, {}).get('label', step) for step in item.get('steps', []))}" for item in project_plan_templates if item.get("id") == value),
+                value,
+            ),
+            key=f"batch_extract_plan_template_{selected_batch_id}",
+        )
+        selected_template = next((item for item in project_plan_templates if item.get("id") == selected_template_id), {})
+        plan_limit = plan_col_b.number_input(
+            "计划最多处理片段数",
+            min_value=1,
+            value=min(3, max(1, len(selected_indices) or 1)),
+            key=f"batch_extract_plan_limit_{selected_batch_id}",
+        )
+        batch_plan_high_ok = True
+        if plan_limit > 50:
+            st.warning(f"⚠️ 计划处理 {plan_limit} 段将产生约 {plan_limit} 次 LLM 调用，预计耗时会较长。")
+            batch_plan_high_ok = st.checkbox(
+                "我确认要大量处理",
+                key=f"batch_plan_high_confirm_{selected_batch_id}",
+            )
+        plan_reextract = plan_col_c.checkbox(
+            "允许重跑已提取片段",
+            value=False,
+            key=f"batch_extract_plan_reextract_{selected_batch_id}",
+        )
+        plan_steps = st.multiselect(
+            "专家步骤顺序",
+            options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
+            default=[
+                step for step in (selected_template.get("steps") if selected_template else plan_preset["steps"])
+                if step in KNOWLEDGE_EXTRACTION_EXPERT_PRESETS
+            ],
+            format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
+            key=f"batch_extract_plan_steps_{selected_batch_id}_{plan_key}_{selected_template_id}",
+        )
+        with st.expander("保存当前专家步骤为项目模板", expanded=False):
+            template_name = st.text_input("模板名称", value=plan_preset.get("label", "自定义提取计划"), key=f"batch_extract_plan_template_name_{selected_batch_id}")
+            template_notes = st.text_area("模板备注", value="", height=80, key=f"batch_extract_plan_template_notes_{selected_batch_id}")
+            if st.button("保存提取计划模板", key=f"batch_save_extract_plan_template_{selected_batch_id}", use_container_width=True):
+                try:
+                    saved_template = upsert_extraction_plan_template(project_name, template_name, plan_steps, template_notes)
+                    st.success(f"已保存项目提取计划模板：{saved_template.get('name')}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"保存模板失败：{exc}")
+            if project_plan_templates:
+                st.markdown("##### 已保存模板")
+                st.dataframe(
+                    [
+                        {
+                            "名称": item.get("name", ""),
+                            "步骤": " -> ".join(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.get(step, {}).get("label", step) for step in item.get("steps", [])),
+                            "备注": item.get("notes", ""),
+                        }
+                        for item in project_plan_templates
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                delete_template_id = st.selectbox(
+                    "删除模板",
+                    options=["__none__"] + [str(item.get("id") or "") for item in project_plan_templates if item.get("id")],
+                    format_func=lambda value: "不删除" if value == "__none__" else next((item.get("name", value) for item in project_plan_templates if item.get("id") == value), value),
+                    key=f"batch_delete_extract_plan_template_select_{selected_batch_id}",
+                )
+                if delete_template_id != "__none__" and st.button("删除所选提取计划模板", key=f"batch_delete_extract_plan_template_{selected_batch_id}", use_container_width=True):
+                    if delete_extraction_plan_template(project_name, delete_template_id):
+                        st.success("已删除提取计划模板。")
+                        st.rerun()
+                    else:
+                        st.error("删除失败：模板不存在。")
+                templates_json = st.text_area(
+                    "模板库 JSON",
+                    value=json.dumps(project_plan_templates, ensure_ascii=False, indent=2),
+                    height=180,
+                    key=f"batch_extract_plan_templates_json_{selected_batch_id}",
+                )
+                if st.button("保存模板库 JSON", key=f"batch_save_extract_plan_templates_json_{selected_batch_id}", use_container_width=True):
+                    try:
+                        parsed = json.loads(templates_json)
+                        if not isinstance(parsed, list):
+                            st.error("模板库必须是列表结构。")
+                        else:
+                            save_extraction_plan_templates(project_name, parsed)
+                            st.success("已保存提取计划模板库。")
+                            st.rerun()
+                    except json.JSONDecodeError as exc:
+                        st.error(f"模板库 JSON 格式错误：{exc}")
+        if plan_steps:
+            st.caption("计划顺序：" + " -> ".join(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[step]["label"] for step in plan_steps))
+        auto_consolidate = st.checkbox(
+            "计划完成后自动整理当前批次待确认知识",
+            value=False,
+            key=f"batch_extract_plan_auto_consolidate_{selected_batch_id}",
+        )
+        auto_consolidation_mode = consolidation_mode if "consolidation_mode" in locals() else "balanced"
+        auto_consolidation_limit = 80
+        auto_consolidation_categories = [category for category in ["characters", "relationships", "timeline_events", "world_rules", "abilities", "items"] if category in knowledge_category_options]
+        if auto_consolidate:
+            auto_col_a, auto_col_b = st.columns(2)
+            auto_consolidation_mode = auto_col_a.selectbox(
+                "自动整理模式",
+                options=list(KNOWLEDGE_CONSOLIDATION_MODE_LABELS.keys()),
+                format_func=lambda value: KNOWLEDGE_CONSOLIDATION_MODE_LABELS.get(value, value),
+                key=f"batch_extract_plan_auto_consolidation_mode_{selected_batch_id}",
+            )
+            auto_consolidation_limit = auto_col_b.number_input(
+                "自动整理最多条目数",
+                min_value=5,
+                max_value=200,
+                value=80,
+                step=5,
+                key=f"batch_extract_plan_auto_consolidation_limit_{selected_batch_id}",
+            )
+            auto_consolidation_categories = st.multiselect(
+                "自动整理分类",
+                options=knowledge_category_options,
+                default=auto_consolidation_categories,
+                format_func=label_knowledge_category,
+                key=f"batch_extract_plan_auto_consolidation_categories_{selected_batch_id}",
+            )
+        if st.button("执行多专家提取计划", key=f"batch_run_extract_plan_{selected_batch_id}", use_container_width=True):
+            if not selected_indices:
+                st.error("请先选择要处理的片段。")
+            elif not plan_steps:
+                st.error("请至少选择一个专家步骤。")
+            elif not batch_plan_high_ok:
+                st.error("处理数量超过 50 段，请先勾选确认框。")
+            else:
+                with st.spinner("正在按专家计划提取资料..."):
+                    updated_batch, plan_summary = run_long_reference_extraction_plan(
+                        project_name,
+                        batch,
+                        selected_indices,
+                        plan_steps,
+                        max_segments=int(plan_limit),
+                        reextract_completed=plan_reextract,
+                    )
+                    auto_result = {}
+                    if auto_consolidate and plan_summary.get("queued_total", 0):
+                        auto_result = consolidate_batch_pending_items(
+                            project_name,
+                            updated_batch,
+                            categories=auto_consolidation_categories,
+                            consolidation_mode=auto_consolidation_mode,
+                            limit=int(auto_consolidation_limit),
+                        )
+                        plan_summary["auto_consolidation"] = {
+                            "enabled": True,
+                            "success": auto_result.get("success", False),
+                            "message": auto_result.get("message", ""),
+                            "source_count": auto_result.get("source_count", 0),
+                            "queued_count": auto_result.get("queued_count", 0),
+                            "mode": auto_consolidation_mode,
+                            "categories": auto_consolidation_categories,
+                        }
+                        if auto_result.get("result"):
+                            st.session_state[f"batch_consolidation_result_{selected_batch_id}"] = auto_result.get("result")
+                    elif auto_consolidate:
+                        plan_summary["auto_consolidation"] = {
+                            "enabled": True,
+                            "success": False,
+                            "message": "本次计划没有新增待确认知识，已跳过自动整理。",
+                            "source_count": 0,
+                            "queued_count": 0,
+                            "mode": auto_consolidation_mode,
+                            "categories": auto_consolidation_categories,
+                        }
+                    if auto_consolidate:
+                        history = updated_batch.get("extraction_plan_runs", [])
+                        if isinstance(history, list) and history:
+                            history[-1] = plan_summary
+                            updated_batch["extraction_plan_runs"] = history
+                        updated_batch["last_extraction_plan"] = plan_summary
+                        save_long_reference_batch(project_name, updated_batch)
+                st.session_state[f"batch_extract_plan_result_{selected_batch_id}"] = plan_summary
+                if not plan_summary.get("segment_indices"):
+                    st.warning("没有可执行的目标片段。若要重跑已提取片段，请勾选“允许重跑已提取片段”。")
+                else:
+                    st.success(
+                        f"计划完成：执行 {len(plan_summary.get('processed_steps', []))} 个专家步骤，"
+                        f"累计处理 {plan_summary.get('processed_segments', 0)} 次片段，加入 {plan_summary.get('queued_total', 0)} 条待确认知识。"
+                    )
+                    if plan_summary.get("auto_consolidation", {}).get("enabled"):
+                        auto_info = plan_summary.get("auto_consolidation", {})
+                        if auto_info.get("success"):
+                            st.success(auto_info.get("message", "自动整理已完成。"))
+                        else:
+                            st.warning(auto_info.get("message", "自动整理没有生成结果。"))
+                    for failure in plan_summary.get("failures", [])[:5]:
+                        st.warning(f"计划步骤失败：{failure}")
+                    if not plan_summary.get("failures"):
+                        st.rerun()
+
+        plan_result = st.session_state.get(f"batch_extract_plan_result_{selected_batch_id}") or batch.get("last_extraction_plan", {})
+        if isinstance(plan_result, dict) and plan_result:
+            with st.expander("上次多专家提取计划结果", expanded=False):
+                step_rows = []
+                for step in plan_result.get("processed_steps", []):
+                    step_rows.append({
+                        "专家": step.get("label", step.get("step", "")),
+                        "模式": KNOWLEDGE_EXTRACTION_MODE_LABELS.get(step.get("mode", ""), step.get("mode", "")),
+                        "分类": "、".join(label_knowledge_category(category) for category in step.get("categories", [])),
+                        "处理片段": step.get("processed", 0),
+                        "入队知识": step.get("queued", 0),
+                        "失败": len(step.get("failures", [])),
+                    })
+                if step_rows:
+                    st.dataframe(step_rows, use_container_width=True, hide_index=True)
+                st.caption(
+                    f"目标片段数={len(plan_result.get('segment_indices', []))} / "
+                    f"累计处理={plan_result.get('processed_segments', 0)} / "
+                    f"入队知识={plan_result.get('queued_total', 0)} / "
+                    f"失败={plan_result.get('failure_count', 0)}"
+                )
+                auto_info = plan_result.get("auto_consolidation", {})
+                if isinstance(auto_info, dict) and auto_info.get("enabled"):
+                    st.caption(
+                        f"自动整理：{KNOWLEDGE_CONSOLIDATION_MODE_LABELS.get(auto_info.get('mode', ''), auto_info.get('mode', ''))} / "
+                        f"来源条目={auto_info.get('source_count', 0)} / 生成={auto_info.get('queued_count', 0)} / "
+                        f"结果={'成功' if auto_info.get('success') else '未完成'}"
+                    )
+                    if auto_info.get("message"):
+                        st.info(auto_info.get("message"))
+
+        st.markdown("#### 批次级整理")
+        batch_pending_items = get_batch_pending_knowledge_items(project_name, batch)
+        st.caption(f"当前批次关联待确认知识 {len(batch_pending_items)} 条。整理会合并同一实体/关系/事件，并用整理后的条目替换这些散条目。")
+        col_mode, col_limit = st.columns(2)
+        consolidation_mode = col_mode.selectbox(
+            "整理模式",
+            options=list(KNOWLEDGE_CONSOLIDATION_MODE_LABELS.keys()),
+            format_func=lambda value: KNOWLEDGE_CONSOLIDATION_MODE_LABELS.get(value, value),
+            key=f"batch_consolidation_mode_{selected_batch_id}",
+        )
+        consolidation_limit = col_limit.number_input(
+            "本次最多整理条目数",
+            min_value=5,
+            max_value=200,
+            value=60,
+            step=5,
+            key=f"batch_consolidation_limit_{selected_batch_id}",
+        )
+        consolidation_categories = st.multiselect(
+            "整理分类",
+            options=knowledge_category_options,
+            default=["characters", "relationships", "timeline_events", "world_rules", "abilities", "items"],
+            format_func=label_knowledge_category,
+            key=f"batch_consolidation_categories_{selected_batch_id}",
+        )
+        if st.button("整理当前批次待确认知识", key=f"batch_consolidate_pending_{selected_batch_id}", use_container_width=True):
+            try:
+                consolidation_summary = consolidate_batch_pending_items(
+                    project_name,
+                    batch,
+                    categories=consolidation_categories,
+                    consolidation_mode=consolidation_mode,
+                    limit=int(consolidation_limit),
+                )
+                if consolidation_summary.get("result"):
+                    st.session_state[f"batch_consolidation_result_{selected_batch_id}"] = consolidation_summary.get("result")
+                if consolidation_summary.get("success"):
+                    st.success(consolidation_summary.get("message", "批次整理已完成。"))
+                    st.rerun()
+                else:
+                    st.error(consolidation_summary.get("message", "批次整理没有生成结果。"))
+            except Exception as exc:
+                st.error(f"批次整理失败：{exc}")
+
+        consolidation_result = st.session_state.get(f"batch_consolidation_result_{selected_batch_id}", {})
+        if consolidation_result:
+            with st.expander("上次批次整理结果", expanded=False):
+                st.markdown(consolidation_result.get("data", {}).get("report_markdown", ""))
+                render_step_validation(consolidation_result)
+                render_step_json_expander(
+                    "批次整理结构化数据",
+                    consolidation_result.get("data", {}).get("knowledge_extraction", {}),
+                )
 
         with st.expander("高级操作", expanded=False):
             if st.button("删除当前批次记录", key=f"batch_delete_{selected_batch_id}"):
@@ -3967,38 +7396,70 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
 
 def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str], expanded: bool = False):
     with st.expander("长篇资料导入器", expanded=expanded):
-        st.caption("适合导入长篇网文、原作正文或大段参考资料。建议先切分并导入索引，再分批提取结构化知识。")
+        st.caption("适合导入长篇网文、原作正文或大段参考资料。推荐流程：先切分，再保存批次，随后按需要导入索引或提取知识。")
+        with st.expander("这几个步骤分别在做什么？", expanded=False):
+            st.markdown(
+                """
+1. **预览切分**：只把文本临时拆成章节/片段，方便检查切分是否合理，还不会写入资料库。
+2. **保存为处理批次**：把这次切分结果保存下来。之后可以在“长篇批次”里继续导入、提取、重试或重新提取。
+3. **导入资料索引**：把片段作为原文资料加入检索库。后续写作、规划、审阅可以召回原文证据，但不会生成结构化角色/设定卡。
+4. **提取结构化知识**：让模型从片段中提取角色、关系、时间线、设定、文风等候选知识，结果先进入“待确认知识”，需要审核后才会成为正式知识库。
+                """.strip()
+            )
 
-        col_a, col_b = st.columns(2)
-        long_title = col_a.text_input("长篇资料标题", key="long_reference_title", placeholder="例如：某某原作正文")
-        long_scope = col_b.selectbox("资料范围", options=["canon", "reference"], format_func=label_scope, key="long_reference_scope")
-        long_authority = col_a.selectbox(
-            "资料可信度",
-            options=["official", "curated", "community", "unknown"],
-            index=0,
-            format_func=label_authority,
-            key="long_reference_authority",
-        )
-        long_source_type = col_b.selectbox(
-            "资料模板",
-            options=list(source_type_options.keys()),
-            index=0,
-            format_func=lambda key: source_type_options.get(key, label_source_type(key)),
-            key="long_reference_source_type",
-        )
-        long_origin = st.text_input("来源说明/链接（可选）", key="long_reference_origin")
+        long_title = st.text_input("长篇资料标题", key="long_reference_title", placeholder="例如：某某原作正文")
+        with st.expander("高级设置：资料属性与切分", expanded=False):
+            col_a, col_b = st.columns(2)
+            long_scope = col_a.selectbox("资料范围", options=["canon", "reference"], format_func=label_scope, key="long_reference_scope")
+            long_authority = col_b.selectbox(
+                "资料可信度",
+                options=["official", "curated", "community", "unknown"],
+                index=0,
+                format_func=label_authority,
+                key="long_reference_authority",
+            )
+            long_source_type = col_a.selectbox(
+                "资料模板",
+                options=list(source_type_options.keys()),
+                index=0,
+                format_func=lambda key: source_type_options.get(key, label_source_type(key)),
+                key="long_reference_source_type",
+            )
+            long_origin = col_b.text_input("来源说明/链接（可选）", key="long_reference_origin")
+            max_chars = st.slider("无章节标题时的切分字数", min_value=2000, max_value=12000, value=6000, step=1000, key="long_reference_max_chars")
         uploaded_file = st.file_uploader("上传 txt/md 文件（可选）", type=["txt", "md"], key="long_reference_file")
         uploaded_text = decode_uploaded_text(uploaded_file)
+        if uploaded_file is not None:
+            upload_signature = hashlib.sha1(uploaded_file.getvalue()).hexdigest()
+            if st.session_state.get("long_reference_uploaded_signature") != upload_signature:
+                st.session_state["long_reference_uploaded_signature"] = upload_signature
+                st.session_state["long_reference_text"] = uploaded_text
+                st.session_state.pop("long_reference_segments", None)
+                st.session_state.pop("long_reference_batch_id", None)
+            st.caption(f"已读取文件：{uploaded_file.name} / {len(uploaded_file.getvalue())} 字节 / 解码后 {len(uploaded_text)} 字符")
+            if not uploaded_text.strip():
+                st.warning("文件已上传，但没有解码出文本内容。请确认文件不是二进制格式，或尝试另存为 UTF-8/UTF-16 txt。")
         pasted_text = st.text_area(
             "或直接粘贴长篇资料",
-            value=uploaded_text,
+            value=st.session_state.get("long_reference_text", uploaded_text),
             height=260,
             key="long_reference_text",
         )
-        max_chars = st.slider("无章节标题时的切分字数", min_value=2000, max_value=12000, value=6000, step=1000, key="long_reference_max_chars")
 
-        if st.button("预览长篇切分"):
+        # 自动切分：有文本且尚未切分时自动执行，省去手动点"预览切分"的步骤
+        if pasted_text.strip() and "long_reference_segments" not in st.session_state:
             title = long_title.strip() or (uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料")
+            segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
+            st.session_state["long_reference_segments"] = segments
+            st.session_state.pop("long_reference_batch_id", None)
+            if segments:
+                st.caption(f"✓ 自动切分为 {len(segments)} 个资料片段。如需调整切分参数，修改后点「重新切分」。")
+
+        if st.button("重新切分", help="修改资料或切分参数后，重新生成片段预览。已有片段将被替换。"):
+            title = long_title.strip() or (uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料")
+            if not pasted_text.strip():
+                st.error("没有可处理的文本内容。请上传 txt/md 文件，或把文本粘贴到输入框中。")
+                return
             segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
             st.session_state["long_reference_segments"] = segments
             st.session_state.pop("long_reference_batch_id", None)
@@ -4069,9 +7530,10 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                 existing = load_long_reference_batch(project_name, batch_id)
                 if existing:
                     return existing
+            fallback_title = uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料"
             batch = create_long_reference_batch(
                 project_name,
-                title=long_title.strip() or "长篇资料",
+                title=long_title.strip() or fallback_title,
                 scope=long_scope,
                 authority=long_authority,
                 source_type=long_source_type,
@@ -4084,50 +7546,206 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             st.session_state["long_reference_batch_id"] = batch.get("batch_id")
             return batch
 
-        if st.button("创建资料处理批次"):
-            batch = get_or_create_preview_batch()
-            st.success(f"已创建批次：{batch.get('title')} / {batch.get('summary', {}).get('segment_count', 0)} 个片段。")
-            st.rerun()
-
-        col_import, col_extract = st.columns(2)
-        if col_import.button("批量导入所选片段到资料索引"):
-            if not selected_indices:
-                st.error("请先选择片段。")
-            else:
-                batch = get_or_create_preview_batch()
-                _, imported = import_long_reference_segments(project_name, batch, selected_indices)
-                st.success(f"已导入 {imported} 个长篇资料片段，并重建检索索引。")
-                st.rerun()
-
-        batch_limit = st.number_input("本次最多提取片段数", min_value=1, max_value=20, value=3, key="long_reference_extract_limit")
-        enabled_categories = st.multiselect(
-            "批量提取分类",
-            options=knowledge_category_options,
-            default=["characters", "items", "abilities", "world_rules", "timeline_events", "relationships"],
-            format_func=label_knowledge_category,
-            key="long_reference_extract_categories",
+        st.markdown("#### 一键处理")
+        st.caption("默认会保存批次、导入资料索引、提取结构化知识，并自动确认低风险条目；有冲突或证据不足的条目会留在“待确认知识”里。")
+        quick_extract_limit = st.number_input(
+            "本次最多处理片段数",
+            min_value=1,
+            value=min(5, max(1, len(selected_indices))),
+            key="long_reference_quick_limit",
+            help="不设上限，超过 50 段需要额外确认。",
         )
-        if col_extract.button("批量提取所选片段到待确认队列"):
+        quick_quick_high_ok = True
+        if quick_extract_limit > 50:
+            st.warning(f"⚠️ 处理 {quick_extract_limit} 段将产生约 {quick_extract_limit} 次 LLM 调用，预计耗时会较长。")
+            quick_quick_high_ok = st.checkbox(
+                "我确认要大量处理",
+                key="long_reference_quick_high_confirm",
+            )
+        with st.expander("一键处理选项", expanded=False):
+            quick_import_to_index = st.checkbox(
+                "同时导入资料索引",
+                value=True,
+                key="long_reference_quick_import_index",
+                help="开启后，原文片段会进入检索库，后续写作可以召回原文证据。",
+            )
+            quick_auto_confirm = st.checkbox(
+                "自动审核并保存低风险知识",
+                value=True,
+                key="long_reference_quick_auto_confirm",
+                help="只自动确认没有冲突、证据存在、置信度尚可的条目；风险条目会留在待确认队列。",
+            )
+            quick_consolidate = st.checkbox(
+                "提取后自动整理散知识",
+                value=False,
+                key="long_reference_quick_consolidate",
+                help="会尝试把同一批次里的散知识合并成更稳定的角色/关系/设定条目。正式大批量处理时再开启更稳。",
+            )
+
+        with st.expander("提取参数设置", expanded=False):
+            shared_expert_preset = st.selectbox(
+                "专家提取预设",
+                options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
+                index=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()).index("balanced"),
+                format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
+                key="long_reference_shared_expert_preset",
+                help="预设会自动推荐提取分类和提取模式。第一次处理长篇资料建议使用“平衡总管”。",
+            )
+            shared_preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[shared_expert_preset]
+            shared_category_strategy = st.radio(
+                "提取分类初始策略",
+                options=["preset", "all", "none"],
+                format_func=lambda value: {"preset": "按专家预设", "all": "全选分类", "none": "不预选分类"}.get(value, value),
+                horizontal=True,
+                key=f"long_reference_shared_category_strategy_{shared_expert_preset}",
+                help="只影响当前控件的默认勾选。分类越多，覆盖越广；分类越少，输出越聚焦。",
+            )
+            shared_categories = st.multiselect(
+                "提取分类",
+                options=knowledge_category_options,
+                default=default_extraction_categories(shared_category_strategy, shared_preset, knowledge_category_options),
+                format_func=label_knowledge_category,
+                key=f"long_reference_shared_categories_{shared_expert_preset}_{shared_category_strategy}",
+                help="决定允许模型输出哪些类型的知识。没有选中的分类不会被主动提取。",
+            )
+            shared_extraction_mode = st.selectbox(
+                "提取模式",
+                options=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()),
+                index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(shared_preset["mode"]) if shared_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
+                format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
+                key=f"long_reference_shared_mode_{shared_expert_preset}",
+                help="模式决定模型看资料时的优先级。通用更稳，深度更适合正式搭同人资料地基。",
+            )
+            st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(shared_extraction_mode, "当前模式暂无说明。"))
+            shared_custom_instructions = st.text_area(
+                "补充提取要求（高级，可选）",
+                height=90,
+                key=f"long_reference_shared_custom_instructions_{shared_expert_preset}",
+                placeholder="例如：优先提取主角相关关系；忽略普通战斗过程；保留所有称呼和口癖。",
+            )
+
+        if st.button("开始一键处理所选片段", use_container_width=True):
             if not selected_indices:
                 st.error("请先选择片段。")
-            elif not enabled_categories:
+            elif not shared_categories:
                 st.error("请至少选择一个提取分类。")
+            elif not quick_quick_high_ok:
+                st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
-                with st.spinner("正在分批提取结构化知识..."):
+                with st.spinner("正在保存批次、导入索引、提取并自动审核低风险知识..."):
                     batch = get_or_create_preview_batch()
-                    _, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
+                    updated_batch, quick_summary = run_long_reference_quick_process(
                         project_name,
                         batch,
-                        selected_indices[: int(batch_limit)],
-                        enabled_categories,
+                        selected_indices[: int(quick_extract_limit)],
+                        enabled_categories=shared_categories,
+                        extraction_mode=shared_extraction_mode,
+                        extract_limit=int(quick_extract_limit),
+                        import_to_index=quick_import_to_index,
+                        consolidate_after_extract=quick_consolidate,
+                        auto_confirm_safe_items=quick_auto_confirm,
+                        custom_instructions=shared_custom_instructions,
                     )
-                st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
-                for failure in failed_titles[:5]:
-                    st.warning(f"提取失败：{failure}")
-                if len(failed_titles) > 5:
-                    st.warning(f"另有 {len(failed_titles) - 5} 个片段提取失败。")
-                if not failed_titles:
+                st.session_state["long_reference_quick_result"] = quick_summary
+                st.success(
+                    f"一键处理完成：导入 {quick_summary.get('imported_count', 0)} 段，"
+                    f"提取 {quick_summary.get('processed_count', 0)} 段，"
+                    f"新增待确认 {quick_summary.get('new_pending_count', 0)} 条，"
+                    f"自动保存 {quick_summary.get('auto_confirmed_count', 0)} 条，"
+                    f"保留待确认 {quick_summary.get('blocked_count', 0)} 条。"
+                )
+                for failure in quick_summary.get("failed_titles", [])[:5]:
+                    st.warning(f"处理失败：{failure}")
+                st.rerun()
+
+        quick_result = st.session_state.get("long_reference_quick_result", {})
+        if quick_result:
+            with st.expander("上次一键处理结果", expanded=bool(quick_result.get("blocked_count"))):
+                st.caption(
+                    f"模式={KNOWLEDGE_EXTRACTION_MODE_LABELS.get(quick_result.get('extraction_mode', ''), quick_result.get('extraction_mode', ''))} / "
+                    f"分类={'、'.join(label_knowledge_category(category) for category in quick_result.get('categories', []))}"
+                )
+                st.json({
+                    "导入片段": quick_result.get("imported_count", 0),
+                    "提取片段": quick_result.get("processed_count", 0),
+                    "新增候选": quick_result.get("new_pending_count", 0),
+                    "自动保存": quick_result.get("auto_confirmed_count", 0),
+                    "保留待确认": quick_result.get("blocked_count", 0),
+                    "失败": quick_result.get("failed_titles", []),
+                    "保留原因": quick_result.get("auto_confirm", {}).get("blocked_reasons", {}),
+                })
+
+        with st.expander("高级：分步处理", expanded=False):
+            st.caption("适合调试或手动控制。保存批次、导入索引、提取知识可以分别执行。")
+            if st.button("保存为处理批次", help="保存当前切分结果，方便之后继续处理、重试失败片段或重新提取。"):
+                batch = get_or_create_preview_batch()
+                st.success(f"已保存批次：{batch.get('title')} / {batch.get('summary', {}).get('segment_count', 0)} 个片段。")
+                st.rerun()
+
+            if st.button(
+                "导入资料索引",
+                help="把所选片段作为可检索原文资料入库。适合让后续写作引用原文，但不会自动生成角色/设定知识。",
+            ):
+                if not selected_indices:
+                    st.error("请先选择片段。")
+                else:
+                    batch = get_or_create_preview_batch()
+                    _, imported = import_long_reference_segments(project_name, batch, selected_indices)
+                    st.success(f"已导入 {imported} 个长篇资料片段，并重建检索索引。")
                     st.rerun()
+
+            st.markdown("##### 手动提取结构化知识")
+            batch_limit = st.number_input("本次最多提取片段数", min_value=1, value=3, key="long_reference_extract_limit")
+            manual_extract_high_ok = True
+            if batch_limit > 50:
+                st.warning(f"⚠️ 提取 {batch_limit} 段将产生约 {batch_limit} 次 LLM 调用，预计耗时会较长。")
+                manual_extract_high_ok = st.checkbox(
+                    "我确认要大量处理",
+                    key="long_reference_manual_extract_high_confirm",
+                )
+            manual_consolidate = st.checkbox(
+                "提取后自动整理散知识",
+                value=False,
+                key="long_reference_manual_consolidate",
+                help="提取完成后自动合并重复/同名的候选知识条目。提取片段数较多时建议开启。",
+            )
+            if st.button("提取结构化知识", use_container_width=True):
+                if not selected_indices:
+                    st.error("请先选择片段。")
+                elif not shared_categories:
+                    st.error("请至少选择一个提取分类。")
+                elif not manual_extract_high_ok:
+                    st.error("处理数量超过 50 段，请先勾选确认框。")
+                else:
+                    with st.spinner("正在分批提取结构化知识..."):
+                        batch = get_or_create_preview_batch()
+                        _, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
+                            project_name,
+                            batch,
+                            selected_indices[: int(batch_limit)],
+                            shared_categories,
+                            extraction_mode=shared_extraction_mode,
+                            custom_instructions=shared_custom_instructions,
+                        )
+                    st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
+                    if manual_consolidate and queued_total:
+                        consolidation_summary = consolidate_batch_pending_items(
+                            project_name,
+                            batch,
+                            categories=shared_categories,
+                            consolidation_mode="balanced",
+                            limit=max(20, min(120, queued_total)),
+                        )
+                        st.success(
+                            f"追加整理：合并 {consolidation_summary.get('source_count', 0)} 条为 "
+                            f"{consolidation_summary.get('queued_count', 0)} 条稳定知识。"
+                        )
+                    for failure in failed_titles[:5]:
+                        st.warning(f"提取失败：{failure}")
+                    if len(failed_titles) > 5:
+                        st.warning(f"另有 {len(failed_titles) - 5} 个片段提取失败。")
+                    if not failed_titles:
+                        st.rerun()
 
 
 def _build_resource_browser_items(project_name: str, story_id: str = "default") -> list[dict]:
@@ -5123,11 +8741,7 @@ def render_arc_outline_page(project_name: str):
 
 
 def run_comprehensive_chapter_evaluation(project_name: str, chapter_no: int, chapter_text: str, story_id: str = "default") -> dict:
-    import importlib
-    import skills as skills_module
-
-    skills_module = importlib.reload(skills_module)
-    return skills_module.evaluate_chapter_comprehensive(project_name, chapter_no, chapter_text, story_id=story_id)
+    return skills.evaluate_chapter_comprehensive(project_name, chapter_no, chapter_text, story_id=story_id)
 
 
 def render_evaluation_page(project_name: str):
@@ -5353,9 +8967,15 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
         st.markdown("### 导入向导")
         st.caption("先选资料来源，再选处理目标。页面只显示当前这一步需要的表单。")
 
+        source_options = ["粘贴一段资料", "上传长篇文本", "手动新增资料卡"]
+        if WEB_REFERENCE_INGESTION_ENABLED:
+            source_options.insert(2, "输入网页链接")
+        if st.session_state.get("ingestion_source_choice") not in source_options:
+            st.session_state["ingestion_source_choice"] = source_options[0]
+
         source_choice = st.radio(
             "资料来源",
-            options=["粘贴一段资料", "上传长篇文本", "输入网页链接", "手动新增资料卡"],
+            options=source_options,
             horizontal=True,
             key="ingestion_source_choice",
         )
@@ -5417,14 +9037,88 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     key="knowledge_extract_authority",
                 )
                 knowledge_origin = st.text_input("来源说明（可选）", key="knowledge_extract_origin")
-                enabled_categories = st.multiselect(
-                    "提取分类",
-                    options=knowledge_category_options,
-                    default=["characters", "items", "abilities", "world_rules", "timeline_events", "writing_style", "dialogue_style", "constraints"],
-                    format_func=label_knowledge_category,
-                    key="knowledge_extract_categories",
-                )
+                with st.expander("高级设置", expanded=False):
+                    paste_expert_preset = st.selectbox(
+                        "专家提取预设",
+                        options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
+                        format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
+                        key="knowledge_extract_expert_preset",
+                    )
+                    paste_preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[paste_expert_preset]
+                    paste_category_strategy = st.radio(
+                        "提取分类初始策略",
+                        options=["preset", "all", "none"],
+                        format_func=lambda value: {"preset": "按专家预设", "all": "全选分类", "none": "不预选分类"}.get(value, value),
+                        horizontal=True,
+                        key=f"knowledge_extract_category_strategy_{paste_expert_preset}",
+                    )
+                    enabled_categories = st.multiselect(
+                        "提取分类",
+                        options=knowledge_category_options,
+                        default=default_extraction_categories(paste_category_strategy, paste_preset, knowledge_category_options),
+                        format_func=label_knowledge_category,
+                        key=f"knowledge_extract_categories_{paste_expert_preset}_{paste_category_strategy}",
+                    )
+                    paste_extraction_mode = st.selectbox(
+                        "提取模式",
+                        options=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()),
+                        index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(paste_preset["mode"]) if paste_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
+                        format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
+                        key=f"knowledge_extract_mode_{paste_expert_preset}",
+                    )
+                    st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(paste_extraction_mode, "当前模式暂无说明。"))
+                    paste_custom_instructions = st.text_area(
+                        "补充提取要求（高级，可选）",
+                        height=90,
+                        key=f"knowledge_extract_custom_instructions_{paste_expert_preset}",
+                        placeholder="例如：只提取对本项目有长期复用价值的事实；不确定内容标为 ambiguous。",
+                    )
                 knowledge_text = st.text_area("原始资料", height=260, key="knowledge_extract_text")
+
+                if st.button("一键提取并自动保存低风险知识", use_container_width=True):
+                    if not knowledge_text.strip():
+                        st.error("请先粘贴原始资料。")
+                    elif not enabled_categories:
+                        st.error("请至少选择一个提取分类。")
+                    else:
+                        try:
+                            before_pending_ids = {str(item.get("pending_id") or "") for item in load_pending_knowledge_items(project_name)}
+                            result = extract_reference_knowledge(
+                                project_name,
+                                knowledge_title,
+                                knowledge_text,
+                                enabled_categories,
+                                extraction_mode=paste_extraction_mode,
+                                custom_instructions=paste_custom_instructions,
+                            )
+                            payload = result.get("data", {}).get("knowledge_extraction", {})
+                            items = payload.get("items", []) if isinstance(payload, dict) else []
+                            queued_count = queue_pending_knowledge_items(
+                                project_name,
+                                items,
+                                scope=knowledge_scope,
+                                authority=knowledge_authority,
+                                source_title=payload.get("source_title", "") or knowledge_title,
+                                source_origin=knowledge_origin,
+                            )
+                            after_pending = load_pending_knowledge_items(project_name)
+                            new_ids = [
+                                str(item.get("pending_id") or "")
+                                for item in after_pending
+                                if str(item.get("pending_id") or "") and str(item.get("pending_id") or "") not in before_pending_ids
+                            ]
+                            auto_summary = auto_confirm_pending_items_without_risk(project_name, new_ids)
+                            st.session_state["knowledge_extraction_result"] = result
+                            st.success(
+                                f"已提取 {len(items)} 条，加入待确认 {queued_count} 条，"
+                                f"自动保存 {len(auto_summary.get('confirmed_ids', []))} 条，"
+                                f"保留待确认 {len(auto_summary.get('blocked_ids', []))} 条。"
+                            )
+                            if auto_summary.get("blocked_ids"):
+                                st.info("保留的条目通常存在冲突、重复、低证据或低置信，请到“待确认知识”中处理。")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(f"一键提取失败：{exc}")
 
                 if st.button("提取知识并预览", use_container_width=True):
                     if not knowledge_text.strip():
@@ -5433,7 +9127,14 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                         st.error("请至少选择一个提取分类。")
                     else:
                         try:
-                            result = extract_reference_knowledge(project_name, knowledge_title, knowledge_text, enabled_categories)
+                            result = extract_reference_knowledge(
+                                project_name,
+                                knowledge_title,
+                                knowledge_text,
+                                enabled_categories,
+                                extraction_mode=paste_extraction_mode,
+                                custom_instructions=paste_custom_instructions,
+                            )
                             st.session_state["knowledge_extraction_result"] = result
                         except Exception as exc:
                             st.error(f"知识提取失败：{exc}")
@@ -5487,7 +9188,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
             st.caption("适合整本 txt、原作正文或大量章节。先切分成片段，再选择导入检索或提取知识。")
             render_long_reference_importer(project_name, source_type_options, knowledge_category_options, expanded=True)
 
-        elif source_choice == "输入网页链接":
+        elif WEB_REFERENCE_INGESTION_ENABLED and source_choice == "输入网页链接":
             st.markdown("#### 网页资料导入")
             url_value = st.text_input("页面链接", key="reference_url_input")
             parsed_url = urlparse(url_value.strip()) if url_value.strip() else None
@@ -5595,7 +9296,10 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
 
         st.divider()
         st.markdown("### 待处理与整理")
-        queue_tab, batch_tab, knowledge_tab, package_tab = st.tabs(["待确认知识", "长篇批次", "知识整理", "资料包"])
+        ledger_tab, queue_tab, batch_tab, knowledge_tab, package_tab = st.tabs(["来源台账", "待确认知识", "长篇批次", "知识整理", "资料包"])
+        with ledger_tab:
+            render_ingestion_health_panel(project_name)
+            render_source_ledger_page(project_name)
         with queue_tab:
             render_pending_knowledge_queue(project_name)
         with batch_tab:
@@ -5701,7 +9405,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     st.success(f"已导入 {imported} 条资料并重建索引。")
                     st.rerun()
 
-    if mode == "ingestion":
+    if mode == "ingestion" and WEB_REFERENCE_INGESTION_ENABLED:
         with st.expander("从网页链接抓取并整理资料", expanded=False):
             url_value = st.text_input("页面链接", key="reference_url_input")
             parsed_url = urlparse(url_value.strip()) if url_value.strip() else None
@@ -5758,12 +9462,26 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                 key="knowledge_extract_authority",
             )
             knowledge_origin = st.text_input("来源说明（可选）", key="knowledge_extract_origin")
+            legacy_expert_preset = st.selectbox(
+                "专家提取预设",
+                options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
+                format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
+                key="knowledge_extract_legacy_expert_preset",
+            )
+            legacy_preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[legacy_expert_preset]
             enabled_categories = st.multiselect(
                 "提取分类",
                 options=knowledge_category_options,
-                default=["characters", "items", "abilities", "world_rules", "timeline_events", "writing_style", "dialogue_style", "constraints"],
+                default=[category for category in legacy_preset["categories"] if category in knowledge_category_options],
                 format_func=label_knowledge_category,
-                key="knowledge_extract_categories",
+                key=f"knowledge_extract_legacy_categories_{legacy_expert_preset}",
+            )
+            legacy_extraction_mode = st.selectbox(
+                "提取模式",
+                options=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()),
+                index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(legacy_preset["mode"]) if legacy_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
+                format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
+                key=f"knowledge_extract_legacy_mode_{legacy_expert_preset}",
             )
             knowledge_text = st.text_area("原始资料", height=260, key="knowledge_extract_text")
 
@@ -5774,7 +9492,13 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     st.error("请至少选择一个提取分类。")
                 else:
                     try:
-                        result = extract_reference_knowledge(project_name, knowledge_title, knowledge_text, enabled_categories)
+                        result = extract_reference_knowledge(
+                            project_name,
+                            knowledge_title,
+                            knowledge_text,
+                            enabled_categories,
+                            extraction_mode=legacy_extraction_mode,
+                        )
                         st.session_state["knowledge_extraction_result"] = result
                     except Exception as exc:
                         st.error(f"知识提取失败：{exc}")

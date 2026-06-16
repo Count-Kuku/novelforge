@@ -20,6 +20,7 @@ from prompts import (
     discuss_volume_turn_prompt,
     creative_structure_prompt,
     extract_reference_knowledge_prompt,
+    consolidate_extracted_knowledge_prompt,
     organize_reference_prompt,
     character_analysis_prompt,
     consistency_check_prompt,
@@ -53,6 +54,7 @@ from memory import (
     load_chapter_outline_metadata,
     load_creative_profile,
     load_global_rules,
+    load_entity_aliases,
     load_outline,
     load_outline_discussion_artifact,
     load_pipeline_run,
@@ -82,6 +84,7 @@ from memory import (
     save_review,
     save_review_json,
     save_outline_discussion_artifact,
+    save_story_rules,
     save_story_memory,
     save_volume_metadata,
     save_volume_discussion_artifact,
@@ -701,13 +704,6 @@ def _build_retrieval_context(
     return format_retrieval_context(hits)
 
 
-def _call_analysis(prompt: str, empty_error: str) -> str:
-    result = call_llm(prompt)
-    if not result.strip():
-        raise RuntimeError(empty_error)
-    return result
-
-
 def _call_json_llm(prompt: str, empty_error: str) -> dict:
     result = call_llm(prompt)
     if not result.strip():
@@ -824,18 +820,42 @@ def organize_reference_text(project_name: str, source_title: str, raw_text: str,
     ).model_dump()
 
 
+def _format_entity_alias_context(project_name: str, limit: int = 80) -> str:
+    lines = []
+    for group in load_entity_aliases(project_name)[:limit]:
+        if not isinstance(group, dict):
+            continue
+        canonical_name = str(group.get("canonical_name") or "").strip()
+        aliases = [
+            str(alias).strip()
+            for alias in group.get("aliases", [])
+            if str(alias).strip() and str(alias).strip() != canonical_name
+        ] if isinstance(group.get("aliases", []), list) else []
+        if not canonical_name:
+            continue
+        category = str(group.get("category") or "unknown").strip()
+        alias_text = "、".join(aliases[:8]) if aliases else "无"
+        lines.append(f"- {category} / 主名称：{canonical_name} / 别名：{alias_text}")
+    return "\n".join(lines) if lines else "当前无已知别名。"
+
+
 def extract_reference_knowledge(
     project_name: str,
     source_title: str,
     raw_text: str,
     enabled_categories: list[str] | None = None,
+    extraction_mode: str = "general",
     story_id: str = "default",
+    custom_instructions: str = "",
 ) -> dict:
     prompt = extract_reference_knowledge_prompt(
         source_title.strip() or "未命名资料",
         raw_text,
         enabled_categories or [],
         _build_rules_text(project_name, "all", story_id=story_id),
+        extraction_mode=extraction_mode,
+        alias_context=_format_entity_alias_context(project_name),
+        custom_instructions=custom_instructions,
     )
     payload = _call_json_llm(prompt, "模型没有返回可提取的知识结果。")
     try:
@@ -850,6 +870,7 @@ def extract_reference_knowledge(
         data={
             "knowledge_extraction": result.model_dump(),
             "report_markdown": render_knowledge_extraction_markdown(result),
+            "extraction_mode": extraction_mode,
         },
         validation=_make_validation_status(
             status="passed",
@@ -859,12 +880,73 @@ def extract_reference_knowledge(
     ).model_dump()
 
 
-def organize_reference_html(project_name: str, source_title: str, html: str, source_url: str) -> dict:
+def consolidate_extracted_knowledge(
+    project_name: str,
+    source_title: str,
+    extracted_items: list[dict],
+    enabled_categories: list[str] | None = None,
+    consolidation_mode: str = "balanced",
+    story_id: str = "default",
+) -> dict:
+    compact_items = []
+    for item in extracted_items:
+        if not isinstance(item, dict):
+            continue
+        compact_items.append({
+            "pending_id": item.get("pending_id", ""),
+            "category": item.get("category", ""),
+            "name": item.get("name", ""),
+            "summary": item.get("summary", ""),
+            "details": item.get("details", {}),
+            "evidence": item.get("evidence", []),
+            "confidence": item.get("confidence", 0.7),
+            "importance": item.get("importance", 0.5),
+            "evidence_strength": item.get("evidence_strength", 0.5),
+            "canon_status": item.get("canon_status", "unknown"),
+            "tags": item.get("tags", []),
+            "source_title": item.get("source_title", ""),
+            "source_segment_id": item.get("source_segment_id", ""),
+            "source_segment_index": item.get("source_segment_index"),
+            "source_segment_title": item.get("source_segment_title", ""),
+        })
+
+    prompt = consolidate_extracted_knowledge_prompt(
+        source_title.strip() or "未命名资料批次",
+        json.dumps(compact_items, ensure_ascii=False, indent=2),
+        enabled_categories or [],
+        consolidation_mode=consolidation_mode,
+        rules_text=_build_rules_text(project_name, "all", story_id=story_id),
+    )
+    payload = _call_json_llm(prompt, "模型没有返回可整理的知识结果。")
+    try:
+        result = KnowledgeExtractionResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"批次知识整理结构校验失败：{format_schema_validation_error(exc)}") from exc
+
+    return _make_step_result(
+        "consolidate_extracted_knowledge",
+        success=True,
+        status="completed",
+        data={
+            "knowledge_extraction": result.model_dump(),
+            "report_markdown": render_knowledge_extraction_markdown(result),
+            "consolidation_mode": consolidation_mode,
+            "source_item_count": len(compact_items),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="KnowledgeExtractionResult",
+            message="批次知识整理结果已通过结构校验。",
+        ),
+    ).model_dump()
+
+
+def organize_reference_html(project_name: str, source_title: str, html: str, source_url: str, story_id: str = "default") -> dict:
     extracted_text = _extract_web_text_from_html(html)
     if not extracted_text.strip():
         raise RuntimeError("抓取到的页面中没有提取出可阅读文本。")
 
-    result = organize_reference_text(project_name, source_title, extracted_text)
+    result = organize_reference_text(project_name, source_title, extracted_text, story_id=story_id)
     result.setdefault("artifacts", {})
     result["artifacts"]["source_url"] = source_url
     result["artifacts"]["raw_text_excerpt"] = extracted_text[:2000]
@@ -873,7 +955,7 @@ def organize_reference_html(project_name: str, source_title: str, html: str, sou
 
 def organize_reference_url(project_name: str, source_title: str, source_url: str, story_id: str = "default") -> dict:
     html = _fetch_web_page(source_url)
-    return organize_reference_html(project_name, source_title, html, source_url)
+    return organize_reference_html(project_name, source_title, html, source_url, story_id=story_id)
 
 
 def discuss_outline(project_name: str, user_idea: str, story_id: str = "default") -> dict:
@@ -2126,6 +2208,8 @@ def update_memory_from_chapter(
         retrieval_context,
     )
     result = call_llm(prompt)
+    if not result.strip():
+        raise RuntimeError("设定更新失败：模型返回了空响应。")
     retrieval_hits = get_retrieval_trace(trace_key)
 
     try:
@@ -2238,6 +2322,8 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
         retrieval_context,
     )
     result = call_llm(prompt)
+    if not result.strip():
+        raise RuntimeError("审阅失败：模型返回了空响应。")
     retrieval_hits = get_retrieval_trace(trace_key)
 
     try:
@@ -2352,6 +2438,8 @@ def compact_memory(project_name: str, story_id: str = "default") -> dict:
     count = chapter_count(project_name, story_id=story_id)
     prompt = compact_memory_prompt(memory, count)
     result = call_llm(prompt)
+    if not result.strip():
+        raise RuntimeError("记忆压缩失败：模型返回了空响应。")
 
     try:
         updates = _extract_json_object(result)
@@ -2913,7 +3001,11 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
                 write_chapter(project_name, chapter_no, state.chapter_outline, None, state.word_count, story_id=story_id)
             )
         except Exception as exc:
-            chapter_step = _make_step_result("write_chapter", success=False, status="failed", error=str(exc))
+            chapter_step = _make_step_result(
+                "write_chapter", success=False, status="failed", error=str(exc),
+                retrieval_hits=get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
+            )
+            _record_pipeline_error(state, step_name="write_chapter", message=str(exc), error_type="llm")
         _record_pipeline_step(state, chapter_step)
         state.chapter = chapter_step.data.get("chapter", "")
         if not chapter_step.success:
@@ -2928,7 +3020,11 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         try:
             review_step = WorkflowStepResult.model_validate(review_chapter(project_name, chapter_no, state.chapter, story_id=story_id))
         except Exception as exc:
-            review_step = _make_step_result("review_chapter", success=False, status="failed", error=str(exc))
+            review_step = _make_step_result(
+                "review_chapter", success=False, status="failed", error=str(exc),
+                retrieval_hits=get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
+            )
+            _record_pipeline_error(state, step_name="review_chapter", message=str(exc), error_type="llm")
         _record_pipeline_step(state, review_step)
         state.review = review_step.data.get("review", {})
         state.review_markdown = review_step.data.get("review_markdown", "")
@@ -2942,7 +3038,11 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         try:
             memory_step = WorkflowStepResult.model_validate(update_memory_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id))
         except Exception as exc:
-            memory_step = _make_step_result("memory_update", success=False, status="failed", error=str(exc))
+            memory_step = _make_step_result(
+                "memory_update", success=False, status="failed", error=str(exc),
+                retrieval_hits=get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
+            )
+            _record_pipeline_error(state, step_name="memory_update", message=str(exc), error_type="llm")
         _record_pipeline_step(state, memory_step)
         state.memory_update = memory_step.data.get("applied_updates", {})
         if memory_step.success:

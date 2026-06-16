@@ -65,6 +65,7 @@ $filesToCopy = @(
     "app.py",
     "llm.py",
     "memory.py",
+    "merge.py",
     "retrieval.py",
     "schemas.py",
     "prompts.py",

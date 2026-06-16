@@ -16,7 +16,6 @@ from memory import (
     load_evaluation_report,
     load_knowledge_base,
     list_long_reference_batches,
-    load_memory,
     load_outline,
     load_pending_knowledge_items,
     load_review,
@@ -28,7 +27,6 @@ from memory import (
     save_analysis_report,
     save_evaluation_json,
     save_evaluation_report,
-    save_memory,
     save_review,
     save_review_json,
     sync_project_retrieval_assets,
@@ -196,6 +194,7 @@ def save_retrieval_source_content(project_name: str, relative_path: str, content
     if not target.exists() or not target.is_file():
         raise FileNotFoundError("Retrieval source does not exist.")
     target.write_text(content, encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
 
 
 def delete_chapter_runs(project_name: str, chapter_no: int, story_id: str = "default") -> int:

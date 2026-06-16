@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -125,6 +124,15 @@ class ReviewResult(NovelForgeSchema):
     consistency_checks: ConsistencyChecks = Field(default_factory=ConsistencyChecks)
     pacing: str = ""
     next_action: str = ""
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _normalize_status(cls, value: Any) -> str:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"pass", "revise", "blocked"}:
+                return lowered
+        return str(value).strip()
 
 
 class ChapterSummary(NovelForgeSchema):
@@ -331,6 +339,16 @@ class ExtractedKnowledgeItem(NovelForgeSchema):
     details: dict[str, str] = Field(default_factory=dict)
     evidence: list[KnowledgeEvidence] = Field(default_factory=list)
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    importance: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_strength: float = Field(default=0.5, ge=0.0, le=1.0)
+    canon_status: str = "unknown"
+    extraction_mode: str = "general"
+    source_segment_id: str = ""
+    source_segment_ids: list[str] = Field(default_factory=list)
+    source_segment_index: int | None = None
+    source_segment_title: str = ""
+    source_segment_titles: list[str] = Field(default_factory=list)
+    merged_from_pending_ids: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
 
     @field_validator("details", mode="before")
@@ -349,6 +367,11 @@ class ExtractedKnowledgeItem(NovelForgeSchema):
     @field_validator("tags", mode="before")
     @classmethod
     def _normalize_tags(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @field_validator("source_segment_ids", "source_segment_titles", "merged_from_pending_ids", mode="before")
+    @classmethod
+    def _normalize_trace_lists(cls, value: Any) -> list[str]:
         return _normalize_string_list(value)
 
 
@@ -910,7 +933,23 @@ def render_knowledge_extraction_markdown(result: KnowledgeExtractionResult) -> s
             lines.append(f"### [{index}] {item.name}")
             if item.summary:
                 lines.extend(["", item.summary])
-            lines.append(f"- 可信度：{item.confidence:.2f}")
+            lines.append(
+                f"- 可信度：{item.confidence:.2f} / 重要性：{item.importance:.2f} / 证据强度：{item.evidence_strength:.2f}"
+            )
+            if item.canon_status and item.canon_status != "unknown":
+                lines.append(f"- 原作状态：{item.canon_status}")
+            if item.extraction_mode and item.extraction_mode != "general":
+                lines.append(f"- 提取模式：{item.extraction_mode}")
+            if item.source_segment_title or item.source_segment_id:
+                segment_label = item.source_segment_title or item.source_segment_id
+                if item.source_segment_index is not None:
+                    segment_label = f"{item.source_segment_index}. {segment_label}"
+                lines.append(f"- 来源片段：{segment_label}")
+            elif item.source_segment_titles or item.source_segment_ids:
+                segment_labels = item.source_segment_titles or item.source_segment_ids
+                lines.append(f"- 来源片段：{', '.join(segment_labels[:5])}")
+            if item.merged_from_pending_ids:
+                lines.append(f"- 合并来源数：{len(item.merged_from_pending_ids)}")
             if item.tags:
                 lines.append(f"- 标签：{', '.join(item.tags)}")
             if item.details:

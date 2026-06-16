@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -340,7 +340,12 @@ def delete_llm_profile(profile_id: str) -> dict:
 
 
 def project_path(project_name: str) -> Path:
-    path = BASE_DIR / project_name.strip()
+    normalized = project_name.strip()
+    if not normalized:
+        raise ValueError("Project name cannot be empty.")
+    if ".." in normalized or "/" in normalized or "\\" in normalized:
+        raise ValueError("Invalid project name: path traversal characters not allowed.")
+    path = BASE_DIR / normalized
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -392,8 +397,13 @@ def sync_project_retrieval_assets(project_name: str):
         from retrieval import rebuild_retrieval_assets
 
         rebuild_retrieval_assets(project_name, build_vectors=False)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("novelforge").warning(
+            "Failed to sync retrieval assets for project %s: %s",
+            project_name, exc,
+        )
 
 
 def load_memory(project_name: str) -> dict:
@@ -404,7 +414,12 @@ def load_memory(project_name: str) -> dict:
         save_memory(project_name, memory)
         return memory
 
-    memory = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        memory = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        memory = normalize_memory(project_name, None)
+        save_memory(project_name, memory)
+        return memory
     normalized = normalize_memory(project_name, memory)
 
     if normalized != memory:
@@ -584,6 +599,8 @@ def create_story(project_name: str, name: str, description: str = "") -> dict:
         counter = 2
         while f"{story_id}_{counter}" in existing_ids:
             counter += 1
+            if counter > 1000:
+                raise RuntimeError(f"无法为故事名 '{name}' 生成唯一 ID：计数器已超上限。")
         story_id = f"{story_id}_{counter}"
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     meta = StoryMeta(
@@ -643,6 +660,29 @@ def copy_story_settings(project_name: str, source_story_id: str, target_story_id
     sync_project_retrieval_assets(project_name)
 
 
+def _merge_list_values(source: list | None, target: list | None) -> list:
+    seen: set[str] = set()
+    merged: list = []
+    for item in (source or []) + (target or []):
+        if item is None:
+            continue
+        if isinstance(item, dict):
+            key = str(item.get("name") or item.get("title") or "").strip()
+            if not key:
+                merged.append(item)
+                continue
+        else:
+            key = str(item).strip()
+            if not key:
+                merged.append(item)
+                continue
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
 def merge_story_to_project_memory(project_name: str, story_id: str, field_resolutions: dict[str, Any] | None = None) -> dict:
     from merge import build_merge_plan
 
@@ -652,7 +692,10 @@ def merge_story_to_project_memory(project_name: str, story_id: str, field_resolu
     resolved = {}
     for opt in plan:
         if not opt.conflict:
-            resolved[opt.path.replace("memory.", "")] = opt.source_value if opt.source_value is not None else opt.target_value
+            if opt.field_type == "list":
+                resolved[opt.path.replace("memory.", "")] = _merge_list_values(opt.source_value, opt.target_value)
+            else:
+                resolved[opt.path.replace("memory.", "")] = opt.source_value if opt.source_value is not None else opt.target_value
         elif field_resolutions and opt.path in field_resolutions:
             resolved[opt.path.replace("memory.", "")] = field_resolutions[opt.path]
         else:
@@ -671,18 +714,30 @@ def merge_story_to_project_memory(project_name: str, story_id: str, field_resolu
 
 
 def merge_project_to_story_memory(project_name: str, story_id: str, field_resolutions: dict[str, Any] | None = None) -> dict:
+    from merge import build_merge_plan
+
     base = load_memory(project_name)
     story = load_story_memory(project_name, story_id)
-    overrides: dict = {}
-    for key, value in base.items():
-        story_val = story.get(key)
+    plan = build_merge_plan(base, story, source_label="项目", target_label="故事", base_path="memory")
+    resolved = {}
+    for opt in plan:
+        key = opt.path.replace("memory.", "")
         if key == "chapter_summaries":
             continue
-        if story_val != value:
-            if isinstance(value, list) and isinstance(story_val, list):
-                overrides[key] = value
-            elif value != story_val:
-                overrides[key] = value
+        if not opt.conflict:
+            if opt.field_type == "list":
+                resolved[key] = _merge_list_values(opt.source_value, opt.target_value)
+            else:
+                resolved[key] = opt.source_value if opt.source_value is not None else opt.target_value
+        elif field_resolutions and opt.path in field_resolutions:
+            resolved[key] = field_resolutions[opt.path]
+        else:
+            resolved[key] = opt.source_value
+
+    overrides: dict = {}
+    for key, value in resolved.items():
+        if base.get(key) != value:
+            overrides[key] = value
     path = _story_memory_overrides_path(project_name, story_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(overrides, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -693,13 +748,7 @@ def merge_project_to_story_memory(project_name: str, story_id: str, field_resolu
 def merge_story_rules_to_project(project_name: str, story_id: str) -> dict:
     project_rules = load_project_rules(project_name)
     story_rules = load_story_rules(project_name, story_id)
-    from merge import _merge_dedup
-    merged = dict(project_rules)
-    for scope in RULE_SCOPES:
-        story_items = story_rules.get(scope, [])
-        if story_items:
-            existing = merged.get(scope, [])
-            merged[scope] = _merge_dedup(existing, story_items)
+    merged = _merge_rules_dedup(project_rules, story_rules)
     save_project_rules(project_name, merged)
     path = _story_rules_overrides_path(project_name, story_id)
     if path.exists():
@@ -863,7 +912,6 @@ def load_effective_rule_conflict_resolutions(project_name: str, story_id: str, s
 def copy_story(project_name: str, source_story_id: str, new_name: str,
                *, include_discussions: bool = True, include_summaries: bool = True,
                include_chapters: bool = True) -> dict:
-    from uuid import uuid4
     import shutil
 
     meta = create_story(project_name, new_name)
@@ -951,7 +999,15 @@ def load_story_memory(project_name: str, story_id: str) -> dict:
     merged = dict(base)
     for key, value in overrides.items():
         if isinstance(value, list) and isinstance(base.get(key), list):
-            merged[key] = base[key] + value
+            # 基于 key 去重合并，防止前缀匹配优化未命中时产生重复条目
+            seen: set[str] = set()
+            deduped: list = []
+            for item in base[key] + value:
+                item_key = str(item.get("name") or item.get("title") or item) if isinstance(item, dict) else str(item)
+                if item_key not in seen:
+                    seen.add(item_key)
+                    deduped.append(item)
+            merged[key] = deduped
         elif value is not None:
             merged[key] = value
     return merged
@@ -968,6 +1024,8 @@ def save_story_memory(project_name: str, story_id: str, memory: dict):
         base_value = base.get(key)
         if value == base_value:
             continue
+        # 使用前缀匹配检测仅追加的新条目；若条目被插入到列表开头或中间，则整体值会存入覆盖层，
+        # 下次加载时会基于 key 去重合并，因此数据一致性不会受损。
         if isinstance(value, list) and isinstance(base_value, list) and value[:len(base_value)] == base_value:
             extra_items = value[len(base_value):]
             if extra_items:
@@ -1044,17 +1102,19 @@ def migrate_project_to_stories(project_name: str) -> bool:
         memory["chapter_summaries"] = []
         save_memory(project_name, memory)
 
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    default_meta = StoryMeta(
-        story_id="default",
-        name="默认故事",
-        description="",
-        status="active",
-        created_at=now,
-        updated_at=now,
-    )
-    idx = StoriesIndex(stories=[default_meta], active_story_id="default")
-    save_stories_index(project_name, idx.model_dump())
+    idx_path = project_path(project_name) / "stories" / "index.json"
+    if not idx_path.exists():
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        default_meta = StoryMeta(
+            story_id="default",
+            name="默认故事",
+            description="",
+            status="active",
+            created_at=now,
+            updated_at=now,
+        )
+        idx = StoriesIndex(stories=[default_meta], active_story_id="default")
+        save_stories_index(project_name, idx.model_dump())
 
     marker.write_text("")
     sync_project_retrieval_assets(project_name)
@@ -1076,6 +1136,28 @@ def knowledge_category_path(project_name: str, category: str) -> Path:
     if safe_category not in KNOWLEDGE_CATEGORIES:
         raise ValueError(f"未知知识分类：{category}")
     return knowledge_dir_path(project_name) / f"{safe_category}.json"
+
+
+def knowledge_entities_dir_path(project_name: str) -> Path:
+    path = knowledge_dir_path(project_name) / "entities"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def character_entities_path(project_name: str) -> Path:
+    return knowledge_entities_dir_path(project_name) / "characters.json"
+
+
+def setting_entities_path(project_name: str) -> Path:
+    return knowledge_entities_dir_path(project_name) / "settings.json"
+
+
+def entity_aliases_path(project_name: str) -> Path:
+    return knowledge_entities_dir_path(project_name) / "aliases.json"
+
+
+def extraction_plan_templates_path(project_name: str) -> Path:
+    return knowledge_entities_dir_path(project_name) / "extraction_plans.json"
 
 
 def pending_knowledge_path(project_name: str) -> Path:
@@ -1108,6 +1190,50 @@ def load_knowledge_base(project_name: str) -> dict[str, list[dict]]:
         category: load_knowledge_category(project_name, category)
         for category in KNOWLEDGE_CATEGORIES
     }
+
+
+def load_character_entities(project_name: str) -> list[dict]:
+    return _load_json_list(character_entities_path(project_name))
+
+
+def save_character_entities(project_name: str, items: list[dict]):
+    path = character_entities_path(project_name)
+    normalized = [item for item in items if isinstance(item, dict)]
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_setting_entities(project_name: str) -> list[dict]:
+    return _load_json_list(setting_entities_path(project_name))
+
+
+def save_setting_entities(project_name: str, items: list[dict]):
+    path = setting_entities_path(project_name)
+    normalized = [item for item in items if isinstance(item, dict)]
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_entity_aliases(project_name: str) -> list[dict]:
+    return _load_json_list(entity_aliases_path(project_name))
+
+
+def save_entity_aliases(project_name: str, items: list[dict]):
+    path = entity_aliases_path(project_name)
+    normalized = [item for item in items if isinstance(item, dict)]
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
+
+
+def load_extraction_plan_templates(project_name: str) -> list[dict]:
+    return _load_json_list(extraction_plan_templates_path(project_name))
+
+
+def save_extraction_plan_templates(project_name: str, items: list[dict]):
+    path = extraction_plan_templates_path(project_name)
+    normalized = [item for item in items if isinstance(item, dict)]
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    sync_project_retrieval_assets(project_name)
 
 
 def load_pending_knowledge_items(project_name: str) -> list[dict]:
@@ -1147,6 +1273,9 @@ def queue_pending_knowledge_items(
         normalized["authority"] = authority
         normalized["source_title"] = source_title or normalized.get("source_title", "")
         normalized["source_origin"] = source_origin
+        normalized["version_scope"] = normalized.get("version_scope") or ("canon" if scope == "canon" else "project_main")
+        normalized["worldline_id"] = normalized.get("worldline_id") or "main"
+        normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
         normalized["status"] = "pending"
         normalized["queued_at"] = queued_at
         pending.append(normalized)
@@ -1240,6 +1369,9 @@ def append_knowledge_items(
             normalized["authority"] = authority
             normalized["source_title"] = source_title or normalized.get("source_title", "")
             normalized["source_origin"] = source_origin
+            normalized["version_scope"] = normalized.get("version_scope") or ("canon" if scope == "canon" else "project_main")
+            normalized["worldline_id"] = normalized.get("worldline_id") or "main"
+            normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
             normalized["status"] = status
             existing.append(normalized)
             next_index += 1
@@ -1277,7 +1409,12 @@ def load_global_rules() -> dict:
         save_global_rules(rules)
         return rules
 
-    rules = json.loads(GLOBAL_RULES_PATH.read_text(encoding="utf-8"))
+    try:
+        rules = json.loads(GLOBAL_RULES_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        rules = normalize_rules(None)
+        save_global_rules(rules)
+        return rules
     normalized = normalize_rules(rules)
     if normalized != rules:
         save_global_rules(normalized)
@@ -1300,7 +1437,12 @@ def load_project_rules(project_name: str) -> dict:
         save_project_rules(project_name, rules)
         return rules
 
-    rules = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        rules = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        rules = normalize_rules(None)
+        save_project_rules(project_name, rules)
+        return rules
     normalized = normalize_rules(rules)
     if normalized != rules:
         save_project_rules(project_name, normalized)

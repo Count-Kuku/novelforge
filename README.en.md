@@ -51,11 +51,30 @@ Current maturity can be summarized as:
 - layered global and project rules
 - project resources page for browsing, editing, and cleaning project files
 - core story state page for short, high-priority settings injected into generation
+- core-setting-to-knowledge conversion for turning stable settings into pending structured knowledge before project-wide reuse
 - source ingestion page for importing canon/reference/sample text and extracting structured knowledge
-- long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing
-- long-form source batch manager for tracking whole-txt splitting, indexing, extraction, failures, and resume progress
+- source ledger for summarizing long-form batches, retrieval sources, knowledge-only sources, processing status, and segment-level provenance
+- long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing, with clearer guidance for saving batches, indexing source text, and extracting knowledge
+- long-form source batch manager for tracking whole-txt splitting, indexing, extraction, re-extraction, failures, and resume progress, with per-segment batch persistence after each extraction for terminal-interruption recovery
+- one-click source processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items for manual review
+- deep source-extraction modes for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction
+- specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes with matching categories and modes
+- extraction category default strategies for starting from specialist presets, all categories, or no preselected categories
+- advanced custom extraction instructions for pasted sources, long-form quick processing, and manual extraction
+- multi-specialist extraction plans for long-form batches, including fanfic foundation, character/relationship, world/timeline, style reference, and strict-canon audit pipelines, with optional post-plan consolidation
+- batch-level knowledge consolidation for turning scattered pending items into more stable character cards, relationships, timelines, and setting records
+- character entity cards generated from confirmed character, relationship, ability, dialogue, timeline, and constraint knowledge
 - long-form source fingerprinting to detect repeated uploads and continue existing batches
 - pending structured-knowledge queue for reviewing extracted items before persistence
+- pending extraction quality panel for same-name duplicates, field conflicts, fact-level conflicts with resolution suggestions, alias candidates, and overlap with confirmed knowledge
+- pending review workspace with filters for category, source, keyword, and risk type, plus sorting by risk, evidence strength, confidence, importance, recency, or category
+- pending knowledge form editor for correcting category, name, summary, details, evidence, tags, quality scores, provenance, and canon status without raw JSON editing
+- confirmed knowledge form editor for maintaining persisted knowledge, moving categories, deleting incorrect items, and rebuilding retrieval indexes
+- version/worldline metadata for separating canon, project-main, AU, branch, and mixed knowledge scopes
+- ingestion health overview for imported-but-unextracted material, failed extraction, quality risks, category gaps, and worldline distribution
+- project-level extraction plan templates with save, inspect, delete, and JSON-edit support for reusing multi-specialist pipelines across batches
+- setting entity cards generated from world rules, locations, organizations, abilities, items, and constraints
+- entity alias library for preserving canonical names and aliases from quality-review hints, improving retrieval, character-card aggregation, and later extraction name normalization
 - structured-knowledge organizer for duplicate detection, merging, deletion, and raw editing
 - source package report generated from confirmed structured knowledge
 - retrieval center for index rebuilds, recall tests, debug inspection, and conflict handling
@@ -108,6 +127,7 @@ Main file responsibilities:
 - `prompts.py`: prompt templates and composition
 - `llm.py`: model abstraction and API integration
 - `memory.py`: persistent storage and project data management
+- `merge.py`: settings merge engine for cross-scope conflict detection and resolution (story, project, story-to-story)
 - `schemas.py`: structured output contracts and validation
 - `retrieval.py`: indexing, retrieval, and context formatting
 
@@ -139,6 +159,7 @@ The app separates three related concepts:
 
 - `Project Resources`: file-level management for outlines, chapters, reports, run snapshots, and source files.
 - `Core State`: compact story settings that are injected with high priority, such as key canon mode, relationships, timeline items, and hard constraints.
+- `Structured Knowledge Base`: long-lived project knowledge such as character cards, world rules, locations, organizations, power systems, relationships, timelines, and hard constraints, shared across stories and retrieval.
 - `Source Ingestion` / `Retrieval Center`: ingestion imports and structures material; retrieval rebuilds indexes, tests recall, inspects debug output, and stores conflict decisions.
 - `Long-Form Source Batches`: after a full txt upload, each segment records whether it has been indexed, extracted, failed, or is still pending.
 - `Source Fingerprint`: stores content hash, file name, total length, and segment count to detect repeated full-source uploads.
@@ -151,7 +172,8 @@ Current retrieval capabilities include:
 - project knowledge retrieval
 - canon and reference retrieval
 - long-form text splitting by chapter title or length before batch import
-- long-form batch progress tracking with continue-indexing, continue-extraction, and retry-failed actions
+- long-form batch progress tracking with continue-indexing, continue-extraction, retry-failed, and re-extract-completed actions
+- batch-level pending-knowledge consolidation with balanced, character-card, timeline, strict-canon, and style-focused modes
 - repeated-upload detection with an option to bind to an existing batch
 - document chunk indexing
 - semantic embedding retrieval
@@ -162,9 +184,31 @@ Current retrieval capabilities include:
 - persisted conflict resolutions that can be recalled as project knowledge
 - optional retrieval debug output for inspecting recall and ranking behavior
 - structured knowledge extraction from pasted material with human confirmation before persistence
+- pasted-material extraction can use the same general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference strategies as long-form batches
+- source ledger aggregates long-form batches, imported retrieval sources, and knowledge-only sources with import, extraction, failure, pending, and confirmed counts
+- long-form source details can inspect segment text and trace related pending or confirmed knowledge items
 - pending review queue for accepting, discarding, or editing extracted knowledge before indexing
+- pending review includes extraction-quality checks for same-name duplicates, same-name field conflicts, fact-level conflicts, alias candidates, and existing confirmed-knowledge overlap, with suggestions and merge actions for same-name groups
+- alias-candidate hints can be saved into `knowledge/entities/aliases.json`; alias groups are indexed as `entity_alias_group`
+- pending review supports category, source, keyword, and quality-risk filtering, plus risk-first, low-evidence, low-confidence, high-importance, newest-first, and category/name sorting
+- pending review and confirmed-knowledge organization support worldline filtering for separating canon, project-main, and AU branch material
+- individual pending items can be edited through a form, saved back to the pending queue, or saved and confirmed into the indexed knowledge base
+- confirmed knowledge items can be edited through a form after persistence, including category, name, summary, details, evidence, quality scores, provenance, and tags
+- core settings can be queued as pending structured knowledge, then confirmed into the project knowledge base for retrieval and cross-story reuse
 - category-level structured-knowledge organization with duplicate detection, merge preview, deletion, and raw editing
 - batched structured-knowledge extraction from selected long-form source segments
+- selectable extraction strategies for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference passes
+- long-form batches include an extraction coverage report for category coverage, missing/weak categories, low-evidence items, low-confidence items, no-evidence items, and segment progress
+- re-extraction stores detailed comparisons against existing pending knowledge for that segment, including added, matched, possibly missing, changed fields, and old/new item snapshots
+- re-extraction diff details can accept the new pass or keep the old pass by deleting the corresponding pending items
+- multi-specialist extraction plans record per-step processed segment counts, queued knowledge counts, failures, and the latest plan summary on the batch; plans can optionally consolidate batch pending knowledge after extraction
+- multi-specialist extraction plans can be saved as project templates and reused by later long-form batches
+- extracted items preserve confidence, importance, evidence strength, canon status, extraction mode, and source-segment trace metadata
+- extracted evidence can preserve and edit paragraph index, segment character offset, and a short context window for source review
+- consolidation reads pending items linked to the current batch, merges duplicate entities and representative evidence, then replaces scattered pending items with consolidated pending records
+- character entity cards are saved to `knowledge/entities/characters.json` and indexed as `entity_character_card`
+- setting entity cards are saved to `knowledge/entities/settings.json` and indexed as `entity_setting_card`
+- entity alias groups are saved to `knowledge/entities/aliases.json`, indexed as `entity_alias_group`, used when generating character entity cards, and injected into later extraction prompts as canonical-name context
 - source package report generation from confirmed knowledge, saved into the retrieval index
 - confirmed structured knowledge is indexed for later generation, review, analysis, and evaluation
 
@@ -224,6 +268,8 @@ Newer persisted artifacts include:
 - `arcs/arc_xxx.chapter_plan.json`: arc-level chapter allocation plans
 - `creative_profile.json`: project-level creative profile
 - `knowledge/*.json`: confirmed structured knowledge records
+- `knowledge/entities/characters.json`: character entity cards generated from confirmed structured knowledge
+- `knowledge/entities/aliases.json`: canonical entity names and aliases
 - `knowledge/pending.json`: pending structured-knowledge review queue
 - `analysis/source_package.md`: source package report generated from structured knowledge
 - `evaluation/chapter_xxx.md` / `.json`: chapter evaluation reports and structured scores

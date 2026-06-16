@@ -1,3 +1,5 @@
+import functools
+
 import os
 from urllib.parse import urlparse
 
@@ -53,6 +55,7 @@ def _should_trust_env_proxy() -> bool:
     return True
 
 
+@functools.lru_cache(maxsize=1)
 def _get_client() -> OpenAI:
     return OpenAI(
         api_key=_get_api_key(),
