@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -59,10 +59,10 @@ def build_merge_plan(
 
 def _list_has_conflict(a: list, b: list) -> bool:
     if not a or not b:
-        return False
+        return len(a or []) != len(b or [])
     set_a = {_list_item_key(item) for item in a}
     set_b = {_list_item_key(item) for item in b}
-    return not set_a.isdisjoint(set_b) and set_a != set_b
+    return set_a != set_b
 
 
 def _list_item_key(item: Any) -> str:

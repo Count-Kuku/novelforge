@@ -59,9 +59,11 @@ Current practical status:
 * Clear UI separation between project resources, core story state, source ingestion, and retrieval testing/debugging
 * Hybrid retrieval with lexical + semantic scoring
 * Retrieval evidence grouping, authority weighting, conflict warnings, and reranking
-* Structured pasted-reference organization and single-page URL reference ingestion for canon/reference knowledge
-* Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing
-* Long-form source batch manager for whole-txt processing progress, continue actions, and failed extraction retries
+* Structured pasted-reference organization for canon/reference knowledge; single-page URL ingestion remains implemented but is temporarily hidden from the UI
+* Source ingestion ledger for summarizing long-form batches, imported retrieval sources, knowledge-only sources, and processing status
+* Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing, with UI guidance that separates preview splitting, batch saving, retrieval indexing, and structured knowledge extraction
+* One-click long-form source processing for saving batches, indexing source text, extracting structured knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items in the review queue
+* Long-form source batch manager for whole-txt processing progress, continue actions, failed extraction retries, and completed-segment re-extraction
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Creative task wizard for creating project creative profiles from plain Chinese task choices
@@ -69,6 +71,27 @@ Current practical status:
 * Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and memory-update chaining
 * Content generation chained pipeline: write → review → memory update, plus reset-based full pipeline from requirement
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
+* Deep source extraction modes for fan-fiction groundwork: general, deep, characters, relationships, timeline, world, style, strict canon, and fanfic reference
+* Specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes
+* Extraction category default strategies for starting from specialist presets, all categories, or no preselected categories
+* Advanced custom extraction instructions for users who want to steer specialist extraction without replacing the structured output contract
+* Multi-specialist extraction plans for long-form batches, including fanfic foundation, character/relationship, world/timeline, style reference, and strict-canon audit pipelines
+* Pasted source extraction can use the same extraction modes as long-form batches
+* Knowledge extraction quality metadata: importance, evidence strength, canon status, extraction mode, and source segment trace fields
+* Extraction coverage reporting for category coverage, missing/weak categories, quality risk, mode distribution, canon-status distribution, and segment progress
+* Re-extraction comparison summaries against existing pending knowledge for the same source segment
+* Pending extraction quality checks for same-name duplicates, field conflicts, fact-level conflicts with resolution suggestions, alias candidates, and overlap with confirmed knowledge
+* Pending review workspace with category/source/keyword/risk filters and risk/evidence/confidence/importance/recency sorting
+* Pending knowledge form editing for correcting extracted items before confirmation without raw JSON editing
+* Confirmed knowledge form editing for maintaining persisted project knowledge without raw JSON editing
+* Version/worldline metadata on structured knowledge for canon, project-main, AU, branch, and mixed scopes
+* Ingestion health overview for imported-but-unextracted material, failed extraction, quality risks, category gaps, entity-card counts, plan-template counts, and worldline distribution
+* Project-level extraction plan templates for reusable multi-specialist extraction workflows, including save/delete/raw JSON maintenance
+* Entity alias library for turning alias-candidate hints into reusable canonical-name/alias groups that also guide later extraction
+* Batch-level extracted-knowledge consolidation for merging scattered pending items into stable character cards, relationship records, timeline facts, style notes, and setting constraints, with five consolidation modes (balanced, character_cards, timeline, strict_canon, style)
+* Character entity cards generated from confirmed structured knowledge and indexed as first-class retrieval documents
+* Setting entity cards generated from confirmed setting knowledge and indexed as first-class retrieval documents
+* Entity alias groups indexed as first-class retrieval documents, used during character-card aggregation, and injected into extraction prompts
 * Confirmed structured knowledge persisted under project `knowledge/` storage and indexed for retrieval
 * Pending structured-knowledge review queue before extracted items become official project knowledge
 * Structured-knowledge organizer for duplicate detection, manual merge, deletion, and raw category editing
@@ -77,6 +100,7 @@ Current practical status:
 * Approval-based planning artifacts for outline / volume / arc / chapter discussions
 * Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
 * Story-state oriented memory fields for canon mode, AU rules, relationships, and active constraints
+* Core setting to structured-knowledge conversion: stable story/project settings can be queued as pending knowledge before becoming project-level reusable knowledge
 * Multi-turn planning discussion UI with continuously updated discussion conclusions
 * Project management workspace with project overview, rename/delete, and resource CRUD
 * IDE-style resource browser for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
@@ -226,6 +250,9 @@ novelforge/
         ├── rules.json           ← shared project rules
 
         ├── knowledge/           ← shared structured knowledge
+        │   └── entities/         ← generated entity cards such as character profiles
+        │
+        ├── analysis/             ← project-level analysis (e.g., source_package.md)
 
         └── stories/             ← story spaces
 
@@ -236,6 +263,8 @@ novelforge/
                 ├── creative_profile.json
 
                 ├── memory_overrides.json
+
+                ├── rules_overrides.json
 
                 ├── outline.md
 
@@ -295,19 +324,29 @@ Responsibilities:
 * Applying grouped workspace navigation, project-aware page headers, and shared app-level visual styling
 * Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
 * Managing source ingestion, retrieval sources, index rebuilds, and retrieval preview
+* Managing a source ingestion ledger that ties together batches, retrieval source files, knowledge-only origins, processing counts, and segment provenance
 * Managing long-form source splitting, batch import, and batch structured extraction into the pending queue
-* Managing long-form source batches with per-segment import/extraction state and retry controls
+* Managing long-form source batches with per-segment import/extraction state, retry controls, completed-segment re-extraction, extraction-mode selection, and batch-level pending-knowledge consolidation
+* Persisting batch state after each segment during extraction, enabling terminal-interruption resume without data loss or duplicate extraction
+* Reporting extraction coverage and re-extraction diffs so repeated passes are auditable rather than blind
+* Running multi-specialist extraction plans across selected long-form segments with per-step progress and failure summaries
 * Detecting repeated long-form uploads through content fingerprints, file names, total character counts, and segment counts
 * Managing a pending structured-knowledge queue for accept/discard/edit review before persistence
+* Surfacing pending extraction quality issues before confirmation, with same-name merge support
+* Filtering and sorting pending extracted knowledge so large ingestion batches can be reviewed by risk, source, category, or quality score
+* Editing individual pending knowledge items through forms before saving or confirming them into indexed knowledge
+* Editing individual confirmed knowledge items through forms, including category moves, deletion, provenance, quality fields, and retrieval index rebuilds
+* Managing entity alias groups and saving alias candidates found during pending extraction quality review
 * Managing structured-knowledge cleanup with duplicate detection, merge preview, deletion, and raw category editing
 * Generating and saving source package reports from confirmed structured knowledge
 * Exposing retrieval mode and score breakdown for debugging/learning
-* Organizing pasted reference text and URL pages into structured retrieval-ready entries before ingestion
+* Organizing pasted reference text into structured retrieval-ready entries before ingestion; URL page ingestion is retained behind an internal UI flag while it is being refined
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
 * Listing and deleting imported external source files from the retrieval center, with automatic index rebuild after removal
 * Separating project resource browsing, core story state editing, source ingestion, and retrieval testing into distinct UI pages
 * Providing a project overview page with project-level statistics, rename, and delete operations
 * Managing project resources through an IDE-style browser with unified preview/edit/save/delete behavior
+* Managing the boundary between core settings and structured knowledge: core settings stay short and high-priority, while stable settings can be converted into searchable project knowledge
 * Supporting direct CRUD for outlines, chapter files, review artifacts, analysis artifacts, run snapshots, and external sources from the UI
 * Supporting batch cleanup for chapter bundles, run snapshots, and external sources
 * Managing volume outlines, arc outlines, and assigning chapter outlines to parent volume / arc nodes
@@ -327,8 +366,9 @@ UI features:
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
-* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, batch indexing, and limited batch extraction
-* Long-form source batch manager for progress metrics, filtered segment lists, continue extraction, and failure retries
+* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, guided one-click processing, batch indexing, guided batch saving, retrieval indexing, and limited batch extraction
+* Source ledger for inspecting source status, long-form segment text, and pending/confirmed knowledge linked to a segment
+* Long-form source batch manager for progress metrics, filtered segment lists, continue extraction, completed re-extraction, and failure retries
 * Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
 * Source package report panel for generating a searchable project reference report
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
@@ -530,6 +570,7 @@ Current merge usage:
 
 * `build_merge_plan()` is called from `memory.py` and `app.py` for settings copy/import workflows
 * The merge plan is rendered as an interactive preview in the settings UI, allowing per-field resolution before applying
+* `merge_story_to_project_memory()` and `merge_project_to_story_memory()` both use `build_merge_plan` for consistent conflict detection, with dedup-aware list merging via `_merge_list_values()`
 
 ---
 
@@ -590,7 +631,7 @@ Current retrieval design notes:
 * Hybrid mode combines explicit term matches with embedding similarity for more robust retrieval
 * Chunking is now source-aware: structured records stay atomic, Markdown-like sources split by section and paragraph, and long prose falls back to overlapping windows
 * External materials can be ingested through typed templates such as character sheets, location sheets, canon events, and world rules
-* Reference ingestion now supports two controlled entry points: pasted raw text and single-page URL fetches, both normalized into structured retrieval entries before persistence
+* Reference ingestion currently exposes pasted raw text as the controlled UI entry point; single-page URL fetches remain implemented but are hidden behind an internal flag until the workflow is more reliable
 * Imported external source files can now be removed from the retrieval center; deletion is followed by a retrieval asset rebuild so the search index stays consistent
 * Retrieval is now observable from generation pages: major steps expose the actual hits used for prompt augmentation
 * Review and analysis outputs now append supporting source references derived from retrieval hits
@@ -617,7 +658,7 @@ Responsibilities:
 * Consistency check prompts
 * Memory update prompts
 * Memory compaction prompts
-* Reference organization prompts for pasted text and fetched pages
+* Reference organization prompts for pasted text, with fetched-page support retained for the temporarily hidden URL ingestion path
 * Discussion prompts for outline-level, volume-level, arc-level, and chapter-level planning
 * Formatting layered rule blocks for prompt injection
 * Merging retrieved context into generation prompts
@@ -663,7 +704,7 @@ Responsibilities:
 * Persist lightweight chapter-to-volume / arc assignment metadata alongside chapter outlines
 * Keep chapter discussion context aligned with the currently selected parent volume / arc planning nodes
 * Return normalized workflow step objects for key execution paths
-* Organize pasted or fetched reference material into structured retrieval entries before storage
+* Organize pasted reference material into structured retrieval entries before storage; fetched reference material is retained for the hidden URL ingestion path
 * Produce structured discussion results for outline and chapter planning before generation
 
 Current skill design notes:
@@ -1016,10 +1057,26 @@ Stores confirmed structured knowledge extracted from source material. Current ca
 * `constraints.json`
 
 `knowledge/pending.json` stores extracted knowledge items waiting for user confirmation. Confirmed items are moved into the category files above and then indexed for retrieval.
+Pending knowledge can come from source extraction, batch-level consolidation, or direct conversion from story/project core settings.
+The source ingestion ledger is generated from existing storage rather than a separate file: `long_reference_batches/`, `retrieval/sources/`, `knowledge/pending.json`, and confirmed `knowledge/*.json`.
+
+`knowledge/entities/characters.json` stores generated character entity cards built from confirmed character, relationship, ability, dialogue, timeline, and constraint knowledge. These cards are indexed as `entity_character_card` retrieval documents.
+
+`knowledge/entities/aliases.json` stores canonical entity names and aliases. Alias groups are indexed as `entity_alias_group` retrieval documents and are used when generating character entity cards.
+
+Knowledge extraction items may include quality and trace metadata:
+
+* `confidence`: model confidence for the extracted item
+* `importance`: long-term writing value for fan-fiction reuse
+* `evidence_strength`: strength of textual evidence
+* `canon_status`: `canon`, `inferred`, `ambiguous`, `fanon`, `user_override`, or `unknown`
+* `extraction_mode`: strategy used for extraction, such as `strict_canon` or `relationships`
+* `source_segment_id`, `source_segment_index`, `source_segment_title`: long-form source segment trace fields
+* `source_segment_ids`, `source_segment_titles`, `merged_from_pending_ids`: multi-source trace fields produced by batch-level consolidation
 
 long_reference_batches/
 
-Stores whole-source processing batches for uploaded or pasted long-form material. Each batch records segment content, import state, extraction state, queued knowledge count, source metadata, and retry errors.
+Stores whole-source processing batches for uploaded or pasted long-form material. Each batch records segment content, import state, extraction state, queued knowledge count, source metadata, last extraction mode, consolidation-ready pending knowledge links, and retry errors.
 Batch metadata also stores source file name, content fingerprint, total character count, and segment count to identify repeated uploads.
 
 retrieval/
@@ -1074,24 +1131,25 @@ Usage notes:
 
 # Memory Structure
 
-Current memory schema:
+Current memory schema (as defined in `memory.py`):
 
 {
 "title": "",
 "genre": "",
+"canon_mode": "",
+"au_rules": [],
 "world": [],
 "characters": [],
+"relationships": [],
 "timeline": [],
 "foreshadowing": [],
-"chapter_summaries": []
+"active_constraints": [],
+"chapter_summaries": [],
+"locations": [],
+"organizations": [],
+"power_systems": [],
+"relationship_graph": []
 }
-
-Future versions may introduce:
-
-* locations
-* organizations
-* power systems
-* relationship graphs
 
 ---
 
@@ -1261,18 +1319,42 @@ Current implementation status:
 * Implemented: retrieval debug preview for query terms, filters, candidates, and reranked hits
 * Implemented: persisted conflict resolutions for recurring evidence disagreements
 * Implemented: pasted reference organization into structured retrieval-ready entries
-* Implemented: single-page URL fetch and organization for controlled canon/reference ingestion
-* Implemented: long-form source importer with chapter-title splitting, length fallback splitting, batch source indexing, and limited batch extraction
-* Implemented: long-form source batch manager with progress tracking, continue import/extraction actions, and failed extraction retry
+* Implemented but temporarily hidden in the UI: single-page URL fetch and organization for controlled canon/reference ingestion
+* Implemented: long-form source importer with chapter-title splitting, length fallback splitting, guided one-click processing, conservative auto-confirm, guided batch saving, batch source indexing, mode help, extraction category default strategies, custom extraction instructions, and limited batch extraction
+* Implemented: long-form source batch manager with progress tracking, continue import/extraction actions, failed extraction retry, and completed-segment re-extraction
 * Implemented: repeated-upload detection using long-form source fingerprints and similarity hints
+* Implemented: source ingestion ledger with long-form batch, retrieval-source, and knowledge-only provenance summaries
+* Implemented: segment-level source inspection from the ledger, including original text and linked pending/confirmed knowledge
 * Implemented: structured knowledge extraction from pasted material into typed categories
+* Implemented: extraction-mode selection for pasted structured-knowledge extraction
+* Implemented: specialist extraction presets that select coherent category groups and extraction modes for common ingestion passes
+* Implemented: multi-specialist extraction plans for selected long-form source segments, with plan history stored on the batch and optional post-plan consolidation
+* Implemented: extraction coverage report for pending knowledge and long-form batches
+* Implemented: re-extraction comparison details for long-form source segments, including added/missing/changed item snapshots
+* Implemented: pending extraction quality panel for duplicates, field conflicts, fact-level conflicts with resolution suggestions, alias candidates, confirmed-knowledge overlap, and same-name pending merge
+* Implemented: pending review filters and sorting for category, source, keyword, quality risk, evidence strength, confidence, importance, recency, and category/name
+* Implemented: pending knowledge form editor with save-to-pending and save-and-confirm actions
+* Implemented: confirmed knowledge form editor with save, category move, delete, and retrieval index rebuild actions
+* Implemented: version/worldline metadata fields for pending and confirmed structured knowledge
+* Implemented: worldline filters for pending review and confirmed-knowledge organization
+* Implemented: ingestion health overview for source and extraction quality governance, including entity-card and template counts
+* Implemented: extraction plan template save/reuse/delete/raw-edit flow for long-form batch multi-specialist plans
+* Implemented: setting entity cards saved under `knowledge/entities/settings.json` and indexed for retrieval
+* Implemented: re-extraction diff actions for accepting the new pass or keeping the old pass
+* Implemented: evidence paragraph/character-position context capture and form editing for long-form extraction
+* Implemented: entity alias library with alias-candidate save action, manual alias-group management, retrieval indexing, character-card alias matching, and extraction prompt alias context
+* Implemented: extraction-mode-aware long-form source extraction for general, deep, character, relationship, timeline, world, style, strict-canon, and fanfic-reference passes
+* Implemented: extraction quality metadata and source-segment trace fields for pending and confirmed structured knowledge
+* Implemented: batch-level pending-knowledge consolidation with balanced, character-card, timeline, strict-canon, and style-focused modes
+* Implemented: core setting conversion into pending structured knowledge for project-level reuse and retrieval
+* Implemented: character entity cards generated from confirmed structured knowledge and indexed for retrieval
 * Implemented: pending structured-knowledge queue with batch confirmation/discard and raw-data editing
 * Implemented: human-confirmed knowledge persistence under project `knowledge/`
 * Implemented: structured-knowledge organizer with duplicate detection, manual merge, deletion, and raw category editing
 * Implemented: retrieval indexing for confirmed structured knowledge
 * Implemented: source package report generation from confirmed structured knowledge, saved under `analysis/source_package.md`
 * Pending: dedicated external vector database backend
-* Pending: deeper fact-level conflict recommendation logic
+* Pending: deeper version/AU-aware retrieval filtering and generation-time worldline selection
 
 Possible technologies:
 
@@ -1416,6 +1498,32 @@ Metrics:
 11. Reusable long-term user requirements should be stored as layered rules instead of hardcoded prompt text in the UI
 
 12. Global rules and project rules must remain inspectable and editable from persistent storage
+
+13. Ensure all LLM-calling functions validate for empty responses and raise explicit errors before parsing structured output
+
+14. Do not silently swallow exceptions without at least a log warning — bare `except Exception: pass` makes bugs invisible
+
+15. Path-constructing functions (especially those accepting user-provided names) must validate against path traversal; prefer raising `ValueError` early
+
+16. Retrieval index assets (manifest + vectors) must stay consistent: every save/delete that modifies retrieval-relevant data must call `sync_project_retrieval_assets` (or document why it shouldn't)
+
+---
+
+# Known Technical Debt
+
+The following items are acknowledged departures from the design philosophy and are tracked for future cleanup:
+
+1. **app.py contains business logic beyond UI rendering.** ~50+ functions (knowledge quality management, fact conflict engine, relationship graph analysis, source fingerprint matching, entity card construction) currently live in `app.py`. These should eventually move to `skills.py`, `memory.py`, or a new dedicated module ([app.py](app.py):3984-4860, 5407-5449, etc.).
+
+2. **Duplicate code patterns exist across discussion/render functions.** Outline, volume, arc, and chapter discussion pages share ~70% of their structure. A shared discussion render helper would reduce maintenance cost.
+
+3. **`retrieve_context` and `debug_retrieve_context` in retrieval.py share ~80% of logic.** These should be unified into a single parameterized entry point to prevent drift between production and debug retrieval results.
+
+4. **Entity save functions in memory.py are structurally identical** (`save_character_entities`, `save_setting_entities`, `save_entity_aliases`, `save_extraction_plan_templates`). A parametrized `_save_entity_list(path, items)` helper would eliminate the duplication.
+
+5. **launcher.py currently has limited cross-platform support.** The Python executable resolution defaults to Windows paths; Linux/macOS fall back to `sys.executable`. A proper multi-platform venv resolution is pending.
+
+6. **No dedicated vector database backend.** Vectors are persisted as flat JSON files (`vectors.json`), which works for small-to-medium projects but will not scale. Migration to Chroma/SQLite+FAISS is planned for V2 completion.
 
 ---
 
