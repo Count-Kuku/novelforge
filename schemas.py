@@ -61,6 +61,39 @@ def _normalize_string_list(value: Any) -> list[str]:
     return normalized
 
 
+def _shorten_text(value: str, max_length: int = 40) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= max_length:
+        return text
+    return text[:max_length].rstrip() + "..."
+
+
+def _infer_knowledge_item_name(item: dict, index: int) -> str:
+    for key in ("name", "title", "subject", "entity", "item", "summary", "content", "description"):
+        text = _stringify_item(item.get(key))
+        if text:
+            return _shorten_text(text)
+
+    details = item.get("details")
+    if isinstance(details, dict):
+        for key in ("名称", "标题", "对象", "角色", "物品", "能力", "地点", "组织", "事件", "关系"):
+            text = _stringify_item(details.get(key))
+            if text:
+                return _shorten_text(text)
+        text = _stringify_item(details)
+        if text:
+            return _shorten_text(text)
+
+    evidence = item.get("evidence")
+    if isinstance(evidence, list):
+        for evidence_item in evidence:
+            text = _stringify_item(evidence_item)
+            if text:
+                return _shorten_text(text)
+
+    return f"未命名知识 {index + 1}"
+
+
 SOURCE_TYPE_LABELS = {
     "external_source": "通用外部资料",
     "external_character_sheet": "角色资料",
@@ -324,6 +357,25 @@ class KnowledgeExtractionResult(NovelForgeSchema):
     source_summary: str = ""
     items: list[ExtractedKnowledgeItem] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def _normalize_items(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+
+        normalized = []
+        for index, item in enumerate(value):
+            if isinstance(item, dict):
+                normalized_item = dict(item)
+                if not _stringify_item(normalized_item.get("name")):
+                    normalized_item["name"] = _infer_knowledge_item_name(normalized_item, index)
+                normalized.append(normalized_item)
+            else:
+                normalized.append(item)
+        return normalized
 
     @field_validator("notes", mode="before")
     @classmethod
