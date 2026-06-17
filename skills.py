@@ -661,6 +661,8 @@ def _build_rules_text(project_name: str, scope: str, story_id: str = "default") 
         f"- 重点参考方向：{', '.join(profile.get('reference_focus', []) or []) or '未设置'}",
         f"- 允许改写原设：{'是' if profile.get('allow_canon_deviation', True) else '否'}",
         f"- 资料冲突处理：{profile.get('conflict_policy', '-')}",
+        f"- 当前世界线：{profile.get('worldline_label') or profile.get('worldline_id') or '未设置'}",
+        f"- 世界线检索模式：{profile.get('worldline_retrieval_mode', 'prefer')}",
     ]
     notes = str(profile.get("notes", "") or "").strip()
     if notes:
@@ -675,19 +677,26 @@ def _build_retrieval_context(
     story_id: str = "default",
     allowed_source_types: list[str] | None = None,
     allowed_scopes: list[str] | None = None,
-    top_k: int = 6,
+    top_k: int | None = None,
     retrieval_mode: str = "hybrid",
     trace_key: str | None = None,
     reference_focus: list[str] | None = None,
     reference_strength: str | None = None,
+    retrieval_profile: str | None = None,
+    worldline_id: str | None = None,
+    worldline_mode: str | None = None,
 ) -> str:
-    if reference_focus is None or reference_strength is None:
+    if reference_focus is None or reference_strength is None or worldline_id is None or worldline_mode is None:
         try:
             profile = load_creative_profile(project_name, story_id)
             if reference_focus is None:
                 reference_focus = profile.get("reference_focus")
             if reference_strength is None:
                 reference_strength = profile.get("reference_strength")
+            if worldline_id is None:
+                worldline_id = profile.get("worldline_id")
+            if worldline_mode is None:
+                worldline_mode = profile.get("worldline_retrieval_mode")
         except Exception:
             pass
     hits = retrieve_context(
@@ -699,9 +708,32 @@ def _build_retrieval_context(
         retrieval_mode=retrieval_mode,
         reference_focus=reference_focus,
         reference_strength=reference_strength,
+        retrieval_profile=retrieval_profile,
+        worldline_id=worldline_id,
+        worldline_mode=worldline_mode or "prefer",
     )
     _set_retrieval_trace(trace_key, hits)
     return format_retrieval_context(hits)
+
+
+def _build_discussion_retrieval_context(
+    project_name: str,
+    query: str,
+    *,
+    story_id: str = "default",
+    trace_key: str | None = None,
+    top_k: int | None = None,
+    retrieval_profile: str = "outline_discussion",
+) -> str:
+    return _build_retrieval_context(
+        project_name,
+        query,
+        story_id=story_id,
+        allowed_scopes=["project", "canon", "reference"],
+        top_k=top_k,
+        trace_key=trace_key,
+        retrieval_profile=retrieval_profile,
+    )
 
 
 def _call_json_llm(prompt: str, empty_error: str) -> dict:
@@ -960,7 +992,15 @@ def organize_reference_url(project_name: str, source_title: str, source_url: str
 
 def discuss_outline(project_name: str, user_idea: str, story_id: str = "default") -> dict:
     memory = load_story_memory(project_name, story_id)
-    prompt = discuss_outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline", story_id=story_id))
+    trace_key = f"outline_discuss:{project_name}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        user_idea,
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="outline_discussion",
+    )
+    prompt = discuss_outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline", story_id=story_id), retrieval_context=retrieval_context)
     payload = _call_json_llm(prompt, "模型没有返回全书讨论结果。")
     try:
         result = OutlineDiscussionResult.model_validate(payload)
@@ -975,6 +1015,7 @@ def discuss_outline(project_name: str, user_idea: str, story_id: str = "default"
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="OutlineDiscussionResult",
@@ -990,10 +1031,10 @@ def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = 
     retrieval_context = _build_retrieval_context(
         project_name,
         user_idea,
-        allowed_source_types=COMMON_RETRIEVAL_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
         story_id=story_id,
+        retrieval_profile="creative_profile_discussion",
     )
     prompt = discuss_creative_profile_prompt(
         memory, current_profile, user_idea,
@@ -1044,6 +1085,14 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, s
         "当前章节暂无已批准讨论结论。",
     )
     recent_summaries = get_recent_chapter_summaries(project_name, story_id=story_id)
+    trace_key = f"chapter_discuss:{project_name}:{chapter_no}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        f"第{chapter_no}章 {user_requirement} {outline} {volume_outline} {arc_outline} {volume_discussion_context} {arc_discussion_context} {chapter_discussion_context}",
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="chapter_discussion",
+    )
     prompt = discuss_chapter_prompt(
         memory,
         outline,
@@ -1056,6 +1105,7 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, s
         chapter_no,
         user_requirement,
         _build_rules_text(project_name, "chapter_outline", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回章节讨论结果。")
     try:
@@ -1071,6 +1121,7 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, s
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="ChapterDiscussionResult",
@@ -1088,6 +1139,14 @@ def discuss_outline_turn(
     story_id: str = "default",
 ) -> dict:
     memory = load_story_memory(project_name, story_id)
+    trace_key = f"outline_discuss_turn:{project_name}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        f"{user_idea} {latest_user_message} {current_discussion or {}}",
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="outline_discussion",
+    )
     prompt = discuss_outline_turn_prompt(
         memory,
         user_idea,
@@ -1095,6 +1154,7 @@ def discuss_outline_turn(
         current_discussion,
         latest_user_message,
         _build_rules_text(project_name, "outline", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回本轮全书讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
@@ -1114,6 +1174,7 @@ def discuss_outline_turn(
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="OutlineDiscussionResult",
@@ -1151,6 +1212,14 @@ def discuss_chapter_turn(
         "当前章节暂无已批准讨论结论。",
     )
     recent_summaries = get_recent_chapter_summaries(project_name, story_id=story_id)
+    trace_key = f"chapter_discuss_turn:{project_name}:{chapter_no}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        f"第{chapter_no}章 {user_requirement} {latest_user_message} {outline} {volume_outline} {arc_outline} {volume_discussion_context} {arc_discussion_context} {chapter_discussion_context} {current_discussion or {}}",
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="chapter_discussion",
+    )
     prompt = discuss_chapter_turn_prompt(
         memory,
         outline,
@@ -1166,6 +1235,7 @@ def discuss_chapter_turn(
         current_discussion,
         latest_user_message,
         _build_rules_text(project_name, "chapter_outline", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回本轮章节讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
@@ -1185,6 +1255,7 @@ def discuss_chapter_turn(
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="ChapterDiscussionResult",
@@ -1207,10 +1278,10 @@ def discuss_creative_profile_turn(
     retrieval_context = _build_retrieval_context(
         project_name,
         latest_user_message,
-        allowed_source_types=COMMON_RETRIEVAL_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
         story_id=story_id,
+        retrieval_profile="creative_profile_discussion",
     )
     prompt = discuss_creative_profile_turn_prompt(
         memory,
@@ -1259,6 +1330,14 @@ def discuss_volume(
 ) -> dict:
     memory = load_story_memory(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
+    trace_key = f"volume_discuss:{project_name}:{volume_no}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        f"第{volume_no}卷 {volume_title} {volume_summary} {user_requirement} {story_outline}",
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="volume_discussion",
+    )
     prompt = discuss_volume_prompt(
         memory,
         story_outline,
@@ -1267,6 +1346,7 @@ def discuss_volume(
         volume_summary,
         user_requirement,
         _build_rules_text(project_name, "outline", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回分卷讨论结果。")
     try:
@@ -1282,6 +1362,7 @@ def discuss_volume(
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="VolumeDiscussionResult",
@@ -1303,6 +1384,14 @@ def discuss_volume_turn(
 ) -> dict:
     memory = load_story_memory(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
+    trace_key = f"volume_discuss_turn:{project_name}:{volume_no}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        f"第{volume_no}卷 {volume_title} {volume_summary} {user_requirement} {latest_user_message} {story_outline} {current_discussion or {}}",
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="volume_discussion",
+    )
     prompt = discuss_volume_turn_prompt(
         memory,
         story_outline,
@@ -1314,6 +1403,7 @@ def discuss_volume_turn(
         current_discussion,
         latest_user_message,
         _build_rules_text(project_name, "outline", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回本轮分卷讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
@@ -1333,6 +1423,7 @@ def discuss_volume_turn(
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="VolumeDiscussionResult",
@@ -1355,6 +1446,14 @@ def discuss_arc(
     memory = load_story_memory(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
     volume_outline = load_volume_outline(project_name, int(volume_no), story_id=story_id) if volume_no else ""
+    trace_key = f"arc_discuss:{project_name}:{arc_no}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        f"剧情段 {arc_no:03d} 第{volume_no or 0}卷 {arc_title} {arc_summary} {estimated_chapter_count or ''} {target_word_count_range} {user_requirement} {story_outline} {volume_outline}",
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="arc_discussion",
+    )
     prompt = discuss_arc_prompt(
         memory,
         story_outline,
@@ -1366,6 +1465,7 @@ def discuss_arc(
         target_word_count_range,
         user_requirement,
         _build_rules_text(project_name, "outline", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回剧情段讨论结果。")
     try:
@@ -1381,6 +1481,7 @@ def discuss_arc(
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="ArcDiscussionResult",
@@ -1406,6 +1507,14 @@ def discuss_arc_turn(
     memory = load_story_memory(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
     volume_outline = load_volume_outline(project_name, int(volume_no), story_id=story_id) if volume_no else ""
+    trace_key = f"arc_discuss_turn:{project_name}:{arc_no}"
+    retrieval_context = _build_discussion_retrieval_context(
+        project_name,
+        f"剧情段 {arc_no:03d} 第{volume_no or 0}卷 {arc_title} {arc_summary} {estimated_chapter_count or ''} {target_word_count_range} {user_requirement} {latest_user_message} {story_outline} {volume_outline} {current_discussion or {}}",
+        story_id=story_id,
+        trace_key=trace_key,
+        retrieval_profile="arc_discussion",
+    )
     prompt = discuss_arc_turn_prompt(
         memory,
         story_outline,
@@ -1420,6 +1529,7 @@ def discuss_arc_turn(
         current_discussion,
         latest_user_message,
         _build_rules_text(project_name, "outline", story_id=story_id),
+        retrieval_context=retrieval_context,
     )
     payload = _call_json_llm(prompt, "模型没有返回本轮剧情段讨论结果。")
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
@@ -1439,6 +1549,7 @@ def discuss_arc_turn(
             "discussion": result.model_dump(),
             "report_markdown": render_discussion_markdown(result),
         },
+        retrieval_hits=get_retrieval_trace(trace_key),
         validation=_make_validation_status(
             status="passed",
             schema_name="ArcDiscussionResult",
@@ -1607,7 +1718,9 @@ def generate_outline(project_name: str, user_idea: str, story_id: str = "default
         allowed_source_types=["outline", "outline_discussion", "memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="outline_generation",
+    )
     prompt = merge_retrieval_context(
         outline_prompt(memory, f"{user_idea}\n\n已批准讨论结论：\n{approved_discussion_context}".strip(), _build_rules_text(project_name, "outline", story_id=story_id)),
         retrieval_context,
@@ -1663,7 +1776,9 @@ def generate_volume_outline(
         ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="outline_generation",
+    )
     prompt = merge_retrieval_context(
         volume_outline_prompt(
             memory,
@@ -1737,7 +1852,9 @@ def generate_arc_outline(
         ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="outline_generation",
+    )
     prompt = merge_retrieval_context(
         arc_outline_prompt(
             memory,
@@ -1833,6 +1950,7 @@ def generate_arc_chapter_plan(
         ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
+        retrieval_profile="chapter_planning",
     )
     prompt = merge_retrieval_context(
         arc_chapter_plan_prompt(
@@ -1891,11 +2009,12 @@ def generate_creative_structure(
     retrieval_context = _build_retrieval_context(
         project_name,
         f"{profile} {user_requirement}",
-        allowed_source_types=COMMON_RETRIEVAL_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         top_k=8,
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="chapter_planning",
+    )
     prompt = merge_retrieval_context(
         creative_structure_prompt(
             memory,
@@ -1982,7 +2101,9 @@ def generate_chapter_outline(
         ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="chapter_planning",
+    )
     prompt = merge_retrieval_context(chapter_outline_prompt(
         memory,
         outline,
@@ -2049,7 +2170,9 @@ def write_chapter(
         ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="drafting",
+    )
     prompt = merge_retrieval_context(
         write_chapter_prompt(memory, chapter_outline, normalized_guidance, word_count, _build_rules_text(project_name, "write", story_id=story_id)),
         retrieval_context,
@@ -2202,7 +2325,9 @@ def update_memory_from_chapter(
         allowed_source_types=["memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "chapter_summary", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="review",
+    )
     prompt = merge_retrieval_context(
         update_memory_prompt(memory, chapter, _build_rules_text(project_name, "memory_update", story_id=story_id)),
         retrieval_context,
@@ -2316,7 +2441,9 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
         ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="review",
+    )
     prompt = merge_retrieval_context(
         review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review", story_id=story_id)),
         retrieval_context,
@@ -2684,7 +2811,9 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id:
         ] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
-            story_id=story_id)
+        story_id=story_id,
+        retrieval_profile="review",
+    )
     prompt = merge_retrieval_context(
         evaluate_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review", story_id=story_id)),
         retrieval_context,
@@ -2761,6 +2890,7 @@ def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: 
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
         story_id=story_id,
+        retrieval_profile="review",
     )
     prompt = merge_retrieval_context(
         comprehensive_chapter_evaluation_prompt(

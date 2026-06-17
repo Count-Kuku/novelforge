@@ -31,9 +31,11 @@ from memory import (
     load_review_json,
     load_volume_discussion_artifact,
     load_conflict_resolutions,
+    load_retrieval_feedback,
     load_evaluation_report,
     load_evaluation_json,
     load_knowledge_base,
+    load_llm_settings,
     list_arcs,
     list_volumes,
     load_retrieval_manifest,
@@ -48,11 +50,33 @@ from memory import (
 from schemas import RetrievalChunk, RetrievalDocument, RetrievalHit, RetrievalIndexManifest, RetrievalVectorStore
 
 
-TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_\-\u4e00-\u9fff]{2,}")
+TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_\-]{2,}|[\u4e00-\u9fff]+")
+MAX_CJK_NGRAM = 4
+CJK_STOP_TOKENS = {
+    "一个",
+    "一些",
+    "这个",
+    "那个",
+    "这些",
+    "那些",
+    "什么",
+    "怎么",
+    "如何",
+    "是否",
+    "不是",
+    "没有",
+    "存在",
+    "检索",
+    "查询",
+}
+MAX_ALIAS_EXPANSION_GROUPS = 12
+MAX_ALIAS_EXPANDED_TERMS = 80
+DEFAULT_WORLDLINE_ID = "main"
 DEFAULT_CHUNK_SIZE = 900
 DEFAULT_CHUNK_OVERLAP = 150
 DEFAULT_TOP_K = 6
 DEFAULT_EMBEDDING_MODEL = os.getenv("LLM_EMBEDDING_MODEL") or os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
+GLOBAL_WORLDLINE_IDS = {"", "all", "global", "shared", "common", "canon", "unknown"}
 AUTHORITY_WEIGHTS = {
     "project": 2.0,
     "official": 1.5,
@@ -68,6 +92,226 @@ REFERENCE_FOCUS_SOURCE_MAP = {
     "时间线": ["knowledge_timeline_events", "memory_timeline"],
     "写作风格": ["knowledge_writing_style", "knowledge_dialogue_style", "knowledge_narrative_techniques"],
     "硬性约束": ["entity_setting_card", "knowledge_constraints"],
+}
+
+KNOWLEDGE_SOURCE_TYPES = [
+    "knowledge_characters",
+    "knowledge_items",
+    "knowledge_abilities",
+    "knowledge_world_rules",
+    "knowledge_locations",
+    "knowledge_organizations",
+    "knowledge_timeline_events",
+    "knowledge_relationships",
+    "knowledge_writing_style",
+    "knowledge_dialogue_style",
+    "knowledge_narrative_techniques",
+    "knowledge_constraints",
+]
+
+RETRIEVAL_TASK_PROFILES = {
+    "creative_profile_discussion": {
+        "top_k": 8,
+        "source_types": [
+            "creative_profile_discussion",
+            "memory_world",
+            "memory_au_rule",
+            "memory_character",
+            "entity_setting_card",
+            "entity_character_card",
+            "entity_alias_group",
+            "external_source",
+            "conflict_resolution",
+            "knowledge_world_rules",
+            "knowledge_constraints",
+            "knowledge_writing_style",
+            "knowledge_dialogue_style",
+            "knowledge_narrative_techniques",
+        ],
+    },
+    "outline_discussion": {
+        "top_k": 9,
+        "source_types": [
+            "outline",
+            "outline_discussion",
+            "memory_character",
+            "memory_world",
+            "memory_au_rule",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_setting_card",
+            "entity_alias_group",
+            "external_source",
+            "conflict_resolution",
+            "knowledge_characters",
+            "knowledge_world_rules",
+            "knowledge_timeline_events",
+            "knowledge_relationships",
+            "knowledge_constraints",
+        ],
+    },
+    "volume_discussion": {
+        "top_k": 8,
+        "source_types": [
+            "outline",
+            "outline_discussion",
+            "volume_outline",
+            "volume_discussion",
+            "chapter_summary",
+            "memory_character",
+            "memory_world",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_setting_card",
+            "external_source",
+            "knowledge_characters",
+            "knowledge_world_rules",
+            "knowledge_timeline_events",
+            "knowledge_relationships",
+            "knowledge_constraints",
+        ],
+    },
+    "arc_discussion": {
+        "top_k": 8,
+        "source_types": [
+            "outline",
+            "volume_outline",
+            "volume_discussion",
+            "arc_outline",
+            "arc_discussion",
+            "arc_chapter_plan",
+            "chapter_summary",
+            "chapter_outline",
+            "memory_character",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_setting_card",
+            "external_source",
+            "knowledge_characters",
+            "knowledge_timeline_events",
+            "knowledge_relationships",
+            "knowledge_constraints",
+        ],
+    },
+    "chapter_discussion": {
+        "top_k": 8,
+        "source_types": [
+            "outline",
+            "volume_outline",
+            "volume_discussion",
+            "arc_outline",
+            "arc_discussion",
+            "chapter_discussion",
+            "chapter_summary",
+            "chapter_outline",
+            "memory_character",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_setting_card",
+            "external_source",
+            "knowledge_characters",
+            "knowledge_timeline_events",
+            "knowledge_relationships",
+            "knowledge_constraints",
+        ],
+    },
+    "outline_generation": {
+        "top_k": 10,
+        "source_types": [
+            "outline",
+            "creative_profile_discussion",
+            "outline_discussion",
+            "memory_character",
+            "memory_world",
+            "memory_au_rule",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_setting_card",
+            "entity_alias_group",
+            "external_source",
+            "conflict_resolution",
+        ] + KNOWLEDGE_SOURCE_TYPES,
+    },
+    "chapter_planning": {
+        "top_k": 8,
+        "source_types": [
+            "outline",
+            "creative_profile_discussion",
+            "outline_discussion",
+            "volume_outline",
+            "volume_discussion",
+            "arc_outline",
+            "arc_discussion",
+            "arc_chapter_plan",
+            "chapter_discussion",
+            "chapter_summary",
+            "chapter_outline",
+            "memory_character",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_setting_card",
+            "external_source",
+            "conflict_resolution",
+        ] + KNOWLEDGE_SOURCE_TYPES,
+    },
+    "drafting": {
+        "top_k": 8,
+        "source_types": [
+            "chapter_outline",
+            "chapter_discussion",
+            "chapter_summary",
+            "memory_character",
+            "memory_relationship",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_alias_group",
+            "external_source",
+            "knowledge_characters",
+            "knowledge_relationships",
+            "knowledge_writing_style",
+            "knowledge_dialogue_style",
+            "knowledge_narrative_techniques",
+            "knowledge_constraints",
+        ],
+    },
+    "review": {
+        "top_k": 9,
+        "source_types": [
+            "chapter_outline",
+            "chapter_discussion",
+            "chapter_summary",
+            "chapter_content",
+            "memory_character",
+            "memory_world",
+            "memory_relationship",
+            "memory_timeline",
+            "memory_foreshadowing",
+            "memory_active_constraint",
+            "entity_character_card",
+            "entity_setting_card",
+            "external_source",
+            "conflict_resolution",
+            "review_issue",
+        ] + KNOWLEDGE_SOURCE_TYPES,
+    },
 }
 
 REFERENCE_STRENGTH_PARAMS = {
@@ -108,7 +352,23 @@ def _normalize_whitespace(text: str) -> str:
 
 
 def _tokenize(text: str) -> list[str]:
-    return [token.lower() for token in TOKEN_PATTERN.findall(text)]
+    tokens: list[str] = []
+    for raw_token in TOKEN_PATTERN.findall(text):
+        token = raw_token.lower()
+        if not token:
+            continue
+        if re.fullmatch(r"[\u4e00-\u9fff]+", token):
+            if len(token) >= 2 and token not in CJK_STOP_TOKENS:
+                tokens.append(token)
+            max_ngram = min(MAX_CJK_NGRAM, len(token))
+            for ngram_size in range(2, max_ngram + 1):
+                for start in range(0, len(token) - ngram_size + 1):
+                    ngram = token[start:start + ngram_size]
+                    if ngram not in CJK_STOP_TOKENS:
+                        tokens.append(ngram)
+        elif len(token) >= 2:
+            tokens.append(token)
+    return tokens
 
 
 def _split_long_text(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP) -> list[str]:
@@ -455,6 +715,10 @@ def _documents_from_knowledge(project_name: str) -> list[RetrievalDocument]:
                     "source_origin": str(item.get("source_origin") or ""),
                     "confidence": item.get("confidence", 0.7),
                     "status": str(item.get("status") or "confirmed"),
+                    "canon_status": str(item.get("canon_status") or "unknown"),
+                    "version_scope": str(item.get("version_scope") or ""),
+                    "worldline_id": str(item.get("worldline_id") or ""),
+                    "worldline_label": str(item.get("worldline_label") or ""),
                 },
             )
             if doc:
@@ -514,6 +778,9 @@ def _documents_from_character_entities(project_name: str) -> list[RetrievalDocum
                 "confidence": card.get("confidence", 0.7),
                 "importance": card.get("importance", 0.5),
                 "canon_status": str(card.get("canon_status") or "unknown"),
+                "version_scope": str(card.get("version_scope") or ""),
+                "worldline_id": str(card.get("worldline_id") or ""),
+                "worldline_label": str(card.get("worldline_label") or ""),
                 "source_knowledge_ids": card.get("source_knowledge_ids", []),
             },
         )
@@ -597,6 +864,7 @@ def _documents_from_setting_entities(project_name: str) -> list[RetrievalDocumen
                 "importance": card.get("importance", 0.5),
                 "canon_status": str(card.get("canon_status") or "unknown"),
                 "worldline_id": str(card.get("worldline_id") or ""),
+                "worldline_label": str(card.get("worldline_label") or ""),
                 "version_scope": str(card.get("version_scope") or ""),
                 "source_knowledge_ids": card.get("source_knowledge_ids", []),
             },
@@ -1131,6 +1399,124 @@ def load_vector_store(project_name: str) -> RetrievalVectorStore | None:
         return None
 
 
+def inspect_retrieval_health(project_name: str) -> dict:
+    issues: list[dict] = []
+    try:
+        manifest = load_retrieval_index(project_name)
+        manifest_error = ""
+    except Exception as exc:
+        manifest = build_retrieval_index(project_name)
+        manifest_error = str(exc)
+        issues.append({
+            "severity": "high",
+            "message": f"索引读取失败，已尝试重建关键词索引：{exc}",
+        })
+
+    try:
+        current_documents = gather_retrieval_documents(project_name)
+        current_chunks: list[RetrievalChunk] = []
+        for document in current_documents:
+            current_chunks.extend(chunk_document(document))
+        gather_error = ""
+    except Exception as exc:
+        current_documents = []
+        current_chunks = []
+        gather_error = str(exc)
+        issues.append({
+            "severity": "high",
+            "message": f"当前资料收集失败：{exc}",
+        })
+
+    manifest_chunk_ids = {chunk.chunk_id for chunk in manifest.chunks}
+    current_chunk_ids = {chunk.chunk_id for chunk in current_chunks}
+    stale_chunk_count = len(manifest_chunk_ids - current_chunk_ids)
+    missing_index_chunk_count = len(current_chunk_ids - manifest_chunk_ids)
+    if stale_chunk_count or missing_index_chunk_count:
+        issues.append({
+            "severity": "medium",
+            "message": f"索引与当前资料不一致：陈旧片段 {stale_chunk_count} 个，未入索引片段 {missing_index_chunk_count} 个。建议重建索引。",
+        })
+
+    store = load_vector_store(project_name)
+    try:
+        active_embedding_model = str(load_llm_settings().get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL)
+    except Exception:
+        active_embedding_model = DEFAULT_EMBEDDING_MODEL
+    vector_ids = set(store.vectors.keys()) if store else set()
+    missing_vector_count = len(manifest_chunk_ids - vector_ids)
+    stale_vector_count = len(vector_ids - manifest_chunk_ids)
+    vector_dimension = 0
+    if store and store.vectors:
+        first_vector = next(iter(store.vectors.values()), [])
+        vector_dimension = len(first_vector) if isinstance(first_vector, list) else 0
+
+    if manifest.chunk_count and not manifest.embedding_enabled:
+        issues.append({
+            "severity": "medium",
+            "message": f"当前索引没有启用语义向量，混合检索会退回关键词检索。当前配置的向量模型：{active_embedding_model or '-'}。",
+        })
+    elif manifest.embedding_enabled and missing_vector_count:
+        issues.append({
+            "severity": "medium",
+            "message": f"语义向量不完整：缺少 {missing_vector_count} 个片段向量。建议重建向量索引。",
+        })
+    if stale_vector_count:
+        issues.append({
+            "severity": "low",
+            "message": f"向量文件包含 {stale_vector_count} 个不再存在于索引中的旧向量。建议重建向量索引。",
+        })
+    if manifest.embedding_model and active_embedding_model and manifest.embedding_model != active_embedding_model:
+        issues.append({
+            "severity": "low",
+            "message": f"当前配置的向量模型 `{active_embedding_model}` 与索引记录 `{manifest.embedding_model}` 不一致。切换模型后建议重建完整索引。",
+        })
+    if store and store.embedding_model and active_embedding_model and store.embedding_model != active_embedding_model:
+        issues.append({
+            "severity": "low",
+            "message": f"当前配置的向量模型 `{active_embedding_model}` 与向量文件记录 `{store.embedding_model}` 不一致。建议重建完整索引。",
+        })
+
+    source_type_counts = Counter(chunk.source_type for chunk in manifest.chunks)
+    scope_counts = Counter(chunk.scope for chunk in manifest.chunks)
+    if manifest.chunk_count == 0:
+        issues.append({
+            "severity": "medium",
+            "message": "当前检索索引没有任何片段。请先导入资料、确认知识或保存大纲/章节后重建索引。",
+        })
+
+    status = "healthy"
+    if any(issue["severity"] == "high" for issue in issues):
+        status = "error"
+    elif any(issue["severity"] == "medium" for issue in issues):
+        status = "warning"
+
+    return {
+        "status": status,
+        "manifest_error": manifest_error,
+        "gather_error": gather_error,
+        "document_count": manifest.document_count,
+        "chunk_count": manifest.chunk_count,
+        "current_document_count": len(current_documents),
+        "current_chunk_count": len(current_chunks),
+        "embedding_enabled": manifest.embedding_enabled,
+        "embedding_model": manifest.embedding_model,
+        "active_embedding_model": active_embedding_model,
+        "vector_store_present": bool(store),
+        "vector_count": len(vector_ids),
+        "vector_dimension": vector_dimension,
+        "missing_vector_count": missing_vector_count,
+        "stale_vector_count": stale_vector_count,
+        "stale_chunk_count": stale_chunk_count,
+        "missing_index_chunk_count": missing_index_chunk_count,
+        "built_at": manifest.built_at,
+        "vector_built_at": store.built_at if store else "",
+        "vector_model": store.embedding_model if store else "",
+        "source_type_counts": dict(source_type_counts.most_common()),
+        "scope_counts": dict(scope_counts.most_common()),
+        "issues": issues,
+    }
+
+
 def build_retrieval_index(project_name: str) -> RetrievalIndexManifest:
     documents = gather_retrieval_documents(project_name)
     chunks: list[RetrievalChunk] = []
@@ -1175,8 +1561,89 @@ def load_retrieval_index(project_name: str) -> RetrievalIndexManifest:
         return build_retrieval_index(project_name)
 
 
-def _expand_query_terms(query: str) -> list[str]:
-    terms = _tokenize(query)
+def _append_unique(target: list[str], values: list[str]) -> None:
+    seen = set(target)
+    for value in values:
+        cleaned = str(value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        target.append(cleaned)
+        seen.add(cleaned)
+
+
+def _build_alias_query_expansion(project_name: str, query: str, base_terms: list[str]) -> dict:
+    query_lower = query.lower()
+    base_term_set = set(base_terms)
+    expanded_terms: list[str] = []
+    matched_alias_groups: list[dict] = []
+
+    try:
+        alias_groups = load_entity_aliases(project_name)
+    except Exception:
+        alias_groups = []
+
+    for group in alias_groups:
+        if len(matched_alias_groups) >= MAX_ALIAS_EXPANSION_GROUPS:
+            break
+        if not isinstance(group, dict):
+            continue
+        canonical_name = str(group.get("canonical_name") or "").strip()
+        aliases = [
+            str(value).strip()
+            for value in group.get("aliases", [])
+            if str(value).strip()
+        ] if isinstance(group.get("aliases", []), list) else []
+        names = []
+        _append_unique(names, [canonical_name] + aliases)
+        if not names:
+            continue
+
+        matched_names = []
+        for name in names:
+            name_lower = name.lower()
+            name_terms = set(_tokenize(name))
+            if name_lower and name_lower in query_lower:
+                matched_names.append(name)
+            elif name_terms and (name_terms & base_term_set):
+                matched_names.append(name)
+
+        if not matched_names:
+            continue
+
+        _append_unique(expanded_terms, names)
+        matched_alias_groups.append({
+            "canonical_name": canonical_name or names[0],
+            "aliases": aliases,
+            "matched_names": matched_names,
+            "category": str(group.get("category") or ""),
+        })
+        if len(expanded_terms) >= MAX_ALIAS_EXPANDED_TERMS:
+            expanded_terms = expanded_terms[:MAX_ALIAS_EXPANDED_TERMS]
+            break
+
+    return {
+        "expanded_terms": expanded_terms,
+        "matched_alias_groups": matched_alias_groups,
+    }
+
+
+def _build_query_plan(project_name: str, query: str) -> dict:
+    base_terms = _tokenize(query)
+    alias_expansion = _build_alias_query_expansion(project_name, query, base_terms)
+    expanded_terms = alias_expansion.get("expanded_terms", [])
+    expanded_text = " ".join(expanded_terms)
+    query_terms = _dedupe_terms(base_terms + _tokenize(expanded_text))
+    return {
+        "query": query,
+        "base_terms": _dedupe_terms(base_terms),
+        "query_terms": query_terms,
+        "expanded_terms": expanded_terms,
+        "matched_alias_groups": alias_expansion.get("matched_alias_groups", []),
+        "semantic_query": f"{query}\n{expanded_text}".strip() if expanded_text else query,
+    }
+
+
+def _dedupe_terms(terms: list[str]) -> list[str]:
     unique_terms = []
     seen = set()
     for term in terms:
@@ -1187,38 +1654,131 @@ def _expand_query_terms(query: str) -> list[str]:
     return unique_terms
 
 
-def _score_chunk(chunk: RetrievalChunk, query_terms: list[str]) -> tuple[float, list[str]]:
+def _term_hits(candidate: str, matched_terms: list[str]) -> bool:
+    candidate_terms = set(_tokenize(candidate))
+    if not candidate_terms:
+        return False
+    return bool(candidate_terms & set(matched_terms))
+
+
+def _normalize_worldline_id(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _chunk_worldline_id(chunk: RetrievalChunk) -> str:
+    return _normalize_worldline_id(chunk.metadata.get("worldline_id") if isinstance(chunk.metadata, dict) else "")
+
+
+def _chunk_worldline_label(chunk: RetrievalChunk) -> str:
+    if not isinstance(chunk.metadata, dict):
+        return ""
+    return str(chunk.metadata.get("worldline_label") or chunk.metadata.get("worldline_id") or "").strip()
+
+
+def _worldline_match_state(chunk: RetrievalChunk, worldline_id: str | None) -> str:
+    target = _normalize_worldline_id(worldline_id)
+    if not target:
+        return "off"
+    chunk_worldline = _chunk_worldline_id(chunk)
+    if not chunk_worldline or chunk_worldline in GLOBAL_WORLDLINE_IDS:
+        return "global"
+    if chunk_worldline == target:
+        return "match"
+    return "mismatch"
+
+
+def _worldline_allowed(chunk: RetrievalChunk, worldline_id: str | None, worldline_mode: str = "prefer") -> bool:
+    mode = str(worldline_mode or "prefer").strip().lower()
+    if mode != "strict":
+        return True
+    return _worldline_match_state(chunk, worldline_id) in {"off", "global", "match"}
+
+
+def _expand_query_terms(query: str) -> list[str]:
+    return _dedupe_terms(_tokenize(query))
+
+
+def _score_chunk(
+    chunk: RetrievalChunk,
+    query_terms: list[str],
+    expanded_terms: list[str] | None = None,
+    *,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+) -> tuple[float, list[str], dict[str, float], list[str]]:
     content_terms = _tokenize(f"{chunk.title} {chunk.content} {' '.join(chunk.tags)}")
     if not content_terms:
-        return 0.0, []
+        return 0.0, [], {}, []
 
     counter = Counter(content_terms)
     matched_terms = []
-    score = 0.0
+    lexical_score = 0.0
     for term in query_terms:
         count = counter.get(term, 0)
         if count <= 0:
             continue
         matched_terms.append(term)
-        score += 2.0 + min(count, 4) * 0.5
+        lexical_score += 2.0 + min(count, 4) * 0.5
 
     if not matched_terms:
-        return 0.0, []
+        return 0.0, [], {}, []
+
+    score = lexical_score
+    score_breakdown = {"lexical": lexical_score}
+    match_reasons = [f"关键词命中：{', '.join(matched_terms[:8])}"]
+
+    expanded_matches = []
+    for term in expanded_terms or []:
+        if term and _term_hits(term, matched_terms):
+            expanded_matches.append(term)
+    if expanded_matches:
+        alias_bonus = min(len(expanded_matches), 4) * 0.35
+        score += alias_bonus
+        score_breakdown["alias_expansion"] = alias_bonus
+        match_reasons.append(f"别名/主名称扩展命中：{', '.join(expanded_matches[:6])}")
 
     if chunk.scope == "project":
         score += 1.5
+        score_breakdown["scope"] = 1.5
+        match_reasons.append("项目范围优先")
     elif chunk.scope == "canon":
         score += 1.0
+        score_breakdown["scope"] = 1.0
+        match_reasons.append("原作范围优先")
 
     if chunk.source_type.startswith("memory_"):
         score += 0.5
+        score_breakdown["source_type"] = score_breakdown.get("source_type", 0.0) + 0.5
+        match_reasons.append("核心设定来源")
     if chunk.source_type in {"review_issue", "chapter_summary"}:
         score += 0.25
+        score_breakdown["source_type"] = score_breakdown.get("source_type", 0.0) + 0.25
+        match_reasons.append("章节摘要/审阅来源")
 
     authority = str(chunk.metadata.get("authority", "")).strip().lower()
-    score += AUTHORITY_WEIGHTS.get(authority, 0.0)
+    authority_bonus = AUTHORITY_WEIGHTS.get(authority, 0.0)
+    if authority_bonus:
+        score += authority_bonus
+        score_breakdown["authority"] = authority_bonus
+        match_reasons.append(f"可信度加权：{authority}")
 
-    return score, matched_terms
+    worldline_state = _worldline_match_state(chunk, worldline_id)
+    if worldline_state == "match":
+        score += 0.9
+        score_breakdown["worldline"] = 0.9
+        label = _chunk_worldline_label(chunk) or str(worldline_id or "")
+        match_reasons.append(f"世界线匹配：{label}")
+    elif worldline_state == "global":
+        score += 0.2
+        score_breakdown["worldline"] = 0.2
+        match_reasons.append("通用世界线资料")
+    elif worldline_state == "mismatch" and str(worldline_mode or "prefer").strip().lower() != "strict":
+        score -= 0.6
+        score_breakdown["worldline"] = -0.6
+        label = _chunk_worldline_label(chunk) or _chunk_worldline_id(chunk)
+        match_reasons.append(f"世界线不同：{label}")
+
+    return score, matched_terms, score_breakdown, match_reasons
 
 
 def _semantic_scores(project_name: str, query: str, chunks: list[RetrievalChunk]) -> dict[str, float]:
@@ -1236,8 +1796,38 @@ def _semantic_scores(project_name: str, query: str, chunks: list[RetrievalChunk]
     return scores
 
 
-def _rerank_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
+def _build_feedback_stats(project_name: str) -> dict[str, dict[str, float]]:
+    weights = {
+        "helpful": 0.25,
+        "priority": 0.6,
+        "irrelevant": -0.35,
+        "wrong": -0.8,
+    }
+    stats: dict[str, dict[str, float]] = {}
+    for item in load_retrieval_feedback(project_name):
+        if not isinstance(item, dict):
+            continue
+        chunk_id = str(item.get("chunk_id") or "").strip()
+        rating = str(item.get("rating") or "").strip()
+        if not chunk_id or rating not in weights:
+            continue
+        entry = stats.setdefault(chunk_id, {"score": 0.0, "count": 0.0})
+        entry["score"] += weights[rating]
+        entry["count"] += 1
+    return stats
+
+
+def _feedback_bonus_for_chunk(chunk: RetrievalChunk, feedback_stats: dict[str, dict[str, float]]) -> float:
+    stat = feedback_stats.get(chunk.chunk_id, {})
+    score = float(stat.get("score", 0.0) or 0.0)
+    if not score:
+        return 0.0
+    return max(-1.5, min(1.2, score))
+
+
+def _rerank_hits(hits: list[RetrievalHit], feedback_stats: dict[str, dict[str, float]] | None = None) -> list[RetrievalHit]:
     reranked = []
+    feedback_stats = feedback_stats or {}
     for hit in hits:
         chunk = hit.chunk
         authority = str(chunk.metadata.get("authority", "unknown") or "unknown").strip().lower()
@@ -1255,11 +1845,63 @@ def _rerank_hits(hits: list[RetrievalHit]) -> list[RetrievalHit]:
         elif authority == "curated":
             rerank_bonus += 0.15
 
-        adjusted_score = hit.score + rerank_bonus
-        reranked.append(hit.model_copy(update={"score": adjusted_score}))
+        feedback_bonus = _feedback_bonus_for_chunk(chunk, feedback_stats)
+        adjusted_score = hit.score + rerank_bonus + feedback_bonus
+        score_breakdown = dict(hit.score_breakdown or {})
+        match_reasons = list(hit.match_reasons or [])
+        if rerank_bonus:
+            score_breakdown["rerank"] = rerank_bonus
+            match_reasons.append(f"重排加权：{rerank_bonus:.2f}")
+        if feedback_bonus:
+            score_breakdown["feedback"] = feedback_bonus
+            if feedback_bonus > 0:
+                match_reasons.append(f"用户反馈加权：{feedback_bonus:.2f}")
+            else:
+                match_reasons.append(f"用户反馈降权：{feedback_bonus:.2f}")
+        reranked.append(hit.model_copy(update={
+            "score": adjusted_score,
+            "score_breakdown": score_breakdown,
+            "match_reasons": match_reasons,
+        }))
 
     reranked.sort(key=lambda item: (-item.score, -item.semantic_score, -item.lexical_score, item.chunk.source_type, item.chunk.chapter_no or 0, item.chunk.chunk_id))
     return reranked
+
+
+def _diversify_hits(
+    hits: list[RetrievalHit],
+    top_k: int,
+    *,
+    max_per_document: int = 2,
+    max_per_source_type: int = 4,
+) -> list[RetrievalHit]:
+    if top_k <= 0 or len(hits) <= top_k:
+        return hits[:top_k]
+
+    selected: list[RetrievalHit] = []
+    document_counts: Counter[str] = Counter()
+    source_type_counts: Counter[str] = Counter()
+
+    for hit in hits:
+        chunk = hit.chunk
+        if document_counts[chunk.document_id] >= max_per_document:
+            continue
+        if source_type_counts[chunk.source_type] >= max_per_source_type:
+            continue
+        selected.append(hit)
+        document_counts[chunk.document_id] += 1
+        source_type_counts[chunk.source_type] += 1
+        if len(selected) >= top_k:
+            return selected
+
+    selected_ids = {hit.chunk.chunk_id for hit in selected}
+    for hit in hits:
+        if hit.chunk.chunk_id in selected_ids:
+            continue
+        selected.append(hit)
+        if len(selected) >= top_k:
+            break
+    return selected
 
 
 def resolve_retrieval_params(
@@ -1269,12 +1911,14 @@ def resolve_retrieval_params(
     allowed_scopes: list[str] | None = None,
     top_k: int | None = None,
     retrieval_mode: str | None = None,
+    retrieval_profile: str | None = None,
 ) -> dict:
+    profile = RETRIEVAL_TASK_PROFILES.get(str(retrieval_profile or "").strip(), {})
     params: dict = {
-        "allowed_source_types": list(allowed_source_types) if allowed_source_types else None,
+        "allowed_source_types": list(allowed_source_types) if allowed_source_types else list(profile.get("source_types", []) or []) or None,
         "allowed_scopes": list(allowed_scopes) if allowed_scopes else None,
-        "top_k": top_k or DEFAULT_TOP_K,
-        "retrieval_mode": retrieval_mode or "hybrid",
+        "top_k": top_k or int(profile.get("top_k") or DEFAULT_TOP_K),
+        "retrieval_mode": retrieval_mode or str(profile.get("mode") or "hybrid"),
     }
 
     if reference_strength and reference_strength in REFERENCE_STRENGTH_PARAMS:
@@ -1302,29 +1946,41 @@ def resolve_retrieval_params(
     return params
 
 
-def retrieve_context(
+def _run_retrieval(
     project_name: str,
     query: str,
     *,
-    top_k: int = DEFAULT_TOP_K,
+    top_k: int | None = None,
     allowed_scopes: list[str] | None = None,
     allowed_source_types: list[str] | None = None,
     retrieval_mode: str = "hybrid",
     reference_focus: list[str] | None = None,
     reference_strength: str | None = None,
-) -> list[RetrievalHit]:
-    if reference_focus or reference_strength:
-        resolved = resolve_retrieval_params(reference_focus, reference_strength, allowed_source_types, allowed_scopes, top_k, retrieval_mode)
-        top_k = resolved["top_k"]
-        retrieval_mode = resolved["retrieval_mode"]
-        allowed_scopes = resolved.get("allowed_scopes")
-        allowed_source_types = resolved.get("allowed_source_types")
+    retrieval_profile: str | None = None,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+) -> dict:
+    resolved = resolve_retrieval_params(
+        reference_focus,
+        reference_strength,
+        allowed_source_types,
+        allowed_scopes,
+        top_k,
+        retrieval_mode,
+        retrieval_profile,
+    )
+    top_k = resolved["top_k"]
+    retrieval_mode = resolved["retrieval_mode"]
+    allowed_scopes = resolved.get("allowed_scopes")
+    allowed_source_types = resolved.get("allowed_source_types")
+    normalized_worldline = _normalize_worldline_id(worldline_id)
+    normalized_worldline_mode = str(worldline_mode or "prefer").strip().lower()
+    if normalized_worldline_mode not in {"prefer", "strict"}:
+        normalized_worldline_mode = "prefer"
 
     index = load_retrieval_index(project_name)
-    query_terms = _expand_query_terms(query)
-    if not query_terms and retrieval_mode == "lexical":
-        return []
-
+    query_plan = _build_query_plan(project_name, query)
+    query_terms = query_plan["query_terms"]
     scope_filter = set(allowed_scopes or ["project", "canon", "reference"])
     source_filter = set(allowed_source_types or [])
 
@@ -1334,109 +1990,224 @@ def retrieve_context(
             continue
         if source_filter and chunk.source_type not in source_filter:
             continue
+        if not _worldline_allowed(chunk, normalized_worldline, normalized_worldline_mode):
+            continue
         filtered_chunks.append(chunk)
 
     semantic_scores = {}
-    semantic_enabled = retrieval_mode in {"semantic", "hybrid"}
-    if semantic_enabled:
+    if retrieval_mode in {"semantic", "hybrid"}:
         try:
-            semantic_scores = _semantic_scores(project_name, query, filtered_chunks)
+            semantic_scores = _semantic_scores(project_name, query_plan["semantic_query"], filtered_chunks)
         except Exception:
             semantic_scores = {}
 
-    hits = []
-    for chunk in filtered_chunks:
-        lexical_score, matched_terms = _score_chunk(chunk, query_terms) if query_terms else (0.0, [])
-        semantic_score = semantic_scores.get(chunk.chunk_id, 0.0)
+    initial_hits: list[RetrievalHit] = []
+    if query_terms or retrieval_mode != "lexical":
+        for chunk in filtered_chunks:
+            if query_terms:
+                lexical_score, matched_terms, score_breakdown, match_reasons = _score_chunk(
+                    chunk,
+                    query_terms,
+                    query_plan["expanded_terms"],
+                    worldline_id=normalized_worldline,
+                    worldline_mode=normalized_worldline_mode,
+                )
+            else:
+                lexical_score, matched_terms, score_breakdown, match_reasons = (0.0, [], {}, [])
+            semantic_score = semantic_scores.get(chunk.chunk_id, 0.0)
 
-        if retrieval_mode == "lexical":
-            final_score = lexical_score
-        elif retrieval_mode == "semantic":
-            final_score = semantic_score
-        else:
-            final_score = lexical_score + semantic_score * 4.0
+            if retrieval_mode == "lexical":
+                final_score = lexical_score
+            elif retrieval_mode == "semantic":
+                final_score = semantic_score
+            else:
+                final_score = lexical_score + semantic_score * 4.0
 
-        if final_score <= 0:
-            continue
-        hits.append(RetrievalHit(
-            chunk=chunk,
-            score=final_score,
-            lexical_score=lexical_score,
-            semantic_score=semantic_score,
-            retrieval_mode=retrieval_mode if semantic_scores else "lexical",
-            matched_terms=matched_terms,
-        ))
+            if final_score <= 0:
+                continue
+            if semantic_score > 0:
+                score_breakdown["semantic"] = semantic_score * (1.0 if retrieval_mode == "semantic" else 4.0)
+                match_reasons.append(f"语义相似度：{semantic_score:.2f}")
+            initial_hits.append(RetrievalHit(
+                chunk=chunk,
+                score=final_score,
+                lexical_score=lexical_score,
+                semantic_score=semantic_score,
+                retrieval_mode=retrieval_mode if semantic_scores else "lexical",
+                matched_terms=matched_terms,
+                expanded_terms=query_plan["expanded_terms"],
+                match_reasons=match_reasons,
+                score_breakdown=score_breakdown,
+            ))
 
-    hits = _rerank_hits(hits)
-    return hits[:top_k]
+    initial_hits.sort(key=lambda item: (-item.score, -item.semantic_score, -item.lexical_score, item.chunk.chunk_id))
+    feedback_stats = _build_feedback_stats(project_name)
+    reranked_hits = _rerank_hits(initial_hits, feedback_stats)
+    diversified_hits = _diversify_hits(reranked_hits, top_k)
+    return {
+        "query": query,
+        "base_query_terms": query_plan["base_terms"],
+        "query_terms": query_terms,
+        "expanded_terms": query_plan["expanded_terms"],
+        "matched_alias_groups": query_plan["matched_alias_groups"],
+        "semantic_query": query_plan["semantic_query"],
+        "retrieval_mode": retrieval_mode,
+        "retrieval_profile": retrieval_profile or "",
+        "top_k": top_k,
+        "scope_filter": sorted(scope_filter),
+        "source_type_filter": sorted(source_filter),
+        "candidate_chunk_count": len(filtered_chunks),
+        "semantic_enabled": bool(semantic_scores),
+        "worldline_id": normalized_worldline,
+        "worldline_mode": normalized_worldline_mode,
+        "initial_hits": initial_hits,
+        "reranked_hits": diversified_hits,
+    }
+
+
+def retrieve_context(
+    project_name: str,
+    query: str,
+    *,
+    top_k: int | None = None,
+    allowed_scopes: list[str] | None = None,
+    allowed_source_types: list[str] | None = None,
+    retrieval_mode: str = "hybrid",
+    reference_focus: list[str] | None = None,
+    reference_strength: str | None = None,
+    retrieval_profile: str | None = None,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+) -> list[RetrievalHit]:
+    result = _run_retrieval(
+        project_name,
+        query,
+        top_k=top_k,
+        allowed_scopes=allowed_scopes,
+        allowed_source_types=allowed_source_types,
+        retrieval_mode=retrieval_mode,
+        reference_focus=reference_focus,
+        reference_strength=reference_strength,
+        retrieval_profile=retrieval_profile,
+        worldline_id=worldline_id,
+        worldline_mode=worldline_mode,
+    )
+    return result["reranked_hits"]
 
 
 def debug_retrieve_context(
     project_name: str,
     query: str,
     *,
-    top_k: int = DEFAULT_TOP_K,
+    top_k: int | None = None,
     allowed_scopes: list[str] | None = None,
     allowed_source_types: list[str] | None = None,
     retrieval_mode: str = "hybrid",
+    retrieval_profile: str | None = None,
+    reference_focus: list[str] | None = None,
+    reference_strength: str | None = None,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
 ) -> dict:
-    index = load_retrieval_index(project_name)
-    query_terms = _expand_query_terms(query)
-    scope_filter = set(allowed_scopes or ["project", "canon", "reference"])
-    source_filter = set(allowed_source_types or [])
-    filtered_chunks = [
-        chunk for chunk in index.chunks
-        if chunk.scope in scope_filter and (not source_filter or chunk.source_type in source_filter)
-    ]
-
-    semantic_scores = {}
-    if retrieval_mode in {"semantic", "hybrid"}:
-        try:
-            semantic_scores = _semantic_scores(project_name, query, filtered_chunks)
-        except Exception:
-            semantic_scores = {}
-
-    initial_hits = []
-    for chunk in filtered_chunks:
-        lexical_score, matched_terms = _score_chunk(chunk, query_terms) if query_terms else (0.0, [])
-        semantic_score = semantic_scores.get(chunk.chunk_id, 0.0)
-        if retrieval_mode == "lexical":
-            final_score = lexical_score
-        elif retrieval_mode == "semantic":
-            final_score = semantic_score
-        else:
-            final_score = lexical_score + semantic_score * 4.0
-        if final_score <= 0:
-            continue
-        initial_hits.append(RetrievalHit(
-            chunk=chunk,
-            score=final_score,
-            lexical_score=lexical_score,
-            semantic_score=semantic_score,
-            retrieval_mode=retrieval_mode if semantic_scores else "lexical",
-            matched_terms=matched_terms,
-        ))
-
-    initial_hits.sort(key=lambda item: (-item.score, -item.semantic_score, -item.lexical_score, item.chunk.chunk_id))
-    reranked_hits = _rerank_hits(initial_hits)
+    result = _run_retrieval(
+        project_name,
+        query,
+        top_k=top_k,
+        allowed_scopes=allowed_scopes,
+        allowed_source_types=allowed_source_types,
+        retrieval_mode=retrieval_mode,
+        reference_focus=reference_focus,
+        reference_strength=reference_strength,
+        retrieval_profile=retrieval_profile,
+        worldline_id=worldline_id,
+        worldline_mode=worldline_mode,
+    )
     return {
-        "query": query,
-        "query_terms": query_terms,
-        "retrieval_mode": retrieval_mode,
-        "scope_filter": sorted(scope_filter),
-        "source_type_filter": sorted(source_filter),
-        "candidate_chunk_count": len(filtered_chunks),
-        "semantic_enabled": bool(semantic_scores),
-        "initial_hits": [hit.model_dump() for hit in initial_hits[:top_k]],
-        "reranked_hits": [hit.model_dump() for hit in reranked_hits[:top_k]],
+        **{key: value for key, value in result.items() if key not in {"initial_hits", "reranked_hits"}},
+        "initial_hits": [hit.model_dump() for hit in result["initial_hits"][:result.get("top_k", top_k or DEFAULT_TOP_K)]],
+        "reranked_hits": [hit.model_dump() for hit in result["reranked_hits"]],
     }
+
+
+def build_retrieval_briefing(hits: list[RetrievalHit]) -> dict:
+    groups: dict[str, list[RetrievalHit]] = {}
+    for hit in hits:
+        groups.setdefault(hit.chunk.source_type, []).append(hit)
+
+    priority_sources = []
+    constraints = []
+    conflicts = []
+    for hit in hits:
+        chunk = hit.chunk
+        meta = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+        source_label = f"{chunk.source_type} / {chunk.title or chunk.document_id}"
+        if chunk.source_type in {"knowledge_constraints", "memory_active_constraint", "entity_setting_card"}:
+            constraints.append({
+                "source": source_label,
+                "content": chunk.content[:260],
+            })
+        if chunk.source_type == "conflict_resolution":
+            conflicts.append({
+                "source": source_label,
+                "content": chunk.content[:260],
+            })
+        priority_sources.append({
+            "source_type": chunk.source_type,
+            "scope": chunk.scope,
+            "title": chunk.title,
+            "score": hit.score,
+            "authority": str(meta.get("authority") or ""),
+            "matched_terms": hit.matched_terms[:8],
+        })
+
+    return {
+        "hit_count": len(hits),
+        "source_type_counts": {key: len(value) for key, value in sorted(groups.items(), key=lambda pair: pair[0])},
+        "priority_sources": priority_sources[:8],
+        "constraints": constraints[:5],
+        "conflicts": conflicts[:5],
+    }
+
+
+def format_retrieval_briefing(hits: list[RetrievalHit]) -> str:
+    briefing = build_retrieval_briefing(hits)
+    if not hits:
+        return "资料简报：未检索到额外上下文。"
+    lines = ["资料简报："]
+    counts = briefing.get("source_type_counts", {})
+    if counts:
+        lines.append("- 来源分布：" + " / ".join(f"{key}={value}" for key, value in counts.items()))
+    priority_sources = briefing.get("priority_sources", [])
+    if priority_sources:
+        lines.append("- 优先参考：")
+        for item in priority_sources[:5]:
+            matched = ", ".join(item.get("matched_terms", [])[:5]) or "-"
+            lines.append(
+                f"  - {item.get('source_type')} / {item.get('scope')} / {item.get('title') or '未命名'} / "
+                f"score={float(item.get('score') or 0):.2f} / matched={matched}"
+            )
+    constraints = briefing.get("constraints", [])
+    if constraints:
+        lines.append("- 需要优先遵守的约束/设定：")
+        for item in constraints[:3]:
+            lines.append(f"  - {item.get('source')}: {item.get('content')}")
+    conflicts = briefing.get("conflicts", [])
+    if conflicts:
+        lines.append("- 已保存的冲突裁决：")
+        for item in conflicts[:3]:
+            lines.append(f"  - {item.get('source')}: {item.get('content')}")
+    return "\n".join(lines)
 
 
 def format_retrieval_context(hits: list[RetrievalHit]) -> str:
     if not hits:
         return "未检索到额外上下文。"
 
-    lines = ["以下为检索到的相关上下文，请优先参考与当前任务直接相关的内容："]
+    lines = [
+        format_retrieval_briefing(hits),
+        "",
+        "以下为检索到的相关上下文，请优先参考与当前任务直接相关的内容：",
+    ]
     for index, hit in enumerate(hits, start=1):
         chunk = hit.chunk
         header = f"[{index}] {chunk.source_type} / mode={hit.retrieval_mode} / score={hit.score:.2f}"
@@ -1447,6 +2218,16 @@ def format_retrieval_context(hits: list[RetrievalHit]) -> str:
         if chunk.title:
             header += f" / {chunk.title}"
         lines.append(header)
+        authority = str(chunk.metadata.get("authority") or "").strip()
+        evidence_notes = []
+        if authority:
+            evidence_notes.append(f"authority={authority}")
+        if hit.matched_terms:
+            evidence_notes.append("matched_terms=" + ", ".join(hit.matched_terms[:8]))
+        if hit.match_reasons:
+            evidence_notes.append("reasons=" + "；".join(hit.match_reasons[:3]))
+        if evidence_notes:
+            lines.append("evidence_meta: " + " / ".join(evidence_notes))
         lines.append(chunk.content)
     return "\n".join(lines)
 

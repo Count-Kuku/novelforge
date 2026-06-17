@@ -279,6 +279,9 @@ class CreativeProfile(NovelForgeSchema):
     reference_focus: list[str] = Field(default_factory=lambda: ["角色", "世界观", "剧情事件"])
     allow_canon_deviation: bool = True
     conflict_policy: str = "优先项目设定"
+    worldline_id: str = "main"
+    worldline_label: str = "本项目主线"
+    worldline_retrieval_mode: Literal["prefer", "strict"] = "prefer"
     notes: str = ""
 
     @field_validator("reference_focus", mode="before")
@@ -586,10 +589,18 @@ class RetrievalHit(NovelForgeSchema):
     semantic_score: float = 0.0
     retrieval_mode: str = "lexical"
     matched_terms: list[str] = Field(default_factory=list)
+    expanded_terms: list[str] = Field(default_factory=list)
+    match_reasons: list[str] = Field(default_factory=list)
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
 
     @field_validator("matched_terms", mode="before")
     @classmethod
     def _normalize_matched_terms(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @field_validator("expanded_terms", "match_reasons", mode="before")
+    @classmethod
+    def _normalize_retrieval_lists(cls, value: Any) -> list[str]:
         return _normalize_string_list(value)
 
 
@@ -1035,6 +1046,8 @@ def render_discussion_markdown(
             f"- 重点参考方向：{', '.join(recommended_profile.reference_focus or []) or '未设置'}",
             f"- 允许改写原设：{'是' if recommended_profile.allow_canon_deviation else '否'}",
             f"- 资料冲突处理：{recommended_profile.conflict_policy or '-'}",
+            f"- 当前世界线：{recommended_profile.worldline_label or recommended_profile.worldline_id or '未设置'}",
+            f"- 世界线检索模式：{recommended_profile.worldline_retrieval_mode or 'prefer'}",
             f"- 自由说明：{recommended_profile.notes or '无'}",
         ])
 

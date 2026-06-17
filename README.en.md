@@ -54,9 +54,9 @@ Current maturity can be summarized as:
 - core-setting-to-knowledge conversion for turning stable settings into pending structured knowledge before project-wide reuse
 - source ingestion page for importing canon/reference/sample text and extracting structured knowledge
 - source ledger for summarizing long-form batches, retrieval sources, knowledge-only sources, processing status, and segment-level provenance
-- long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing, with clearer guidance for saving batches, indexing source text, and extracting knowledge
+- long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing, with strict-canon, fanfic-foundation, and style-reference initialization presets plus clearer guidance for saving batches, indexing source text, and extracting knowledge
 - long-form source batch manager for tracking whole-txt splitting, indexing, extraction, re-extraction, failures, and resume progress, with per-segment batch persistence after each extraction for terminal-interruption recovery
-- one-click source processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items for manual review
+- one-click source processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items for manual review; the pending queue can preview the current auto-review policy and manually auto-confirm low-risk items; auto-confirm decisions are logged and can be rolled back
 - deep source-extraction modes for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction
 - specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes with matching categories and modes
 - extraction category default strategies for starting from specialist presets, all categories, or no preselected categories
@@ -74,17 +74,19 @@ Current maturity can be summarized as:
 - ingestion health overview for imported-but-unextracted material, failed extraction, quality risks, category gaps, and worldline distribution
 - project-level extraction plan templates with save, inspect, delete, and JSON-edit support for reusing multi-specialist pipelines across batches
 - setting entity cards generated from world rules, locations, organizations, abilities, items, and constraints
-- entity alias library for preserving canonical names and aliases from quality-review hints, improving retrieval, character-card aggregation, and later extraction name normalization
+- entity alias library for preserving canonical names and aliases from quality-review hints, expanding aliases at query time, improving retrieval, character-card aggregation, and later extraction name normalization
 - structured-knowledge organizer for duplicate detection, merging, deletion, and raw editing
 - source package report generated from confirmed structured knowledge
-- retrieval center for index rebuilds, recall tests, debug inspection, and conflict handling
+- retrieval center for index rebuilds, RAG health inspection, recall tests, debug inspection, and conflict handling
 - project creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
-- creative task wizard for turning Chinese task goals into project creative settings
-- dynamic generation entry that can run direct prose, short-form structure, or chapter-plan based generation from the creative profile
+- story-level worldline settings in the creative profile, including worldline ID/name and RAG worldline mode for later discussions and generation
+- creative-profile discussion assist for turning natural-language goals into structured story creative settings
+- quick-generation playground that can run direct prose, short-form structure, or chapter-plan based generation from the creative profile
 - structured knowledge ingestion from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 - lexical, semantic, and hybrid retrieval
+- task-aware retrieval profiles for creative-profile discussion, outline discussion, volume discussion, arc discussion, chapter discussion, outline generation, chapter planning, drafting, and review/evaluation
 - authority-aware and conflict-aware evidence presentation
-- retrieval debug preview for query terms, candidate chunks, and reranked hits
+- retrieval debug preview with selectable task profiles, query terms, candidate chunks, semantic status, and reranked hits
 - persisted retrieval conflict resolutions
 - character, timeline, foreshadowing, and consistency analysis
 - chapter quality evaluation with structured scoring reports
@@ -96,40 +98,11 @@ Current maturity can be summarized as:
 - lightweight writing guidance controls
 - in-app model endpoint and key configuration
 
-## Design Principles
+## Documentation Scope
 
-NovelForge follows a few core principles:
+This README is user-facing. It focuses on what NovelForge does, how to start using it, and how the source-ingestion, retrieval, planning, and writing flows work.
 
-1. Persistence before intelligence
-2. Workflow before agents
-3. Skills before autonomy
-4. Project-oriented architecture
-5. Model independence through an OpenAI-compatible interface
-
-## Architecture
-
-High-level flow:
-
-```text
-User
--> Streamlit UI (app.py)
--> Skill Layer (skills.py)
--> Prompt Layer (prompts.py)
--> LLM Interface (llm.py)
--> OpenAI-compatible API
--> Memory / Storage / Retrieval
-```
-
-Main file responsibilities:
-
-- `app.py`: UI and interaction flow
-- `skills.py`: writing and analysis capabilities
-- `prompts.py`: prompt templates and composition
-- `llm.py`: model abstraction and API integration
-- `memory.py`: persistent storage and project data management
-- `merge.py`: settings merge engine for cross-scope conflict detection and resolution (story, project, story-to-story)
-- `schemas.py`: structured output contracts and validation
-- `retrieval.py`: indexing, retrieval, and context formatting
+For deeper architecture, module responsibilities, storage layout, implementation notes, and roadmap details, see [project.md](./project.md).
 
 ## Typical Workflow
 
@@ -176,8 +149,20 @@ Current retrieval capabilities include:
 - batch-level pending-knowledge consolidation with balanced, character-card, timeline, strict-canon, and style-focused modes
 - repeated-upload detection with an option to bind to an existing batch
 - document chunk indexing
+- improved Chinese phrase recall through short ngram tokenization for names, items, abilities, and setting phrases
+- entity-alias query expansion so canonical names, aliases, translated names, and short names can recall the same knowledge group
 - semantic embedding retrieval
 - hybrid lexical + semantic ranking
+- worldline-aware retrieval with optional preference weighting or strict filtering; once a story creative profile saves a worldline, discussions, outline generation, chapter planning, drafting, and review use it automatically
+- lightweight result diversification so one document or source type does not dominate all top hits
+- retrieval feedback weighting: current hits can be marked helpful, priority, irrelevant, or wrong; later reranking uses those signals and exposes the adjustment in score breakdowns
+- RAG evaluation workbench for saving fixed test queries, expected terms/chunks/source types, running single or full suites, and storing run results
+- pre-generation retrieval briefing that summarizes source distribution, priority references, constraints/settings, and conflict resolutions before detailed evidence chunks
+- post-generation source-usage reports on discussion, outline, planning, drafting, review, and evaluation pages, showing retrieved source distribution, priority references, hard constraints, and conflict resolutions
+- explainable retrieval evidence in previews, workflow traces, and prompt context through matched terms, expanded aliases, recall reasons, score breakdowns, and evidence_meta
+- RAG health inspection for index document/chunk counts, current source chunks, vector counts, missing vectors, stale chunks, source distribution, scope distribution, active embedding model, and embedding-model mismatch warnings
+- retrieval center can rebuild keyword-only indexes or full indexes; keyword RAG remains usable when embeddings are unavailable
+- discussion-first planning now uses RAG: creative-profile, outline, volume, arc, and chapter discussions can retrieve relevant settings, structured knowledge, imported sources, and approved discussion artifacts
 - source authority weighting
 - scope-grouped evidence display
 - conflict warnings when project evidence and external evidence overlap
@@ -189,6 +174,7 @@ Current retrieval capabilities include:
 - long-form source details can inspect segment text and trace related pending or confirmed knowledge items
 - pending review queue for accepting, discarding, or editing extracted knowledge before indexing
 - pending review includes extraction-quality checks for same-name duplicates, same-name field conflicts, fact-level conflicts, alias candidates, and existing confirmed-knowledge overlap, with suggestions and merge actions for same-name groups
+- automatic review policy and records for one-click and pasted-source low-risk saves, including configurable thresholds, grade-B handling, manual-review categories, confirm/block decisions, reasons, pending snapshots, write targets, run-level rollback, and single-item return to pending review
 - alias-candidate hints can be saved into `knowledge/entities/aliases.json`; alias groups are indexed as `entity_alias_group`
 - pending review supports category, source, keyword, and quality-risk filtering, plus risk-first, low-evidence, low-confidence, high-importance, newest-first, and category/name sorting
 - pending review and confirmed-knowledge organization support worldline filtering for separating canon, project-main, and AU branch material
@@ -224,7 +210,7 @@ Each project can store a creative profile describing the intended generation pat
 
 This profile is injected into major generation, discussion, review, and analysis prompts so model behavior can adapt to length, workflow depth, and reference strength.
 
-The in-app creative task wizard can create this profile from plain Chinese task choices such as what to write, target length, output goal, reference strength, conflict policy, and notes.
+If the user is not sure how to configure the profile, the in-app creative-profile discussion assist can turn natural-language goals into recommended settings, backfill the form, and save an approved discussion artifact.
 
 The in-app `快速生成` (quick generation) page is designed for testing and experimentation:
 
@@ -234,47 +220,15 @@ The in-app `快速生成` (quick generation) page is designed for testing and ex
 
 Full automatic orchestration for long-form volume/arc/chapter pipelines is still planned.
 
-## Project Storage Structure
+## Data And Backups
 
-Each story is stored as an independent project under `data/projects/`.
+NovelForge stores project data locally under `data/`, including project settings, story spaces, chapters, reviews, source materials, structured knowledge, retrieval indexes, and run history.
 
-Typical structure:
+Recommendations:
 
-```text
-data/
-  global_rules.json
-  projects/
-    your_project/
-      memory.json
-      rules.json
-      creative_profile.json
-      outline.md
-      knowledge/
-      volumes/
-      arcs/
-      chapter_outlines/
-      chapters/
-      reviews/
-      analysis/
-      evaluation/
-      retrieval/
-      runs/
-```
-
-This keeps planning, draft chapters, reviews, analysis, and retrieval artifacts attached to the same project instead of scattering them across chat history.
-
-Newer persisted artifacts include:
-
-- `arcs/arc_xxx.chapter_plan.json`: arc-level chapter allocation plans
-- `creative_profile.json`: project-level creative profile
-- `knowledge/*.json`: confirmed structured knowledge records
-- `knowledge/entities/characters.json`: character entity cards generated from confirmed structured knowledge
-- `knowledge/entities/aliases.json`: canonical entity names and aliases
-- `knowledge/pending.json`: pending structured-knowledge review queue
-- `analysis/source_package.md`: source package report generated from structured knowledge
-- `evaluation/chapter_xxx.md` / `.json`: chapter evaluation reports and structured scores
-- `retrieval/conflict_resolutions.json`: saved retrieval conflict decisions
-- `runs/*.json`: resumable pipeline run snapshots
+- Back up the whole `data/` directory regularly.
+- For the portable build, back up the app folder's `data/` directory and `.env`.
+- For the full file layout and storage responsibilities, see the project storage section in [project.md](./project.md).
 
 ## Setup And Run
 
@@ -374,64 +328,15 @@ Planned or compatible directions:
 - Qwen
 - local or self-hosted OpenAI-compatible models
 
-## Roadmap
+## Development And Architecture Notes
 
-### V2 backend maturation
+README keeps to usage-level guidance. The following content is maintained in [project.md](./project.md):
 
-- dedicated vector database backend
-- deeper fact-level conflict recommendation logic
-- stronger retrieval robustness
-
-### V3 workflow runtime adoption
-
-- graph or runtime-based workflow orchestration
-- richer first-class retry and resume policies
-- branching workflow execution
-
-### V4 multi-agent architecture
-
-Planned roles include:
-
-- ChiefEditorAgent
-- PlotAgent
-- WriterAgent
-- ReviewAgent
-- MemoryAgent
-- ResearchAgent
-
-The first pre-agent step is implemented: source material can be split into typed structured knowledge and confirmed by the user before indexing. These extractors can later become specialist ingestion agents.
-
-### V5 evaluation system
-
-The initial chapter-level evaluation foundation is implemented and can persist Markdown and JSON reports.
-
-Current evaluation dimensions include:
-
-- character consistency
-- writing quality
-- plot progression quality
-- information density
-- emotional impact
-- foreshadowing handling
-
-Planned next steps:
-
-- cross-version chapter comparison
-- cross-run metric tracking
-- automated evaluation suites for model and prompt changes
-
-## Development Notes
-
-The project keeps responsibilities intentionally separated:
-
-- keep UI logic light in `app.py`
-- add new writing capabilities through `skills.py`
-- keep prompt engineering in `prompts.py`
-- keep persistence logic in `memory.py`
-- isolate model integration changes in `llm.py`
-- define structured LLM outputs through `schemas.py`
-
-For deeper implementation details and roadmap context, see `project.md`.
+- architecture and module responsibilities
+- project storage layout
+- RAG, source extraction, workflow, and evaluation implementation notes
+- roadmap
+- development boundaries and extension guidance
 
 ## License
 

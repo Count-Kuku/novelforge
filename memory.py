@@ -1164,6 +1164,25 @@ def pending_knowledge_path(project_name: str) -> Path:
     return knowledge_dir_path(project_name) / "pending.json"
 
 
+def auto_review_runs_path(project_name: str) -> Path:
+    return knowledge_dir_path(project_name) / "auto_review_runs.json"
+
+
+def auto_review_policy_path(project_name: str) -> Path:
+    return knowledge_dir_path(project_name) / "auto_review_policy.json"
+
+
+DEFAULT_AUTO_REVIEW_POLICY = {
+    "min_confidence": 0.45,
+    "min_evidence_strength": 0.35,
+    "grade_a_confidence": 0.75,
+    "grade_a_evidence_strength": 0.65,
+    "allow_grade_b_auto_confirm": True,
+    "require_evidence": True,
+    "manual_review_categories": ["constraints"],
+}
+
+
 def _load_json_list(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -1246,6 +1265,67 @@ def save_pending_knowledge_items(project_name: str, items: list[dict]):
     path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_auto_review_runs(project_name: str) -> list[dict]:
+    return _load_json_list(auto_review_runs_path(project_name))
+
+
+def save_auto_review_runs(project_name: str, runs: list[dict]):
+    path = auto_review_runs_path(project_name)
+    normalized = [item for item in runs if isinstance(item, dict)]
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def normalize_auto_review_policy(policy: dict | None) -> dict:
+    raw = policy if isinstance(policy, dict) else {}
+    normalized = dict(DEFAULT_AUTO_REVIEW_POLICY)
+    for key in ["min_confidence", "min_evidence_strength", "grade_a_confidence", "grade_a_evidence_strength"]:
+        try:
+            value = float(raw.get(key, normalized[key]))
+        except (TypeError, ValueError):
+            value = float(normalized[key])
+        normalized[key] = max(0.0, min(1.0, value))
+    normalized["allow_grade_b_auto_confirm"] = bool(raw.get("allow_grade_b_auto_confirm", normalized["allow_grade_b_auto_confirm"]))
+    normalized["require_evidence"] = bool(raw.get("require_evidence", normalized["require_evidence"]))
+    categories = raw.get("manual_review_categories", normalized["manual_review_categories"])
+    if not isinstance(categories, list):
+        categories = normalized["manual_review_categories"]
+    normalized["manual_review_categories"] = [
+        str(category)
+        for category in categories
+        if str(category) in KNOWLEDGE_CATEGORIES
+    ]
+    return normalized
+
+
+def load_auto_review_policy(project_name: str) -> dict:
+    path = auto_review_policy_path(project_name)
+    if not path.exists():
+        return dict(DEFAULT_AUTO_REVIEW_POLICY)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        raw = {}
+    return normalize_auto_review_policy(raw)
+
+
+def save_auto_review_policy(project_name: str, policy: dict) -> dict:
+    normalized = normalize_auto_review_policy(policy)
+    path = auto_review_policy_path(project_name)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def append_auto_review_run(project_name: str, run: dict) -> dict:
+    runs = load_auto_review_runs(project_name)
+    normalized = dict(run or {})
+    normalized["run_id"] = normalized.get("run_id") or f"auto_review_{uuid4().hex}"
+    normalized["created_at"] = normalized.get("created_at") or datetime.now(timezone.utc).isoformat()
+    normalized["status"] = normalized.get("status") or "active"
+    runs.append(normalized)
+    save_auto_review_runs(project_name, runs[-200:])
+    return normalized
+
+
 def queue_pending_knowledge_items(
     project_name: str,
     items: list[dict],
@@ -1298,14 +1378,25 @@ def discard_pending_knowledge_items(project_name: str, pending_ids: list[str]) -
 
 
 def confirm_pending_knowledge_items(project_name: str, pending_ids: list[str]) -> int:
+    result = confirm_pending_knowledge_items_with_records(project_name, pending_ids)
+    return int(result.get("saved_count", 0))
+
+
+def confirm_pending_knowledge_items_with_records(
+    project_name: str,
+    pending_ids: list[str],
+    *,
+    confirmation_metadata: dict | None = None,
+) -> dict:
     id_set = {str(item) for item in pending_ids}
     if not id_set:
-        return 0
+        return {"saved_count": 0, "confirmed_records": [], "pending_snapshots": []}
     pending = load_pending_knowledge_items(project_name)
     selected = [item for item in pending if str(item.get("pending_id", "")) in id_set]
     remaining = [item for item in pending if str(item.get("pending_id", "")) not in id_set]
 
     saved_count = 0
+    confirmed_records: list[dict] = []
     grouped: dict[tuple[str, str, str, str], list[dict]] = {}
     for item in selected:
         key = (
@@ -1316,17 +1407,24 @@ def confirm_pending_knowledge_items(project_name: str, pending_ids: list[str]) -
         )
         grouped.setdefault(key, []).append(item)
     for (scope, authority, source_title, source_origin), items in grouped.items():
-        saved_count += append_knowledge_items(
+        count, records = append_knowledge_items_with_records(
             project_name,
             items,
             scope=scope,
             authority=authority,
             source_title=source_title,
             source_origin=source_origin,
+            confirmation_metadata=confirmation_metadata,
         )
+        saved_count += count
+        confirmed_records.extend(records)
     if selected:
         save_pending_knowledge_items(project_name, remaining)
-    return saved_count
+    return {
+        "saved_count": saved_count,
+        "confirmed_records": confirmed_records,
+        "pending_snapshots": [dict(item) for item in selected],
+    }
 
 
 def _make_knowledge_id(category: str, index: int) -> str:
@@ -1343,6 +1441,29 @@ def append_knowledge_items(
     source_origin: str = "",
     status: str = "confirmed",
 ) -> int:
+    saved_count, _ = append_knowledge_items_with_records(
+        project_name,
+        items,
+        scope=scope,
+        authority=authority,
+        source_title=source_title,
+        source_origin=source_origin,
+        status=status,
+    )
+    return saved_count
+
+
+def append_knowledge_items_with_records(
+    project_name: str,
+    items: list[dict],
+    *,
+    scope: str,
+    authority: str,
+    source_title: str = "",
+    source_origin: str = "",
+    status: str = "confirmed",
+    confirmation_metadata: dict | None = None,
+) -> tuple[int, list[dict]]:
     grouped: dict[str, list[dict]] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -1353,11 +1474,13 @@ def append_knowledge_items(
         grouped.setdefault(category, []).append(item)
 
     saved_count = 0
+    saved_records: list[dict] = []
     for category, category_items in grouped.items():
         existing = load_knowledge_category(project_name, category)
         next_index = len(existing) + 1
         for item in category_items:
             normalized = dict(item)
+            source_pending_id = str(normalized.get("pending_id") or "")
             normalized.pop("pending_id", None)
             normalized.pop("queued_at", None)
             normalized.setdefault("name", "")
@@ -1373,11 +1496,169 @@ def append_knowledge_items(
             normalized["worldline_id"] = normalized.get("worldline_id") or "main"
             normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
             normalized["status"] = status
+            if confirmation_metadata:
+                normalized.update({
+                    key: value
+                    for key, value in confirmation_metadata.items()
+                    if str(key).strip()
+                })
+            if source_pending_id:
+                normalized["source_pending_id"] = source_pending_id
             existing.append(normalized)
+            saved_records.append({
+                "pending_id": source_pending_id,
+                "category": category,
+                "knowledge_id": normalized.get("id", ""),
+                "name": normalized.get("name", ""),
+                "source_title": normalized.get("source_title", ""),
+                "source_origin": normalized.get("source_origin", ""),
+            })
             next_index += 1
             saved_count += 1
         save_knowledge_category(project_name, category, existing)
-    return saved_count
+    return saved_count, saved_records
+
+
+def rollback_auto_review_run(project_name: str, run_id: str) -> dict:
+    target_run_id = str(run_id or "").strip()
+    if not target_run_id:
+        return {"success": False, "message": "缺少自动审核记录 ID。", "removed_count": 0, "restored_count": 0}
+
+    runs = load_auto_review_runs(project_name)
+    run_index = next((index for index, item in enumerate(runs) if str(item.get("run_id") or "") == target_run_id), -1)
+    if run_index < 0:
+        return {"success": False, "message": "未找到自动审核记录。", "removed_count": 0, "restored_count": 0}
+
+    run = dict(runs[run_index])
+    if str(run.get("status") or "") == "rolled_back":
+        return {"success": False, "message": "该自动审核记录已经回退过。", "removed_count": 0, "restored_count": 0}
+
+    confirmed_records = run.get("confirmed_records", []) if isinstance(run.get("confirmed_records", []), list) else []
+    removed_count = 0
+    records_by_category: dict[str, set[str]] = {}
+    for record in confirmed_records:
+        if not isinstance(record, dict):
+            continue
+        category = str(record.get("category") or "")
+        knowledge_id = str(record.get("knowledge_id") or "")
+        if category in KNOWLEDGE_CATEGORIES and knowledge_id:
+            records_by_category.setdefault(category, set()).add(knowledge_id)
+
+    for category, id_set in records_by_category.items():
+        existing = load_knowledge_category(project_name, category)
+        remaining = [item for item in existing if str(item.get("id") or "") not in id_set]
+        removed_count += len(existing) - len(remaining)
+        if len(remaining) != len(existing):
+            save_knowledge_category(project_name, category, remaining)
+
+    pending = load_pending_knowledge_items(project_name)
+    existing_pending_ids = {str(item.get("pending_id") or "") for item in pending}
+    restored_count = 0
+    restored_at = datetime.now(timezone.utc).isoformat()
+    for snapshot in run.get("pending_snapshots", []) if isinstance(run.get("pending_snapshots", []), list) else []:
+        if not isinstance(snapshot, dict):
+            continue
+        restored = dict(snapshot)
+        pending_id = str(restored.get("pending_id") or "")
+        if not pending_id:
+            restored["pending_id"] = f"pending_rollback_{uuid4().hex}"
+            pending_id = str(restored["pending_id"])
+        if pending_id in existing_pending_ids:
+            continue
+        restored["status"] = "pending"
+        restored["rollback_from_auto_review_run_id"] = target_run_id
+        restored["rolled_back_at"] = restored_at
+        pending.append(restored)
+        existing_pending_ids.add(pending_id)
+        restored_count += 1
+    if restored_count:
+        save_pending_knowledge_items(project_name, pending)
+
+    run["status"] = "rolled_back"
+    run["rolled_back_at"] = restored_at
+    run["rollback_result"] = {
+        "removed_count": removed_count,
+        "restored_count": restored_count,
+    }
+    runs[run_index] = run
+    save_auto_review_runs(project_name, runs)
+    sync_project_retrieval_assets(project_name)
+    return {
+        "success": True,
+        "message": f"已回退自动审核记录：删除 {removed_count} 条正式知识，恢复 {restored_count} 条待确认知识。",
+        "removed_count": removed_count,
+        "restored_count": restored_count,
+        "run": run,
+    }
+
+
+def return_confirmed_knowledge_item_to_pending(
+    project_name: str,
+    category: str,
+    knowledge_id: str,
+    *,
+    reason: str = "",
+) -> dict:
+    target_category = str(category or "").strip()
+    target_id = str(knowledge_id or "").strip()
+    if target_category not in KNOWLEDGE_CATEGORIES or not target_id:
+        return {"success": False, "message": "缺少有效的知识分类或知识 ID。", "pending_id": ""}
+
+    items = load_knowledge_category(project_name, target_category)
+    item_index = next((index for index, item in enumerate(items) if str(item.get("id") or "") == target_id), -1)
+    if item_index < 0:
+        return {"success": False, "message": "未找到要退回的正式知识。", "pending_id": ""}
+
+    item = dict(items[item_index])
+    remaining = [entry for index, entry in enumerate(items) if index != item_index]
+    pending = load_pending_knowledge_items(project_name)
+    existing_pending_ids = {str(entry.get("pending_id") or "") for entry in pending}
+    pending_id = str(item.get("source_pending_id") or "")
+    if not pending_id or pending_id in existing_pending_ids:
+        pending_id = f"pending_returned_{uuid4().hex}"
+
+    restored = dict(item)
+    restored.pop("id", None)
+    restored.pop("auto_reviewed_at", None)
+    restored["pending_id"] = pending_id
+    restored["category"] = target_category
+    restored["status"] = "pending"
+    restored["returned_from_knowledge_id"] = target_id
+    restored["returned_from_auto_review_run_id"] = item.get("auto_review_run_id", "")
+    restored["return_reason"] = reason
+    restored["returned_at"] = datetime.now(timezone.utc).isoformat()
+    pending.append(restored)
+
+    save_knowledge_category(project_name, target_category, remaining)
+    save_pending_knowledge_items(project_name, pending)
+
+    run_id = str(item.get("auto_review_run_id") or "")
+    if run_id:
+        runs = load_auto_review_runs(project_name)
+        for run in runs:
+            if str(run.get("run_id") or "") != run_id:
+                continue
+            returned = run.get("returned_records", [])
+            if not isinstance(returned, list):
+                returned = []
+            returned.append({
+                "category": target_category,
+                "knowledge_id": target_id,
+                "pending_id": pending_id,
+                "name": item.get("name", ""),
+                "returned_at": restored["returned_at"],
+                "reason": reason,
+            })
+            run["returned_records"] = returned
+            break
+        save_auto_review_runs(project_name, runs)
+
+    sync_project_retrieval_assets(project_name)
+    return {
+        "success": True,
+        "message": f"已将 {item.get('name', target_id)} 退回待确认队列。",
+        "pending_id": pending_id,
+    }
 
 
 def load_story_rules(project_name: str, story_id: str) -> dict:
@@ -2265,6 +2546,18 @@ def conflict_resolutions_path(project_name: str) -> Path:
     return retrieval_path(project_name) / "conflict_resolutions.json"
 
 
+def retrieval_eval_cases_path(project_name: str) -> Path:
+    return retrieval_path(project_name) / "eval_cases.json"
+
+
+def retrieval_eval_runs_path(project_name: str) -> Path:
+    return retrieval_path(project_name) / "eval_runs.json"
+
+
+def retrieval_feedback_path(project_name: str) -> Path:
+    return retrieval_path(project_name) / "feedback.json"
+
+
 def load_conflict_resolutions(project_name: str) -> list[dict]:
     file = conflict_resolutions_path(project_name)
     if not file.exists():
@@ -2297,6 +2590,147 @@ def save_conflict_resolution(project_name: str, resolution: dict) -> dict:
     file = conflict_resolutions_path(project_name)
     file.write_text(json.dumps(resolutions, ensure_ascii=False, indent=2), encoding="utf-8")
     sync_project_retrieval_assets(project_name)
+    return normalized
+
+
+def _normalize_string_list_field(value) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        return [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
+    return []
+
+
+def normalize_retrieval_eval_case(case: dict) -> dict:
+    payload = dict(case or {})
+    now = datetime.now(timezone.utc).isoformat()
+    case_id = str(payload.get("case_id") or "").strip() or f"rag_eval_{uuid4().hex}"
+    top_k = payload.get("top_k", 6)
+    try:
+        top_k = max(1, min(20, int(top_k)))
+    except (TypeError, ValueError):
+        top_k = 6
+    min_expected_matches = payload.get("min_expected_matches", 1)
+    try:
+        min_expected_matches = max(1, int(min_expected_matches))
+    except (TypeError, ValueError):
+        min_expected_matches = 1
+    retrieval_mode = str(payload.get("retrieval_mode") or "hybrid").strip()
+    if retrieval_mode not in {"hybrid", "lexical", "semantic"}:
+        retrieval_mode = "hybrid"
+    worldline_mode = str(payload.get("worldline_mode") or "prefer").strip()
+    if worldline_mode not in {"prefer", "strict"}:
+        worldline_mode = "prefer"
+    return {
+        "case_id": case_id,
+        "name": str(payload.get("name") or payload.get("query") or "未命名评测用例").strip(),
+        "query": str(payload.get("query") or "").strip(),
+        "expected_terms": _normalize_string_list_field(payload.get("expected_terms", [])),
+        "expected_chunk_ids": _normalize_string_list_field(payload.get("expected_chunk_ids", [])),
+        "expected_source_types": _normalize_string_list_field(payload.get("expected_source_types", [])),
+        "allowed_scopes": _normalize_string_list_field(payload.get("allowed_scopes", [])),
+        "allowed_source_types": _normalize_string_list_field(payload.get("allowed_source_types", [])),
+        "retrieval_profile": str(payload.get("retrieval_profile") or "").strip(),
+        "retrieval_mode": retrieval_mode,
+        "worldline_id": str(payload.get("worldline_id") or "").strip(),
+        "worldline_mode": worldline_mode,
+        "top_k": top_k,
+        "min_expected_matches": min_expected_matches,
+        "notes": str(payload.get("notes") or "").strip(),
+        "status": str(payload.get("status") or "active").strip() or "active",
+        "created_at": str(payload.get("created_at") or now),
+        "updated_at": now,
+    }
+
+
+def load_retrieval_eval_cases(project_name: str) -> list[dict]:
+    return _load_json_list(retrieval_eval_cases_path(project_name))
+
+
+def save_retrieval_eval_cases(project_name: str, cases: list[dict]):
+    normalized = [
+        normalize_retrieval_eval_case(item)
+        for item in (cases or [])
+        if isinstance(item, dict)
+    ]
+    retrieval_eval_cases_path(project_name).write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def upsert_retrieval_eval_case(project_name: str, case: dict) -> dict:
+    normalized = normalize_retrieval_eval_case(case)
+    if not normalized["query"]:
+        raise ValueError("评测查询不能为空。")
+    if not (normalized["expected_terms"] or normalized["expected_chunk_ids"] or normalized["expected_source_types"]):
+        raise ValueError("至少需要一个期望命中词、片段 ID 或来源类型。")
+    cases = load_retrieval_eval_cases(project_name)
+    updated = []
+    replaced = False
+    for item in cases:
+        if str(item.get("case_id") or "") == normalized["case_id"]:
+            normalized["created_at"] = item.get("created_at") or normalized["created_at"]
+            updated.append(normalized)
+            replaced = True
+        else:
+            updated.append(item)
+    if not replaced:
+        updated.append(normalized)
+    save_retrieval_eval_cases(project_name, updated)
+    return normalized
+
+
+def delete_retrieval_eval_case(project_name: str, case_id: str) -> bool:
+    target_id = str(case_id or "").strip()
+    cases = load_retrieval_eval_cases(project_name)
+    remaining = [item for item in cases if str(item.get("case_id") or "") != target_id]
+    if len(remaining) == len(cases):
+        return False
+    save_retrieval_eval_cases(project_name, remaining)
+    return True
+
+
+def load_retrieval_eval_runs(project_name: str) -> list[dict]:
+    return _load_json_list(retrieval_eval_runs_path(project_name))
+
+
+def append_retrieval_eval_run(project_name: str, run: dict) -> dict:
+    normalized = dict(run or {})
+    normalized["run_id"] = str(normalized.get("run_id") or f"rag_eval_run_{uuid4().hex}")
+    normalized["created_at"] = str(normalized.get("created_at") or datetime.now(timezone.utc).isoformat())
+    runs = load_retrieval_eval_runs(project_name)
+    runs.append(normalized)
+    retrieval_eval_runs_path(project_name).write_text(json.dumps(runs[-200:], ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def load_retrieval_feedback(project_name: str) -> list[dict]:
+    return _load_json_list(retrieval_feedback_path(project_name))
+
+
+def append_retrieval_feedback(project_name: str, feedback: dict) -> dict:
+    allowed_ratings = {"helpful", "priority", "irrelevant", "wrong"}
+    payload = dict(feedback or {})
+    rating = str(payload.get("rating") or "").strip()
+    if rating not in allowed_ratings:
+        raise ValueError("未知的检索反馈类型。")
+    chunk_id = str(payload.get("chunk_id") or "").strip()
+    if not chunk_id:
+        raise ValueError("缺少检索片段 ID。")
+    normalized = {
+        "feedback_id": str(payload.get("feedback_id") or f"rag_feedback_{uuid4().hex}"),
+        "created_at": str(payload.get("created_at") or datetime.now(timezone.utc).isoformat()),
+        "query": str(payload.get("query") or "").strip(),
+        "rating": rating,
+        "note": str(payload.get("note") or "").strip(),
+        "chunk_id": chunk_id,
+        "document_id": str(payload.get("document_id") or "").strip(),
+        "source_type": str(payload.get("source_type") or "").strip(),
+        "scope": str(payload.get("scope") or "").strip(),
+        "title": str(payload.get("title") or "").strip(),
+        "path": str(payload.get("path") or "").strip(),
+    }
+    items = load_retrieval_feedback(project_name)
+    items.append(normalized)
+    retrieval_feedback_path(project_name).write_text(json.dumps(items[-1000:], ensure_ascii=False, indent=2), encoding="utf-8")
     return normalized
 
 

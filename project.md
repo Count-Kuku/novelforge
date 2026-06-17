@@ -1,5 +1,9 @@
 # NovelForge
 
+This document is the architecture and implementation reference for NovelForge. It records module boundaries, storage layout, current implementation status, and roadmap notes.
+
+For user-facing feature introductions, setup steps, and workflow guidance, see `README.md`.
+
 ## Project Overview
 
 NovelForge is a long-form novel writing system built around LLMs, memory management, workflow automation, and future multi-agent collaboration.
@@ -61,13 +65,16 @@ Current practical status:
 * Retrieval evidence grouping, authority weighting, conflict warnings, and reranking
 * Structured pasted-reference organization for canon/reference knowledge; single-page URL ingestion remains implemented but is temporarily hidden from the UI
 * Source ingestion ledger for summarizing long-form batches, imported retrieval sources, knowledge-only sources, and processing status
-* Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing, with UI guidance that separates preview splitting, batch saving, retrieval indexing, and structured knowledge extraction
+* Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing, with strict-canon, fanfic-foundation, and style-reference initialization presets plus UI guidance that separates preview splitting, batch saving, retrieval indexing, and structured knowledge extraction
 * One-click long-form source processing for saving batches, indexing source text, extracting structured knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items in the review queue
+* Automatic review run records for low-risk auto-confirm decisions, including decision reasons, pending snapshots, confirmed write targets, and run-level rollback
+* Project-level automatic review policy for confidence/evidence thresholds, grade-B handling, and manual-review categories
+* Pending-queue automatic-review preview for showing which filtered or selected items would be auto-confirmed before actually saving them
 * Long-form source batch manager for whole-txt processing progress, continue actions, failed extraction retries, and completed-segment re-extraction
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
-* Creative task wizard for creating project creative profiles from plain Chinese task choices
-* First dynamic generation entry replaced by lightweight quick-generation playground supporting prompt-only or fully-configured execution for testing and experimentation
+* Consolidated creative profile page for direct profile editing, discussion-assisted recommendations, one-click form backfill, and approval-based persistence
+* Lightweight quick-generation playground supporting prompt-only or fully-configured execution for testing and experimentation
 * Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and memory-update chaining
 * Content generation chained pipeline: write → review → memory update, plus reset-based full pipeline from requirement
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
@@ -119,6 +126,19 @@ Current practical status:
 * Resumable chapter pipeline runs from persisted workflow snapshots
 * Arc-level chapter allocation planning with persisted structured plans
 * Retrieval debug preview with query terms, filters, candidate counts, and rerank inspection
+* Retrieval center RAG health inspection for manifest/current-source consistency, vector coverage, stale chunks, source distribution, and scope distribution
+* Task-aware retrieval profiles for creative-profile discussion, outline discussion, volume discussion, arc discussion, chapter discussion, outline generation, chapter planning, drafting, and review/evaluation
+* Planning discussions now use retrieval context before formal generation, including creative-profile, outline, volume, arc, and chapter discussions
+* Chinese phrase retrieval improved through short ngram tokenization and lightweight stop-token filtering
+* Entity-alias query expansion so canonical names, aliases, translated names, and short names can recall the same knowledge group
+* Worldline-aware retrieval now supports preference weighting and strict filtering from indexed metadata
+* Story creative profiles now persist worldline ID/name and retrieval mode so RAG can automatically follow the active story branch
+* Retrieval reranking now includes lightweight result diversification to reduce repeated hits from the same document or source type
+* Retrieval reranking now uses saved user feedback to boost useful/priority hits and demote irrelevant/wrong hits
+* RAG evaluation workbench for fixed recall test cases, expected terms/chunks/source types, persisted run history, and pass-rate tracking
+* Prompt retrieval context now starts with a compact retrieval briefing before detailed evidence chunks
+* Generation pages now show a source-usage report summarizing retrieved source distribution, priority references, hard constraints, and conflict resolutions
+* Explainable retrieval evidence now carries expanded terms, recall reasons, score breakdowns, and `evidence_meta` into debug views and prompt context
 * Persisted retrieval conflict resolutions for project-vs-canon/reference decisions
 * Chapter-level evaluation reports with structured scoring and saved Markdown/JSON artifacts
 * Story-level rule overrides (rules_overrides.json) with three-level injection: global → project → story
@@ -133,11 +153,11 @@ Current practical status:
 
 In short: the project already has a working V1 product, substantial V2 groundwork and implementation, and meaningful V3 preparation.
 
-Recent direction update:
+Current direction update:
 
 * NovelForge is now moving toward configurable fan-fiction generation rather than one fixed long-form pipeline.
-* The first implementation step includes a creative profile, a quick-generation playground, profile-aware content generation with inline pipeline, and structured knowledge ingestion.
-* True multi-agent ingestion is still deferred; the current implementation uses a modular extractor workflow that can later be wrapped as specialist agents.
+* This direction is now implemented through story creative profiles, quick generation, profile-aware content generation, source ingestion, multi-specialist extraction plans, automatic review, and RAG evaluation/feedback.
+* True autonomous multi-agent orchestration is still deferred; the current ingestion implementation uses modular specialist workflows that can later be wrapped as agents.
 
 ---
 
@@ -303,6 +323,9 @@ novelforge/
         * `chapter_outlines/chapter_xxx.discussion.json` stores approved chapter-planning discussion artifacts when available
         * `evaluation/chapter_xxx.md` and `evaluation/chapter_xxx.json` store chapter-level evaluation reports and structured scores
         * `retrieval/conflict_resolutions.json` stores user-approved retrieval conflict decisions
+        * `retrieval/eval_cases.json` stores reusable RAG recall evaluation cases
+        * `retrieval/eval_runs.json` stores RAG evaluation run history
+        * `retrieval/feedback.json` stores user feedback for retrieval reranking
 ```
 
 ---
@@ -329,6 +352,9 @@ Responsibilities:
 * Managing long-form source batches with per-segment import/extraction state, retry controls, completed-segment re-extraction, extraction-mode selection, and batch-level pending-knowledge consolidation
 * Persisting batch state after each segment during extraction, enabling terminal-interruption resume without data loss or duplicate extraction
 * Reporting extraction coverage and re-extraction diffs so repeated passes are auditable rather than blind
+* Recording auto-review decisions so low-risk automated confirmation remains auditable and reversible
+* Previewing automatic-review decisions in the pending queue before manually running low-risk auto-confirmation
+* Returning individual auto-confirmed knowledge items to pending review without rolling back the whole run
 * Running multi-specialist extraction plans across selected long-form segments with per-step progress and failure summaries
 * Detecting repeated long-form uploads through content fingerprints, file names, total character counts, and segment counts
 * Managing a pending structured-knowledge queue for accept/discard/edit review before persistence
@@ -366,12 +392,13 @@ UI features:
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
-* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, guided one-click processing, batch indexing, guided batch saving, retrieval indexing, and limited batch extraction
+* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, fanfic-oriented initialization presets, guided one-click processing, batch indexing, guided batch saving, retrieval indexing, and limited batch extraction
 * Source ledger for inspecting source status, long-form segment text, and pending/confirmed knowledge linked to a segment
 * Long-form source batch manager for progress metrics, filtered segment lists, continue extraction, completed re-extraction, and failure retries
 * Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
 * Source package report panel for generating a searchable project reference report
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
+* Shared source-usage report for retrieval-aware workflow outputs
 * Grouped sidebar navigation that separates workspace pages into workbench / planning / writing / resources areas
 * Planning navigation is profile-aware: a new story initially shows only creative configuration, then expands to long-form or short-form planning pages based on target length and workflow depth
 * Project overview home screen with quick actions for quick generation, content generation, source ingestion, and resource browsing
@@ -387,8 +414,7 @@ UI features:
 * Dedicated model configuration page for saving multiple endpoint/key/model profiles and switching the active runtime profile from the UI
 * Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, etc.) for one-click endpoint/model fill
 * In-app connection testing for model profiles before saving
-* Creative task wizard that saves project creative settings from task type, length, output goal, reference strength, conflict policy, and notes
-* Creative profile page can now combine direct option selection with discussion-assisted recommended settings, one-click form backfill, and approval-based persistence of a creative-profile discussion artifact
+* Creative profile page combines direct option selection with discussion-assisted recommended settings, one-click form backfill, and approval-based persistence of a creative-profile discussion artifact
 
 Business logic should remain minimal.
 
@@ -621,6 +647,19 @@ Responsibilities:
 Current retrieval design notes:
 
 * Current retrieval supports lexical, semantic, and hybrid modes
+* The retrieval center exposes keyword-only rebuild and full index rebuild separately, so projects can keep lexical RAG usable even when embeddings are unavailable
+* `inspect_retrieval_health` reports manifest/current-source consistency, vector coverage, stale vector/chunk counts, source-type distribution, scope distribution, semantic availability, active embedding model, and embedding-model mismatch warnings
+* `retrieve_context` and `debug_retrieve_context` support task-aware retrieval profiles for discussion, planning, drafting, and review/evaluation workflows
+* Chinese lexical retrieval uses short ngrams for continuous CJK text, with lightweight stop-token filtering to reduce generic false positives
+* Query planning expands entity aliases from `knowledge/entities/aliases.json` before lexical and semantic retrieval, improving recall for canonical names, aliases, translations, and short names
+* A shared internal retrieval runner powers both `retrieve_context` and `debug_retrieve_context`, reducing drift between production retrieval and diagnostics
+* Worldline metadata from confirmed knowledge and entity cards participates in retrieval scoring; strict mode keeps global/unlabeled material while excluding explicit mismatched worldlines
+* Story creative-profile worldline fields are automatically passed into retrieval-aware discussions, planning, drafting, and review through the shared retrieval context builder
+* Retrieval hits include `expanded_terms`, `match_reasons`, and `score_breakdown`; formatted prompt context adds `evidence_meta` with authority, matched terms, and top recall reasons
+* Retrieval results are diversified after reranking to reduce repeated hits from the same document or source type
+* Retrieval feedback from `retrieval/feedback.json` participates in reranking and records its effect in `score_breakdown.feedback`
+* RAG evaluation cases and run history live under `retrieval/eval_cases.json` and `retrieval/eval_runs.json`
+* Formatted retrieval context includes a compact briefing for source distribution, priority references, constraints/settings, and conflict resolutions before full chunks
 * Retrieval documents are separated from prompt logic so the indexing contract remains reusable
 * Scope priority currently prefers `project`, then `canon`, then `reference`
 * Retrieval is already injected into outline, chapter planning, writing, review, memory update, and analysis steps
@@ -1058,6 +1097,8 @@ Stores confirmed structured knowledge extracted from source material. Current ca
 
 `knowledge/pending.json` stores extracted knowledge items waiting for user confirmation. Confirmed items are moved into the category files above and then indexed for retrieval.
 Pending knowledge can come from source extraction, batch-level consolidation, or direct conversion from story/project core settings.
+`knowledge/auto_review_policy.json` stores project-level automatic review thresholds and manual-review category rules.
+`knowledge/auto_review_runs.json` stores automatic review runs for low-risk auto-confirm decisions, including confirmed record targets, blocked reasons, pending snapshots, single-item returns, and rollback status.
 The source ingestion ledger is generated from existing storage rather than a separate file: `long_reference_batches/`, `retrieval/sources/`, `knowledge/pending.json`, and confirmed `knowledge/*.json`.
 
 `knowledge/entities/characters.json` stores generated character entity cards built from confirmed character, relationship, ability, dialogue, timeline, and constraint knowledge. These cards are indexed as `entity_character_card` retrieval documents.
@@ -1305,6 +1346,18 @@ Current implementation status:
 * Implemented: project-scoped embedding generation via `llm.py`
 * Implemented: embedding-backed `vectors.json` storage for semantic retrieval
 * Implemented: lexical / semantic / hybrid retrieval modes with score breakdown in UI
+* Implemented: keyword-only and full-index rebuild controls in the retrieval center
+* Implemented: RAG health panel for index consistency, vector coverage, stale chunks, source distribution, and scope distribution
+* Implemented: task-aware retrieval profiles for discussion, outline generation, chapter planning, drafting, and review/evaluation
+* Implemented: RAG-backed planning discussions for creative profile, outline, volume, arc, and chapter discussion turns
+* Implemented: Chinese phrase ngram tokenization and lightweight stop-token filtering for better lexical recall
+* Implemented: alias-aware query expansion and debug display of matched alias groups
+* Implemented: shared retrieval execution path for production and debug retrieval
+* Implemented: worldline-aware retrieval preference/strict modes and retrieval-center controls
+* Implemented: story creative-profile worldline fields and automatic RAG worldline propagation
+* Implemented: explainable retrieval hits with expanded terms, recall reasons, score breakdown, and `evidence_meta` prompt injection
+* Implemented: embedding-model consistency warnings in RAG health checks
+* Implemented: lightweight retrieval result diversification after reranking
 * Implemented: source-aware smart chunking for structured records, Markdown sections, and long prose
 * Implemented: typed external source templates for better RAG ingestion quality
 * Implemented: per-step retrieval trace display in generation, review, analysis, and pipeline result views
@@ -1321,6 +1374,8 @@ Current implementation status:
 * Implemented: pasted reference organization into structured retrieval-ready entries
 * Implemented but temporarily hidden in the UI: single-page URL fetch and organization for controlled canon/reference ingestion
 * Implemented: long-form source importer with chapter-title splitting, length fallback splitting, guided one-click processing, conservative auto-confirm, guided batch saving, batch source indexing, mode help, extraction category default strategies, custom extraction instructions, and limited batch extraction
+* Implemented: automatic review records and rollback for low-risk auto-confirmed extracted knowledge
+* Implemented: project-level auto-review policy configuration and single confirmed-item return to pending review
 * Implemented: long-form source batch manager with progress tracking, continue import/extraction actions, failed extraction retry, and completed-segment re-extraction
 * Implemented: repeated-upload detection using long-form source fingerprints and similarity hints
 * Implemented: source ingestion ledger with long-form batch, retrieval-source, and knowledge-only provenance summaries
@@ -1354,7 +1409,7 @@ Current implementation status:
 * Implemented: retrieval indexing for confirmed structured knowledge
 * Implemented: source package report generation from confirmed structured knowledge, saved under `analysis/source_package.md`
 * Pending: dedicated external vector database backend
-* Pending: deeper version/AU-aware retrieval filtering and generation-time worldline selection
+* Pending: richer worldline management UI for defining, listing, and merging project branches
 
 Possible technologies:
 
@@ -1388,8 +1443,8 @@ Current implementation status:
 
 * Implemented: one-click chapter pipeline across planning, writing, review, and memory update
 * Implemented: story-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
-* Implemented: creative task wizard that maps plain Chinese task choices into the current story creative profile
-* Implemented: first dynamic generation page for direct prose, short-form structure + prose, and chapter-plan + prose tasks
+* Implemented: consolidated creative profile page that maps plain Chinese discussion and direct form choices into the current story creative profile
+* Implemented: quick-generation playground for direct prose, short-form structure + prose, and chapter-plan + prose tasks
 * Implemented: per-step error isolation with partial result recovery
 * Implemented: explicit `ChapterPipelineState`-style workflow object
 * Implemented: structured `WorkflowError` records with typed categories
@@ -1517,7 +1572,7 @@ The following items are acknowledged departures from the design philosophy and a
 
 2. **Duplicate code patterns exist across discussion/render functions.** Outline, volume, arc, and chapter discussion pages share ~70% of their structure. A shared discussion render helper would reduce maintenance cost.
 
-3. **`retrieve_context` and `debug_retrieve_context` in retrieval.py share ~80% of logic.** These should be unified into a single parameterized entry point to prevent drift between production and debug retrieval results.
+3. **Legacy creative-task-wizard helpers remain in app.py.** The separate user-facing wizard has been superseded by the consolidated creative profile page, but `build_profile_from_task_wizard` / `render_creative_task_wizard` still exist as unused compatibility code. They should be removed or folded into the current discussion-assisted profile flow.
 
 4. **Entity save functions in memory.py are structurally identical** (`save_character_entities`, `save_setting_entities`, `save_entity_aliases`, `save_extraction_plan_templates`). A parametrized `_save_entity_list(path, items)` helper would eliminate the duplication.
 

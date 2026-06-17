@@ -28,6 +28,9 @@ from memory import (
     load_arc_outline,
     load_chapter_outline_metadata,
     load_conflict_resolutions,
+    load_retrieval_eval_cases,
+    load_retrieval_eval_runs,
+    load_retrieval_feedback,
     delete_arc_chapter_plan,
     load_evaluation_json,
     load_evaluation_report,
@@ -36,6 +39,8 @@ from memory import (
     load_creative_profile_discussion_artifact,
     load_knowledge_base,
     load_knowledge_category,
+    load_auto_review_runs,
+    load_auto_review_policy,
     load_character_entities,
     load_entity_aliases,
     load_extraction_plan_templates,
@@ -74,11 +79,14 @@ from memory import (
     save_story_memory,
     save_knowledge_category,
     save_character_entities,
+    save_auto_review_policy,
     save_entity_aliases,
     save_extraction_plan_templates,
     save_setting_entities,
     append_knowledge_items,
+    append_auto_review_run,
     confirm_pending_knowledge_items,
+    confirm_pending_knowledge_items_with_records,
     copy_story_settings,
     merge_story_to_project_memory,
     merge_project_to_story_memory,
@@ -89,8 +97,14 @@ from memory import (
     merge_global_rules_to_project,
     merge_global_rules_to_story,
     discard_pending_knowledge_items,
+    rollback_auto_review_run,
+    return_confirmed_knowledge_item_to_pending,
     queue_pending_knowledge_items,
     save_pending_knowledge_items,
+    upsert_retrieval_eval_case,
+    delete_retrieval_eval_case,
+    append_retrieval_eval_run,
+    append_retrieval_feedback,
     save_outline,
     save_project_rules,
     save_story_rules,
@@ -129,7 +143,7 @@ from project_manager import (
     save_retrieval_source_content,
     save_review_resources,
 )
-from retrieval import build_structured_external_source_payload, debug_retrieve_context, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
+from retrieval import RETRIEVAL_TASK_PROFILES, build_retrieval_briefing, build_structured_external_source_payload, debug_retrieve_context, inspect_retrieval_health, rebuild_retrieval_assets, ingest_external_source_file, load_retrieval_index, retrieve_context
 from skills import (
     approve_chapter_discussion,
     approve_arc_discussion,
@@ -980,6 +994,9 @@ CREATIVE_PROFILE_FORM_KEYS = {
     "allow_canon_deviation": "creative_form_allow_canon_deviation",
     "notes": "creative_form_notes",
     "reference_focus": "creative_form_reference_focus",
+    "worldline_id": "creative_form_worldline_id",
+    "worldline_label": "creative_form_worldline_label",
+    "worldline_retrieval_mode": "creative_form_worldline_retrieval_mode",
 }
 
 
@@ -997,6 +1014,9 @@ def _normalize_creative_form_state(profile: dict | None) -> dict:
         "reference_strength": payload.get("reference_strength", "中参考"),
         "conflict_policy": payload.get("conflict_policy", "优先项目设定"),
         "allow_canon_deviation": bool(payload.get("allow_canon_deviation", True)),
+        "worldline_id": payload.get("worldline_id", DEFAULT_WORLDLINE_ID),
+        "worldline_label": payload.get("worldline_label", DEFAULT_WORLDLINE_LABEL),
+        "worldline_retrieval_mode": payload.get("worldline_retrieval_mode", "prefer") if payload.get("worldline_retrieval_mode", "prefer") in {"prefer", "strict"} else "prefer",
         "notes": payload.get("notes", ""),
         "reference_focus": preset_focus or ["角色", "世界观", "剧情事件"],
         "custom_reference_focus": "，".join(custom_focus),
@@ -1031,6 +1051,9 @@ def _set_creative_profile_form_state(project_name: str, profile: dict):
     st.session_state[CREATIVE_PROFILE_FORM_KEYS["reference_focus"]] = normalized["reference_focus"]
     st.session_state[CREATIVE_PROFILE_FORM_KEYS["custom_reference_focus"]] = normalized["custom_reference_focus"]
     st.session_state[CREATIVE_PROFILE_FORM_KEYS["allow_canon_deviation"]] = normalized["allow_canon_deviation"]
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["worldline_id"]] = normalized["worldline_id"]
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["worldline_label"]] = normalized["worldline_label"]
+    st.session_state[CREATIVE_PROFILE_FORM_KEYS["worldline_retrieval_mode"]] = normalized["worldline_retrieval_mode"]
     st.session_state[CREATIVE_PROFILE_FORM_KEYS["notes"]] = normalized["notes"]
 
 
@@ -1044,6 +1067,9 @@ def _build_creative_profile_from_form_values(
     reference_focus: list[str],
     custom_reference_focus: str,
     allow_canon_deviation: bool,
+    worldline_id: str,
+    worldline_label: str,
+    worldline_retrieval_mode: str,
     notes: str,
 ) -> dict:
     custom_focus_items = [
@@ -1067,6 +1093,9 @@ def _build_creative_profile_from_form_values(
         "reference_focus": merged_reference_focus,
         "allow_canon_deviation": allow_canon_deviation,
         "conflict_policy": conflict_policy,
+        "worldline_id": str(worldline_id or "").strip() or DEFAULT_WORLDLINE_ID,
+        "worldline_label": str(worldline_label or "").strip() or DEFAULT_WORLDLINE_LABEL,
+        "worldline_retrieval_mode": worldline_retrieval_mode if worldline_retrieval_mode in {"prefer", "strict"} else "prefer",
         "notes": notes,
     }
 
@@ -1211,9 +1240,112 @@ def render_step_json_expander(title: str, payload: dict):
         st.code(json.dumps(payload, ensure_ascii=False, indent=2), language="json")
 
 
+def build_retrieval_usage_report_from_payload(hits: list[dict]) -> dict:
+    if not hits:
+        return {
+            "hit_count": 0,
+            "source_type_counts": {},
+            "scope_counts": {},
+            "priority_sources": [],
+            "constraints": [],
+            "conflicts": [],
+            "risk_notes": ["本次没有检索到可用资料，生成内容更依赖当前输入、核心设定和模型推断。"],
+        }
+
+    source_type_counts: dict[str, int] = {}
+    scope_counts: dict[str, int] = {}
+    priority_sources = []
+    constraints = []
+    conflicts = []
+    risk_notes = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        chunk = hit.get("chunk", {}) if isinstance(hit.get("chunk", {}), dict) else {}
+        source_type = str(chunk.get("source_type") or "unknown")
+        scope = str(chunk.get("scope") or "project")
+        source_type_counts[source_type] = source_type_counts.get(source_type, 0) + 1
+        scope_counts[scope] = scope_counts.get(scope, 0) + 1
+        title = str(chunk.get("title") or chunk.get("document_id") or "未命名")
+        content = str(chunk.get("content") or "")
+        meta = chunk.get("metadata", {}) if isinstance(chunk.get("metadata", {}), dict) else {}
+        priority_sources.append({
+            "来源类型": label_source_type(source_type),
+            "范围": label_scope(scope),
+            "标题": title,
+            "相关度": f"{float(hit.get('score') or 0):.2f}",
+            "可信度": label_authority(meta.get("authority", "unknown")),
+            "命中词": "、".join(str(term) for term in hit.get("matched_terms", [])[:6]),
+        })
+        if source_type in {"knowledge_constraints", "memory_active_constraint", "entity_setting_card"}:
+            constraints.append({
+                "来源": f"{label_source_type(source_type)} / {title}",
+                "内容": content[:260],
+            })
+        if source_type == "conflict_resolution":
+            conflicts.append({
+                "来源": title,
+                "内容": content[:260],
+            })
+
+    if not constraints:
+        risk_notes.append("本次召回中没有明显的硬性约束条目；涉及原作边界时建议检查正式知识库或提高资料参考强度。")
+    if conflicts:
+        risk_notes.append("本次召回包含已保存冲突裁决，生成时应优先遵守裁决结论。")
+    if scope_counts.get("canon", 0) or scope_counts.get("reference", 0):
+        risk_notes.append("本次包含原作/参考资料证据，适合用于校验角色、事件和设定边界。")
+
+    return {
+        "hit_count": len(hits),
+        "source_type_counts": source_type_counts,
+        "scope_counts": scope_counts,
+        "priority_sources": priority_sources[:8],
+        "constraints": constraints[:5],
+        "conflicts": conflicts[:5],
+        "risk_notes": risk_notes,
+    }
+
+
+def render_retrieval_usage_report(hits: list[dict], title: str = "资料使用报告"):
+    report = build_retrieval_usage_report_from_payload(hits)
+    with st.expander(title, expanded=bool(hits)):
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("召回片段", report.get("hit_count", 0))
+        metric_cols[1].metric("来源类型", len(report.get("source_type_counts", {})))
+        metric_cols[2].metric("硬约束/设定", len(report.get("constraints", [])))
+        metric_cols[3].metric("冲突裁决", len(report.get("conflicts", [])))
+        if report.get("scope_counts"):
+            st.caption("范围分布：" + " / ".join(f"{label_scope(key)}={value}" for key, value in report.get("scope_counts", {}).items()))
+        if report.get("source_type_counts"):
+            st.caption("来源分布：" + " / ".join(f"{label_source_type(key)}={value}" for key, value in report.get("source_type_counts", {}).items()))
+        if report.get("risk_notes"):
+            for note in report.get("risk_notes", []):
+                st.info(note)
+        priority_sources = report.get("priority_sources", [])
+        if priority_sources:
+            st.markdown("#### 优先参考资料")
+            st.dataframe(priority_sources, use_container_width=True, hide_index=True)
+        constraints = report.get("constraints", [])
+        if constraints:
+            st.markdown("#### 需要优先遵守的约束/设定")
+            for item in constraints:
+                st.markdown(f"**{item.get('来源', '')}**")
+                st.caption(item.get("内容", ""))
+        conflicts = report.get("conflicts", [])
+        if conflicts:
+            st.markdown("#### 已保存冲突裁决")
+            for item in conflicts:
+                st.markdown(f"**{item.get('来源', '')}**")
+                st.caption(item.get("内容", ""))
+
+
 def render_step_retrieval(step_result: dict, title: str, fallback_hits: list[dict] | None = None):
     hits = step_result.get("retrieval_hits", []) if step_result else []
-    render_retrieval_hits_block(hits or (fallback_hits or []), title)
+    active_hits = hits or (fallback_hits or [])
+    if not active_hits:
+        return
+    render_retrieval_usage_report(active_hits, "本次生成资料使用报告")
+    render_retrieval_hits_block(active_hits, title)
 
 
 def _render_rule_editor(title: str, storage_key: str, rules: dict) -> dict:
@@ -2125,6 +2257,7 @@ def render_outline_page(project_name: str):
     with summary_col:
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前收敛出的结论。")
+        render_step_retrieval(discussion_step, "本次大纲讨论参考的检索上下文")
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前讨论", key="approve_outline_discussion"):
             try:
@@ -2134,7 +2267,7 @@ def render_outline_page(project_name: str):
             except Exception as exc:
                 st.error(f"批准失败：{exc}")
         if clear_col.button("清除已批准版本", key="clear_outline_discussion"):
-            if clear_outline_discussion_approval(project_name):
+            if clear_outline_discussion_approval(project_name, story_id=story_id):
                 st.success("已清除全书已批准讨论工件。")
                 st.rerun()
             else:
@@ -2162,6 +2295,7 @@ def render_outline_page(project_name: str):
                         messages,
                         discussion_step.get("data", {}).get("discussion", {}),
                         follow_up,
+                        story_id=story_id,
                     )
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了当前讨论结论。"
@@ -2253,7 +2387,7 @@ def render_chapter_outline_page(project_name: str):
     )
     with st.expander("当前使用的已批准规划工件", expanded=False):
         st.markdown("### 章节已批准讨论")
-        _render_approved_discussion_artifact(load_chapter_discussion_artifact(project_name, chapter_no), "当前章节没有已批准讨论工件。")
+        _render_approved_discussion_artifact(load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id), "当前章节没有已批准讨论工件。")
         st.markdown("### 分卷已批准讨论")
         _render_approved_discussion_artifact(volume_discussion_artifact, "当前分卷没有已批准讨论工件。")
         st.markdown("### 剧情段已批准讨论")
@@ -2268,7 +2402,7 @@ def render_chapter_outline_page(project_name: str):
     clear_input_flag_key = _discussion_input_clear_flag_key("chapter", suffix)
     _consume_discussion_input_clear("chapter", suffix)
     discussion_step = st.session_state.get(result_key, {})
-    chapter_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no)
+    chapter_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id)
 
     col_action_1, col_action_2 = st.columns(2)
     if col_action_1.button("开始讨论本章方向"):
@@ -2293,6 +2427,7 @@ def render_chapter_outline_page(project_name: str):
     with summary_col:
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示本章方向的当前结论。")
+        render_step_retrieval(discussion_step, "本次章节讨论参考的检索上下文")
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前章节讨论", key=f"approve_chapter_discussion_{chapter_no}"):
             try:
@@ -2302,7 +2437,7 @@ def render_chapter_outline_page(project_name: str):
             except Exception as exc:
                 st.error(f"批准失败：{exc}")
         if clear_col.button("清除已批准章节讨论", key=f"clear_chapter_discussion_{chapter_no}"):
-            if clear_chapter_discussion_approval(project_name, chapter_no):
+            if clear_chapter_discussion_approval(project_name, chapter_no, story_id=story_id):
                 st.success("已清除章节已批准讨论工件。")
                 st.rerun()
             else:
@@ -2337,6 +2472,7 @@ def render_chapter_outline_page(project_name: str):
                         messages,
                         discussion_step.get("data", {}).get("discussion", {}),
                         follow_up,
+                        story_id=story_id,
                     )
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本章讨论结论。"
@@ -3178,6 +3314,28 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             CREATIVE_PROFILE_FORM_KEYS["conflict_policy"],
             "例如：原作性格优先，但世界观以本项目为准。",
         )
+        col_worldline_a, col_worldline_b, col_worldline_c = st.columns([1, 1, 1])
+        worldline_id = col_worldline_a.text_input(
+            "当前世界线 ID",
+            value=form_state.get("worldline_id", DEFAULT_WORLDLINE_ID),
+            placeholder="例如：main、au_modern、branch_01",
+            key=CREATIVE_PROFILE_FORM_KEYS["worldline_id"],
+            help="用于 RAG 检索过滤和加权。建议使用稳定英文/拼音/数字 ID。",
+        )
+        worldline_label = col_worldline_b.text_input(
+            "当前世界线名称",
+            value=form_state.get("worldline_label", DEFAULT_WORLDLINE_LABEL),
+            placeholder="例如：本项目主线、现代 AU、二周目分支",
+            key=CREATIVE_PROFILE_FORM_KEYS["worldline_label"],
+        )
+        worldline_retrieval_mode = col_worldline_c.selectbox(
+            "世界线检索模式",
+            options=["prefer", "strict"],
+            index=0 if form_state.get("worldline_retrieval_mode", "prefer") != "strict" else 1,
+            format_func=lambda value: {"prefer": "偏好匹配", "strict": "严格过滤"}.get(value, value),
+            key=CREATIVE_PROFILE_FORM_KEYS["worldline_retrieval_mode"],
+            help="偏好匹配会保留其他世界线但降权；严格过滤会排除明确属于其他世界线的资料。",
+        )
         reference_focus = st.multiselect(
             "重点参考方向",
             options=focus_options,
@@ -3216,6 +3374,9 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             reference_focus,
             custom_reference_focus,
             allow_canon_deviation,
+            worldline_id,
+            worldline_label,
+            worldline_retrieval_mode,
             notes,
         ), story_id=story_id, mark_configured=True)
         _set_creative_profile_form_state(project_name, saved)
@@ -3232,6 +3393,9 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             reference_focus,
             custom_reference_focus,
             allow_canon_deviation,
+            worldline_id,
+            worldline_label,
+            worldline_retrieval_mode,
             notes,
         )
         profile = preview_profile
@@ -3572,6 +3736,61 @@ def render_pending_knowledge_queue(project_name: str):
             for index in selected_indices
             if 0 <= index < pending_count and pending_items[index].get("pending_id")
         ]
+        with st.expander("自动审核预检与批量处理", expanded=False):
+            st.caption("这里不会重新调用模型，只按当前自动审核策略和质检结果判断哪些条目可以自动保存，哪些仍保留给人工审核。")
+            auto_scope = st.radio(
+                "预检范围",
+                options=["当前筛选结果", "已选择条目"],
+                horizontal=True,
+                key="pending_auto_review_scope",
+            )
+            auto_candidate_indices = filtered_indices if auto_scope == "当前筛选结果" else selected_indices
+            auto_candidate_items = [
+                pending_items[index]
+                for index in auto_candidate_indices
+                if 0 <= index < pending_count
+            ]
+            auto_preview = build_pending_auto_review_preview(
+                auto_candidate_items,
+                issue_map,
+                load_auto_review_policy(project_name),
+            )
+            preview_cols = st.columns(4)
+            preview_cols[0].metric("候选条目", auto_preview.get("candidate_count", 0))
+            preview_cols[1].metric("可自动确认", len(auto_preview.get("confirmed_ids", [])))
+            preview_cols[2].metric("A 级", auto_preview.get("grade_counts", {}).get("A", 0))
+            preview_cols[3].metric("保留待确认", len(auto_preview.get("blocked_ids", [])))
+            reason_counts = auto_preview.get("blocked_reason_counts", {})
+            if reason_counts:
+                st.caption("主要保留原因：" + " / ".join(f"{reason}={count}" for reason, count in list(reason_counts.items())[:8]))
+            preview_rows = auto_preview.get("rows", [])[:80]
+            if preview_rows:
+                st.dataframe(preview_rows, use_container_width=True, hide_index=True)
+                if len(auto_preview.get("rows", [])) > len(preview_rows):
+                    st.caption(f"仅展示前 {len(preview_rows)} 条预检结果。")
+            auto_candidate_ids = [
+                str(item.get("pending_id") or "")
+                for item in auto_candidate_items
+                if item.get("pending_id")
+            ]
+            if st.button("按当前策略自动确认低风险条目", key="pending_run_auto_review", use_container_width=True):
+                if not auto_candidate_ids:
+                    st.error("当前范围内没有可审核条目。")
+                else:
+                    auto_summary = auto_confirm_pending_items_without_risk(
+                        project_name,
+                        auto_candidate_ids,
+                        source_type="pending_queue_manual_auto_review",
+                        source_title=f"待确认队列 / {auto_scope}",
+                        note="用户在待确认队列手动触发自动审核",
+                    )
+                    st.success(
+                        f"自动审核完成：确认 {len(auto_summary.get('confirmed_ids', []))} 条，"
+                        f"保留 {len(auto_summary.get('blocked_ids', []))} 条。"
+                    )
+                    if auto_summary.get("run_id"):
+                        st.caption(f"自动审核记录：{auto_summary.get('run_id')}")
+                    st.rerun()
         col_a, col_b = st.columns(2)
         if col_a.button("确认所选并写入结构化知识"):
             if not selected_ids:
@@ -3608,6 +3827,172 @@ def render_pending_knowledge_queue(project_name: str):
                         st.rerun()
                 except json.JSONDecodeError as exc:
                     st.error(f"结构化数据格式错误：{exc}")
+
+
+def render_auto_review_policy_panel(project_name: str):
+    policy = load_auto_review_policy(project_name)
+    with st.expander("自动审核策略", expanded=False):
+        st.caption("控制低风险知识是否自动保存。策略越严格，保留待确认越多；策略越宽松，人工审核负担越低。")
+        col_conf, col_evidence = st.columns(2)
+        min_confidence = col_conf.slider(
+            "自动确认最低置信度",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(policy.get("min_confidence", 0.45)),
+            step=0.05,
+            key="auto_review_policy_min_confidence",
+        )
+        min_evidence_strength = col_evidence.slider(
+            "自动确认最低证据强度",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(policy.get("min_evidence_strength", 0.35)),
+            step=0.05,
+            key="auto_review_policy_min_evidence",
+        )
+        col_grade_a, col_grade_e = st.columns(2)
+        grade_a_confidence = col_grade_a.slider(
+            "A 级置信度阈值",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(policy.get("grade_a_confidence", 0.75)),
+            step=0.05,
+            key="auto_review_policy_grade_a_confidence",
+        )
+        grade_a_evidence_strength = col_grade_e.slider(
+            "A 级证据阈值",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(policy.get("grade_a_evidence_strength", 0.65)),
+            step=0.05,
+            key="auto_review_policy_grade_a_evidence",
+        )
+        allow_grade_b_auto_confirm = st.checkbox(
+            "允许 B 级条目自动确认",
+            value=bool(policy.get("allow_grade_b_auto_confirm", True)),
+            key="auto_review_policy_allow_grade_b",
+            help="关闭后，只有 A 级条目会自动保存，B 级会保留用于抽查。",
+        )
+        require_evidence = st.checkbox(
+            "自动确认必须有证据",
+            value=bool(policy.get("require_evidence", True)),
+            key="auto_review_policy_require_evidence",
+        )
+        manual_review_categories = st.multiselect(
+            "必须人工审核的分类",
+            options=list(KNOWLEDGE_CATEGORY_LABELS.keys()),
+            default=[
+                category
+                for category in policy.get("manual_review_categories", ["constraints"])
+                if category in KNOWLEDGE_CATEGORY_LABELS
+            ],
+            format_func=label_knowledge_category,
+            key="auto_review_policy_manual_categories",
+            help="这些分类永远不会自动确认，适合硬性约束、世界规则等高影响资料。",
+        )
+        if st.button("保存自动审核策略", key="save_auto_review_policy", use_container_width=True):
+            saved = save_auto_review_policy(project_name, {
+                "min_confidence": min_confidence,
+                "min_evidence_strength": min_evidence_strength,
+                "grade_a_confidence": grade_a_confidence,
+                "grade_a_evidence_strength": grade_a_evidence_strength,
+                "allow_grade_b_auto_confirm": allow_grade_b_auto_confirm,
+                "require_evidence": require_evidence,
+                "manual_review_categories": manual_review_categories,
+            })
+            st.success("自动审核策略已保存。")
+            st.json(saved)
+
+
+def render_auto_review_runs_panel(project_name: str):
+    runs = list(reversed(load_auto_review_runs(project_name)))
+    with st.expander(f"自动审核记录（{len(runs)}）", expanded=False):
+        st.caption("自动审核会保存每次自动确认的决策、原始待确认快照和写入位置。发现误入库时，可以回退某次自动审核。")
+        if not runs:
+            st.caption("当前还没有自动审核记录。")
+            return
+
+        active_runs = [run for run in runs if str(run.get("status") or "active") != "rolled_back"]
+        metric_cols = st.columns(4)
+        metric_cols[0].metric("记录数", len(runs))
+        metric_cols[1].metric("可回退", len(active_runs))
+        metric_cols[2].metric("自动确认", sum(len(run.get("confirmed_ids", []) or []) for run in runs))
+        metric_cols[3].metric("保留待确认", sum(len(run.get("blocked_ids", []) or []) for run in runs))
+
+        selected_run_id = st.selectbox(
+            "选择自动审核记录",
+            options=[str(run.get("run_id") or "") for run in runs],
+            format_func=lambda run_id: next(
+                (
+                    f"{run.get('created_at', '-')[:19]} / {run.get('source_title') or run.get('source_type') or '自动审核'}"
+                    f" / 确认 {len(run.get('confirmed_ids', []) or [])}"
+                    f" / 保留 {len(run.get('blocked_ids', []) or [])}"
+                    f" / {'已回退' if run.get('status') == 'rolled_back' else '可回退'}"
+                    for run in runs if str(run.get("run_id") or "") == run_id
+                ),
+                run_id,
+            ),
+            key="auto_review_run_select",
+        )
+        selected_run = next((run for run in runs if str(run.get("run_id") or "") == selected_run_id), {})
+        if not selected_run:
+            return
+
+        st.caption(
+            f"run_id={selected_run.get('run_id', '')} / 来源={selected_run.get('source_type', '-') or '-'} / "
+            f"批次={selected_run.get('batch_id', '-') or '-'} / 状态={selected_run.get('status', 'active')}"
+        )
+        if selected_run.get("note"):
+            st.info(str(selected_run.get("note")))
+
+        reason_counts: dict[str, int] = {}
+        for reason in (selected_run.get("blocked_reasons", {}) or {}).values():
+            reason_counts[str(reason or "未说明")] = reason_counts.get(str(reason or "未说明"), 0) + 1
+        if reason_counts:
+            st.caption("保留原因：" + " / ".join(f"{reason}={count}" for reason, count in reason_counts.items()))
+
+        rows = []
+        for decision in selected_run.get("decisions", [])[:80] if isinstance(selected_run.get("decisions", []), list) else []:
+            if not isinstance(decision, dict):
+                continue
+            rows.append({
+                "决策": "自动确认" if decision.get("decision") == "confirm" else "保留待确认",
+                "等级": decision.get("grade", ""),
+                "分类": label_knowledge_category(decision.get("category", "")),
+                "名称": decision.get("name", ""),
+                "原因": decision.get("reason", ""),
+            })
+        if rows:
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            if len(selected_run.get("decisions", []) or []) > len(rows):
+                st.caption(f"仅展示前 {len(rows)} 条决策。")
+
+        with st.expander("自动审核记录原始数据", expanded=False):
+            st.json(selected_run)
+
+        if selected_run.get("status") == "rolled_back":
+            result = selected_run.get("rollback_result", {})
+            st.warning(
+                f"该记录已回退：删除 {result.get('removed_count', 0)} 条正式知识，"
+                f"恢复 {result.get('restored_count', 0)} 条待确认知识。"
+            )
+            return
+
+        confirm_text = st.text_input(
+            "输入 run_id 以确认回退",
+            key=f"rollback_auto_review_confirm_{selected_run_id}",
+            placeholder=selected_run_id,
+        )
+        if st.button("回退这次自动审核", key=f"rollback_auto_review_{selected_run_id}", use_container_width=True):
+            if confirm_text.strip() != selected_run_id:
+                st.error("请先输入完整 run_id，避免误回退。")
+            else:
+                result = rollback_auto_review_run(project_name, selected_run_id)
+                if result.get("success"):
+                    st.success(result.get("message", "已回退。"))
+                    st.rerun()
+                else:
+                    st.error(result.get("message", "回退失败。"))
 
 
 def parse_comma_tags(value: str) -> list[str]:
@@ -3916,6 +4301,42 @@ def render_confirmed_knowledge_item_editor(
             col_save, col_delete = st.columns(2)
             save_clicked = col_save.form_submit_button("保存正式知识并重建索引", use_container_width=True)
             delete_clicked = col_delete.form_submit_button("删除该条正式知识", use_container_width=True)
+
+        can_return_to_pending = bool(item.get("auto_review_run_id") or item.get("source_pending_id"))
+        return_clicked = False
+        return_reason = ""
+        if can_return_to_pending:
+            st.caption(
+                f"自动审核来源：{item.get('auto_review_run_id', '-') or '-'} / "
+                f"原 pending：{item.get('source_pending_id', '-') or '-'}"
+            )
+            with st.expander("退回待确认", expanded=False):
+                st.caption("只退回这一条正式知识，不影响同一次自动审核的其他条目。退回后可在待确认队列重新编辑、确认或丢弃。")
+                return_reason = st.text_input(
+                    "退回原因（可选）",
+                    key=f"return_confirmed_reason_{category}_{selected_index}",
+                    placeholder="例如：自动审核误判、证据需要复核、世界线不对",
+                )
+                return_clicked = st.button(
+                    "将该条正式知识退回待确认",
+                    key=f"return_confirmed_to_pending_{category}_{selected_index}",
+                    use_container_width=True,
+                )
+
+        if return_clicked:
+            knowledge_id = str(item.get("id") or "")
+            result = return_confirmed_knowledge_item_to_pending(
+                project_name,
+                category,
+                knowledge_id,
+                reason=return_reason,
+            )
+            if result.get("success"):
+                rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success(result.get("message", "已退回待确认。"))
+                st.rerun()
+            st.error(result.get("message", "退回失败。"))
+            return
 
         if not (save_clicked or delete_clicked):
             return
@@ -5858,6 +6279,39 @@ def render_extraction_diff_detail(project_name: str, diff: dict, key_prefix: str
                 render_knowledge_diff_item(item, f"{key_prefix}_missing_{index}")
 
 
+def apply_long_reference_fanfic_preset(preset: str):
+    if preset == "canon_foundation":
+        st.session_state["long_reference_scope"] = "canon"
+        st.session_state["long_reference_authority"] = "official"
+        st.session_state["long_reference_source_type"] = "external_source"
+        st.session_state["long_reference_quick_import_index"] = True
+        st.session_state["long_reference_quick_auto_confirm"] = True
+        st.session_state["long_reference_quick_consolidate"] = False
+        st.session_state["long_reference_shared_expert_preset"] = "canon_auditor"
+        st.session_state["long_reference_shared_category_strategy_canon_auditor"] = "preset"
+        st.session_state["long_reference_shared_mode_canon_auditor"] = "strict_canon"
+    elif preset == "fanfic_foundation":
+        st.session_state["long_reference_scope"] = "canon"
+        st.session_state["long_reference_authority"] = "official"
+        st.session_state["long_reference_source_type"] = "external_source"
+        st.session_state["long_reference_quick_import_index"] = True
+        st.session_state["long_reference_quick_auto_confirm"] = True
+        st.session_state["long_reference_quick_consolidate"] = True
+        st.session_state["long_reference_shared_expert_preset"] = "balanced"
+        st.session_state["long_reference_shared_category_strategy_balanced"] = "preset"
+        st.session_state["long_reference_shared_mode_balanced"] = "deep"
+    elif preset == "style_reference":
+        st.session_state["long_reference_scope"] = "reference"
+        st.session_state["long_reference_authority"] = "curated"
+        st.session_state["long_reference_source_type"] = "external_source"
+        st.session_state["long_reference_quick_import_index"] = True
+        st.session_state["long_reference_quick_auto_confirm"] = True
+        st.session_state["long_reference_quick_consolidate"] = False
+        st.session_state["long_reference_shared_expert_preset"] = "style_expert"
+        st.session_state["long_reference_shared_category_strategy_style_expert"] = "preset"
+        st.session_state["long_reference_shared_mode_style_expert"] = "style"
+
+
 def run_long_reference_extraction_plan(
     project_name: str,
     batch: dict,
@@ -6618,11 +7072,26 @@ def consolidate_batch_pending_items(
     }
 
 
-def pending_item_has_auto_confirm_risk(item: dict, issue_map: dict) -> bool:
+def evaluate_pending_auto_review_decision(item: dict, issue_map: dict, policy: dict | None = None) -> dict:
+    active_policy = dict(policy or {})
     pending_id = str(item.get("pending_id") or "")
+    category = str(item.get("category") or "")
+    manual_categories = set(active_policy.get("manual_review_categories", []) if isinstance(active_policy.get("manual_review_categories", []), list) else [])
+    if category in manual_categories:
+        return {
+            "pending_id": pending_id,
+            "decision": "blocked",
+            "grade": "C",
+            "reason": f"{label_knowledge_category(category)} 需人工审核",
+        }
     issue = issue_map.get(pending_id, {}) if isinstance(issue_map, dict) else {}
     if issue:
-        return True
+        return {
+            "pending_id": pending_id,
+            "decision": "blocked",
+            "grade": "D" if issue.get("severity") == "高" else "C",
+            "reason": pending_quality_label(issue),
+        }
     try:
         confidence = float(item.get("confidence") or 0)
     except (TypeError, ValueError):
@@ -6632,35 +7101,161 @@ def pending_item_has_auto_confirm_risk(item: dict, issue_map: dict) -> bool:
     except (TypeError, ValueError):
         evidence_strength = 0
     evidence = item.get("evidence", [])
-    if confidence and confidence < 0.45:
-        return True
-    if evidence_strength and evidence_strength < 0.35:
-        return True
-    if not evidence:
-        return True
-    return False
+    min_confidence = float(active_policy.get("min_confidence", 0.45))
+    min_evidence_strength = float(active_policy.get("min_evidence_strength", 0.35))
+    grade_a_confidence = float(active_policy.get("grade_a_confidence", 0.75))
+    grade_a_evidence_strength = float(active_policy.get("grade_a_evidence_strength", 0.65))
+    require_evidence = bool(active_policy.get("require_evidence", True))
+    allow_grade_b = bool(active_policy.get("allow_grade_b_auto_confirm", True))
+    if require_evidence and not evidence:
+        return {
+            "pending_id": pending_id,
+            "decision": "blocked",
+            "grade": "C",
+            "reason": "缺少证据",
+        }
+    if confidence and confidence < min_confidence:
+        return {
+            "pending_id": pending_id,
+            "decision": "blocked",
+            "grade": "C",
+            "reason": f"置信度偏低：{confidence:.2f}",
+        }
+    if evidence_strength and evidence_strength < min_evidence_strength:
+        return {
+            "pending_id": pending_id,
+            "decision": "blocked",
+            "grade": "C",
+            "reason": f"证据强度偏低：{evidence_strength:.2f}",
+        }
+    grade = "A" if (confidence >= grade_a_confidence and evidence_strength >= grade_a_evidence_strength) else "B"
+    if grade == "B" and not allow_grade_b:
+        return {
+            "pending_id": pending_id,
+            "decision": "blocked",
+            "grade": "B",
+            "reason": "B 级条目按当前策略保留抽查",
+        }
+    return {
+        "pending_id": pending_id,
+        "decision": "confirm",
+        "grade": grade,
+        "reason": f"无质检风险，置信度 {confidence:.2f}，证据强度 {evidence_strength:.2f}",
+    }
 
 
-def auto_confirm_pending_items_without_risk(project_name: str, candidate_ids: list[str]) -> dict:
+def pending_item_has_auto_confirm_risk(item: dict, issue_map: dict, policy: dict | None = None) -> bool:
+    return evaluate_pending_auto_review_decision(item, issue_map, policy).get("decision") != "confirm"
+
+
+def build_pending_auto_review_preview(items: list[dict], issue_map: dict, policy: dict | None = None) -> dict:
+    rows = []
+    confirmed_ids = []
+    blocked_ids = []
+    grade_counts: dict[str, int] = {}
+    blocked_reason_counts: dict[str, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        pending_id = str(item.get("pending_id") or "")
+        if not pending_id:
+            continue
+        decision = evaluate_pending_auto_review_decision(item, issue_map, policy)
+        grade = str(decision.get("grade") or "")
+        reason = str(decision.get("reason") or "")
+        grade_counts[grade] = grade_counts.get(grade, 0) + 1
+        if decision.get("decision") == "confirm":
+            confirmed_ids.append(pending_id)
+            decision_label = "自动确认"
+        else:
+            blocked_ids.append(pending_id)
+            blocked_reason_counts[reason] = blocked_reason_counts.get(reason, 0) + 1
+            decision_label = "保留待确认"
+        rows.append({
+            "决策": decision_label,
+            "等级": grade,
+            "分类": label_knowledge_category(item.get("category", "")),
+            "名称": item.get("name", ""),
+            "置信度": f"{safe_confidence(item.get('confidence', 0)):.2f}",
+            "证据": f"{safe_confidence(item.get('evidence_strength', 0)):.2f}",
+            "原因": reason,
+            "来源": item.get("source_title", "") or item.get("source_segment_title", ""),
+        })
+    rows.sort(key=lambda row: (0 if row.get("决策") == "保留待确认" else 1, row.get("等级", ""), row.get("分类", ""), row.get("名称", "")))
+    return {
+        "candidate_count": len(confirmed_ids) + len(blocked_ids),
+        "confirmed_ids": confirmed_ids,
+        "blocked_ids": blocked_ids,
+        "grade_counts": grade_counts,
+        "blocked_reason_counts": blocked_reason_counts,
+        "rows": rows,
+    }
+
+
+def auto_confirm_pending_items_without_risk(
+    project_name: str,
+    candidate_ids: list[str],
+    *,
+    source_type: str = "",
+    source_title: str = "",
+    batch_id: str = "",
+    note: str = "",
+) -> dict:
     id_set = {str(item) for item in candidate_ids if item}
     if not id_set:
-        return {"confirmed_ids": [], "blocked_ids": [], "blocked_reasons": {}}
+        return {"confirmed_ids": [], "blocked_ids": [], "blocked_reasons": {}, "run_id": ""}
     pending_items = load_pending_knowledge_items(project_name)
+    policy = load_auto_review_policy(project_name)
     candidate_items = [item for item in pending_items if str(item.get("pending_id") or "") in id_set]
     quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
     issue_map = build_pending_issue_map(quality_issues)
     confirmed_ids = []
     blocked_ids = []
     blocked_reasons = {}
+    decisions = []
     for item in candidate_items:
         pending_id = str(item.get("pending_id") or "")
-        issue = issue_map.get(pending_id, {})
-        if pending_item_has_auto_confirm_risk(item, issue_map):
+        decision = evaluate_pending_auto_review_decision(item, issue_map, policy)
+        decision.update({
+            "category": item.get("category", ""),
+            "name": item.get("name", ""),
+            "source_title": item.get("source_title", ""),
+            "source_origin": item.get("source_origin", ""),
+        })
+        decisions.append(decision)
+        if decision.get("decision") != "confirm":
             blocked_ids.append(pending_id)
-            blocked_reasons[pending_id] = pending_quality_label(issue) if issue else "证据/置信不足"
+            blocked_reasons[pending_id] = decision.get("reason", "证据/置信不足")
         else:
             confirmed_ids.append(pending_id)
-    saved_count = confirm_pending_knowledge_items(project_name, confirmed_ids)
+
+    id_digest = hashlib.sha1("|".join(sorted(id_set)).encode("utf-8")).hexdigest()[:10]
+    run_id = f"auto_review_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{id_digest}"
+    confirm_result = confirm_pending_knowledge_items_with_records(
+        project_name,
+        confirmed_ids,
+        confirmation_metadata={
+            "auto_review_run_id": run_id,
+            "auto_reviewed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    saved_count = int(confirm_result.get("saved_count", 0))
+    run = append_auto_review_run(project_name, {
+        "run_id": run_id,
+        "source_type": source_type or "auto_confirm",
+        "source_title": source_title,
+        "batch_id": batch_id,
+        "note": note,
+        "candidate_ids": sorted(id_set),
+        "confirmed_ids": confirmed_ids,
+        "blocked_ids": blocked_ids,
+        "blocked_reasons": blocked_reasons,
+        "decisions": decisions,
+        "confirmed_records": confirm_result.get("confirmed_records", []),
+        "pending_snapshots": confirm_result.get("pending_snapshots", []),
+        "saved_count": saved_count,
+        "policy": policy,
+    })
     if saved_count:
         rebuild_retrieval_assets(project_name, build_vectors=True)
     return {
@@ -6668,6 +7263,8 @@ def auto_confirm_pending_items_without_risk(project_name: str, candidate_ids: li
         "blocked_ids": blocked_ids,
         "blocked_reasons": blocked_reasons,
         "saved_count": saved_count,
+        "run_id": run.get("run_id", run_id),
+        "decisions": decisions,
     }
 
 
@@ -6735,7 +7332,14 @@ def run_long_reference_quick_process(
         if str(item.get("pending_id") or "") and str(item.get("pending_id") or "") not in before_pending_ids
     ]
     if auto_confirm_safe_items:
-        auto_confirm_summary = auto_confirm_pending_items_without_risk(project_name, new_pending_ids)
+        auto_confirm_summary = auto_confirm_pending_items_without_risk(
+            project_name,
+            new_pending_ids,
+            source_type="long_reference_quick_process",
+            source_title=batch.get("title", ""),
+            batch_id=batch.get("batch_id", ""),
+            note="长篇资料一键处理自动审核",
+        )
 
     summary = {
         "selected_segment_count": len(selected_indices),
@@ -6948,6 +7552,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                     "提取片段": batch_quick_result.get("processed_count", 0),
                     "新增候选": batch_quick_result.get("new_pending_count", 0),
                     "自动保存": batch_quick_result.get("auto_confirmed_count", 0),
+                    "自动审核记录": batch_quick_result.get("auto_confirm", {}).get("run_id", ""),
                     "保留待确认": batch_quick_result.get("blocked_count", 0),
                     "保留原因": batch_quick_result.get("auto_confirm", {}).get("blocked_reasons", {}),
                     "失败": batch_quick_result.get("failed_titles", []),
@@ -7397,6 +8002,30 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
 def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str], expanded: bool = False):
     with st.expander("长篇资料导入器", expanded=expanded):
         st.caption("适合导入长篇网文、原作正文或大段参考资料。推荐流程：先切分，再保存批次，随后按需要导入索引或提取知识。")
+        with st.expander("同人资料初始化推荐方案", expanded=True):
+            st.caption("先选一个处理目标，系统会自动设置资料范围、可信度、一键处理和提取模式。后续仍可在高级设置里手动调整。")
+            preset_cols = st.columns(3)
+            with preset_cols[0]:
+                st.markdown("**严格原作地基**")
+                st.caption("适合先锁定不能违背的原作事实、关系、事件和硬约束。")
+                if st.button("使用严格原作方案", key="long_reference_preset_canon_foundation", use_container_width=True):
+                    apply_long_reference_fanfic_preset("canon_foundation")
+                    st.success("已切换为严格原作方案。")
+                    st.rerun()
+            with preset_cols[1]:
+                st.markdown("**同人创作地基**")
+                st.caption("适合第一次正式整理整本原作，兼顾角色、关系、时间线、世界观和约束。")
+                if st.button("使用同人地基方案", key="long_reference_preset_fanfic_foundation", use_container_width=True):
+                    apply_long_reference_fanfic_preset("fanfic_foundation")
+                    st.success("已切换为同人地基方案。")
+                    st.rerun()
+            with preset_cols[2]:
+                st.markdown("**文风参考地基**")
+                st.caption("适合导入样本文本或原作文风片段，优先提取叙事、对白和氛围。")
+                if st.button("使用文风参考方案", key="long_reference_preset_style_reference", use_container_width=True):
+                    apply_long_reference_fanfic_preset("style_reference")
+                    st.success("已切换为文风参考方案。")
+                    st.rerun()
         with st.expander("这几个步骤分别在做什么？", expanded=False):
             st.markdown(
                 """
@@ -7670,6 +8299,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                     "提取片段": quick_result.get("processed_count", 0),
                     "新增候选": quick_result.get("new_pending_count", 0),
                     "自动保存": quick_result.get("auto_confirmed_count", 0),
+                    "自动审核记录": quick_result.get("auto_confirm", {}).get("run_id", ""),
                     "保留待确认": quick_result.get("blocked_count", 0),
                     "失败": quick_result.get("failed_titles", []),
                     "保留原因": quick_result.get("auto_confirm", {}).get("blocked_reasons", {}),
@@ -8417,6 +9047,7 @@ def render_volume_outline_page(project_name: str):
     with summary_col:
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前分卷方向的结论。")
+        render_step_retrieval(discussion_step, "本次分卷讨论参考的检索上下文")
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前讨论", key=f"approve_volume_discussion_{volume_no}"):
             try:
@@ -8572,6 +9203,7 @@ def render_arc_outline_page(project_name: str):
     with summary_col:
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前剧情段方向的结论。")
+        render_step_retrieval(discussion_step, "本次剧情段讨论参考的检索上下文")
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前讨论", key=f"approve_arc_discussion_{arc_no}"):
             try:
@@ -8831,6 +9463,16 @@ def render_retrieval_hits_block(hits: list[dict], title: str):
                     authority = label_authority(chunk.get("metadata", {}).get("authority", "unknown"))
                     if matched_terms:
                         st.caption(f"命中词：{', '.join(matched_terms)}")
+                    expanded_terms = hit.get("expanded_terms", [])
+                    if expanded_terms:
+                        st.caption(f"查询扩展：{', '.join(expanded_terms[:12])}")
+                    match_reasons = hit.get("match_reasons", [])
+                    if match_reasons:
+                        st.caption("召回原因：" + "；".join(match_reasons[:5]))
+                    score_breakdown = hit.get("score_breakdown", {})
+                    if score_breakdown:
+                        breakdown_text = " / ".join(f"{key}={value:.2f}" for key, value in score_breakdown.items())
+                        st.caption(f"分数拆解：{breakdown_text}")
                     st.caption(
                         f"可信度={authority} / 关键词分={hit.get('lexical_score', 0):.2f} / 语义分={hit.get('semantic_score', 0):.2f} / 来源={chunk.get('path', '-') }"
                     )
@@ -8857,6 +9499,352 @@ def render_retrieval_hits_block(hits: list[dict], title: str):
                 )
                 if rationale:
                     st.caption(f"判断理由：{rationale}")
+
+
+def _parse_multiline_or_comma_values(value: str) -> list[str]:
+    normalized = str(value or "").replace("，", ",")
+    parts: list[str] = []
+    for line in normalized.splitlines():
+        parts.extend(item.strip() for item in line.split(",") if item.strip())
+    return [item for item in parts if item]
+
+
+def _retrieval_profile_label(value: str) -> str:
+    return {
+        "": "通用",
+        "creative_profile_discussion": "创作配置讨论",
+        "outline_discussion": "全书大纲讨论",
+        "volume_discussion": "分卷讨论",
+        "arc_discussion": "剧情段讨论",
+        "chapter_discussion": "章节讨论",
+        "outline_generation": "大纲生成",
+        "chapter_planning": "章节规划",
+        "drafting": "正文写作",
+        "review": "审阅/评价",
+    }.get(value, value)
+
+
+def evaluate_retrieval_case(project_name: str, case: dict) -> dict:
+    expected_terms = [str(item).strip() for item in case.get("expected_terms", []) if str(item).strip()]
+    expected_chunk_ids = [str(item).strip() for item in case.get("expected_chunk_ids", []) if str(item).strip()]
+    expected_source_types = [str(item).strip() for item in case.get("expected_source_types", []) if str(item).strip()]
+    hits = retrieve_context(
+        project_name,
+        str(case.get("query") or ""),
+        top_k=int(case.get("top_k") or 6),
+        allowed_scopes=case.get("allowed_scopes") or None,
+        allowed_source_types=case.get("allowed_source_types") or None,
+        retrieval_mode=str(case.get("retrieval_mode") or "hybrid"),
+        retrieval_profile=str(case.get("retrieval_profile") or "") or None,
+        worldline_id=str(case.get("worldline_id") or "") or None,
+        worldline_mode=str(case.get("worldline_mode") or "prefer"),
+    )
+    hit_payloads = [hit.model_dump() for hit in hits]
+    matched_terms = []
+    for term in expected_terms:
+        needle = term.lower()
+        if any(
+            needle in str(hit.chunk.title or "").lower()
+            or needle in str(hit.chunk.content or "").lower()
+            or needle in " ".join(hit.matched_terms).lower()
+            for hit in hits
+        ):
+            matched_terms.append(term)
+    hit_chunk_ids = [hit.chunk.chunk_id for hit in hits]
+    hit_source_types = [hit.chunk.source_type for hit in hits]
+    matched_chunk_ids = [chunk_id for chunk_id in expected_chunk_ids if chunk_id in hit_chunk_ids]
+    matched_source_types = [source_type for source_type in expected_source_types if source_type in hit_source_types]
+    matched_count = len(matched_terms) + len(matched_chunk_ids) + len(matched_source_types)
+    expectation_count = len(expected_terms) + len(expected_chunk_ids) + len(expected_source_types)
+    min_expected_matches = max(1, int(case.get("min_expected_matches") or 1))
+    passed = expectation_count > 0 and matched_count >= min_expected_matches
+    top_hit = hits[0] if hits else None
+    return {
+        "case_id": case.get("case_id", ""),
+        "name": case.get("name", ""),
+        "query": case.get("query", ""),
+        "passed": passed,
+        "matched_count": matched_count,
+        "expectation_count": expectation_count,
+        "min_expected_matches": min_expected_matches,
+        "matched_terms": matched_terms,
+        "matched_chunk_ids": matched_chunk_ids,
+        "matched_source_types": matched_source_types,
+        "hit_count": len(hits),
+        "top_hit": top_hit.model_dump() if top_hit else {},
+        "hits": hit_payloads,
+        "briefing": build_retrieval_briefing(hits),
+    }
+
+
+def run_retrieval_eval_cases(project_name: str, cases: list[dict], note: str = "") -> dict:
+    active_cases = [case for case in cases if str(case.get("status") or "active") == "active" and str(case.get("query") or "").strip()]
+    results = []
+    for case in active_cases:
+        try:
+            results.append(evaluate_retrieval_case(project_name, case))
+        except Exception as exc:
+            results.append({
+                "case_id": case.get("case_id", ""),
+                "name": case.get("name", ""),
+                "query": case.get("query", ""),
+                "passed": False,
+                "error": str(exc),
+                "matched_count": 0,
+                "expectation_count": 0,
+                "hits": [],
+            })
+    passed_count = sum(1 for item in results if item.get("passed"))
+    run = append_retrieval_eval_run(project_name, {
+        "note": note,
+        "case_count": len(active_cases),
+        "passed_count": passed_count,
+        "failed_count": len(active_cases) - passed_count,
+        "pass_rate": (passed_count / len(active_cases)) if active_cases else 0,
+        "results": results,
+    })
+    return run
+
+
+def render_retrieval_eval_workbench(project_name: str, manifest):
+    cases = load_retrieval_eval_cases(project_name)
+    runs = list(reversed(load_retrieval_eval_runs(project_name)))
+    feedback_items = load_retrieval_feedback(project_name)
+    source_type_candidates = sorted({chunk.source_type for chunk in manifest.chunks}) if manifest else []
+    with st.expander("RAG 评测与反馈", expanded=False):
+        st.caption("用固定测试问题评估召回是否命中预期资料；检索反馈会影响后续排序，适合持续调教项目资料库。")
+        metric_cols = st.columns(4)
+        active_cases = [case for case in cases if str(case.get("status") or "active") == "active"]
+        metric_cols[0].metric("评测用例", len(cases))
+        metric_cols[1].metric("启用用例", len(active_cases))
+        metric_cols[2].metric("评测运行", len(runs))
+        metric_cols[3].metric("反馈记录", len(feedback_items))
+
+        with st.expander("新增 / 更新评测用例", expanded=False):
+            edit_options = ["__new__"] + [str(case.get("case_id") or "") for case in cases]
+            edit_case_id = st.selectbox(
+                "编辑目标",
+                options=edit_options,
+                format_func=lambda value: "新建用例" if value == "__new__" else next((case.get("name", value) for case in cases if case.get("case_id") == value), value),
+                key="rag_eval_edit_case_id",
+            )
+            current_case = next((case for case in cases if case.get("case_id") == edit_case_id), {}) if edit_case_id != "__new__" else {}
+            case_name = st.text_input("用例名称", value=current_case.get("name", ""), key=f"rag_eval_case_name_{edit_case_id}")
+            case_query = st.text_area("测试查询", value=current_case.get("query", ""), height=90, key=f"rag_eval_case_query_{edit_case_id}")
+            expected_terms_text = st.text_area(
+                "期望命中词（逗号或换行分隔）",
+                value="\n".join(current_case.get("expected_terms", [])),
+                height=80,
+                key=f"rag_eval_expected_terms_{edit_case_id}",
+            )
+            expected_chunk_ids_text = st.text_area(
+                "期望片段 ID（可选，逗号或换行分隔）",
+                value="\n".join(current_case.get("expected_chunk_ids", [])),
+                height=70,
+                key=f"rag_eval_expected_chunks_{edit_case_id}",
+            )
+            eval_col_a, eval_col_b, eval_col_c = st.columns(3)
+            expected_source_types = eval_col_a.multiselect(
+                "期望来源类型（可选）",
+                options=source_type_candidates,
+                default=[item for item in current_case.get("expected_source_types", []) if item in source_type_candidates],
+                format_func=label_source_type,
+                key=f"rag_eval_expected_source_types_{edit_case_id}",
+            )
+            profile_options = [""] + list(RETRIEVAL_TASK_PROFILES.keys())
+            eval_profile = eval_col_b.selectbox(
+                "任务策略",
+                options=profile_options,
+                index=profile_options.index(current_case.get("retrieval_profile", "")) if current_case.get("retrieval_profile", "") in profile_options else 0,
+                format_func=_retrieval_profile_label,
+                key=f"rag_eval_profile_{edit_case_id}",
+            )
+            eval_mode = eval_col_c.selectbox(
+                "检索模式",
+                options=["hybrid", "lexical", "semantic"],
+                index=["hybrid", "lexical", "semantic"].index(current_case.get("retrieval_mode", "hybrid")) if current_case.get("retrieval_mode", "hybrid") in {"hybrid", "lexical", "semantic"} else 0,
+                format_func=label_retrieval_mode,
+                key=f"rag_eval_mode_{edit_case_id}",
+            )
+            scope_values = st.multiselect(
+                "范围过滤",
+                options=["project", "canon", "reference"],
+                default=current_case.get("allowed_scopes", []) or ["project", "canon", "reference"],
+                format_func=label_scope,
+                key=f"rag_eval_scopes_{edit_case_id}",
+            )
+            source_type_values = st.multiselect(
+                "来源类型过滤（可选）",
+                options=source_type_candidates,
+                default=[item for item in current_case.get("allowed_source_types", []) if item in source_type_candidates],
+                format_func=label_source_type,
+                key=f"rag_eval_allowed_source_types_{edit_case_id}",
+            )
+            config_col_a, config_col_b, config_col_c = st.columns(3)
+            eval_top_k = config_col_a.number_input("返回条数", min_value=1, max_value=20, value=int(current_case.get("top_k", 6) or 6), key=f"rag_eval_top_k_{edit_case_id}")
+            eval_min_matches = config_col_b.number_input("最少命中预期数", min_value=1, max_value=20, value=int(current_case.get("min_expected_matches", 1) or 1), key=f"rag_eval_min_matches_{edit_case_id}")
+            eval_status = config_col_c.selectbox(
+                "状态",
+                options=["active", "disabled"],
+                index=0 if current_case.get("status", "active") != "disabled" else 1,
+                format_func=lambda value: "启用" if value == "active" else "停用",
+                key=f"rag_eval_status_{edit_case_id}",
+            )
+            eval_notes = st.text_area("备注", value=current_case.get("notes", ""), height=70, key=f"rag_eval_notes_{edit_case_id}")
+            if st.button("保存评测用例", key=f"save_rag_eval_case_{edit_case_id}", use_container_width=True):
+                try:
+                    saved = upsert_retrieval_eval_case(project_name, {
+                        "case_id": "" if edit_case_id == "__new__" else edit_case_id,
+                        "name": case_name,
+                        "query": case_query,
+                        "expected_terms": _parse_multiline_or_comma_values(expected_terms_text),
+                        "expected_chunk_ids": _parse_multiline_or_comma_values(expected_chunk_ids_text),
+                        "expected_source_types": expected_source_types,
+                        "allowed_scopes": scope_values,
+                        "allowed_source_types": source_type_values,
+                        "retrieval_profile": eval_profile,
+                        "retrieval_mode": eval_mode,
+                        "top_k": int(eval_top_k),
+                        "min_expected_matches": int(eval_min_matches),
+                        "status": eval_status,
+                        "notes": eval_notes,
+                    })
+                    st.success(f"已保存评测用例：{saved.get('name')}")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"保存失败：{exc}")
+
+        if cases:
+            rows = [
+                {
+                    "名称": case.get("name", ""),
+                    "查询": case.get("query", "")[:80],
+                    "期望词": "、".join(case.get("expected_terms", [])[:5]),
+                    "期望来源": "、".join(label_source_type(item) for item in case.get("expected_source_types", [])[:5]),
+                    "策略": _retrieval_profile_label(case.get("retrieval_profile", "")),
+                    "状态": "启用" if case.get("status", "active") == "active" else "停用",
+                }
+                for case in cases
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+            action_col_a, action_col_b, action_col_c = st.columns(3)
+            selected_case_id = action_col_a.selectbox(
+                "选择运行/删除用例",
+                options=[str(case.get("case_id") or "") for case in cases],
+                format_func=lambda value: next((case.get("name", value) for case in cases if case.get("case_id") == value), value),
+                key="rag_eval_selected_case",
+            )
+            if action_col_b.button("运行所选用例", key="run_selected_rag_eval", use_container_width=True):
+                selected_case = next((case for case in cases if case.get("case_id") == selected_case_id), None)
+                if selected_case:
+                    run = run_retrieval_eval_cases(project_name, [selected_case], note="手动运行单个评测用例")
+                    st.session_state["rag_eval_last_run"] = run
+                    st.success(f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}")
+            if action_col_c.button("删除所选用例", key="delete_selected_rag_eval", use_container_width=True):
+                if delete_retrieval_eval_case(project_name, selected_case_id):
+                    st.success("已删除评测用例。")
+                    st.rerun()
+            if st.button("运行全部启用评测用例", key="run_all_rag_eval", use_container_width=True):
+                run = run_retrieval_eval_cases(project_name, cases, note="手动运行全部启用评测用例")
+                st.session_state["rag_eval_last_run"] = run
+                st.success(f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}，通过率 {run.get('pass_rate', 0):.0%}")
+
+        last_run = st.session_state.get("rag_eval_last_run") or (runs[0] if runs else {})
+        if last_run:
+            with st.expander("最近一次评测结果", expanded=True):
+                st.caption(
+                    f"run_id={last_run.get('run_id', '')} / 通过 {last_run.get('passed_count', 0)} / "
+                    f"总数 {last_run.get('case_count', 0)} / 通过率 {last_run.get('pass_rate', 0):.0%}"
+                )
+                result_rows = []
+                for result in last_run.get("results", []):
+                    top_hit = result.get("top_hit", {}).get("chunk", {}) if isinstance(result.get("top_hit", {}), dict) else {}
+                    result_rows.append({
+                        "结果": "通过" if result.get("passed") else "未通过",
+                        "用例": result.get("name", ""),
+                        "命中": f"{result.get('matched_count', 0)} / {result.get('expectation_count', 0)}",
+                        "Top1": f"{label_source_type(top_hit.get('source_type', ''))} / {top_hit.get('title', '')}" if top_hit else "-",
+                        "错误": result.get("error", ""),
+                    })
+                if result_rows:
+                    st.dataframe(result_rows, use_container_width=True, hide_index=True)
+                render_step_json_expander("评测运行原始数据", last_run)
+
+        if feedback_items:
+            with st.expander("最近检索反馈", expanded=False):
+                st.dataframe(
+                    [
+                        {
+                            "时间": item.get("created_at", "")[:19],
+                            "反馈": item.get("rating", ""),
+                            "查询": item.get("query", "")[:50],
+                            "来源": label_source_type(item.get("source_type", "")),
+                            "标题": item.get("title", ""),
+                            "备注": item.get("note", ""),
+                        }
+                        for item in reversed(feedback_items[-50:])
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+
+def render_retrieval_feedback_controls(project_name: str, current_hits: list[dict], query: str):
+    if not current_hits:
+        return
+    with st.expander("记录本次检索反馈", expanded=False):
+        st.caption("反馈会保存到项目 RAG 资产中；后续检索会对有用/优先片段加权，对无用/错误片段降权。")
+        hit_options = [
+            str(hit.get("chunk", {}).get("chunk_id") or "")
+            for hit in current_hits
+            if hit.get("chunk", {}).get("chunk_id")
+        ]
+        selected_chunk_id = st.selectbox(
+            "选择片段",
+            options=hit_options,
+            format_func=lambda value: next(
+                (
+                    f"{label_source_type(hit.get('chunk', {}).get('source_type', ''))} / "
+                    f"{hit.get('chunk', {}).get('title', '') or value} / score={hit.get('score', 0):.2f}"
+                    for hit in current_hits
+                    if hit.get("chunk", {}).get("chunk_id") == value
+                ),
+                value,
+            ),
+            key="retrieval_feedback_chunk",
+        )
+        rating = st.radio(
+            "反馈类型",
+            options=["helpful", "priority", "irrelevant", "wrong"],
+            horizontal=True,
+            format_func=lambda value: {
+                "helpful": "有用",
+                "priority": "应优先",
+                "irrelevant": "无关",
+                "wrong": "错误",
+            }.get(value, value),
+            key="retrieval_feedback_rating",
+        )
+        note = st.text_area("反馈备注（可选）", height=70, key="retrieval_feedback_note")
+        if st.button("保存检索反馈", key="save_retrieval_feedback", use_container_width=True):
+            selected_hit = next((hit for hit in current_hits if hit.get("chunk", {}).get("chunk_id") == selected_chunk_id), {})
+            chunk = selected_hit.get("chunk", {})
+            try:
+                saved = append_retrieval_feedback(project_name, {
+                    "query": query,
+                    "rating": rating,
+                    "note": note,
+                    "chunk_id": chunk.get("chunk_id", ""),
+                    "document_id": chunk.get("document_id", ""),
+                    "source_type": chunk.get("source_type", ""),
+                    "scope": chunk.get("scope", ""),
+                    "title": chunk.get("title", ""),
+                    "path": chunk.get("path", ""),
+                })
+                st.success(f"已保存反馈：{saved.get('rating')} / {saved.get('title') or saved.get('chunk_id')}")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"保存反馈失败：{exc}")
 
 
 def render_retrieval_page(project_name: str, mode: str = "center"):
@@ -8914,9 +9902,16 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
         except Exception as exc:
             st.warning(f"索引读取失败：{exc}")
 
-        col1, col2 = st.columns(2)
-        if col1.button("重建检索索引"):
-            with st.spinner("正在重建索引..."):
+        col1, col2, col3 = st.columns(3)
+        if col1.button("重建关键词索引"):
+            with st.spinner("正在重建关键词索引..."):
+                manifest = rebuild_retrieval_assets(project_name, build_vectors=False)
+            st.success(
+                f"关键词索引已重建：{manifest.document_count} 份文档 / {manifest.chunk_count} 个片段"
+            )
+            st.rerun()
+        if col2.button("重建完整索引"):
+            with st.spinner("正在重建索引和语义向量..."):
                 manifest = rebuild_retrieval_assets(project_name, build_vectors=True)
             st.success(
                 f"索引已重建：{manifest.document_count} 份文档 / {manifest.chunk_count} 个片段 / 语义向量={'已启用' if manifest.embedding_enabled else '未启用'}"
@@ -8924,7 +9919,71 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
             st.rerun()
 
         source_dir = retrieval_sources_path(project_name)
-        col2.caption(f"外部资料目录：`{source_dir}`")
+        col3.caption(f"外部资料目录：`{source_dir}`")
+
+        with st.expander("RAG 健康检查", expanded=True):
+            try:
+                health = inspect_retrieval_health(project_name)
+                status_label = {
+                    "healthy": "健康",
+                    "warning": "需要注意",
+                    "error": "异常",
+                }.get(health.get("status", ""), health.get("status", "未知"))
+                st.caption(
+                    f"状态：{status_label} / 索引构建时间：{health.get('built_at') or '-'} / "
+                    f"向量构建时间：{health.get('vector_built_at') or '-'} / "
+                    f"当前向量模型：{health.get('active_embedding_model') or '-'}"
+                )
+                metric_cols = st.columns(6)
+                metric_cols[0].metric("索引文档", health.get("document_count", 0))
+                metric_cols[1].metric("索引片段", health.get("chunk_count", 0))
+                metric_cols[2].metric("当前片段", health.get("current_chunk_count", 0))
+                metric_cols[3].metric("向量数", health.get("vector_count", 0))
+                metric_cols[4].metric("缺失向量", health.get("missing_vector_count", 0))
+                metric_cols[5].metric("陈旧片段", health.get("stale_chunk_count", 0))
+
+                if health.get("embedding_enabled"):
+                    st.success(f"语义向量已启用：{health.get('vector_model') or health.get('embedding_model') or '-'} / 维度 {health.get('vector_dimension') or '-'}")
+                else:
+                    st.warning("语义向量未启用。混合检索会自动退回关键词检索；如需语义召回，请配置可用的 Embedding 模型后重建完整索引。")
+
+                for issue in health.get("issues", []):
+                    severity = issue.get("severity")
+                    message = issue.get("message", "")
+                    if severity == "high":
+                        st.error(message)
+                    elif severity == "medium":
+                        st.warning(message)
+                    else:
+                        st.info(message)
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    st.markdown("#### 来源分布")
+                    source_counts = health.get("source_type_counts", {})
+                    if source_counts:
+                        st.dataframe(
+                            [{"来源类型": label_source_type(key), "片段数": value} for key, value in source_counts.items()],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.caption("暂无来源片段。")
+                with col_b:
+                    st.markdown("#### 范围分布")
+                    scope_counts = health.get("scope_counts", {})
+                    if scope_counts:
+                        st.dataframe(
+                            [{"范围": label_scope(key), "片段数": value} for key, value in scope_counts.items()],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.caption("暂无范围统计。")
+            except Exception as exc:
+                st.error(f"RAG 健康检查失败：{exc}")
+
+        render_retrieval_eval_workbench(project_name, manifest)
 
         with st.expander("管理已导入资料", expanded=False):
             existing_source_files = list_retrieval_source_files(project_name)
@@ -9107,7 +10166,13 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                                 for item in after_pending
                                 if str(item.get("pending_id") or "") and str(item.get("pending_id") or "") not in before_pending_ids
                             ]
-                            auto_summary = auto_confirm_pending_items_without_risk(project_name, new_ids)
+                            auto_summary = auto_confirm_pending_items_without_risk(
+                                project_name,
+                                new_ids,
+                                source_type="pasted_source_extraction",
+                                source_title=knowledge_title,
+                                note="粘贴资料一键提取自动审核",
+                            )
                             st.session_state["knowledge_extraction_result"] = result
                             st.success(
                                 f"已提取 {len(items)} 条，加入待确认 {queued_count} 条，"
@@ -9116,6 +10181,8 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                             )
                             if auto_summary.get("blocked_ids"):
                                 st.info("保留的条目通常存在冲突、重复、低证据或低置信，请到“待确认知识”中处理。")
+                            if auto_summary.get("run_id"):
+                                st.caption(f"自动审核记录：{auto_summary.get('run_id')}")
                             st.rerun()
                         except Exception as exc:
                             st.error(f"一键提取失败：{exc}")
@@ -9301,7 +10368,9 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
             render_ingestion_health_panel(project_name)
             render_source_ledger_page(project_name)
         with queue_tab:
+            render_auto_review_policy_panel(project_name)
             render_pending_knowledge_queue(project_name)
+            render_auto_review_runs_panel(project_name)
         with batch_tab:
             render_long_reference_batch_manager(project_name, knowledge_category_options)
         with knowledge_tab:
@@ -9579,6 +10648,15 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
             format_func=label_retrieval_mode,
             key="retrieval_mode"
         )
+        retrieval_profile_options = [""] + list(RETRIEVAL_TASK_PROFILES.keys())
+        retrieval_profile = st.selectbox(
+            "任务策略",
+            options=retrieval_profile_options,
+            index=0,
+            format_func=_retrieval_profile_label,
+            key="retrieval_task_profile",
+            help="选择后会使用对应任务的来源偏好和默认召回数量；手动来源过滤会优先于任务策略。",
+        )
         scope_options = st.multiselect(
             "范围过滤",
             options=["project", "canon", "reference"],
@@ -9594,6 +10672,25 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
             format_func=label_source_type,
             key="retrieval_source_type_filter",
         )
+        worldline_options = sorted({
+            str(chunk.metadata.get("worldline_id") or "").strip()
+            for chunk in manifest.chunks
+            if isinstance(chunk.metadata, dict) and str(chunk.metadata.get("worldline_id") or "").strip()
+        }) if manifest else []
+        worldline_filter = st.selectbox(
+            "世界线偏好（可选）",
+            options=[""] + worldline_options,
+            format_func=lambda value: "不限定" if not value else value,
+            key="retrieval_worldline_filter",
+            help="选择后会优先召回同世界线资料；通用资料仍会保留。",
+        )
+        worldline_mode = st.selectbox(
+            "世界线模式",
+            options=["prefer", "strict"],
+            format_func=lambda value: {"prefer": "偏好匹配", "strict": "严格过滤"}.get(value, value),
+            key="retrieval_worldline_mode",
+            help="偏好匹配会给同世界线资料加权、给其他世界线轻微降权；严格过滤会排除明确属于其他世界线的资料。",
+        )
         include_debug = st.checkbox("生成检索调试信息", value=False, key="retrieval_include_debug")
         if st.button("执行检索"):
             try:
@@ -9604,8 +10701,12 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     allowed_scopes=scope_options,
                     allowed_source_types=source_type_filter or None,
                     retrieval_mode=retrieval_mode,
+                    retrieval_profile=retrieval_profile or None,
+                    worldline_id=worldline_filter or None,
+                    worldline_mode=worldline_mode,
                 )
                 st.session_state["retrieval_hits"] = [hit.model_dump() for hit in hits]
+                st.session_state["retrieval_last_query"] = query
                 st.session_state["retrieval_debug"] = debug_retrieve_context(
                     project_name,
                     query,
@@ -9613,6 +10714,9 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     allowed_scopes=scope_options,
                     allowed_source_types=source_type_filter or None,
                     retrieval_mode=retrieval_mode,
+                    retrieval_profile=retrieval_profile or None,
+                    worldline_id=worldline_filter or None,
+                    worldline_mode=worldline_mode,
                 ) if include_debug else {}
             except Exception as exc:
                 st.error(f"检索失败：{exc}")
@@ -9629,16 +10733,47 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
             matched_terms = hit.get("matched_terms", [])
             if matched_terms:
                 st.caption(f"命中词：{', '.join(matched_terms)}")
+            expanded_terms = hit.get("expanded_terms", [])
+            if expanded_terms:
+                st.caption(f"查询扩展：{', '.join(expanded_terms[:12])}")
+            match_reasons = hit.get("match_reasons", [])
+            if match_reasons:
+                st.caption("召回原因：" + "；".join(match_reasons[:5]))
+            score_breakdown = hit.get("score_breakdown", {})
+            if score_breakdown:
+                breakdown_text = " / ".join(f"{key}={value:.2f}" for key, value in score_breakdown.items())
+                st.caption(f"分数拆解：{breakdown_text}")
             st.caption(
                 f"关键词分={hit.get('lexical_score', 0):.2f} / 语义分={hit.get('semantic_score', 0):.2f} / 来源={chunk.get('path', '-') }"
             )
+
+        render_retrieval_feedback_controls(project_name, current_hits, st.session_state.get("retrieval_last_query", query))
 
         debug_payload = st.session_state.get("retrieval_debug", {})
         if debug_payload:
             with st.expander("检索调试信息", expanded=False):
                 st.caption(
-                    f"检索词={', '.join(debug_payload.get('query_terms', [])) or '-'} / 候选片段={debug_payload.get('candidate_chunk_count', 0)} / 语义向量={'已启用' if debug_payload.get('semantic_enabled', False) else '未启用'}"
+                    f"策略={debug_payload.get('retrieval_profile') or '通用'} / 世界线={debug_payload.get('worldline_id') or '不限定'} / 模式={debug_payload.get('worldline_mode') or 'prefer'} / 检索词={', '.join(debug_payload.get('query_terms', [])) or '-'} / 候选片段={debug_payload.get('candidate_chunk_count', 0)} / 语义向量={'已启用' if debug_payload.get('semantic_enabled', False) else '未启用'}"
                 )
+                expanded_terms = debug_payload.get("expanded_terms", [])
+                if expanded_terms:
+                    st.caption(f"查询扩展：{', '.join(expanded_terms[:20])}")
+                alias_groups = debug_payload.get("matched_alias_groups", [])
+                if alias_groups:
+                    with st.expander("命中的别名组", expanded=False):
+                        st.dataframe(
+                            [
+                                {
+                                    "主名称": group.get("canonical_name", ""),
+                                    "命中名称": "、".join(group.get("matched_names", [])),
+                                    "别名": "、".join(group.get("aliases", [])),
+                                    "分类": label_knowledge_category(group.get("category", "")),
+                                }
+                                for group in alias_groups
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
                 st.markdown("### 重排前")
                 for index, hit in enumerate(debug_payload.get("initial_hits", []), start=1):
                     chunk = hit.get("chunk", {})
