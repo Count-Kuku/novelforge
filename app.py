@@ -20,6 +20,7 @@ from memory import (
     delete_volume,
     get_active_llm_profile,
     get_active_story_id,
+    rename_story,
     list_stories,
     load_arc_discussion_artifact,
     list_arcs,
@@ -98,6 +99,7 @@ from memory import (
     merge_global_rules_to_story,
     discard_pending_knowledge_items,
     rollback_auto_review_run,
+    restore_auto_review_snapshots_to_pending,
     return_confirmed_knowledge_item_to_pending,
     queue_pending_knowledge_items,
     save_pending_knowledge_items,
@@ -432,9 +434,9 @@ SEVERITY_LABELS = {
 
 PAGE_GROUPS = {
     "工作台": ["项目总览", "模型配置", "生成规则", "资源浏览器"],
+    "资料": ["资料导入", "核心设定", "检索中心"],
     "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
     "写作": ["快速生成", "正文生成", "章节评价"],
-    "资料": ["核心设定", "资料导入", "检索中心"],
 }
 
 PAGE_DESCRIPTIONS = {
@@ -596,6 +598,55 @@ def label_batch_segment_status(value: str) -> str:
         "": "待处理",
     }
     return labels.get(str(value or ""), str(value or "未知"))
+
+
+def create_batch_progress_callback(title: str):
+    progress_bar = st.progress(0)
+    status_slot = st.empty()
+
+    def update(event: dict):
+        if not isinstance(event, dict):
+            return
+        total = max(int(event.get("total") or 1), 1)
+        current = max(0, min(int(event.get("current") or 0), total))
+        percent = int((current / total) * 100)
+        message = str(event.get("message") or "正在处理").strip()
+        progress_bar.progress(percent)
+        status_slot.caption(f"{title}：{message}（{current}/{total}）")
+
+    return update
+
+
+def summarize_long_reference_resume_state(segments: list[dict]) -> dict:
+    pending_import_indices = []
+    pending_extract_indices = []
+    imported_not_extracted_indices = []
+    failed_indices = []
+    completed_indices = []
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            continue
+        import_status = str(segment.get("import_status") or "pending")
+        extract_status = str(segment.get("extract_status") or "pending")
+        if import_status != "imported":
+            pending_import_indices.append(index)
+        if extract_status in {"pending", ""}:
+            pending_extract_indices.append(index)
+            if import_status == "imported":
+                imported_not_extracted_indices.append(index)
+        if extract_status == "failed":
+            failed_indices.append(index)
+        if extract_status in {"queued", "extracted"}:
+            completed_indices.append(index)
+    unfinished_indices = sorted(set(pending_import_indices + pending_extract_indices + failed_indices))
+    return {
+        "pending_import_indices": pending_import_indices,
+        "pending_extract_indices": pending_extract_indices,
+        "imported_not_extracted_indices": imported_not_extracted_indices,
+        "failed_indices": failed_indices,
+        "completed_indices": completed_indices,
+        "unfinished_indices": unfinished_indices,
+    }
 
 
 def apply_app_style():
@@ -917,6 +968,120 @@ def render_quick_action(label: str, page: str, help_text: str):
     st.caption(help_text)
     if st.button("进入", key=f"quick_action_{stable_widget_suffix(page)}", use_container_width=True):
         navigate_to(page)
+
+
+RESOURCE_BROWSER_GROUPS = [
+    ("outline", "全书大纲"),
+    ("outline_discussion", "全书讨论工件"),
+    ("creative_profile_discussion", "创作配置讨论工件"),
+    ("volume_outline", "分卷大纲"),
+    ("volume_discussion", "分卷讨论工件"),
+    ("arc_outline", "剧情段大纲"),
+    ("arc_discussion", "剧情段讨论工件"),
+    ("arc_chapter_plan", "剧情段章节分配"),
+    ("chapter_outline", "章节细纲"),
+    ("chapter_discussion", "章节讨论工件"),
+    ("chapter_content", "章节正文"),
+    ("review", "审阅结果"),
+    ("analysis", "分析报告"),
+    ("evaluation", "评估报告"),
+    ("run", "流水线记录"),
+    ("source", "外部资料"),
+    ("knowledge_item", "结构化知识"),
+    ("pending_knowledge", "待确认知识"),
+    ("long_reference_batch", "资料批次"),
+]
+RESOURCE_BROWSER_GROUP_LABELS = dict(RESOURCE_BROWSER_GROUPS)
+
+
+def _normalize_resource_browser_groups(groups: list[str] | tuple[str, ...] | None) -> list[str]:
+    allowed_groups = set(RESOURCE_BROWSER_GROUP_LABELS)
+    normalized = []
+    for group in groups or []:
+        group_key = str(group)
+        if group_key in allowed_groups and group_key not in normalized:
+            normalized.append(group_key)
+    return normalized
+
+
+def _resource_browser_focus_key(project_name: str) -> str:
+    return f"resource_browser_focus:{project_name}"
+
+
+def navigate_to_resource_browser(
+    project_name: str,
+    groups: list[str] | tuple[str, ...] | None = None,
+    *,
+    search_value: str = "",
+    select_first: bool = True,
+):
+    st.session_state[_resource_browser_focus_key(project_name)] = {
+        "groups": _normalize_resource_browser_groups(groups),
+        "search_value": str(search_value or ""),
+        "select_first": bool(select_first),
+    }
+    navigate_to("资源浏览器")
+
+
+def _consume_resource_browser_focus(project_name: str, browser_items: list[dict]) -> tuple[dict, str]:
+    focus = st.session_state.pop(_resource_browser_focus_key(project_name), None)
+    if not isinstance(focus, dict):
+        return {}, ""
+
+    focus_groups = _normalize_resource_browser_groups(focus.get("groups") or [])
+    focus_search = str(focus.get("search_value") or "").strip()
+
+    st.session_state[f"resource_browser_search_{project_name}"] = focus_search
+    st.session_state[f"resource_browser_volume_filter_{project_name}"] = 0
+    st.session_state[f"resource_browser_arc_filter_{project_name}"] = 0
+    if focus_groups:
+        st.session_state[f"resource_browser_group_filter_{project_name}"] = focus_groups
+
+    candidates = list(browser_items)
+    if focus_groups:
+        candidates = [item for item in candidates if item.get("group") in focus_groups]
+    if focus_search:
+        search_lower = focus_search.lower()
+        candidates = [
+            item for item in candidates
+            if search_lower in str(item.get("label", "")).lower()
+            or search_lower in str(item.get("path_label", "")).lower()
+        ]
+
+    if candidates and bool(focus.get("select_first", True)):
+        selected = candidates[0]
+        _set_resource_browser_selection(project_name, selected)
+        return selected, ""
+
+    focus_labels = "、".join(RESOURCE_BROWSER_GROUP_LABELS.get(group, group) for group in focus_groups)
+    return {}, f"当前没有可定位的{focus_labels or '资源'}。"
+
+
+def _safe_int_metric_value(value) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def render_resource_metric_link(
+    container,
+    project_name: str,
+    story_id: str,
+    label: str,
+    value,
+    groups: list[str] | tuple[str, ...],
+):
+    metric_value = _safe_int_metric_value(value)
+    normalized_groups = _normalize_resource_browser_groups(groups)
+    container.metric(label, metric_value)
+    button_key = scoped_widget_key("overview_resource_metric", project_name, story_id, label, ",".join(normalized_groups))
+    if metric_value > 0 and normalized_groups:
+        if container.button("查看资源", key=button_key, use_container_width=True):
+            navigate_to_resource_browser(project_name, normalized_groups)
+    else:
+        disabled_label = "暂无资源" if normalized_groups else "未纳入资源"
+        container.button(disabled_label, key=button_key, disabled=True, use_container_width=True)
 
 
 def recommended_workflow_for_profile(profile: dict) -> list[str]:
@@ -2948,24 +3113,24 @@ def render_project_overview_page(project_name: str):
 
     st.markdown("### 项目指标")
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("正文章节", summary.get("chapter_count", 0))
-    col2.metric("细纲章节", summary.get("chapter_outline_count", 0))
-    col3.metric("审阅数量", summary.get("review_count", 0))
-    col4.metric("分析报告", summary.get("analysis_count", 0))
-    col5.metric("评估报告", summary.get("evaluation_count", 0))
+    render_resource_metric_link(col1, project_name, story_id, "正文章节", summary.get("chapter_count", 0), ["chapter_content"])
+    render_resource_metric_link(col2, project_name, story_id, "细纲章节", summary.get("chapter_outline_count", 0), ["chapter_outline"])
+    render_resource_metric_link(col3, project_name, story_id, "审阅数量", summary.get("review_count", 0), ["review"])
+    render_resource_metric_link(col4, project_name, story_id, "分析报告", summary.get("analysis_count", 0), ["analysis"])
+    render_resource_metric_link(col5, project_name, story_id, "评估报告", summary.get("evaluation_count", 0), ["evaluation"])
 
     col6, col7, col8, col9, col12, col13, col14 = st.columns(7)
-    col6.metric("分卷数量", summary.get("volume_count", 0))
-    col7.metric("剧情段数量", summary.get("arc_count", 0))
-    col8.metric("流水线记录", summary.get("run_count", 0))
-    col9.metric("外部资料", summary.get("retrieval_source_count", 0))
-    col12.metric("结构化知识", summary.get("knowledge_item_count", 0))
-    col13.metric("待确认知识", summary.get("pending_knowledge_count", 0))
-    col14.metric("资料批次", summary.get("long_reference_batch_count", 0))
+    render_resource_metric_link(col6, project_name, story_id, "分卷数量", summary.get("volume_count", 0), ["volume_outline"])
+    render_resource_metric_link(col7, project_name, story_id, "剧情段数量", summary.get("arc_count", 0), ["arc_outline"])
+    render_resource_metric_link(col8, project_name, story_id, "流水线记录", summary.get("run_count", 0), ["run"])
+    render_resource_metric_link(col9, project_name, story_id, "外部资料", summary.get("retrieval_source_count", 0), ["source"])
+    render_resource_metric_link(col12, project_name, story_id, "结构化知识", summary.get("knowledge_item_count", 0), ["knowledge_item"])
+    render_resource_metric_link(col13, project_name, story_id, "待确认知识", summary.get("pending_knowledge_count", 0), ["pending_knowledge"])
+    render_resource_metric_link(col14, project_name, story_id, "资料批次", summary.get("long_reference_batch_count", 0), ["long_reference_batch"])
 
     col10, col11 = st.columns(2)
-    col10.metric("已批准分卷讨论", summary.get("approved_volume_count", 0))
-    col11.metric("已批准剧情段讨论", summary.get("approved_arc_count", 0))
+    render_resource_metric_link(col10, project_name, story_id, "已批准分卷讨论", summary.get("approved_volume_count", 0), ["volume_discussion"])
+    render_resource_metric_link(col11, project_name, story_id, "已批准剧情段讨论", summary.get("approved_arc_count", 0), ["arc_discussion"])
 
     st.caption(f"章节摘要={summary.get('chapter_summary_count', 0)} / 资源文件数={summary.get('resource_file_count', 0)}")
 
@@ -3189,23 +3354,45 @@ def _render_story_management_tab(project_name: str):
     st.markdown(f"#### 故事列表（共 {len(stories)} 个）")
 
     for s in stories:
-        cols = st.columns([3, 1, 1, 1, 1])
+        story_id = str(s.get("story_id") or "")
+        cols = st.columns([3, 1, 1, 1, 1, 1])
         cols[0].write(f"**{s.get('name', s['story_id'])}**  ({s['story_id']})")
         cols[1].write(s.get("status", "active"))
         cols[2].write(s.get("created_at", "")[:10])
 
-        is_active = s["story_id"] == st.session_state.get("active_story_id", "default")
-        if cols[3].button("切换", key=f"switch_{s['story_id']}", disabled=is_active, use_container_width=True):
-            set_active_story(project_name, s["story_id"])
-            st.session_state["active_story_id"] = s["story_id"]
+        is_active = story_id == st.session_state.get("active_story_id", "default")
+        if cols[3].button("切换", key=f"switch_{story_id}", disabled=is_active, use_container_width=True):
+            set_active_story(project_name, story_id)
+            st.session_state["active_story_id"] = story_id
             st.rerun()
 
-        if cols[4].button("复制", key=f"copy_{s['story_id']}", use_container_width=True):
-            from uuid import uuid4
-            new_id = f"{s['story_id']}_copy_{uuid4().hex[:6]}"
+        with cols[4].popover("编辑", use_container_width=True):
+            st.caption(f"故事 ID：`{story_id}`")
+            new_story_name = st.text_input(
+                "故事名称",
+                value=str(s.get("name") or story_id),
+                key=f"rename_story_name_{story_id}",
+            )
+            new_story_description = st.text_area(
+                "故事描述",
+                value=str(s.get("description") or ""),
+                height=80,
+                key=f"rename_story_desc_{story_id}",
+            )
+            if st.button("保存故事信息", key=f"save_story_meta_{story_id}", use_container_width=True):
+                try:
+                    rename_story(project_name, story_id, new_story_name, new_story_description)
+                    st.success("故事信息已更新。")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"保存失败：{exc}")
+
+        if cols[5].button("复制", key=f"copy_{story_id}", use_container_width=True):
             try:
-                copy_story_settings(project_name, s["story_id"], new_id)
-                st.success(f"已复制设定到新故事：{new_id}")
+                new_story_name = f"{s.get('name') or story_id} 副本"
+                meta = create_story(project_name, new_story_name, str(s.get("description") or ""))
+                copy_story_settings(project_name, story_id, meta["story_id"])
+                st.success(f"已复制设定到新故事：{meta.get('name') or meta['story_id']}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"复制失败：{exc}")
@@ -3761,10 +3948,12 @@ def render_pending_knowledge_queue(project_name: str):
             st.caption("当前没有待确认的知识条目。")
             return
 
-        render_pending_knowledge_quality_panel(project_name, pending_items)
-
         quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
         issue_map = build_pending_issue_map(quality_issues)
+        policy = load_auto_review_policy(project_name)
+
+        render_pending_triage_dashboard(project_name, pending_items, issue_map, policy)
+        render_pending_knowledge_quality_panel(project_name, pending_items)
         filtered_indices = filter_pending_knowledge_indices(pending_items, issue_map)
 
         st.caption(f"当前筛选结果：{len(filtered_indices)} / {pending_count} 条")
@@ -3852,7 +4041,7 @@ def render_pending_knowledge_queue(project_name: str):
             auto_preview = build_pending_auto_review_preview(
                 auto_candidate_items,
                 issue_map,
-                load_auto_review_policy(project_name),
+                policy,
             )
             preview_cols = st.columns(4)
             preview_cols[0].metric("候选条目", auto_preview.get("candidate_count", 0))
@@ -4010,27 +4199,28 @@ def render_auto_review_policy_panel(project_name: str):
 
 def render_auto_review_runs_panel(project_name: str):
     runs = list(reversed(load_auto_review_runs(project_name)))
-    with st.expander(f"自动审核记录（{len(runs)}）", expanded=False):
-        st.caption("自动审核会保存每次自动确认的决策、原始待确认快照和写入位置。发现误入库时，可以回退某次自动审核。")
+    with st.expander(f"处理记录与人工复核箱（{len(runs)}）", expanded=bool(runs)):
+        st.caption("这里保存自动确认和待确认清空模式的批次记录。发现误处理时，可以按批次回退。")
         if not runs:
-            st.caption("当前还没有自动审核记录。")
+            st.caption("当前还没有批量处理记录。")
             return
 
         active_runs = [run for run in runs if str(run.get("status") or "active") != "rolled_back"]
         metric_cols = st.columns(4)
         metric_cols[0].metric("记录数", len(runs))
         metric_cols[1].metric("可回退", len(active_runs))
-        metric_cols[2].metric("自动确认", sum(len(run.get("confirmed_ids", []) or []) for run in runs))
-        metric_cols[3].metric("保留待确认", sum(len(run.get("blocked_ids", []) or []) for run in runs))
+        metric_cols[2].metric("入库", sum(len(run.get("confirmed_ids", []) or []) for run in runs))
+        metric_cols[3].metric("归档/复核", sum(len(run.get("archived_ids", []) or []) + len(run.get("manual_review_ids", []) or []) for run in runs))
 
         selected_run_id = st.selectbox(
-            "选择自动审核记录",
+            "选择处理记录",
             options=[str(run.get("run_id") or "") for run in runs],
             format_func=lambda run_id: next(
                 (
                     f"{run.get('created_at', '-')[:19]} / {run.get('source_title') or run.get('source_type') or '自动审核'}"
-                    f" / 确认 {len(run.get('confirmed_ids', []) or [])}"
-                    f" / 保留 {len(run.get('blocked_ids', []) or [])}"
+                    f" / 入库 {len(run.get('confirmed_ids', []) or [])}"
+                    f" / 归档 {len(run.get('archived_ids', []) or [])}"
+                    f" / 复核 {len(run.get('manual_review_ids', []) or [])}"
                     f" / {'已回退' if run.get('status') == 'rolled_back' else '可回退'}"
                     for run in runs if str(run.get("run_id") or "") == run_id
                 ),
@@ -4049,6 +4239,14 @@ def render_auto_review_runs_panel(project_name: str):
         if selected_run.get("note"):
             st.info(str(selected_run.get("note")))
 
+        batch_summary = selected_run.get("batch_summary", {}) if isinstance(selected_run.get("batch_summary", {}), dict) else {}
+        if batch_summary:
+            batch_cols = st.columns(4)
+            batch_cols[0].metric("本批次", batch_summary.get("total", 0))
+            batch_cols[1].metric("入库", batch_summary.get("confirmed", len(selected_run.get("confirmed_ids", []) or [])))
+            batch_cols[2].metric("归档", batch_summary.get("archived", len(selected_run.get("archived_ids", []) or [])))
+            batch_cols[3].metric("复核箱", batch_summary.get("manual_review", len(selected_run.get("manual_review_ids", []) or [])))
+
         reason_counts: dict[str, int] = {}
         for reason in (selected_run.get("blocked_reasons", {}) or {}).values():
             reason_counts[str(reason or "未说明")] = reason_counts.get(str(reason or "未说明"), 0) + 1
@@ -4059,8 +4257,15 @@ def render_auto_review_runs_panel(project_name: str):
         for decision in selected_run.get("decisions", [])[:80] if isinstance(selected_run.get("decisions", []), list) else []:
             if not isinstance(decision, dict):
                 continue
+            action = str(decision.get("action") or "")
+            decision_value = str(decision.get("decision") or "")
+            decision_label = {
+                "confirm": "自动入库",
+                "archive": "归档丢弃",
+                "manual_review": "人工复核箱",
+            }.get(action) or ("自动确认" if decision_value == "confirm" else "保留待确认")
             rows.append({
-                "决策": "自动确认" if decision.get("decision") == "confirm" else "保留待确认",
+                "决策": decision_label,
                 "等级": decision.get("grade", ""),
                 "分类": label_knowledge_category(decision.get("category", "")),
                 "名称": decision.get("name", ""),
@@ -4071,15 +4276,85 @@ def render_auto_review_runs_panel(project_name: str):
             if len(selected_run.get("decisions", []) or []) > len(rows):
                 st.caption(f"仅展示前 {len(rows)} 条决策。")
 
+        manual_snapshots = selected_run.get("manual_review_snapshots", []) if isinstance(selected_run.get("manual_review_snapshots", []), list) else []
+        if manual_snapshots:
+            with st.expander(f"人工复核箱预览（{len(manual_snapshots)}）", expanded=True):
+                restored_ids = {
+                    str(item or "")
+                    for item in selected_run.get("restored_pending_ids", [])
+                    if str(item or "").strip()
+                }
+                st.dataframe(
+                    [
+                        {
+                            "分类": label_knowledge_category(item.get("category", "")),
+                            "名称": item.get("name", ""),
+                            "摘要": str(item.get("summary", ""))[:120],
+                            "来源": item.get("source_title", "") or item.get("source_segment_title", ""),
+                            "状态": "已恢复" if str(item.get("pending_id") or "") in restored_ids else "待恢复",
+                        }
+                        for item in manual_snapshots[:120]
+                    ],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                if len(manual_snapshots) > 120:
+                    st.caption(f"仅展示前 120 条，完整快照保存在原始数据里。")
+                restorable_snapshots = [
+                    item for item in manual_snapshots
+                    if isinstance(item, dict)
+                    and str(item.get("pending_id") or "").strip()
+                    and str(item.get("pending_id") or "") not in restored_ids
+                ]
+                selected_restore_ids = st.multiselect(
+                    "选择要恢复到待确认队列的复核条目",
+                    options=[str(item.get("pending_id") or "") for item in restorable_snapshots],
+                    format_func=lambda pending_id: next(
+                        (
+                            f"{label_knowledge_category(item.get('category', ''))} / {item.get('name', pending_id)}"
+                            for item in restorable_snapshots
+                            if str(item.get("pending_id") or "") == pending_id
+                        ),
+                        pending_id,
+                    ),
+                    key=f"restore_manual_review_ids_{selected_run_id}",
+                )
+                restore_cols = st.columns(2)
+                if restore_cols[0].button(
+                    "恢复所选到待确认",
+                    key=f"restore_manual_review_selected_{selected_run_id}",
+                    disabled=not selected_restore_ids,
+                    use_container_width=True,
+                ):
+                    result = restore_auto_review_snapshots_to_pending(project_name, selected_run_id, selected_restore_ids)
+                    if result.get("success"):
+                        st.success(result.get("message", "已恢复。"))
+                        st.rerun()
+                    else:
+                        st.error(result.get("message", "恢复失败。"))
+                if restore_cols[1].button(
+                    f"恢复全部未恢复（{len(restorable_snapshots)}）",
+                    key=f"restore_manual_review_all_{selected_run_id}",
+                    disabled=not restorable_snapshots,
+                    use_container_width=True,
+                ):
+                    result = restore_auto_review_snapshots_to_pending(
+                        project_name,
+                        selected_run_id,
+                        [str(item.get("pending_id") or "") for item in restorable_snapshots],
+                    )
+                    if result.get("success"):
+                        st.success(result.get("message", "已恢复。"))
+                        st.rerun()
+                    else:
+                        st.error(result.get("message", "恢复失败。"))
+
         with st.expander("自动审核记录原始数据", expanded=False):
             st.json(selected_run)
 
         if selected_run.get("status") == "rolled_back":
             result = selected_run.get("rollback_result", {})
-            st.warning(
-                f"该记录已回退：删除 {result.get('removed_count', 0)} 条正式知识，"
-                f"恢复 {result.get('restored_count', 0)} 条待确认知识。"
-            )
+            st.warning(f"该记录已回退：删除 {result.get('removed_count', 0)} 条正式知识，恢复 {result.get('restored_count', 0)} 条待确认知识。")
             return
 
         confirm_text = st.text_input(
@@ -4087,7 +4362,7 @@ def render_auto_review_runs_panel(project_name: str):
             key=f"rollback_auto_review_confirm_{selected_run_id}",
             placeholder=selected_run_id,
         )
-        if st.button("回退这次自动审核", key=f"rollback_auto_review_{selected_run_id}", use_container_width=True):
+        if st.button("回退这次处理", key=f"rollback_auto_review_{selected_run_id}", use_container_width=True):
             if confirm_text.strip() != selected_run_id:
                 st.error("请先输入完整 run_id，避免误回退。")
             else:
@@ -4934,6 +5209,394 @@ def summarize_item_evidence(item: dict) -> list[str]:
         if text:
             lines.append(text[:180])
     return lines
+
+
+def pending_item_risk_types(item: dict, issue_map: dict[str, dict]) -> set[str]:
+    issue_info = issue_map.get(str(item.get("pending_id") or ""), {})
+    risks = set(issue_info.get("types", set()))
+    if safe_confidence(item.get("evidence_strength", 0.5)) < 0.45:
+        risks.add("low_evidence")
+    if safe_confidence(item.get("confidence", 0.7)) < 0.55:
+        risks.add("low_confidence")
+    if not summarize_item_evidence(item):
+        risks.add("no_evidence")
+    return risks
+
+
+def build_pending_triage_summary(pending_items: list[dict], issue_map: dict[str, dict], auto_preview: dict) -> dict:
+    risk_counts = {
+        "fact_conflict": 0,
+        "same_name_conflict": 0,
+        "confirmed_overlap": 0,
+        "duplicate": 0,
+        "alias_candidate": 0,
+        "low_evidence": 0,
+        "low_confidence": 0,
+        "no_evidence": 0,
+    }
+    category_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    worldline_counts: dict[str, int] = {}
+    for item in pending_items:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "unknown")
+        source = str(item.get("source_title") or item.get("source_origin") or "未标明来源")
+        worldline = str(item.get("worldline_label") or item.get("worldline_id") or "未标明")
+        category_counts[category] = category_counts.get(category, 0) + 1
+        source_counts[source] = source_counts.get(source, 0) + 1
+        worldline_counts[worldline] = worldline_counts.get(worldline, 0) + 1
+        for risk in pending_item_risk_types(item, issue_map):
+            if risk in risk_counts:
+                risk_counts[risk] += 1
+
+    return {
+        "total": len(pending_items),
+        "auto_confirm_count": len(auto_preview.get("confirmed_ids", [])),
+        "manual_count": len(auto_preview.get("blocked_ids", [])),
+        "grade_counts": auto_preview.get("grade_counts", {}),
+        "blocked_reason_counts": auto_preview.get("blocked_reason_counts", {}),
+        "risk_counts": risk_counts,
+        "category_counts": category_counts,
+        "source_counts": source_counts,
+        "worldline_counts": worldline_counts,
+    }
+
+
+def build_pending_clear_plan(
+    pending_items: list[dict],
+    issue_map: dict[str, dict],
+    policy: dict,
+    *,
+    archive_low_quality: bool = True,
+) -> dict:
+    decisions = []
+    counts = {
+        "confirm": 0,
+        "manual_review": 0,
+        "archive": 0,
+    }
+    manual_categories = set(policy.get("manual_review_categories", []) if isinstance(policy.get("manual_review_categories", []), list) else [])
+    for item in pending_items:
+        if not isinstance(item, dict):
+            continue
+        pending_id = str(item.get("pending_id") or "")
+        if not pending_id:
+            continue
+        auto_decision = evaluate_pending_auto_review_decision(item, issue_map, policy)
+        risks = pending_item_risk_types(item, issue_map)
+        category = str(item.get("category") or "")
+        action = "manual_review"
+        reason = auto_decision.get("reason") or "需要人工复核"
+
+        if auto_decision.get("decision") == "confirm":
+            action = "confirm"
+            reason = auto_decision.get("reason") or "低风险自动入库"
+        elif category in manual_categories:
+            action = "manual_review"
+            reason = f"{label_knowledge_category(category)} 按策略进入人工复核箱"
+        elif risks & {"fact_conflict", "same_name_conflict", "confirmed_overlap"}:
+            action = "manual_review"
+            reason = "存在事实冲突、同名冲突或正式库已有条目"
+        elif risks & {"duplicate", "alias_candidate"}:
+            action = "manual_review"
+            reason = "疑似重复或别名，适合人工合并"
+        elif archive_low_quality and risks & {"low_evidence", "low_confidence", "no_evidence"}:
+            action = "archive"
+            reason = "低证据、低置信或无证据，归档丢弃并保留快照"
+
+        counts[action] += 1
+        decisions.append({
+            "pending_id": pending_id,
+            "action": action,
+            "reason": reason,
+            "grade": auto_decision.get("grade", ""),
+            "category": category,
+            "category_label": label_knowledge_category(category),
+            "name": item.get("name", "未命名"),
+            "source_title": item.get("source_title", "") or item.get("source_segment_title", ""),
+            "confidence": safe_confidence(item.get("confidence", 0.0)),
+            "evidence_strength": safe_confidence(item.get("evidence_strength", 0.0)),
+            "risks": sorted(risks),
+        })
+    return {
+        "total": len(decisions),
+        "counts": counts,
+        "decisions": decisions,
+        "archive_low_quality": archive_low_quality,
+    }
+
+
+def execute_pending_clear_plan(project_name: str, plan: dict, *, note: str = "") -> dict:
+    decisions = [item for item in plan.get("decisions", []) if isinstance(item, dict)]
+    if not decisions:
+        return {"success": False, "message": "处理方案为空。"}
+
+    pending = load_pending_knowledge_items(project_name)
+    pending_by_id = {
+        str(item.get("pending_id") or ""): item
+        for item in pending
+        if isinstance(item, dict) and item.get("pending_id")
+    }
+    candidate_ids = [
+        str(decision.get("pending_id") or "")
+        for decision in decisions
+        if str(decision.get("pending_id") or "") in pending_by_id
+    ]
+    if not candidate_ids:
+        return {"success": False, "message": "方案中的条目已经不在待确认队列里。"}
+
+    action_by_id = {
+        str(decision.get("pending_id") or ""): str(decision.get("action") or "manual_review")
+        for decision in decisions
+    }
+    confirm_ids = [pending_id for pending_id in candidate_ids if action_by_id.get(pending_id) == "confirm"]
+    archive_ids = [pending_id for pending_id in candidate_ids if action_by_id.get(pending_id) == "archive"]
+    manual_ids = [pending_id for pending_id in candidate_ids if action_by_id.get(pending_id) == "manual_review"]
+
+    run_at = datetime.now(timezone.utc).isoformat()
+    id_digest = hashlib.sha1("|".join(sorted(candidate_ids)).encode("utf-8")).hexdigest()[:10]
+    run_id = f"pending_batch_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{id_digest}"
+
+    confirm_result = confirm_pending_knowledge_items_with_records(
+        project_name,
+        confirm_ids,
+        confirmation_metadata={
+            "auto_review_run_id": run_id,
+            "auto_reviewed_at": run_at,
+            "pending_batch_action": "confirm",
+        },
+    ) if confirm_ids else {"saved_count": 0, "confirmed_records": [], "pending_snapshots": []}
+
+    pending_after_confirm = load_pending_knowledge_items(project_name)
+    remove_ids = set(archive_ids + manual_ids)
+    if remove_ids:
+        remaining = [
+            item for item in pending_after_confirm
+            if str(item.get("pending_id") or "") not in remove_ids
+        ]
+        save_pending_knowledge_items(project_name, remaining)
+
+    archive_snapshots = []
+    manual_snapshots = []
+    for pending_id in archive_ids:
+        snapshot = dict(pending_by_id.get(pending_id, {}))
+        if snapshot:
+            snapshot["pending_batch_action"] = "archive"
+            snapshot["processed_batch_id"] = run_id
+            archive_snapshots.append(snapshot)
+    for pending_id in manual_ids:
+        snapshot = dict(pending_by_id.get(pending_id, {}))
+        if snapshot:
+            snapshot["pending_batch_action"] = "manual_review"
+            snapshot["processed_batch_id"] = run_id
+            manual_snapshots.append(snapshot)
+
+    pending_snapshots = []
+    seen_snapshot_ids = set()
+    for snapshot in list(confirm_result.get("pending_snapshots", [])) + archive_snapshots + manual_snapshots:
+        pending_id = str(snapshot.get("pending_id") or "")
+        if pending_id and pending_id in seen_snapshot_ids:
+            continue
+        if pending_id:
+            seen_snapshot_ids.add(pending_id)
+        pending_snapshots.append(dict(snapshot))
+
+    decision_rows = [
+        decision for decision in decisions
+        if str(decision.get("pending_id") or "") in set(candidate_ids)
+    ]
+    run = append_auto_review_run(project_name, {
+        "run_id": run_id,
+        "source_type": "pending_batch_process",
+        "source_title": "待确认清空模式",
+        "note": note or "执行待确认清空方案",
+        "candidate_ids": candidate_ids,
+        "confirmed_ids": confirm_ids,
+        "blocked_ids": manual_ids,
+        "archived_ids": archive_ids,
+        "manual_review_ids": manual_ids,
+        "decisions": decision_rows,
+        "confirmed_records": confirm_result.get("confirmed_records", []),
+        "pending_snapshots": pending_snapshots,
+        "archived_snapshots": archive_snapshots,
+        "manual_review_snapshots": manual_snapshots,
+        "saved_count": int(confirm_result.get("saved_count", 0)),
+        "policy": load_auto_review_policy(project_name),
+        "batch_summary": {
+            "total": len(candidate_ids),
+            "confirmed": len(confirm_ids),
+            "archived": len(archive_ids),
+            "manual_review": len(manual_ids),
+        },
+    })
+    if int(confirm_result.get("saved_count", 0)):
+        rebuild_retrieval_assets(project_name, build_vectors=True)
+    return {
+        "success": True,
+        "message": (
+            f"处理完成：入库 {int(confirm_result.get('saved_count', 0))} 条，"
+            f"归档 {len(archive_ids)} 条，进入复核箱 {len(manual_ids)} 条。"
+        ),
+        "run_id": run.get("run_id", run_id),
+        "confirmed_count": int(confirm_result.get("saved_count", 0)),
+        "archived_count": len(archive_ids),
+        "manual_review_count": len(manual_ids),
+    }
+
+
+def render_pending_triage_dashboard(project_name: str, pending_items: list[dict], issue_map: dict[str, dict], policy: dict):
+    auto_preview = build_pending_auto_review_preview(pending_items, issue_map, policy)
+    summary = build_pending_triage_summary(pending_items, issue_map, auto_preview)
+    with st.expander("待确认处理台", expanded=len(pending_items) >= 50):
+        st.caption("大批量待确认不要逐条读。推荐顺序：自动确认低风险 -> 处理冲突/重复 -> 再看低证据条目。")
+        metric_cols = st.columns(5)
+        metric_cols[0].metric("待处理", summary["total"])
+        metric_cols[1].metric("可自动确认", summary["auto_confirm_count"])
+        metric_cols[2].metric("需人工看", summary["manual_count"])
+        metric_cols[3].metric("事实/同名冲突", summary["risk_counts"]["fact_conflict"] + summary["risk_counts"]["same_name_conflict"])
+        metric_cols[4].metric("低证据/无证据", summary["risk_counts"]["low_evidence"] + summary["risk_counts"]["no_evidence"])
+
+        if summary["auto_confirm_count"]:
+            st.success(
+                f"建议先自动确认 {summary['auto_confirm_count']} 条低风险内容。"
+                "自动审核会留下记录，后续发现误入库可以在自动审核记录里回退。"
+            )
+        else:
+            st.info("当前策略下没有可自动确认的低风险条目。可以调宽自动审核策略，或先处理冲突/低证据条目。")
+
+        action_cols = st.columns(4)
+        if action_cols[0].button(
+            f"自动确认低风险（{summary['auto_confirm_count']}）",
+            key="pending_triage_auto_confirm_all",
+            use_container_width=True,
+            disabled=summary["auto_confirm_count"] == 0,
+            type="primary" if summary["auto_confirm_count"] else "secondary",
+        ):
+            candidate_ids = [
+                str(item.get("pending_id") or "")
+                for item in pending_items
+                if item.get("pending_id")
+            ]
+            auto_summary = auto_confirm_pending_items_without_risk(
+                project_name,
+                candidate_ids,
+                source_type="pending_queue_triage_auto_review",
+                source_title="待确认处理台 / 全量低风险",
+                note="用户在待确认处理台触发全量低风险自动确认",
+            )
+            st.success(
+                f"自动审核完成：确认 {len(auto_summary.get('confirmed_ids', []))} 条，"
+                f"保留 {len(auto_summary.get('blocked_ids', []))} 条。"
+            )
+            st.rerun()
+
+        if action_cols[1].button("只看冲突/已存在", key="pending_triage_show_conflicts", use_container_width=True):
+            st.session_state["pending_filter_risks"] = ["fact_conflict", "same_name_conflict", "confirmed_overlap"]
+            st.session_state["pending_sort_mode"] = "risk_first"
+            st.rerun()
+        if action_cols[2].button("只看低证据", key="pending_triage_show_low_evidence", use_container_width=True):
+            st.session_state["pending_filter_risks"] = ["low_evidence", "low_confidence", "no_evidence"]
+            st.session_state["pending_sort_mode"] = "low_evidence"
+            st.rerun()
+        if action_cols[3].button("只看重复/别名", key="pending_triage_show_duplicates", use_container_width=True):
+            st.session_state["pending_filter_risks"] = ["duplicate", "alias_candidate"]
+            st.session_state["pending_sort_mode"] = "risk_first"
+            st.rerun()
+
+        if st.button("清空待确认筛选", key="pending_triage_clear_filters", use_container_width=True):
+            for key in [
+                "pending_filter_categories",
+                "pending_filter_risks",
+                "pending_filter_sources",
+                "pending_filter_worldlines",
+            ]:
+                st.session_state[key] = []
+            st.session_state["pending_filter_keyword"] = ""
+            st.session_state["pending_sort_mode"] = "risk_first"
+            st.rerun()
+
+        st.markdown("#### 清空模式（可回退）")
+        archive_low_quality = st.checkbox(
+            "低证据、低置信、无证据条目直接归档丢弃",
+            value=True,
+            key="pending_clear_archive_low_quality",
+            help="归档不会写入正式知识，但会保存在本次处理批次记录里；整批回退时会恢复到待确认队列。",
+        )
+        clear_plan = build_pending_clear_plan(
+            pending_items,
+            issue_map,
+            policy,
+            archive_low_quality=archive_low_quality,
+        )
+        plan_counts = clear_plan.get("counts", {})
+        plan_cols = st.columns(4)
+        plan_cols[0].metric("本次覆盖", clear_plan.get("total", 0))
+        plan_cols[1].metric("自动入库", plan_counts.get("confirm", 0))
+        plan_cols[2].metric("归档丢弃", plan_counts.get("archive", 0))
+        plan_cols[3].metric("人工复核箱", plan_counts.get("manual_review", 0))
+        st.caption("执行后普通待确认队列会被清空；入库、归档、复核箱条目都会写进一条可回退的处理批次记录。")
+        preview_rows = [
+            {
+                "动作": {
+                    "confirm": "自动入库",
+                    "archive": "归档丢弃",
+                    "manual_review": "人工复核箱",
+                }.get(decision.get("action", ""), decision.get("action", "")),
+                "分类": decision.get("category_label", ""),
+                "名称": decision.get("name", ""),
+                "原因": decision.get("reason", ""),
+                "置信度": f"{decision.get('confidence', 0):.2f}",
+                "证据": f"{decision.get('evidence_strength', 0):.2f}",
+            }
+            for decision in clear_plan.get("decisions", [])[:120]
+        ]
+        with st.expander("查看处理方案样例", expanded=False):
+            if preview_rows:
+                st.dataframe(preview_rows, use_container_width=True, hide_index=True)
+                if len(clear_plan.get("decisions", [])) > len(preview_rows):
+                    st.caption(f"仅展示前 {len(preview_rows)} 条，完整决策会写入批次记录。")
+            else:
+                st.caption("当前没有可执行的待确认条目。")
+
+        if confirmed_button(
+            st,
+            "执行方案并清空普通待确认队列",
+            "确认执行本次清空方案",
+            "pending_clear_execute_plan",
+            type="primary",
+        ):
+            result = execute_pending_clear_plan(
+                project_name,
+                clear_plan,
+                note="用户在待确认处理台执行清空模式",
+            )
+            if result.get("success"):
+                st.success(f"{result.get('message')} 批次记录：{result.get('run_id')}")
+                st.rerun()
+            else:
+                st.error(result.get("message", "执行失败。"))
+
+        with st.expander("分布明细", expanded=False):
+            dist_cols = st.columns(3)
+            top_categories = sorted(summary["category_counts"].items(), key=lambda item: item[1], reverse=True)[:12]
+            top_sources = sorted(summary["source_counts"].items(), key=lambda item: item[1], reverse=True)[:12]
+            top_worldlines = sorted(summary["worldline_counts"].items(), key=lambda item: item[1], reverse=True)[:12]
+            dist_cols[0].dataframe(
+                [{"分类": label_knowledge_category(category), "数量": count} for category, count in top_categories],
+                use_container_width=True,
+                hide_index=True,
+            )
+            dist_cols[1].dataframe(
+                [{"来源": source, "数量": count} for source, count in top_sources],
+                use_container_width=True,
+                hide_index=True,
+            )
+            dist_cols[2].dataframe(
+                [{"世界线": worldline, "数量": count} for worldline, count in top_worldlines],
+                use_container_width=True,
+                hide_index=True,
+            )
 
 
 def filter_pending_knowledge_indices(pending_items: list[dict], issue_map: dict[str, dict]) -> list[int]:
@@ -6092,6 +6755,8 @@ def import_long_reference_segments(
         if index < 0 or index >= len(segments):
             continue
         segment = segments[index]
+        if segment.get("import_status") == "imported":
+            continue
         payload = build_structured_external_source_payload(
             source_type=batch.get("source_type", "external_source"),
             scope=batch.get("scope", "reference"),
@@ -6130,15 +6795,34 @@ def extract_long_reference_segments_to_queue(
     enabled_categories: list[str],
     extraction_mode: str = "general",
     custom_instructions: str = "",
+    progress_callback=None,
 ) -> tuple[dict, int, int, list[str]]:
     queued_total = 0
     processed = 0
     failed_titles = []
     segments = batch.get("segments", [])
-    for index in segment_indices:
+    target_indices = [
+        index for index in segment_indices
+        if 0 <= index < len(segments)
+    ]
+    total_targets = len(target_indices)
+    if progress_callback:
+        progress_callback({
+            "current": 0,
+            "total": total_targets or 1,
+            "message": "准备提取片段",
+        })
+    for position, index in enumerate(target_indices, start=1):
         if index < 0 or index >= len(segments):
             continue
         segment = segments[index]
+        segment_title = str(segment.get("title") or f"片段 {position:03d}")
+        if progress_callback:
+            progress_callback({
+                "current": position - 1,
+                "total": total_targets or 1,
+                "message": f"正在提取：{segment_title}",
+            })
         try:
             existing_related = get_segment_related_knowledge_items(project_name, segment, include_confirmed=False)["pending"]
             result = extract_reference_knowledge(
@@ -6192,12 +6876,30 @@ def extract_long_reference_segments_to_queue(
             save_long_reference_batch(project_name, batch)
             queued_total += queued_count
             processed += 1
+            if progress_callback:
+                progress_callback({
+                    "current": position,
+                    "total": total_targets or 1,
+                    "message": f"已完成：{segment_title}，新增 {queued_count} 条",
+                })
         except Exception as exc:
             segment["extract_status"] = "failed"
             segment["extract_error"] = str(exc)
             save_long_reference_batch(project_name, batch)
             failed_titles.append(f"{segment.get('title', '未命名片段')}：{exc}")
+            if progress_callback:
+                progress_callback({
+                    "current": position,
+                    "total": total_targets or 1,
+                    "message": f"提取失败：{segment_title}",
+                })
     batch = save_long_reference_batch(project_name, batch)
+    if progress_callback:
+        progress_callback({
+            "current": total_targets or 1,
+            "total": total_targets or 1,
+            "message": f"提取完成：成功 {processed} 段，失败 {len(failed_titles)} 段",
+        })
     return batch, processed, queued_total, failed_titles
 
 
@@ -6437,6 +7139,7 @@ def run_long_reference_extraction_plan(
     *,
     max_segments: int = 5,
     reextract_completed: bool = False,
+    progress_callback=None,
 ) -> tuple[dict, dict]:
     segments = batch.get("segments", []) if isinstance(batch.get("segments", []), list) else []
     target_indices = []
@@ -6461,7 +7164,7 @@ def run_long_reference_extraction_plan(
     if not target_indices or not expert_steps:
         return batch, summary
 
-    current_batch = batch
+    planned_steps = []
     for step_key in expert_steps:
         preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.get(step_key)
         if not preset:
@@ -6469,16 +7172,43 @@ def run_long_reference_extraction_plan(
         categories = [category for category in preset.get("categories", []) if category in KNOWLEDGE_CATEGORY_LABELS]
         if not categories:
             continue
+        planned_steps.append((step_key, preset, categories))
+
+    total_work = max(1, len(target_indices) * len(planned_steps))
+    completed_work = 0
+    if progress_callback:
+        progress_callback({
+            "current": 0,
+            "total": total_work,
+            "message": f"准备执行 {len(planned_steps)} 个专家步骤",
+        })
+
+    current_batch = batch
+    for step_key, preset, categories in planned_steps:
+        step_label = preset.get("label", step_key)
+
+        def step_progress(event: dict, *, offset=completed_work, label=step_label):
+            if not progress_callback or not isinstance(event, dict):
+                return
+            progress_callback({
+                **event,
+                "current": min(offset + int(event.get("current") or 0), total_work),
+                "total": total_work,
+                "message": f"{label} / {event.get('message', '正在提取')}",
+            })
+
         current_batch, processed, queued_total, failures = extract_long_reference_segments_to_queue(
             project_name,
             current_batch,
             target_indices,
             categories,
             extraction_mode=str(preset.get("mode") or "general"),
+            progress_callback=step_progress,
         )
+        completed_work += len(target_indices)
         step_summary = {
             "step": step_key,
-            "label": preset.get("label", step_key),
+            "label": step_label,
             "mode": preset.get("mode", "general"),
             "categories": categories,
             "processed": processed,
@@ -6490,6 +7220,19 @@ def run_long_reference_extraction_plan(
         summary["queued_total"] += queued_total
         summary["failure_count"] += len(failures)
         summary["failures"].extend(failures[:10])
+        if progress_callback:
+            progress_callback({
+                "current": min(completed_work, total_work),
+                "total": total_work,
+                "message": f"{step_label} 完成",
+            })
+
+    if progress_callback:
+        progress_callback({
+            "current": total_work,
+            "total": total_work,
+            "message": f"计划完成：累计处理 {summary.get('processed_segments', 0)} 次片段",
+        })
 
     history = current_batch.get("extraction_plan_runs", [])
     if not isinstance(history, list):
@@ -7411,6 +8154,7 @@ def run_long_reference_quick_process(
     consolidate_after_extract: bool,
     auto_confirm_safe_items: bool,
     custom_instructions: str = "",
+    progress_callback=None,
 ) -> tuple[dict, dict]:
     selected_indices = list(segment_indices)
     extract_indices = selected_indices[: int(extract_limit)]
@@ -7422,7 +8166,20 @@ def run_long_reference_quick_process(
     consolidation_summary: dict = {}
     auto_confirm_summary: dict = {}
 
+    progress_total = max(1, len(extract_indices))
+    if progress_callback:
+        progress_callback({
+            "current": 0,
+            "total": progress_total,
+            "message": "准备一键处理",
+        })
     if import_to_index:
+        if progress_callback:
+            progress_callback({
+                "current": 0,
+                "total": progress_total,
+                "message": "正在导入资料索引",
+            })
         batch, imported = import_long_reference_segments(project_name, batch, selected_indices)
     if extract_indices:
         batch, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
@@ -7432,8 +8189,15 @@ def run_long_reference_quick_process(
             enabled_categories,
             extraction_mode=extraction_mode,
             custom_instructions=custom_instructions,
+            progress_callback=progress_callback,
         )
     if consolidate_after_extract and queued_total:
+        if progress_callback:
+            progress_callback({
+                "current": progress_total,
+                "total": progress_total,
+                "message": "正在整理散知识",
+            })
         consolidation_summary = consolidate_batch_pending_items(
             project_name,
             batch,
@@ -7449,6 +8213,12 @@ def run_long_reference_quick_process(
         if str(item.get("pending_id") or "") and str(item.get("pending_id") or "") not in before_pending_ids
     ]
     if auto_confirm_safe_items:
+        if progress_callback:
+            progress_callback({
+                "current": progress_total,
+                "total": progress_total,
+                "message": "正在自动审核低风险知识",
+            })
         auto_confirm_summary = auto_confirm_pending_items_without_risk(
             project_name,
             new_pending_ids,
@@ -7479,6 +8249,12 @@ def run_long_reference_quick_process(
     }
     batch = append_long_reference_quick_run(batch, summary)
     batch = save_long_reference_batch(project_name, batch)
+    if progress_callback:
+        progress_callback({
+            "current": progress_total,
+            "total": progress_total,
+            "message": f"一键处理完成：提取 {processed} 段，新增候选 {len(new_pending_ids)} 条",
+        })
     return batch, summary
 
 
@@ -7520,28 +8296,52 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             st.caption(
                 f"文件={batch.get('source_file_name', '-') or '-'} / 资料指纹={str(batch.get('content_fingerprint', ''))[:12] or '-'} / 字符数={batch.get('content_char_count', 0)}"
             )
+        segments = batch.get("segments", [])
+        resume_state = summarize_long_reference_resume_state(segments)
+        unfinished_indices = resume_state["unfinished_indices"]
+        imported_not_extracted_indices = resume_state["imported_not_extracted_indices"]
+        failed_indices = resume_state["failed_indices"]
+        pending_import_indices = resume_state["pending_import_indices"]
+        if unfinished_indices:
+            st.warning(
+                f"检测到这个批次还没处理完：未导入 {len(pending_import_indices)} 段，"
+                f"已导入但未提取 {len(imported_not_extracted_indices)} 段，"
+                f"提取失败 {len(failed_indices)} 段。"
+            )
+            st.info(
+                "怎么继续：下面已经默认切到“未完成（推荐续跑）”。保持默认选择，点击“继续处理所选片段”。"
+                "系统会跳过已导入片段的重复导入，只继续未完成的提取；失败片段会按当前设置重试。"
+            )
+        else:
+            st.success("这个批次的片段都已经完成提取。下一步可以去“待确认知识”审核，或按需重跑已提取片段。")
+
         render_extraction_coverage_report(project_name, batch, key_prefix=f"batch_{selected_batch_id}")
 
-        segments = batch.get("segments", [])
+        filter_key = f"long_reference_batch_filter_{selected_batch_id}"
+        if filter_key not in st.session_state:
+            st.session_state[filter_key] = "未完成（推荐续跑）" if unfinished_indices else "全部"
         filter_mode = st.selectbox(
-            "片段过滤",
-            options=["全部", "未导入", "未提取", "提取失败", "已提取"],
-            key="long_reference_batch_filter",
+            "查看哪些片段",
+            options=["未完成（推荐续跑）", "已导入未提取", "未导入", "提取失败", "已提取", "全部"],
+            key=filter_key,
         )
         filtered_indices = []
         for index, segment in enumerate(segments):
-            if filter_mode == "未导入" and segment.get("import_status") == "imported":
+            if filter_mode == "未完成（推荐续跑）" and index not in unfinished_indices:
                 continue
-            if filter_mode == "未提取" and segment.get("extract_status", "pending") not in {"pending", ""}:
+            if filter_mode == "已导入未提取" and index not in imported_not_extracted_indices:
                 continue
-            if filter_mode == "提取失败" and segment.get("extract_status") != "failed":
+            if filter_mode == "未导入" and index not in pending_import_indices:
+                continue
+            if filter_mode == "提取失败" and index not in failed_indices:
                 continue
             if filter_mode == "已提取" and segment.get("extract_status") not in {"queued", "extracted"}:
                 continue
             filtered_indices.append(index)
 
+        selected_segments_key = f"long_reference_batch_selected_segments_{selected_batch_id}_{stable_widget_suffix(filter_mode)}"
         selected_indices = st.multiselect(
-            "选择可继续处理片段（一键处理会按上限处理前 N 个）",
+            "选择要继续处理的片段",
             options=filtered_indices,
             default=filtered_indices[: min(20, len(filtered_indices))],
             format_func=lambda index: (
@@ -7549,7 +8349,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 f" / 导入={label_batch_segment_status(segments[index].get('import_status', 'pending'))}"
                 f" / 提取={label_batch_segment_status(segments[index].get('extract_status', 'pending'))}"
             ),
-            key=f"long_reference_batch_selected_segments_{selected_batch_id}",
+            key=selected_segments_key,
         )
 
         for index in filtered_indices[:12]:
@@ -7588,9 +8388,10 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
         selected_count = len(selected_indices)
         planned_quick_count = min(int(quick_continue_limit), selected_count)
         st.info(
-            f"本次一键处理将按当前选择顺序处理 {planned_quick_count} 个片段；"
+            f"本次继续处理将按当前选择顺序处理 {planned_quick_count} 个片段；"
             f"已选择 {selected_count} 个，当前过滤结果共 {len(filtered_indices)} 个片段。"
         )
+        selected_needs_import = any(index in pending_import_indices for index in selected_indices)
         with st.expander("高级设置：批次一键处理策略", expanded=False):
             quick_continue_auto_confirm = st.checkbox(
                 "自动审核并保存低风险知识",
@@ -7599,8 +8400,9 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             )
             quick_continue_import = st.checkbox(
                 "同时导入资料索引",
-                value=True,
+                value=selected_needs_import,
                 key=f"batch_quick_import_{selected_batch_id}",
+                help="断点续跑时，已导入片段会自动跳过，不会重复写入资料索引。",
             )
             quick_continue_preset_key = st.selectbox(
                 "专家提取预设",
@@ -7638,7 +8440,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             quick_continue_auto_confirm = True
             quick_continue_import = True
             quick_continue_custom_instructions = ""
-        if st.button("继续一键处理所选片段", key=f"batch_quick_process_{selected_batch_id}", use_container_width=True):
+        if st.button("继续处理所选片段", key=f"batch_quick_process_{selected_batch_id}", use_container_width=True, type="primary" if unfinished_indices else "secondary"):
             if not selected_indices:
                 st.error("请先选择片段。")
             elif not quick_continue_categories:
@@ -7647,6 +8449,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
                 with st.spinner("正在继续处理批次..."):
+                    progress_callback = create_batch_progress_callback("批次一键处理")
                     batch, quick_summary = run_long_reference_quick_process(
                         project_name,
                         batch,
@@ -7658,6 +8461,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                         consolidate_after_extract=False,
                         auto_confirm_safe_items=quick_continue_auto_confirm,
                         custom_instructions=quick_continue_custom_instructions,
+                        progress_callback=progress_callback,
                     )
                 st.session_state[f"batch_quick_result_{selected_batch_id}"] = quick_summary
                 st.success(
@@ -7746,18 +8550,23 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 elif not enabled_categories:
                     st.error("请至少选择一个提取分类。")
                 else:
-                    _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
-                        project_name,
-                        batch,
-                        target_indices,
-                        enabled_categories,
-                        extraction_mode=extraction_mode,
-                    )
-                    st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
-                    for failure in failures[:5]:
-                        st.warning(f"提取失败：{failure}")
-                    if not failures:
-                        st.rerun()
+                    with st.spinner("正在提取所选片段..."):
+                        progress_callback = create_batch_progress_callback("批量提取")
+                        _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+                            project_name,
+                            batch,
+                            target_indices,
+                            enabled_categories,
+                            extraction_mode=extraction_mode,
+                            progress_callback=progress_callback,
+                        )
+                    st.session_state[f"batch_manual_extract_result_{selected_batch_id}"] = {
+                        "action": "提取所选未提取片段",
+                        "processed": processed,
+                        "queued_total": queued_total,
+                        "failures": failures,
+                    }
+                    st.rerun()
 
         if col_retry.button("重试失败片段", key=f"batch_retry_{selected_batch_id}"):
             target_indices = [
@@ -7769,18 +8578,23 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             elif not enabled_categories:
                 st.error("请至少选择一个提取分类。")
             else:
-                _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
-                    project_name,
-                    batch,
-                    target_indices,
-                    enabled_categories,
-                    extraction_mode=extraction_mode,
-                )
-                st.success(f"已重试 {processed} 个片段，加入 {queued_total} 条待确认知识。")
-                for failure in failures[:5]:
-                    st.warning(f"重试失败：{failure}")
-                if not failures:
-                    st.rerun()
+                with st.spinner("正在重试失败片段..."):
+                    progress_callback = create_batch_progress_callback("重试提取")
+                    _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+                        project_name,
+                        batch,
+                        target_indices,
+                        enabled_categories,
+                        extraction_mode=extraction_mode,
+                        progress_callback=progress_callback,
+                    )
+                st.session_state[f"batch_manual_extract_result_{selected_batch_id}"] = {
+                    "action": "重试失败片段",
+                    "processed": processed,
+                    "queued_total": queued_total,
+                    "failures": failures,
+                }
+                st.rerun()
 
         if col_reextract.button("重新提取已提取片段", key=f"batch_reextract_{selected_batch_id}"):
             target_indices = [
@@ -7792,18 +8606,33 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             elif not enabled_categories:
                 st.error("请至少选择一个提取分类。")
             else:
-                _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
-                    project_name,
-                    batch,
-                    target_indices,
-                    enabled_categories,
-                    extraction_mode=extraction_mode,
-                )
-                st.success(f"已重新提取 {processed} 个片段，加入 {queued_total} 条待确认知识。")
-                for failure in failures[:5]:
-                    st.warning(f"重新提取失败：{failure}")
-                if not failures:
-                    st.rerun()
+                with st.spinner("正在重新提取片段..."):
+                    progress_callback = create_batch_progress_callback("重新提取")
+                    _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
+                        project_name,
+                        batch,
+                        target_indices,
+                        enabled_categories,
+                        extraction_mode=extraction_mode,
+                        progress_callback=progress_callback,
+                    )
+                st.session_state[f"batch_manual_extract_result_{selected_batch_id}"] = {
+                    "action": "重新提取已提取片段",
+                    "processed": processed,
+                    "queued_total": queued_total,
+                    "failures": failures,
+                }
+                st.rerun()
+
+        manual_extract_result = st.session_state.get(f"batch_manual_extract_result_{selected_batch_id}", {})
+        if manual_extract_result:
+            with st.expander("上次手动提取结果", expanded=bool(manual_extract_result.get("failures"))):
+                st.json({
+                    "操作": manual_extract_result.get("action", ""),
+                    "处理片段": manual_extract_result.get("processed", 0),
+                    "新增候选": manual_extract_result.get("queued_total", 0),
+                    "失败": manual_extract_result.get("failures", []),
+                })
 
         st.markdown("#### 多专家提取计划")
         plan_col_a, plan_col_b, plan_col_c = st.columns(3)
@@ -7954,6 +8783,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
                 with st.spinner("正在按专家计划提取资料..."):
+                    progress_callback = create_batch_progress_callback("多专家提取计划")
                     updated_batch, plan_summary = run_long_reference_extraction_plan(
                         project_name,
                         batch,
@@ -7961,6 +8791,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                         plan_steps,
                         max_segments=int(plan_limit),
                         reextract_completed=plan_reextract,
+                        progress_callback=progress_callback,
                     )
                     auto_result = {}
                     if auto_consolidate and plan_summary.get("queued_total", 0):
@@ -8015,8 +8846,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                             st.warning(auto_info.get("message", "自动整理没有生成结果。"))
                     for failure in plan_summary.get("failures", [])[:5]:
                         st.warning(f"计划步骤失败：{failure}")
-                    if not plan_summary.get("failures"):
-                        st.rerun()
+                    st.rerun()
 
         plan_result = st.session_state.get(f"batch_extract_plan_result_{selected_batch_id}") or batch.get("last_extraction_plan", {})
         if isinstance(plan_result, dict) and plan_result:
@@ -8401,6 +9231,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                 st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
                 with st.spinner("正在保存批次、导入索引、提取并自动审核低风险知识..."):
+                    progress_callback = create_batch_progress_callback("一键处理")
                     batch = get_or_create_preview_batch()
                     updated_batch, quick_summary = run_long_reference_quick_process(
                         project_name,
@@ -8413,6 +9244,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                         consolidate_after_extract=quick_consolidate,
                         auto_confirm_safe_items=quick_auto_confirm,
                         custom_instructions=shared_custom_instructions,
+                        progress_callback=progress_callback,
                     )
                 st.session_state["long_reference_quick_result"] = quick_summary
                 st.success(
@@ -8487,6 +9319,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                     st.error("处理数量超过 50 段，请先勾选确认框。")
                 else:
                     with st.spinner("正在分批提取结构化知识..."):
+                        progress_callback = create_batch_progress_callback("手动提取结构化知识")
                         batch = get_or_create_preview_batch()
                         _, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
                             project_name,
@@ -8495,8 +9328,13 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                             shared_categories,
                             extraction_mode=shared_extraction_mode,
                             custom_instructions=shared_custom_instructions,
+                            progress_callback=progress_callback,
                         )
-                    st.success(f"已处理 {processed} 个片段，加入 {queued_total} 条待确认知识。")
+                    st.session_state["long_reference_manual_extract_result"] = {
+                        "processed": processed,
+                        "queued_total": queued_total,
+                        "failed_titles": failed_titles,
+                    }
                     if manual_consolidate and queued_total:
                         consolidation_summary = consolidate_batch_pending_items(
                             project_name,
@@ -8509,12 +9347,61 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                             f"追加整理：合并 {consolidation_summary.get('source_count', 0)} 条为 "
                             f"{consolidation_summary.get('queued_count', 0)} 条稳定知识。"
                         )
-                    for failure in failed_titles[:5]:
-                        st.warning(f"提取失败：{failure}")
-                    if len(failed_titles) > 5:
-                        st.warning(f"另有 {len(failed_titles) - 5} 个片段提取失败。")
-                    if not failed_titles:
-                        st.rerun()
+                        st.session_state["long_reference_manual_extract_result"]["consolidation"] = consolidation_summary
+                    st.rerun()
+
+            manual_result = st.session_state.get("long_reference_manual_extract_result", {})
+            if manual_result:
+                with st.expander("上次手动提取结果", expanded=bool(manual_result.get("failed_titles"))):
+                    st.json({
+                        "处理片段": manual_result.get("processed", 0),
+                        "新增候选": manual_result.get("queued_total", 0),
+                        "失败": manual_result.get("failed_titles", []),
+                        "整理": manual_result.get("consolidation", {}),
+                    })
+
+
+def _resource_browser_json_text(payload) -> str:
+    try:
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+    except TypeError:
+        return str(payload)
+
+
+def _resource_browser_item_name(item: dict, fallback: str) -> str:
+    for field in ["name", "title", "subject", "key", "id", "pending_id"]:
+        value = str(item.get(field) or "").strip()
+        if value:
+            return value[:80]
+    content = str(item.get("content") or item.get("summary") or "").strip()
+    if content:
+        return content[:80]
+    return fallback
+
+
+def _long_reference_batch_browser_payload(batch: dict) -> dict:
+    segments = []
+    for segment in batch.get("segments", []):
+        if not isinstance(segment, dict):
+            continue
+        segments.append({
+            key: value for key, value in segment.items()
+            if key != "content"
+        })
+    return {
+        "batch_id": batch.get("batch_id", ""),
+        "title": batch.get("title", ""),
+        "scope": batch.get("scope", ""),
+        "authority": batch.get("authority", ""),
+        "source_type": batch.get("source_type", ""),
+        "source_origin": batch.get("source_origin", ""),
+        "source_file_name": batch.get("source_file_name", ""),
+        "content_char_count": batch.get("content_char_count", 0),
+        "created_at": batch.get("created_at", ""),
+        "updated_at": batch.get("updated_at", ""),
+        "summary": batch.get("summary", {}),
+        "segments": segments,
+    }
 
 
 def _build_resource_browser_items(project_name: str, story_id: str = "default") -> list[dict]:
@@ -8786,6 +9673,72 @@ def _build_resource_browser_items(project_name: str, story_id: str = "default") 
             "deletable": True,
         })
 
+    knowledge_base = load_knowledge_base(project_name)
+    for category, knowledge_items in knowledge_base.items():
+        for index, knowledge_item in enumerate(knowledge_items, start=1):
+            if not isinstance(knowledge_item, dict):
+                continue
+            item_name = _resource_browser_item_name(knowledge_item, f"知识条目 {index}")
+            item_identity = str(knowledge_item.get("id") or knowledge_item.get("knowledge_id") or item_name)
+            items.append({
+                "id": f"knowledge:{category}:{stable_widget_suffix(f'{category}:{index}:{item_identity}')}",
+                "group": "knowledge_item",
+                "label": f"{label_knowledge_category(category)} / {item_name}",
+                "path_label": f"knowledge / {category} / {item_identity}",
+                "content": _resource_browser_json_text(knowledge_item),
+                "knowledge_payload": knowledge_item,
+                "knowledge_category": category,
+                "chapter_no": None,
+                "analysis_type": "",
+                "relative_path": f"knowledge/{category}.json",
+                "editable": False,
+                "deletable": False,
+            })
+
+    for index, pending_item in enumerate(load_pending_knowledge_items(project_name), start=1):
+        if not isinstance(pending_item, dict):
+            continue
+        category = str(pending_item.get("category") or "unknown")
+        pending_id = str(pending_item.get("pending_id") or pending_item.get("id") or f"pending:{index}")
+        item_name = _resource_browser_item_name(pending_item, f"待确认条目 {index}")
+        items.append({
+            "id": f"pending-knowledge:{stable_widget_suffix(f'{index}:{pending_id}')}",
+            "group": "pending_knowledge",
+            "label": f"{label_knowledge_category(category)} / {item_name}",
+            "path_label": f"pending_knowledge / {category} / {pending_id}",
+            "content": _resource_browser_json_text(pending_item),
+            "pending_payload": pending_item,
+            "knowledge_category": category,
+            "chapter_no": None,
+            "analysis_type": "",
+            "relative_path": "pending_knowledge.json",
+            "editable": False,
+            "deletable": False,
+        })
+
+    for batch in list_long_reference_batches(project_name):
+        if not isinstance(batch, dict):
+            continue
+        batch_id = str(batch.get("batch_id") or "")
+        batch_identity = batch_id or str(batch.get("file_name") or batch.get("title") or "long_reference_batch")
+        batch_title = str(batch.get("title") or batch.get("source_file_name") or batch_id or "资料批次")
+        summary = batch.get("summary", {}) if isinstance(batch.get("summary", {}), dict) else {}
+        segment_count = int(summary.get("segment_count") or len(batch.get("segments", []) or []))
+        extracted_count = int(summary.get("extract_queued_count") or 0)
+        items.append({
+            "id": f"long-reference-batch:{stable_widget_suffix(batch_identity)}",
+            "group": "long_reference_batch",
+            "label": f"{batch_title}（{segment_count} 段 / 已提取 {extracted_count}）",
+            "path_label": f"long_reference_batches / {batch.get('file_name') or batch_id}",
+            "content": _resource_browser_json_text(_long_reference_batch_browser_payload(batch)),
+            "batch_payload": batch,
+            "chapter_no": None,
+            "analysis_type": "",
+            "relative_path": f"long_reference_batches/{batch.get('file_name') or batch_id}",
+            "editable": False,
+            "deletable": False,
+        })
+
     return items
 
 
@@ -8912,6 +9865,17 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
                 st.rerun()
         return
 
+    if group in {"knowledge_item", "pending_knowledge", "long_reference_batch"}:
+        st.caption("该资源在浏览器中只读；编辑和批量处理请回到「资料导入」。")
+        st.code(resource.get("content", ""), language="json")
+        if st.button(
+            "前往资料导入",
+            key=scoped_widget_key("browser_goto_ingestion", project_name, story_id, resource.get("id")),
+            use_container_width=True,
+        ):
+            navigate_to("资料导入")
+        return
+
     edited_content = st.text_area(
         "内容",
         value=resource.get("content", ""),
@@ -8999,6 +9963,11 @@ def render_resource_management_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     browser_items = _build_resource_browser_items(project_name, story_id=story_id)
     selected = _get_resource_browser_selection(project_name)
+    focused_selected, focus_warning = _consume_resource_browser_focus(project_name, browser_items)
+    if focused_selected:
+        selected = focused_selected
+    if focus_warning:
+        st.info(focus_warning)
 
     left_col, right_col = st.columns([1, 2])
 
@@ -9006,6 +9975,18 @@ def render_resource_management_page(project_name: str):
         st.markdown("### 资源浏览器")
         search_value = st.text_input("搜索资源", key=f"resource_browser_search_{project_name}")
         search_lower = search_value.strip().lower()
+        group_filter_key = f"resource_browser_group_filter_{project_name}"
+        group_filter_options = [group_key for group_key, _ in RESOURCE_BROWSER_GROUPS]
+        existing_group_filter = st.session_state.get(group_filter_key)
+        if not isinstance(existing_group_filter, list) or any(group not in group_filter_options for group in existing_group_filter):
+            st.session_state[group_filter_key] = group_filter_options
+        browser_group_filter = st.multiselect(
+            "资源类型",
+            options=group_filter_options,
+            format_func=lambda value: RESOURCE_BROWSER_GROUP_LABELS.get(value, value),
+            key=group_filter_key,
+        )
+        active_group_filter = set(browser_group_filter)
         volume_filter_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name, story_id=story_id)]
         browser_volume_filter = st.selectbox(
             "按分卷过滤",
@@ -9092,26 +10073,26 @@ def render_resource_management_page(project_name: str):
                 st.success(f"已删除 {deleted_count} 份外部资料。")
                 st.rerun()
 
-        groups = [
-            ("outline", "全书大纲"),
-            ("outline_discussion", "全书讨论工件"),
-            ("creative_profile_discussion", "创作配置讨论工件"),
-            ("volume_outline", "分卷大纲"),
-            ("volume_discussion", "分卷讨论工件"),
-            ("arc_outline", "剧情段大纲"),
-            ("arc_discussion", "剧情段讨论工件"),
-            ("arc_chapter_plan", "剧情段章节分配"),
-            ("chapter_outline", "章节细纲"),
-            ("chapter_discussion", "章节讨论工件"),
-            ("chapter_content", "章节正文"),
-            ("review", "审阅结果"),
-            ("analysis", "分析报告"),
-            ("evaluation", "评估报告"),
-            ("run", "流水线记录"),
-            ("source", "外部资料"),
-        ]
+        global_filter_passthrough_groups = {
+            "outline",
+            "outline_discussion",
+            "creative_profile_discussion",
+            "run",
+            "analysis",
+            "evaluation",
+            "source",
+            "review",
+            "chapter_content",
+            "knowledge_item",
+            "pending_knowledge",
+            "long_reference_batch",
+        }
+        visible_resource_count = 0
+        visible_items = []
 
-        for group_key, group_label in groups:
+        for group_key, group_label in RESOURCE_BROWSER_GROUPS:
+            if group_key not in active_group_filter:
+                continue
             group_items = [item for item in browser_items if item.get("group") == group_key]
             if browser_volume_filter:
                 filtered_items = []
@@ -9123,7 +10104,7 @@ def render_resource_management_page(project_name: str):
                         item_volume_no = (item.get("arc_metadata") or {}).get("volume_no")
                     if item_volume_no is None:
                         item_volume_no = (item.get("chapter_metadata") or {}).get("volume_no")
-                    if item.get("group") in {"outline", "creative_profile_discussion", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
+                    if item.get("group") in global_filter_passthrough_groups:
                         filtered_items.append(item)
                     elif item_volume_no == browser_volume_filter:
                         filtered_items.append(item)
@@ -9136,7 +10117,7 @@ def render_resource_management_page(project_name: str):
                         item_arc_no = (item.get("arc_metadata") or {}).get("arc_no")
                     if item_arc_no is None:
                         item_arc_no = (item.get("chapter_metadata") or {}).get("arc_no")
-                    if item.get("group") in {"outline", "outline_discussion", "creative_profile_discussion", "volume_outline", "volume_discussion", "run", "analysis", "evaluation", "source", "review", "chapter_content"}:
+                    if item.get("group") in global_filter_passthrough_groups or item.get("group") in {"volume_outline", "volume_discussion"}:
                         filtered_items.append(item)
                     elif item_arc_no == browser_arc_filter:
                         filtered_items.append(item)
@@ -9149,6 +10130,8 @@ def render_resource_management_page(project_name: str):
                 ]
             if not group_items:
                 continue
+            visible_resource_count += len(group_items)
+            visible_items.extend(group_items)
             st.markdown(f"**{group_label}**")
             for item in group_items:
                 selected_flag = selected.get("id") == item.get("id")
@@ -9156,14 +10139,20 @@ def render_resource_management_page(project_name: str):
                 if st.button(button_label, key=f"resource_select_{item.get('id')}", use_container_width=True):
                     _set_resource_browser_selection(project_name, item)
                     st.rerun()
+        if not visible_resource_count:
+            st.caption("当前筛选下没有可显示的资源。")
 
     with right_col:
         st.markdown("### 资源详情")
         if selected and not any(item.get("id") == selected.get("id") for item in browser_items):
             selected = {}
             st.session_state[_resource_browser_selection_key(project_name)] = {}
-        if not selected and browser_items:
-            selected = browser_items[0]
+        visible_ids = {item.get("id") for item in visible_items}
+        if selected and visible_ids and selected.get("id") not in visible_ids:
+            selected = {}
+            st.session_state[_resource_browser_selection_key(project_name)] = {}
+        if not selected and visible_items:
+            selected = visible_items[0]
             _set_resource_browser_selection(project_name, selected)
         _render_resource_browser_detail(project_name, selected)
 
@@ -10582,13 +11571,14 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
 
         st.divider()
         st.markdown("### 待处理与整理")
-        ledger_tab, queue_tab, batch_tab, knowledge_tab, package_tab = st.tabs(["来源台账", "待确认知识", "长篇批次", "知识整理", "资料包"])
+        ledger_tab, queue_tab, record_tab, batch_tab, knowledge_tab, package_tab = st.tabs(["来源台账", "待确认知识", "处理记录", "长篇批次", "知识整理", "资料包"])
         with ledger_tab:
             render_ingestion_health_panel(project_name)
             render_source_ledger_page(project_name)
         with queue_tab:
             render_auto_review_policy_panel(project_name)
             render_pending_knowledge_queue(project_name)
+        with record_tab:
             render_auto_review_runs_panel(project_name)
         with batch_tab:
             render_long_reference_batch_manager(project_name, knowledge_category_options)

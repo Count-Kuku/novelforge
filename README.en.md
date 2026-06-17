@@ -2,6 +2,8 @@
 
 # NovelForge
 
+Current version: `v0.5.0`
+
 NovelForge is an LLM-powered writing workspace for long-form fiction, built around persistent project storage, retrieval-augmented generation, structured workflows, and future multi-agent collaboration.
 
 It is designed for long-running writing scenarios such as fan fiction, web novels, and original long-form projects, where consistency, memory, planning, and iterative revision matter more than one-shot chat output.
@@ -39,6 +41,8 @@ Current maturity can be summarized as:
 ## Core Capabilities
 
 - project-based story storage
+- story spaces: one project can hold multiple independent stories that share project-level canon/reference knowledge while keeping story assets separate
+- story management: stories can be renamed, described, and copied into newly registered story spaces
 - Streamlit web UI
 - full-story outline generation
 - chapter outline generation
@@ -56,7 +60,8 @@ Current maturity can be summarized as:
 - source ledger for summarizing long-form batches, retrieval sources, knowledge-only sources, processing status, and segment-level provenance
 - long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing, with strict-canon, fanfic-foundation, and style-reference initialization presets plus clearer guidance for saving batches, indexing source text, and extracting knowledge
 - long-form source batch manager for tracking whole-txt splitting, indexing, extraction, re-extraction, failures, and resume progress, with per-segment batch persistence after each extraction for terminal-interruption recovery
-- one-click source processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items for manual review; the pending queue can preview the current auto-review policy and manually auto-confirm low-risk items; auto-confirm decisions are logged and can be rolled back
+- one-click source processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and showing batch progress; pages refresh automatically after long-running batch actions complete
+- pending-queue clear mode for auto-saving low-risk items, archiving weak-evidence items, and moving conflicts/duplicates into a manual review box; processing records support full rollback and restoring manual-review snapshots back into the pending queue
 - deep source-extraction modes for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction
 - specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes with matching categories and modes
 - extraction category default strategies for starting from specialist presets, all categories, or no preselected categories
@@ -97,6 +102,8 @@ Current maturity can be summarized as:
 - arc-level chapter allocation plans
 - lightweight writing guidance controls
 - in-app model endpoint and key configuration
+- grouped navigation ordered by workbench, sources, planning, and writing; source ingestion is the first item in the sources group
+- project overview metrics can jump directly into the resource browser for matching resource types
 
 ## Documentation Scope
 
@@ -130,7 +137,7 @@ NovelForge includes a project-scoped retrieval layer that works across both inte
 
 The app separates three related concepts:
 
-- `Project Resources`: file-level management for outlines, chapters, reports, run snapshots, and source files.
+- `Resource Browser`: file-level management for outlines, chapters, reports, run snapshots, and source files, plus read-only inspection for structured knowledge, pending knowledge, and long-form batches.
 - `Core State`: compact story settings that are injected with high priority, such as key canon mode, relationships, timeline items, and hard constraints.
 - `Structured Knowledge Base`: long-lived project knowledge such as character cards, world rules, locations, organizations, power systems, relationships, timelines, and hard constraints, shared across stories and retrieval.
 - `Source Ingestion` / `Retrieval Center`: ingestion imports and structures material; retrieval rebuilds indexes, tests recall, inspects debug output, and stores conflict decisions.
@@ -174,7 +181,7 @@ Current retrieval capabilities include:
 - long-form source details can inspect segment text and trace related pending or confirmed knowledge items
 - pending review queue for accepting, discarding, or editing extracted knowledge before indexing
 - pending review includes extraction-quality checks for same-name duplicates, same-name field conflicts, fact-level conflicts, alias candidates, and existing confirmed-knowledge overlap, with suggestions and merge actions for same-name groups
-- automatic review policy and records for one-click and pasted-source low-risk saves, including configurable thresholds, grade-B handling, manual-review categories, confirm/block decisions, reasons, pending snapshots, write targets, run-level rollback, and single-item return to pending review
+- automatic review policy and processing records for one-click, pasted-source, and pending-queue clear actions, including configurable thresholds, grade-B handling, manual-review categories, confirm/archive/manual-review decisions, pending snapshots, write targets, run-level rollback, single-item return, and manual-review snapshot restore
 - alias-candidate hints can be saved into `knowledge/entities/aliases.json`; alias groups are indexed as `entity_alias_group`
 - pending review supports category, source, keyword, and quality-risk filtering, plus risk-first, low-evidence, low-confidence, high-importance, newest-first, and category/name sorting
 - pending review and confirmed-knowledge organization support worldline filtering for separating canon, project-main, and AU branch material
@@ -292,7 +299,7 @@ python -m venv .venv
 2. Run the packaging script from PowerShell:
 
 ```powershell
-.\build_release.ps1 -Version v0.1.0
+.\build_release.ps1 -Version v0.5.0
 ```
 
 3. The script will automatically:
@@ -300,7 +307,7 @@ python -m venv .venv
 - install `pyinstaller` into `.venv`
 - build `NovelForge.exe` from `launcher.py`
 - assemble `release/NovelForge-Portable/`
-- create `release/NovelForge-windows-portable-v0.1.0.zip`
+- create `release/NovelForge-windows-portable-v0.5.0.zip`
 - save a local build log under `release/`
 
 ### Notes

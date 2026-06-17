@@ -638,6 +638,26 @@ def create_story(project_name: str, name: str, description: str = "") -> dict:
     return meta.model_dump()
 
 
+def rename_story(project_name: str, story_id: str, name: str, description: str | None = None) -> dict:
+    clean_story_id = str(story_id or "").strip()
+    clean_name = str(name or "").strip()
+    if not clean_story_id:
+        raise ValueError("故事 ID 不能为空。")
+    if not clean_name:
+        raise ValueError("故事名称不能为空。")
+
+    index = load_stories_index(project_name)
+    for story in index.get("stories", []):
+        if story.get("story_id") == clean_story_id:
+            story["name"] = clean_name
+            if description is not None:
+                story["description"] = str(description or "").strip()
+            story["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            save_stories_index(project_name, index)
+            return dict(story)
+    raise ValueError(f"故事不存在：{clean_story_id}")
+
+
 
 def copy_story_settings(project_name: str, source_story_id: str, target_story_id: str):
     """将源故事的创作配置、创作配置讨论工件、记忆覆盖和生成规则复制到目标故事。"""
@@ -1605,6 +1625,90 @@ def rollback_auto_review_run(project_name: str, run_id: str) -> dict:
         "removed_count": removed_count,
         "restored_count": restored_count,
         "run": run,
+    }
+
+
+def restore_auto_review_snapshots_to_pending(
+    project_name: str,
+    run_id: str,
+    pending_ids: list[str],
+    *,
+    snapshot_field: str = "manual_review_snapshots",
+) -> dict:
+    target_run_id = str(run_id or "").strip()
+    requested_ids = [str(item or "").strip() for item in pending_ids if str(item or "").strip()]
+    if not target_run_id or not requested_ids:
+        return {"success": False, "message": "缺少处理记录或待恢复条目。", "restored_count": 0}
+
+    runs = load_auto_review_runs(project_name)
+    run_index = next((index for index, item in enumerate(runs) if str(item.get("run_id") or "") == target_run_id), -1)
+    if run_index < 0:
+        return {"success": False, "message": "未找到处理记录。", "restored_count": 0}
+
+    run = dict(runs[run_index])
+    if str(run.get("status") or "") == "rolled_back":
+        return {"success": False, "message": "该处理记录已经整批回退，不能重复恢复。", "restored_count": 0}
+
+    snapshots = run.get(snapshot_field, []) if isinstance(run.get(snapshot_field, []), list) else []
+    snapshot_by_id = {
+        str(snapshot.get("pending_id") or ""): snapshot
+        for snapshot in snapshots
+        if isinstance(snapshot, dict) and str(snapshot.get("pending_id") or "")
+    }
+    restored_before = set(
+        str(item or "")
+        for item in run.get("restored_pending_ids", [])
+        if str(item or "").strip()
+    )
+
+    pending = load_pending_knowledge_items(project_name)
+    existing_pending_ids = {str(item.get("pending_id") or "") for item in pending if isinstance(item, dict)}
+    restored_count = 0
+    skipped_ids: list[str] = []
+    restored_ids: list[str] = []
+    restored_at = datetime.now(timezone.utc).isoformat()
+
+    for pending_id in requested_ids:
+        snapshot = snapshot_by_id.get(pending_id)
+        if not snapshot or pending_id in existing_pending_ids or pending_id in restored_before:
+            skipped_ids.append(pending_id)
+            continue
+        restored = dict(snapshot)
+        restored["status"] = "pending"
+        restored["restored_from_auto_review_run_id"] = target_run_id
+        restored["restored_from_snapshot_field"] = snapshot_field
+        restored["restored_at"] = restored_at
+        pending.append(restored)
+        existing_pending_ids.add(pending_id)
+        restored_before.add(pending_id)
+        restored_ids.append(pending_id)
+        restored_count += 1
+
+    if restored_count:
+        save_pending_knowledge_items(project_name, pending)
+
+    run["restored_pending_ids"] = sorted(restored_before)
+    restore_events = run.get("restore_events", [])
+    if not isinstance(restore_events, list):
+        restore_events = []
+    restore_events.append({
+        "restored_at": restored_at,
+        "snapshot_field": snapshot_field,
+        "requested_ids": requested_ids,
+        "restored_ids": restored_ids,
+        "skipped_ids": skipped_ids,
+    })
+    run["restore_events"] = restore_events[-50:]
+    runs[run_index] = run
+    save_auto_review_runs(project_name, runs)
+
+    return {
+        "success": True,
+        "message": f"已恢复 {restored_count} 条到待确认队列，跳过 {len(skipped_ids)} 条。",
+        "restored_count": restored_count,
+        "skipped_count": len(skipped_ids),
+        "restored_ids": restored_ids,
+        "skipped_ids": skipped_ids,
     }
 
 

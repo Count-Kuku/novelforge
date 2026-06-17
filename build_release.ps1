@@ -75,7 +75,9 @@ $filesToCopy = @(
     "NovelForge.spec",
     "requirements.txt",
     ".env.example",
+    "VERSION",
     "README.md",
+    "README.en.md",
     "project.md"
 )
 

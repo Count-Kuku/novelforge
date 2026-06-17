@@ -4,6 +4,8 @@ This document is the architecture and implementation reference for NovelForge. I
 
 For user-facing feature introductions, setup steps, and workflow guidance, see `README.md`.
 
+Current release marker: `v0.5.0`
+
 ## Project Overview
 
 NovelForge is a long-form novel writing system built around LLMs, memory management, workflow automation, and future multi-agent collaboration.
@@ -66,11 +68,13 @@ Current practical status:
 * Structured pasted-reference organization for canon/reference knowledge; single-page URL ingestion remains implemented but is temporarily hidden from the UI
 * Source ingestion ledger for summarizing long-form batches, imported retrieval sources, knowledge-only sources, and processing status
 * Long-form source importer for splitting uploaded/pasted novel text by chapter title or length before batch indexing, with strict-canon, fanfic-foundation, and style-reference initialization presets plus UI guidance that separates preview splitting, batch saving, retrieval indexing, and structured knowledge extraction
-* One-click long-form source processing for saving batches, indexing source text, extracting structured knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items in the review queue
+* One-click long-form source processing for saving batches, indexing source text, extracting structured knowledge, auto-confirming low-risk items, and leaving conflicts or weak-evidence items in the review queue, with visible progress and automatic page-state refresh after completion
 * Automatic review run records for low-risk auto-confirm decisions, including decision reasons, pending snapshots, confirmed write targets, and run-level rollback
 * Project-level automatic review policy for confidence/evidence thresholds, grade-B handling, and manual-review categories
 * Pending-queue automatic-review preview for showing which filtered or selected items would be auto-confirmed before actually saving them
+* Pending-queue clear mode with low-risk auto-save, low-quality archive, conflict/duplicate manual review box, run-level rollback, and manual-review snapshot restore back into the pending queue
 * Long-form source batch manager for whole-txt processing progress, continue actions, failed extraction retries, and completed-segment re-extraction
+* Batch processing progress bars for long-form extraction, retry, re-extraction, multi-specialist extraction plans, and one-click source processing
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Consolidated creative profile page for direct profile editing, discussion-assisted recommendations, one-click form backfill, and approval-based persistence
@@ -111,17 +115,19 @@ Current practical status:
 * Multi-turn planning discussion UI with continuously updated discussion conclusions
 * Project management workspace with project overview, rename/delete, and resource CRUD
 * IDE-style resource browser for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
+* Project overview metrics can focus the resource browser on matching resource groups, including chapters, outlines, reports, sources, structured knowledge, pending knowledge, and long-form batches
 * Hierarchical outline support with project outline + volume outlines + arc outlines + chapter assignment to volume / arc
 * Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
 * In-app LLM configuration with multi-profile endpoint / key management and active-profile switching
 * Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, SiliconFlow) for quick endpoint/model fill
 * Connection testing for model profiles before saving
 * Local launcher and portable-build scripts for desktop-style localhost packaging
-* Grouped workspace navigation in the sidebar: 工作台 (overview/config/resources), 规划 (profile-aware planning), 写作 (quick gen, content generation, evaluation), 资料 (settings, ingestion, retrieval center)
+* Grouped workspace navigation in the sidebar: 工作台 (overview/config/resources), 资料 (ingestion/settings/retrieval center), 规划 (profile-aware planning), 写作 (quick gen, content generation, evaluation)
 * Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
 * Project overview page upgraded into a quick-action home screen for quick generation, content generation, ingestion, and resource browsing
 * Story spaces support：one project can hold multiple independent stories, each with its own creative profile, memory overrides, outlines, chapters, reviews, evaluations, analysis reports, pipeline runs, and chapter summaries, while sharing project-level base memory, structured knowledge, source materials, rules, and retrieval index
 * Automatic migration of existing single-story projects into the default story space on first access, with the active story persisted in `stories/index.json`
+* Story management supports editing story display name/description and copying one story's settings into a newly registered story space
 * Creative-profile discussion assist for clarifying ambiguous task intent before saving recommended structured project settings
 * Resumable chapter pipeline runs from persisted workflow snapshots
 * Arc-level chapter allocation planning with persisted structured plans
@@ -248,7 +254,11 @@ novelforge/
 
 ├── README.md
 
+├── README.en.md
+
 ├── project.md
+
+├── VERSION
 
 ├── launcher.py
 
@@ -354,6 +364,7 @@ Responsibilities:
 * Reporting extraction coverage and re-extraction diffs so repeated passes are auditable rather than blind
 * Recording auto-review decisions so low-risk automated confirmation remains auditable and reversible
 * Previewing automatic-review decisions in the pending queue before manually running low-risk auto-confirmation
+* Running pending-queue clear plans that split entries into auto-save, archive, and manual-review snapshots, then exposing rollback and selective restore actions
 * Returning individual auto-confirmed knowledge items to pending review without rolling back the whole run
 * Running multi-specialist extraction plans across selected long-form segments with per-step progress and failure summaries
 * Detecting repeated long-form uploads through content fingerprints, file names, total character counts, and segment counts
@@ -370,8 +381,8 @@ Responsibilities:
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
 * Listing and deleting imported external source files from the retrieval center, with automatic index rebuild after removal
 * Separating project resource browsing, core story state editing, source ingestion, and retrieval testing into distinct UI pages
-* Providing a project overview page with project-level statistics, rename, and delete operations
-* Managing project resources through an IDE-style browser with unified preview/edit/save/delete behavior
+* Providing a project overview page with project-level statistics, resource-metric navigation, rename, and delete operations
+* Managing project resources through an IDE-style browser with unified preview/edit/save/delete behavior and read-only inspection for structured knowledge, pending knowledge, and long-form batches
 * Managing the boundary between core settings and structured knowledge: core settings stay short and high-priority, while stable settings can be converted into searchable project knowledge
 * Supporting direct CRUD for outlines, chapter files, review artifacts, analysis artifacts, run snapshots, and external sources from the UI
 * Supporting batch cleanup for chapter bundles, run snapshots, and external sources
@@ -392,20 +403,20 @@ UI features:
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
-* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, fanfic-oriented initialization presets, guided one-click processing, batch indexing, guided batch saving, retrieval indexing, and limited batch extraction
+* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, fanfic-oriented initialization presets, guided one-click processing, batch indexing, guided batch saving, retrieval indexing, limited batch extraction, visible progress bars, and completion reruns
 * Source ledger for inspecting source status, long-form segment text, and pending/confirmed knowledge linked to a segment
 * Long-form source batch manager for progress metrics, filtered segment lists, continue extraction, completed re-extraction, and failure retries
 * Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
 * Source package report panel for generating a searchable project reference report
 * Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
 * Shared source-usage report for retrieval-aware workflow outputs
-* Grouped sidebar navigation that separates workspace pages into workbench / planning / writing / resources areas
+* Grouped sidebar navigation that separates workspace pages into workbench / sources / planning / writing areas, with source ingestion before core settings
 * Planning navigation is profile-aware: a new story initially shows only creative configuration, then expands to long-form or short-form planning pages based on target length and workflow depth
-* Project overview home screen with quick actions for quick generation, content generation, source ingestion, and resource browsing
+* Project overview home screen with quick actions for quick generation, content generation, source ingestion, resource browsing, and metric-level resource focus
 * Project-aware page header that surfaces project title, genre, canon mode, and current page description
 * Save buttons in structured story-state forms stay disabled until the user actually changes form content
 * Content generation page can inspect persisted run snapshots, transition logs, and structured workflow errors from pipeline executions
-* Resource browser with left-side file navigation, right-side editor/detail panel, and lightweight volume / arc filtering
+* Resource browser with left-side file navigation, right-side editor/detail panel, resource-type filtering, lightweight volume / arc filtering, and stable selection scoped to visible results
 * Dedicated volume outline page for editing per-volume title / summary / status / outline body
 * Dedicated arc outline page for editing per-arc parent volume, title, summary, status, estimated chapter count, target word count range, outline body, and linked chapter visibility
 * Chapter discussion and chapter-outline generation now both consume the currently selected volume / arc planning context so discussion and formal generation stay aligned
@@ -453,7 +464,7 @@ Responsibilities:
 * Install `pyinstaller` into the local `.venv`
 * Build `NovelForge.exe` from `launcher.py`
 * Assemble a portable release directory
-* Copy the runtime, source files, and baseline data structure into the release bundle
+* Copy the runtime, source files, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
 * Copy optional `.streamlit` runtime configuration when present
 * Save a build transcript under `release/` for local diagnostics
 * Produce a zip archive suitable for GitHub Releases
@@ -534,6 +545,7 @@ Responsibilities:
 * Loading saved LLM configuration profiles
 * Saving saved LLM configuration profiles
 * Switching the active LLM configuration profile and syncing it back into `.env`
+* Loading, creating, renaming, copying, archiving, and deleting story-space metadata
 * Loading outlines
 * Saving outlines
 * Loading volume outlines
@@ -570,6 +582,8 @@ Responsibilities:
 * Saving pipeline run state snapshots
 * Loading historical pipeline runs
 * Listing pipeline runs for inspection and future resume/replay flows
+* Loading and saving structured knowledge, pending knowledge, auto-review policy, and processing run records
+* Rolling back processing runs and restoring manual-review snapshots back into the pending queue
 * Fetching recent chapter summaries (configurable limit, default 5)
 * Counting total written chapters
 
@@ -1098,7 +1112,7 @@ Stores confirmed structured knowledge extracted from source material. Current ca
 `knowledge/pending.json` stores extracted knowledge items waiting for user confirmation. Confirmed items are moved into the category files above and then indexed for retrieval.
 Pending knowledge can come from source extraction, batch-level consolidation, or direct conversion from story/project core settings.
 `knowledge/auto_review_policy.json` stores project-level automatic review thresholds and manual-review category rules.
-`knowledge/auto_review_runs.json` stores automatic review runs for low-risk auto-confirm decisions, including confirmed record targets, blocked reasons, pending snapshots, single-item returns, and rollback status.
+`knowledge/auto_review_runs.json` stores automatic review and pending-queue processing runs, including confirmed record targets, archived snapshots, manual-review snapshots, restored snapshot IDs, single-item returns, and rollback status.
 The source ingestion ledger is generated from existing storage rather than a separate file: `long_reference_batches/`, `retrieval/sources/`, `knowledge/pending.json`, and confirmed `knowledge/*.json`.
 
 `knowledge/entities/characters.json` stores generated character entity cards built from confirmed character, relationship, ability, dialogue, timeline, and constraint knowledge. These cards are indexed as `entity_character_card` retrieval documents.
@@ -1375,8 +1389,9 @@ Current implementation status:
 * Implemented but temporarily hidden in the UI: single-page URL fetch and organization for controlled canon/reference ingestion
 * Implemented: long-form source importer with chapter-title splitting, length fallback splitting, guided one-click processing, conservative auto-confirm, guided batch saving, batch source indexing, mode help, extraction category default strategies, custom extraction instructions, and limited batch extraction
 * Implemented: automatic review records and rollback for low-risk auto-confirmed extracted knowledge
+* Implemented: pending-queue clear mode with auto-save/archive/manual-review routing, batch records, rollback, and manual-review snapshot restore
 * Implemented: project-level auto-review policy configuration and single confirmed-item return to pending review
-* Implemented: long-form source batch manager with progress tracking, continue import/extraction actions, failed extraction retry, and completed-segment re-extraction
+* Implemented: long-form source batch manager with progress tracking, visible batch progress bars, continue import/extraction actions, failed extraction retry, completed-segment re-extraction, and completion reruns
 * Implemented: repeated-upload detection using long-form source fingerprints and similarity hints
 * Implemented: source ingestion ledger with long-form batch, retrieval-source, and knowledge-only provenance summaries
 * Implemented: segment-level source inspection from the ledger, including original text and linked pending/confirmed knowledge
