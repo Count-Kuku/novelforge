@@ -202,6 +202,15 @@ User
 Streamlit UI
 (app.py)
 ↓
+Knowledge Workflow Layer
+(knowledge_workflows.py)
+↓
+Knowledge Quality Layer
+(knowledge_quality.py)
+↓
+Knowledge Entity Layer
+(knowledge_entities.py)
+↓
 Skill Layer
 (skills.py)
 ↓
@@ -245,6 +254,12 @@ novelforge/
 ├── prompts.py
 
 ├── skills.py
+
+├── knowledge_workflows.py
+
+├── knowledge_quality.py
+
+├── knowledge_entities.py
 
 ├── requirements.txt
 
@@ -362,9 +377,9 @@ Responsibilities:
 * Managing long-form source batches with per-segment import/extraction state, retry controls, completed-segment re-extraction, extraction-mode selection, and batch-level pending-knowledge consolidation
 * Persisting batch state after each segment during extraction, enabling terminal-interruption resume without data loss or duplicate extraction
 * Reporting extraction coverage and re-extraction diffs so repeated passes are auditable rather than blind
-* Recording auto-review decisions so low-risk automated confirmation remains auditable and reversible
-* Previewing automatic-review decisions in the pending queue before manually running low-risk auto-confirmation
-* Running pending-queue clear plans that split entries into auto-save, archive, and manual-review snapshots, then exposing rollback and selective restore actions
+* Rendering auto-review decisions so low-risk automated confirmation remains auditable and reversible
+* Rendering automatic-review previews in the pending queue before manually running low-risk auto-confirmation
+* Rendering pending-queue clear-plan controls and handing execution to `knowledge_workflows.py`
 * Returning individual auto-confirmed knowledge items to pending review without rolling back the whole run
 * Running multi-specialist extraction plans across selected long-form segments with per-step progress and failure summaries
 * Detecting repeated long-form uploads through content fingerprints, file names, total character counts, and segment counts
@@ -432,6 +447,66 @@ Business logic should remain minimal.
 Current UI design note:
 
 * `app.py` now includes lightweight reusable render helpers so pages consume `WorkflowStepResult` objects consistently instead of hand-formatting each skill result independently
+* Pending-knowledge triage rules and clear-plan execution have been split out to `knowledge_workflows.py`; quality detection, fact-conflict helpers, alias upsert, and knowledge merge helpers have been split out to `knowledge_quality.py`; character/setting entity-card aggregation has been split out to `knowledge_entities.py`. `app.py` should keep only the Streamlit rendering and interaction glue for those flows
+
+---
+
+## knowledge_workflows.py
+
+Pending structured-knowledge workflow logic.
+
+Responsibilities:
+
+* Normalize confidence/evidence scores used by knowledge review flows
+* Summarize evidence snippets for pending knowledge items
+* Convert quality issues into user-facing risk labels
+* Evaluate automatic-review decisions from item quality, policy, evidence, and quality-issue maps
+* Build automatic-review previews for pending-queue UI display
+* Build pending-queue clear plans that route entries into auto-save, archive, or manual-review snapshots
+* Execute pending-queue clear plans by coordinating confirmed knowledge writes, pending queue removal, processing records, and retrieval index rebuilds
+
+Design purpose:
+
+* Keep non-UI pending-knowledge decision logic out of `app.py`
+* Make future tests for auto-review policy, clear-plan routing, and rollback/restore behavior easier to add
+
+---
+
+## knowledge_quality.py
+
+Structured-knowledge quality and matching logic.
+
+Responsibilities:
+
+* Normalize entity names and knowledge item match keys
+* Merge text/list values used by entity cards, alias groups, and knowledge consolidation
+* Detect duplicate pending knowledge, same-name field conflicts, fact-level conflicts, confirmed-knowledge overlap, and alias candidates
+* Build pending-issue maps consumed by pending-review filters and auto-review decisions
+* Maintain entity alias groups without requiring UI code to manipulate alias storage directly
+
+Design purpose:
+
+* Keep knowledge-quality rules, matching heuristics, and alias-upsert behavior outside `app.py`
+* Provide a reusable place for future fact-conflict tests and entity normalization improvements
+
+---
+
+## knowledge_entities.py
+
+Structured-knowledge entity-card aggregation.
+
+Responsibilities:
+
+* Merge confirmed structured knowledge items into stable character and setting entity cards
+* Collect related relationship, ability, item, dialogue-style, constraint, and timeline entries for character cards
+* Use entity alias groups to connect canonical names, aliases, translated names, and short names during aggregation
+* Build setting cards from world rules, locations, organizations, abilities, items, and constraints
+* Provide shared merge helpers used by pending-quality merge actions and entity-card generation
+
+Design purpose:
+
+* Keep entity-card construction and related matching rules outside `app.py`
+* Make future tests for character-card aggregation, setting-card aggregation, and alias-guided matching easier to add
 
 ---
 
@@ -1583,7 +1658,7 @@ Metrics:
 
 The following items are acknowledged departures from the design philosophy and are tracked for future cleanup:
 
-1. **app.py contains business logic beyond UI rendering.** ~50+ functions (knowledge quality management, fact conflict engine, relationship graph analysis, source fingerprint matching, entity card construction) currently live in `app.py`. These should eventually move to `skills.py`, `memory.py`, or a new dedicated module ([app.py](app.py):3984-4860, 5407-5449, etc.).
+1. **app.py still contains business logic beyond UI rendering.** Pending-knowledge auto-review, clear-plan execution, quality issue construction, fact-conflict helpers, alias upsert, knowledge merge helpers, and entity-card aggregation have started moving into `knowledge_workflows.py`, `knowledge_quality.py`, and `knowledge_entities.py`, but substantial logic remains in `app.py` (relationship graph analysis, source fingerprint matching, long-form batch orchestration). These should continue moving to `skills.py`, `memory.py`, `knowledge_workflows.py`, `knowledge_quality.py`, `knowledge_entities.py`, or additional dedicated modules.
 
 2. **Duplicate code patterns exist across discussion/render functions.** Outline, volume, arc, and chapter discussion pages share ~70% of their structure. A shared discussion render helper would reduce maintenance cost.
 
@@ -1607,13 +1682,19 @@ Read files in the following order:
 
 2. app.py
 
-3. skills.py
+3. knowledge_workflows.py
 
-4. memory.py
+4. knowledge_quality.py
 
-5. prompts.py
+5. knowledge_entities.py
 
-6. llm.py
+6. skills.py
+
+7. memory.py
+
+8. prompts.py
+
+9. llm.py
 
 When implementing new features:
 

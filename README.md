@@ -402,6 +402,7 @@ README 只保留使用层面的说明。以下内容统一维护在 [project.md]
 - 架构设计与模块职责
 - 项目存储结构
 - RAG、资料提取、工作流和评估系统的实现说明
+- 业务模块拆分进度，例如待确认知识工作流、质量检查与实体卡聚合已从应用层拆到 `knowledge_workflows.py` / `knowledge_quality.py` / `knowledge_entities.py`
 - 后续 Roadmap
 - 开发边界与扩展建议
 

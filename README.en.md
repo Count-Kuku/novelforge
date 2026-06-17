@@ -342,6 +342,7 @@ README keeps to usage-level guidance. The following content is maintained in [pr
 - architecture and module responsibilities
 - project storage layout
 - RAG, source extraction, workflow, and evaluation implementation notes
+- business-module extraction status, including pending-knowledge workflow, quality logic, and entity-card aggregation moved into `knowledge_workflows.py` / `knowledge_quality.py` / `knowledge_entities.py`
 - roadmap
 - development boundaries and extension guidance
 
