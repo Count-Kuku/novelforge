@@ -281,6 +281,14 @@ def save_llm_settings(settings: dict):
             os.environ[key] = value
         else:
             os.environ.pop(key, None)
+    try:
+        from llm import clear_llm_client_cache
+
+        clear_llm_client_cache()
+    except Exception as exc:
+        import logging
+
+        logging.getLogger("novelforge").warning("Failed to clear LLM client cache: %s", exc)
 
 
 def set_active_llm_profile(profile_id: str):
@@ -339,13 +347,21 @@ def delete_llm_profile(profile_id: str) -> dict:
     return payload
 
 
-def project_path(project_name: str) -> Path:
+def normalize_project_name(project_name: str) -> str:
     normalized = project_name.strip()
     if not normalized:
         raise ValueError("Project name cannot be empty.")
     if ".." in normalized or "/" in normalized or "\\" in normalized:
         raise ValueError("Invalid project name: path traversal characters not allowed.")
-    path = BASE_DIR / normalized
+    return normalized
+
+
+def project_dir(project_name: str) -> Path:
+    return BASE_DIR / normalize_project_name(project_name)
+
+
+def project_path(project_name: str) -> Path:
+    path = project_dir(project_name)
     path.mkdir(parents=True, exist_ok=True)
     return path
 

@@ -55,12 +55,24 @@ def _should_trust_env_proxy() -> bool:
     return True
 
 
-@functools.lru_cache(maxsize=1)
-def _get_client() -> OpenAI:
+@functools.lru_cache(maxsize=8)
+def _get_client_for_config(api_key: str, base_url: str, trust_env_proxy: bool) -> OpenAI:
     return OpenAI(
-        api_key=_get_api_key(),
-        base_url=_get_base_url(),
-        http_client=httpx.Client(trust_env=_should_trust_env_proxy()),
+        api_key=api_key,
+        base_url=base_url,
+        http_client=httpx.Client(trust_env=trust_env_proxy),
+    )
+
+
+def clear_llm_client_cache():
+    _get_client_for_config.cache_clear()
+
+
+def _get_client() -> OpenAI:
+    return _get_client_for_config(
+        _get_api_key(),
+        _get_base_url(),
+        _should_trust_env_proxy(),
     )
 
 DEFAULT_TEMPERATURE = 0.7

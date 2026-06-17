@@ -431,31 +431,37 @@ SEVERITY_LABELS = {
 }
 
 PAGE_GROUPS = {
-    "工作台": ["项目总览", "模型配置", "生成规则", "项目资源"],
+    "工作台": ["项目总览", "模型配置", "生成规则", "资源浏览器"],
     "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
     "写作": ["快速生成", "正文生成", "章节评价"],
-    "资料": ["设定", "资料录入", "检索中心"],
+    "资料": ["核心设定", "资料导入", "检索中心"],
 }
 
 PAGE_DESCRIPTIONS = {
     "项目总览": "查看项目进度、资源规模和基础管理。",
     "快速生成": "实验性快速生成。只凭一段提示词就能生成，也可展开复杂配置，适合测试或临时片段。",
-    "项目资源": "集中浏览、编辑和清理项目文件。",
+    "资源浏览器": "集中浏览、编辑和清理项目文件。",
     "创作配置": "定义任务类型、篇幅、流程深度和参考强度。",
-    "设定": "管理故事级和项目级的核心设定（角色、世界观、时间线等）。",
+    "核心设定": "管理故事级和项目级的核心设定（角色、世界观、时间线等）。",
     "生成大纲": "规划全书方向并生成全局大纲。",
     "分卷大纲": "维护中层分卷结构。",
     "剧情段大纲": "维护剧情段和章节分配计划。",
     "生成细纲": "生成具体章节细纲。",
     "正文生成": "根据细纲或需求生成正文内容，可串联审阅和设定更新。适应章节制和自由写作两种模式。",
     "章节评价": "综合判断章节是否可继续、质量分数和一致性诊断。",
-    "资料录入": "导入原作、参考资料和长篇文本。",
+    "资料导入": "导入原作、参考资料和长篇文本。",
     "检索中心": "调试索引、召回证据和冲突裁决。",
     "生成规则": "管理全局、项目和故事级的生成约束，控制模型怎么写。",
     "模型配置": "配置模型端点、密钥和档案切换。",
 }
 
 DEFAULT_PAGE = "项目总览"
+
+LEGACY_PAGE_ALIASES = {
+    "设定": "核心设定",
+    "资料录入": "资料导入",
+    "项目资源": "资源浏览器",
+}
 
 SCHEMA_LABELS = {
     "OrganizedReferenceResult": "资料整理结果",
@@ -875,6 +881,37 @@ def stable_widget_suffix(value: str) -> str:
     return hashlib.md5(str(value).encode("utf-8")).hexdigest()[:10]
 
 
+def scoped_widget_key(base: str, *parts) -> str:
+    scope = ":".join(str(part) for part in parts if part is not None)
+    return f"{base}_{stable_widget_suffix(scope)}"
+
+
+def scoped_session_key(base: str, *parts) -> str:
+    scope = ":".join(str(part) for part in parts if part is not None)
+    return f"{base}:{stable_widget_suffix(scope)}"
+
+
+def confirmed_button(
+    container,
+    label: str,
+    confirm_label: str,
+    key: str,
+    *,
+    use_container_width: bool = True,
+    type: str = "secondary",
+    help_text: str | None = None,
+) -> bool:
+    confirmed = container.checkbox(confirm_label, key=f"{key}_confirm")
+    return container.button(
+        label,
+        key=key,
+        disabled=not confirmed,
+        use_container_width=use_container_width,
+        type=type,
+        help=help_text,
+    )
+
+
 def render_quick_action(label: str, page: str, help_text: str):
     st.markdown(f"**{label}**")
     st.caption(help_text)
@@ -1000,6 +1037,15 @@ CREATIVE_PROFILE_FORM_KEYS = {
 }
 
 
+def _creative_profile_state_key(project_name: str, story_id: str) -> str:
+    return f"creative_profile_form_state:{stable_widget_suffix(f'{project_name}:{story_id}')}"
+
+
+def _creative_profile_form_keys(project_name: str, story_id: str) -> dict[str, str]:
+    suffix = stable_widget_suffix(f"{project_name}:{story_id}")
+    return {name: f"{base_key}_{suffix}" for name, base_key in CREATIVE_PROFILE_FORM_KEYS.items()}
+
+
 def _normalize_creative_form_state(profile: dict | None) -> dict:
     payload = dict(profile or {})
     existing_focus = payload.get("reference_focus", []) if isinstance(payload.get("reference_focus", []), list) else []
@@ -1023,38 +1069,39 @@ def _normalize_creative_form_state(profile: dict | None) -> dict:
     }
 
 
-def _init_creative_profile_form_state(project_name: str, profile: dict):
-    state_key = f"creative_profile_form_state:{project_name}"
+def _init_creative_profile_form_state(project_name: str, story_id: str, profile: dict):
+    state_key = _creative_profile_state_key(project_name, story_id)
     if state_key in st.session_state:
         return
     st.session_state[state_key] = _normalize_creative_form_state(profile)
 
 
-def _get_creative_profile_form_state(project_name: str) -> dict:
-    return dict(st.session_state.get(f"creative_profile_form_state:{project_name}", {}))
+def _get_creative_profile_form_state(project_name: str, story_id: str) -> dict:
+    return dict(st.session_state.get(_creative_profile_state_key(project_name, story_id), {}))
 
 
-def _set_creative_profile_form_state(project_name: str, profile: dict):
+def _set_creative_profile_form_state(project_name: str, story_id: str, profile: dict):
     normalized = _normalize_creative_form_state(profile)
-    st.session_state[f"creative_profile_form_state:{project_name}"] = normalized
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['story_mode']}_select"] = normalized["story_mode"] if normalized["story_mode"] in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['story_mode']}_custom"] = normalized["story_mode"] if normalized["story_mode"] not in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"} else ""
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['target_length']}_select"] = normalized["target_length"] if normalized["target_length"] in {"片段", "短篇", "中篇", "长篇", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['target_length']}_custom"] = normalized["target_length"] if normalized["target_length"] not in {"片段", "短篇", "中篇", "长篇"} else ""
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['workflow_depth']}_select"] = normalized["workflow_depth"] if normalized["workflow_depth"] in {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['workflow_depth']}_custom"] = normalized["workflow_depth"] if normalized["workflow_depth"] not in {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"} else ""
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['reference_strength']}_select"] = normalized["reference_strength"] if normalized["reference_strength"] in {"轻参考", "中参考", "强参考", "严格原作", "主要参考文风", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['reference_strength']}_custom"] = normalized["reference_strength"] if normalized["reference_strength"] not in {"轻参考", "中参考", "强参考", "严格原作", "主要参考文风"} else ""
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['conflict_policy']}_select"] = normalized["conflict_policy"] if normalized["conflict_policy"] in {"优先项目设定", "优先原作资料", "人工确认", "保留多版本", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
-    st.session_state[f"{CREATIVE_PROFILE_FORM_KEYS['conflict_policy']}_custom"] = normalized["conflict_policy"] if normalized["conflict_policy"] not in {"优先项目设定", "优先原作资料", "人工确认", "保留多版本"} else ""
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["target_word_count"]] = normalized["target_word_count"]
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["reference_focus"]] = normalized["reference_focus"]
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["custom_reference_focus"]] = normalized["custom_reference_focus"]
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["allow_canon_deviation"]] = normalized["allow_canon_deviation"]
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["worldline_id"]] = normalized["worldline_id"]
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["worldline_label"]] = normalized["worldline_label"]
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["worldline_retrieval_mode"]] = normalized["worldline_retrieval_mode"]
-    st.session_state[CREATIVE_PROFILE_FORM_KEYS["notes"]] = normalized["notes"]
+    st.session_state[_creative_profile_state_key(project_name, story_id)] = normalized
+    form_keys = _creative_profile_form_keys(project_name, story_id)
+    st.session_state[f"{form_keys['story_mode']}_select"] = normalized["story_mode"] if normalized["story_mode"] in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{form_keys['story_mode']}_custom"] = normalized["story_mode"] if normalized["story_mode"] not in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"} else ""
+    st.session_state[f"{form_keys['target_length']}_select"] = normalized["target_length"] if normalized["target_length"] in {"片段", "短篇", "中篇", "长篇", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{form_keys['target_length']}_custom"] = normalized["target_length"] if normalized["target_length"] not in {"片段", "短篇", "中篇", "长篇"} else ""
+    st.session_state[f"{form_keys['workflow_depth']}_select"] = normalized["workflow_depth"] if normalized["workflow_depth"] in {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{form_keys['workflow_depth']}_custom"] = normalized["workflow_depth"] if normalized["workflow_depth"] not in {"只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"} else ""
+    st.session_state[f"{form_keys['reference_strength']}_select"] = normalized["reference_strength"] if normalized["reference_strength"] in {"轻参考", "中参考", "强参考", "严格原作", "主要参考文风", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{form_keys['reference_strength']}_custom"] = normalized["reference_strength"] if normalized["reference_strength"] not in {"轻参考", "中参考", "强参考", "严格原作", "主要参考文风"} else ""
+    st.session_state[f"{form_keys['conflict_policy']}_select"] = normalized["conflict_policy"] if normalized["conflict_policy"] in {"优先项目设定", "优先原作资料", "人工确认", "保留多版本", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
+    st.session_state[f"{form_keys['conflict_policy']}_custom"] = normalized["conflict_policy"] if normalized["conflict_policy"] not in {"优先项目设定", "优先原作资料", "人工确认", "保留多版本"} else ""
+    st.session_state[form_keys["target_word_count"]] = normalized["target_word_count"]
+    st.session_state[form_keys["reference_focus"]] = normalized["reference_focus"]
+    st.session_state[form_keys["custom_reference_focus"]] = normalized["custom_reference_focus"]
+    st.session_state[form_keys["allow_canon_deviation"]] = normalized["allow_canon_deviation"]
+    st.session_state[form_keys["worldline_id"]] = normalized["worldline_id"]
+    st.session_state[form_keys["worldline_label"]] = normalized["worldline_label"]
+    st.session_state[form_keys["worldline_retrieval_mode"]] = normalized["worldline_retrieval_mode"]
+    st.session_state[form_keys["notes"]] = normalized["notes"]
 
 
 def _build_creative_profile_from_form_values(
@@ -1599,7 +1646,13 @@ def render_llm_settings_page():
                         st.success(message)
                     except Exception as exc:
                         st.error(str(exc))
-        if action_col3.button("删除档案", key="delete_llm_profile", use_container_width=True):
+        if confirmed_button(
+            action_col3,
+            "删除档案",
+            "确认删除该模型档案",
+            "delete_llm_profile",
+            help_text="删除前请确认该档案不再需要。",
+        ):
             try:
                 delete_llm_profile(selected_profile_id)
                 st.success("档案已删除。")
@@ -1714,6 +1767,8 @@ def render_llm_settings_page():
                 st.error("档案名称不能为空。")
             elif not cleaned_base_url:
                 st.error("模型服务网址不能为空。")
+            elif auto_activate and not cleaned_api_key:
+                st.error("接口密钥为空时不能立即切换为当前档案。可以取消“保存后立即切换”，或先填写密钥。")
             else:
                 parsed_url = urlparse(cleaned_base_url)
                 if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
@@ -1898,11 +1953,12 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
     visible_page_groups = page_groups_for_story(project_name, current_story_id)
     available_pages = [page for pages in visible_page_groups.values() for page in pages]
     pending_nav_page = st.session_state.pop("pending_nav_page", "")
+    pending_nav_page = LEGACY_PAGE_ALIASES.get(pending_nav_page, pending_nav_page)
     if pending_nav_page in available_pages:
         st.session_state["active_page"] = pending_nav_page
         st.session_state["nav_revision"] = int(st.session_state.get("nav_revision", 0)) + 1
 
-    active_page = st.session_state.get("active_page", DEFAULT_PAGE)
+    active_page = LEGACY_PAGE_ALIASES.get(st.session_state.get("active_page", DEFAULT_PAGE), st.session_state.get("active_page", DEFAULT_PAGE))
     if active_page not in available_pages:
         if active_page in PAGE_GROUPS.get("规划", []) and "创作配置" in available_pages:
             active_page = "创作配置"
@@ -1926,7 +1982,7 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
         active_page = group_pages[0]
 
     if selected_group == "规划" and project_name and not is_story_creative_profile_configured(project_name, current_story_id):
-        st.sidebar.caption("先完成当前故事的创作配置，规划入口会按篇幅和生成层级自动展开。")
+        st.sidebar.warning("规划页已锁定：先完成当前故事的「创作配置」。保存后会按篇幅和生成层级展开后续入口。")
 
     selected_page = st.sidebar.radio(
         "页面",
@@ -2215,7 +2271,7 @@ def render_core_setting_to_knowledge_tool(project_name: str, memory: dict, sourc
                     source_title=source_title,
                     source_origin="core_settings",
                 )
-                st.success(f"已加入 {queued_count} 条待确认知识。请到“资料录入 -> 待确认知识”审核确认。")
+                st.success(f"已加入 {queued_count} 条待确认知识。请到“资料导入 -> 待确认知识”审核确认。")
                 st.rerun()
 
 
@@ -2328,7 +2384,12 @@ def render_chapter_outline_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     st.subheader("章节细纲")
 
-    chapter_no = st.number_input("章节编号", min_value=1, value=1)
+    chapter_no = st.number_input("章节编号", min_value=1, value=1, key=scoped_widget_key("chapter_outline_no", project_name, story_id))
+    chapter_no = int(chapter_no)
+    chapter_scope = (project_name, story_id, chapter_no)
+    chapter_outline_step_key = scoped_session_key("chapter_outline_step", *chapter_scope)
+    chapter_outline_text_key = scoped_session_key("chapter_outline", *chapter_scope)
+    chapter_outline_editor_key = scoped_widget_key("chapter_outline_editor", *chapter_scope)
     existing_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
     outline_metadata = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
     volumes = list_volumes(project_name, story_id=story_id)
@@ -2339,7 +2400,7 @@ def render_chapter_outline_page(project_name: str):
         options=volume_options,
         index=volume_options.index(default_volume) if default_volume in volume_options else 0,
         format_func=lambda value: "未指定分卷" if value == 0 else f"第 {value} 卷",
-        key=f"chapter_outline_volume_{chapter_no}",
+        key=scoped_widget_key("chapter_outline_volume", *chapter_scope),
     )
     if volume_no:
         volume_meta = load_volume_metadata(project_name, volume_no, story_id=story_id)
@@ -2348,7 +2409,7 @@ def render_chapter_outline_page(project_name: str):
     else:
         volume_meta = {}
         volume_discussion_artifact = {}
-    arcs = list_arcs(project_name, volume_no=volume_no or None)
+    arcs = list_arcs(project_name, volume_no=volume_no or None, story_id=story_id)
     arc_options = [0] + [int(item.get("arc_no", 0)) for item in arcs]
     default_arc = int(outline_metadata.get("arc_no") or 0)
     arc_no = st.selectbox(
@@ -2356,7 +2417,7 @@ def render_chapter_outline_page(project_name: str):
         options=arc_options,
         index=arc_options.index(default_arc) if default_arc in arc_options else 0,
         format_func=lambda value: "未指定剧情段" if value == 0 else f"剧情段 {value:03d}",
-        key=f"chapter_outline_arc_{chapter_no}",
+        key=scoped_widget_key("chapter_outline_arc", *chapter_scope),
     )
     if arc_no:
         arc_meta = load_arc_metadata(project_name, arc_no, story_id=story_id)
@@ -2383,7 +2444,7 @@ def render_chapter_outline_page(project_name: str):
     approval_required = st.checkbox(
         "要求已批准的章节/卷/剧情段讨论后再生成章节细纲",
         value=False,
-        key=f"chapter_outline_require_approval_{chapter_no}",
+        key=scoped_widget_key("chapter_outline_require_approval", *chapter_scope),
     )
     with st.expander("当前使用的已批准规划工件", expanded=False):
         st.markdown("### 章节已批准讨论")
@@ -2392,10 +2453,10 @@ def render_chapter_outline_page(project_name: str):
         _render_approved_discussion_artifact(volume_discussion_artifact, "当前分卷没有已批准讨论工件。")
         st.markdown("### 剧情段已批准讨论")
         _render_approved_discussion_artifact(arc_discussion_artifact, "当前剧情段没有已批准讨论工件。")
-    step_result = st.session_state.get(f"chapter_outline_step_{chapter_no}", {})
-    requirement = st.text_area("本章要求", height=200)
+    step_result = st.session_state.get(chapter_outline_step_key, {})
+    requirement = st.text_area("本章要求", height=200, key=scoped_widget_key("chapter_outline_requirement", *chapter_scope))
 
-    suffix = str(chapter_no)
+    suffix = f"{project_name}:{story_id}:{chapter_no}"
     messages_key = _discussion_messages_key("chapter", suffix)
     result_key = _discussion_result_key("chapter", suffix)
     input_key = _discussion_input_key("chapter", suffix)
@@ -2405,7 +2466,7 @@ def render_chapter_outline_page(project_name: str):
     chapter_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id)
 
     col_action_1, col_action_2 = st.columns(2)
-    if col_action_1.button("开始讨论本章方向"):
+    if col_action_1.button("开始讨论本章方向", key=scoped_widget_key("start_chapter_discussion", *chapter_scope)):
         try:
             save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": volume_no or None, "arc_no": arc_no or None}, story_id=story_id)
             result = discuss_chapter(project_name, chapter_no, requirement, story_id=story_id)
@@ -2417,7 +2478,7 @@ def render_chapter_outline_page(project_name: str):
         except Exception as exc:
             st.error(f"讨论失败：{exc}")
 
-    if col_action_2.button("重置本章讨论"):
+    if col_action_2.button("重置本章讨论", key=scoped_widget_key("reset_chapter_discussion", *chapter_scope)):
         st.session_state[result_key] = {}
         st.session_state[messages_key] = []
         st.session_state[clear_input_flag_key] = True
@@ -2429,14 +2490,14 @@ def render_chapter_outline_page(project_name: str):
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示本章方向的当前结论。")
         render_step_retrieval(discussion_step, "本次章节讨论参考的检索上下文")
         approve_col, clear_col = st.columns(2)
-        if approve_col.button("批准当前章节讨论", key=f"approve_chapter_discussion_{chapter_no}"):
+        if approve_col.button("批准当前章节讨论", key=scoped_widget_key("approve_chapter_discussion", *chapter_scope)):
             try:
                 result = approve_chapter_discussion(project_name, chapter_no, discussion_step, story_id=story_id)
                 st.success(f"已保存章节讨论工件：{result.get('saved_path', '')}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"批准失败：{exc}")
-        if clear_col.button("清除已批准章节讨论", key=f"clear_chapter_discussion_{chapter_no}"):
+        if clear_col.button("清除已批准章节讨论", key=scoped_widget_key("clear_chapter_discussion", *chapter_scope)):
             if clear_chapter_discussion_approval(project_name, chapter_no, story_id=story_id):
                 st.success("已清除章节已批准讨论工件。")
                 st.rerun()
@@ -2455,7 +2516,7 @@ def render_chapter_outline_page(project_name: str):
             height=120,
             placeholder="例如：我希望这章更偏日常拉扯，不要太快进入正面冲突。"
         )
-        if st.button("发送本章讨论消息", key=f"send_chapter_discussion_{chapter_no}"):
+        if st.button("发送本章讨论消息", key=scoped_widget_key("send_chapter_discussion", *chapter_scope)):
             if not follow_up.strip():
                 st.warning("讨论消息不能为空。")
             elif not requirement.strip():
@@ -2482,7 +2543,7 @@ def render_chapter_outline_page(project_name: str):
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
 
-    if st.button("生成章节细纲"):
+    if st.button("生成章节细纲", key=scoped_widget_key("generate_chapter_outline", *chapter_scope)):
         if approval_required:
             if volume_no and not (volume_discussion_artifact.get("discussion", {}) or {}).get("approval_ready"):
                 st.error("当前分卷还没有已批准讨论工件，已阻止章节细纲生成。")
@@ -2492,20 +2553,27 @@ def render_chapter_outline_page(project_name: str):
                 st.error("当前章节还没有已批准讨论工件，已阻止章节细纲生成。")
             else:
                 result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None, story_id=story_id)
-                st.session_state[f"chapter_outline_step_{chapter_no}"] = result
-                st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
+                step_result = result
+                outline_value = result.get("data", {}).get("chapter_outline", "")
+                st.session_state[chapter_outline_step_key] = result
+                st.session_state[chapter_outline_text_key] = outline_value
+                st.session_state[chapter_outline_editor_key] = outline_value
         else:
             result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None, story_id=story_id)
-            st.session_state[f"chapter_outline_step_{chapter_no}"] = result
-            st.session_state[f"chapter_outline_{chapter_no}"] = result.get("data", {}).get("chapter_outline", "")
+            step_result = result
+            outline_value = result.get("data", {}).get("chapter_outline", "")
+            st.session_state[chapter_outline_step_key] = result
+            st.session_state[chapter_outline_text_key] = outline_value
+            st.session_state[chapter_outline_editor_key] = outline_value
 
     outline_text = st.text_area(
         "章节细纲内容",
-        value=st.session_state.get(f"chapter_outline_{chapter_no}", existing_outline),
-        height=500
+        value=st.session_state.get(chapter_outline_text_key, existing_outline),
+        height=500,
+        key=chapter_outline_editor_key,
     )
 
-    if st.button("保存章节细纲"):
+    if st.button("保存章节细纲", key=scoped_widget_key("save_chapter_outline", *chapter_scope)):
         save_chapter_outline(project_name, chapter_no, outline_text, story_id=story_id)
         save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": volume_no or None, "arc_no": arc_no or None}, story_id=story_id)
         st.success(f"第 {chapter_no} 章细纲已保存")
@@ -2536,29 +2604,40 @@ def render_chapter_page(project_name: str):
     )
     if not is_chapter_mode and chapter_no < 1:
         chapter_no = 1
+    chapter_no = int(chapter_no)
+    chapter_scope = (project_name, story_id, chapter_no)
+    chapter_step_key = scoped_session_key("chapter_step", *chapter_scope)
+    chapter_outline_gen_key = scoped_session_key("chapter_outline_gen", *chapter_scope)
+    chapter_text_key = scoped_session_key("chapter_text", *chapter_scope)
+    pipeline_result_key = scoped_session_key("pipeline_result", *chapter_scope)
+    review_markdown_key = scoped_session_key("review_markdown", *chapter_scope)
+    review_inline_step_key = scoped_session_key("review_step_inline", *chapter_scope)
+    memory_update_step_key = scoped_session_key("memory_update_step", *chapter_scope)
+    chapter_outline_editor_key = scoped_widget_key("chapter_write_outline_editor", *chapter_scope)
+    chapter_text_editor_key = scoped_widget_key("chapter_text_editor", *chapter_scope)
 
     existing_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
     existing_chapter = load_chapter(project_name, chapter_no, story_id=story_id)
     approved_discussion_artifact = load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id) if is_chapter_mode else {}
     discussion_guidance_default = _format_discussion_artifact_as_guidance(approved_discussion_artifact) if is_chapter_mode else ""
-    chapter_step = st.session_state.get(f"chapter_step_{chapter_no}", {})
+    chapter_step = st.session_state.get(chapter_step_key, {})
 
     word_count = st.text_input(
         "目标字数（如 2000-2500）",
         value="2000-2500",
-        key=f"content_word_count_{chapter_no}",
+        key=scoped_widget_key("content_word_count", *chapter_scope),
     )
 
-    has_existing_outline = bool(existing_outline or st.session_state.get(f"chapter_outline_gen_{chapter_no}"))
+    has_existing_outline = bool(existing_outline or st.session_state.get(chapter_outline_gen_key))
 
     if not has_existing_outline:
         st.info("没有已有细纲，可直接编写、从需求生成细纲、或从需求完整执行。")
         with st.expander("从需求自动执行", expanded=True):
-            gen_requirement = st.text_area("创作需求", height=100, key=f"auto_full_req_{chapter_no}",
+            gen_requirement = st.text_area("创作需求", height=100, key=scoped_widget_key("auto_full_req", *chapter_scope),
                 placeholder="例如：主角在废弃车站发现线索，与搭档产生分歧。")
             col_gen_outline, col_full_pipeline = st.columns(2)
             with col_gen_outline:
-                if st.button("仅生成细纲", use_container_width=True, key=f"gen_outline_btn_{chapter_no}"):
+                if st.button("仅生成细纲", use_container_width=True, key=scoped_widget_key("gen_outline_btn", *chapter_scope)):
                     if not gen_requirement.strip():
                         st.warning("请先填写创作需求。")
                     else:
@@ -2567,7 +2646,8 @@ def render_chapter_page(project_name: str):
                                 outline_result = generate_chapter_outline(project_name, chapter_no, gen_requirement, story_id=story_id)
                             outline_text = outline_result.get("data", {}).get("chapter_outline", "")
                             if outline_text:
-                                st.session_state[f"chapter_outline_gen_{chapter_no}"] = outline_text
+                                st.session_state[chapter_outline_gen_key] = outline_text
+                                st.session_state[chapter_outline_editor_key] = outline_text
                                 st.success("细纲已生成，将在上方细纲文本框中显示。")
                                 st.rerun()
                             else:
@@ -2575,7 +2655,7 @@ def render_chapter_page(project_name: str):
                         except Exception as exc:
                             st.error(f"细纲生成失败：{exc}")
             with col_full_pipeline:
-                if st.button("细纲→写作→审阅→更新设定", use_container_width=True, type="primary", key=f"full_pipeline_btn_{chapter_no}"):
+                if st.button("细纲→写作→审阅→更新设定", use_container_width=True, type="primary", key=scoped_widget_key("full_pipeline_btn", *chapter_scope)):
                     if not gen_requirement.strip():
                         st.warning("请先填写创作需求。")
                     else:
@@ -2584,29 +2664,31 @@ def render_chapter_page(project_name: str):
                                 pipeline_result = pipeline_plan_write_review_update(
                                     project_name, chapter_no, gen_requirement, word_count, story_id=story_id
                                 )
-                            st.session_state[f"pipeline_result_{chapter_no}"] = pipeline_result
+                            st.session_state[pipeline_result_key] = pipeline_result
                             chapter = pipeline_result.get("chapter", "") or pipeline_result.get("steps", {}).get("write_chapter", {}).get("data", {}).get("chapter", "")
                             if chapter:
-                                st.session_state[f"chapter_{chapter_no}"] = chapter
+                                st.session_state[chapter_text_key] = chapter
+                                st.session_state[chapter_text_editor_key] = chapter
                             st.rerun()
                         except Exception as exc:
                             st.error(f"完整流水线执行失败：{exc}")
 
-    chapter_outline_value = st.session_state.get(f"chapter_outline_gen_{chapter_no}", existing_outline)
+    chapter_outline_value = st.session_state.get(chapter_outline_gen_key, existing_outline)
     chapter_outline = st.text_area(
         "内容细纲" if not is_chapter_mode else "章节细纲",
         value=chapter_outline_value,
-        height=250
+        height=250,
+        key=chapter_outline_editor_key,
     )
 
     if is_chapter_mode:
         st.markdown("### 本章讨论与写作提示")
         st.caption("这里适合写临时想法、需要特别执行的写法、和已批准章节讨论的收束结论；生成正文时会并入写作补充要求。")
-        discussion_guidance_key = f"write_discussion_guidance_{chapter_no}"
+        discussion_guidance_key = scoped_widget_key("write_discussion_guidance", *chapter_scope)
         if discussion_guidance_default and discussion_guidance_key not in st.session_state:
             st.session_state[discussion_guidance_key] = discussion_guidance_default
         action_col, preview_col = st.columns([1, 1])
-        if action_col.button("用已批准章节讨论填入", key=f"fill_discussion_guidance_{chapter_no}"):
+        if action_col.button("用已批准章节讨论填入", key=scoped_widget_key("fill_discussion_guidance", *chapter_scope)):
             if discussion_guidance_default:
                 st.session_state[discussion_guidance_key] = discussion_guidance_default
                 st.success("已填入已批准章节讨论。")
@@ -2626,7 +2708,7 @@ def render_chapter_page(project_name: str):
         discussion_guidance = st.text_area(
             "补充提示",
             height=80,
-            key=f"write_notes_{chapter_no}",
+            key=scoped_widget_key("write_notes", *chapter_scope),
             placeholder="例如：整体语气轻松，结尾留悬念。",
         )
 
@@ -2635,35 +2717,35 @@ def render_chapter_page(project_name: str):
         "文风/基调",
         options=["", "克制", "热血", "轻快", "压抑", "爽文推进"],
         format_func=lambda value: value or "未特别指定",
-        key=f"write_tone_{chapter_no}",
+        key=scoped_widget_key("write_tone", *chapter_scope),
     )
     pacing = st.selectbox(
         "节奏",
         options=["", "慢铺", "均衡", "快推"],
         format_func=lambda value: value or "未特别指定",
-        key=f"write_pacing_{chapter_no}",
+        key=scoped_widget_key("write_pacing", *chapter_scope),
     )
     dialogue_density = st.selectbox(
         "对话密度",
         options=["", "低", "中", "高"],
         format_func=lambda value: value or "未特别指定",
-        key=f"write_dialogue_density_{chapter_no}",
+        key=scoped_widget_key("write_dialogue_density", *chapter_scope),
     )
     focus = st.multiselect(
         "描写重点",
         options=["动作", "心理", "环境", "关系拉扯", "战斗", "信息揭示"],
-        key=f"write_focus_{chapter_no}",
+        key=scoped_widget_key("write_focus", *chapter_scope),
     )
     ending_strength = st.selectbox(
         "结尾力度",
         options=["", "轻钩子", "强钩子", "悬念断点"],
         format_func=lambda value: value or "未特别指定",
-        key=f"write_ending_strength_{chapter_no}",
+        key=scoped_widget_key("write_ending_strength", *chapter_scope),
     )
     extra_requirements = st.text_area(
         "写作补充要求",
         height=120,
-        key=f"write_extra_requirements_{chapter_no}",
+        key=scoped_widget_key("write_extra_requirements", *chapter_scope),
         placeholder="例如：减少说明性段落，多写试探性对话，结尾用短句收束。",
     )
     combined_extra_requirements_parts = []
@@ -2686,18 +2768,21 @@ def render_chapter_page(project_name: str):
 
     col_write, col_pipeline = st.columns([1, 1])
     with col_write:
-        write_clicked = st.button("写正文", type="primary" if has_outline else "secondary", use_container_width=True)
+        write_clicked = st.button("写正文", type="primary" if has_outline else "secondary", use_container_width=True, key=scoped_widget_key("write_chapter_btn", *chapter_scope))
     with col_pipeline:
         pipeline_clicked = st.button(
             "细纲→写作→审阅→更新设定" if has_outline else "需要先填写或生成细纲",
             disabled=not has_outline,
             use_container_width=True,
+            key=scoped_widget_key("inline_pipeline_btn", *chapter_scope),
         )
 
     if write_clicked:
         result = write_chapter(project_name, chapter_no, chapter_outline, writing_guidance, word_count, story_id=story_id)
-        st.session_state[f"chapter_step_{chapter_no}"] = result
-        st.session_state[f"chapter_{chapter_no}"] = result.get("data", {}).get("chapter", "")
+        chapter = result.get("data", {}).get("chapter", "")
+        st.session_state[chapter_step_key] = result
+        st.session_state[chapter_text_key] = chapter
+        st.session_state[chapter_text_editor_key] = chapter
         st.rerun()
 
     if pipeline_clicked and has_outline:
@@ -2714,14 +2799,26 @@ def render_chapter_page(project_name: str):
                 steps_result["review_chapter"] = review_result
                 review_markdown = review_result.get("data", {}).get("review_markdown", "")
 
-                memory_result = update_memory_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
+                review_success = bool(review_result.get("success")) and review_result.get("status") not in {"failed", "rejected", "blocked"}
+                if review_success:
+                    memory_result = update_memory_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
+                else:
+                    memory_result = {
+                        "step_name": "memory_update",
+                        "success": False,
+                        "status": "skipped",
+                        "warnings": ["章节审阅未通过或未完成，已跳过核心设定更新。"],
+                    }
                 steps_result["memory_update"] = memory_result
 
-            st.session_state[f"chapter_{chapter_no}"] = chapter
-            st.session_state[f"pipeline_result_{chapter_no}"] = {
+            st.session_state[chapter_text_key] = chapter
+            st.session_state[chapter_text_editor_key] = chapter
+            st.session_state[pipeline_result_key] = {
                 "steps": steps_result,
                 "review_markdown": review_markdown,
             }
+            if review_markdown:
+                st.session_state[review_markdown_key] = review_markdown
             st.rerun()
         except Exception as exc:
             st.error(f"流水线执行失败：{exc}")
@@ -2734,8 +2831,9 @@ def render_chapter_page(project_name: str):
 
     chapter_text = st.text_area(
         "正文" if not is_chapter_mode else "章节正文",
-        value=st.session_state.get(f"chapter_{chapter_no}", existing_chapter),
-        height=600
+        value=st.session_state.get(chapter_text_key, existing_chapter),
+        height=600,
+        key=chapter_text_editor_key,
     )
 
     save_col, review_col, memory_col = st.columns(3)
@@ -2749,14 +2847,14 @@ def render_chapter_page(project_name: str):
         do_review = st.button(
             "审阅正文" if has_chapter else "需要先生成正文",
             disabled=not has_chapter,
-            key=f"review_inline_{chapter_no}",
+            key=scoped_widget_key("review_inline", *chapter_scope),
             use_container_width=True,
         )
         if do_review and has_chapter:
             try:
                 result = review_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-                st.session_state[f"review_step_{chapter_no}_inline"] = result
-                st.session_state[f"review_markdown_{chapter_no}"] = result.get("data", {}).get("review_markdown", "")
+                st.session_state[review_inline_step_key] = result
+                st.session_state[review_markdown_key] = result.get("data", {}).get("review_markdown", "")
                 st.rerun()
             except Exception as exc:
                 st.error(f"审阅失败：{exc}")
@@ -2765,22 +2863,22 @@ def render_chapter_page(project_name: str):
         do_memory = st.button(
             "更新核心设定" if has_chapter else "需要先生成正文",
             disabled=not has_chapter,
-            key=f"memory_inline_{chapter_no}",
+            key=scoped_widget_key("memory_inline", *chapter_scope),
             use_container_width=True,
         )
         if do_memory and has_chapter:
             result = update_memory_from_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-            st.session_state[f"memory_update_step_{chapter_no}"] = result
+            st.session_state[memory_update_step_key] = result
             render_step_status_message(result, "核心设定更新成功", "核心设定更新失败：")
             render_step_validation(result)
             render_step_json_expander("设定更新结构化数据", result)
 
-    review_markdown = st.session_state.get(f"review_markdown_{chapter_no}", "")
+    review_markdown = st.session_state.get(review_markdown_key, "")
     if review_markdown:
         with st.expander("审阅结果", expanded=True):
             st.markdown(review_markdown)
 
-    pipeline_result = st.session_state.get(f"pipeline_result_{chapter_no}", {})
+    pipeline_result = st.session_state.get(pipeline_result_key, {})
     if pipeline_result:
         expanded_by_default = bool(pipeline_result.get("steps", {}).get("write_chapter", {}).get("success"))
         with st.expander("流水线执行详情", expanded=not expanded_by_default):
@@ -2803,12 +2901,12 @@ def render_chapter_page(project_name: str):
         get_retrieval_trace(f"write:{project_name}:{chapter_no}")
     )
     render_step_retrieval(
-        st.session_state.get(f"review_step_{chapter_no}_inline", {}),
+        st.session_state.get(review_inline_step_key, {}),
         "本次审阅使用的检索上下文",
         get_retrieval_trace(f"review:{project_name}:{chapter_no}")
     )
     render_step_retrieval(
-        st.session_state.get(f"memory_update_step_{chapter_no}", {}),
+        st.session_state.get(memory_update_step_key, {}),
         "本次设定更新使用的检索上下文",
         get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}")
     )
@@ -2844,9 +2942,9 @@ def render_project_overview_page(project_name: str):
     with action_col2:
         render_quick_action("正文生成", "正文生成", "根据细纲或需求写作，可串联审阅和设定更新。")
     with action_col3:
-        render_quick_action("整理资料", "资料录入", "导入原作、参考和长文本资料。")
+        render_quick_action("整理资料", "资料导入", "导入原作、参考和长文本资料。")
     with action_col4:
-        render_quick_action("查看资源", "项目资源", "集中管理章节、报告和来源文件。")
+        render_quick_action("查看资源", "资源浏览器", "集中管理章节、报告和来源文件。")
 
     st.markdown("### 项目指标")
     col1, col2, col3, col4, col5 = st.columns(5)
@@ -2907,7 +3005,7 @@ def render_settings_page(project_name: str):
             current_story_name = s.get("name", story_id)
             break
 
-    st.subheader(f"设定 · {current_story_name}")
+    st.subheader(f"核心设定 · {current_story_name}")
     st.caption("故事级设定仅影响当前故事；项目级设定为所有故事共享。创意方向和生成流程请到「创作配置」页面配置。")
 
     story_tab, project_tab = st.tabs(["故事设定", "项目设定"])
@@ -3076,14 +3174,14 @@ def _render_project_settings_tab(project_name: str):
     st.markdown("#### 项目知识库")
     knowledge = load_knowledge_base(project_name)
     total_items = sum(len(items) for items in knowledge.values())
-    st.caption(f"共 {len(knowledge)} 个分类，{total_items} 条知识条目。详细信息请到「资料录入」页面管理。")
+    st.caption(f"共 {len(knowledge)} 个分类，{total_items} 条知识条目。详细信息请到「资料导入」页面管理。")
     for cat, items in knowledge.items():
         if items:
             with st.expander(f"{label_knowledge_category(cat)}（{len(items)} 条）", expanded=False):
                 for item in items:
                     st.markdown(f"- **{item.get('name', '-')}**：{str(item.get('content', ''))[:200]}")
-    if st.button("前往资料录入", use_container_width=True, key="goto_ingestion"):
-        navigate_to("资料录入")
+    if st.button("前往资料导入", use_container_width=True, key="goto_ingestion"):
+        navigate_to("资料导入")
 
 
 def _render_story_management_tab(project_name: str):
@@ -3154,8 +3252,9 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
         )
 
     profile = load_creative_profile(project_name, story_id=story_id)
-    _init_creative_profile_form_state(project_name, profile)
-    form_state = _get_creative_profile_form_state(project_name)
+    _init_creative_profile_form_state(project_name, story_id, profile)
+    form_state = _get_creative_profile_form_state(project_name, story_id)
+    profile_keys = _creative_profile_form_keys(project_name, story_id)
     story_modes = ["主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"]
     target_lengths = ["片段", "短篇", "中篇", "长篇"]
     workflow_depths = ["只生成正文", "短篇结构+正文", "章节计划+正文", "分卷/剧情段/章节", "完整长篇流程"]
@@ -3177,14 +3276,14 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             user_idea = st.text_area(
                 "这次想写什么",
                 height=100,
-                key=f"creative_profile_discussion_seed_{project_name}",
+                key=scoped_widget_key("creative_profile_discussion_seed", project_name, story_id),
                 placeholder="例如：想写一个偏伤感的现代都市架空续写，只保留原作人物关系和说话风格，不保留原作结局。",
                 label_visibility="collapsed",
             )
         with col_action:
             st.write("")
             st.write("")
-            if st.button("开始讨论", key="start_creative_profile_discussion", use_container_width=True):
+            if st.button("开始讨论", key=scoped_widget_key("start_creative_profile_discussion", project_name, story_id), use_container_width=True):
                 if not user_idea.strip():
                     st.warning("请先描述这次想写什么。")
                 else:
@@ -3196,11 +3295,11 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                         _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
                         recommended = result.get("data", {}).get("discussion", {}).get("recommended_profile", {})
                         if recommended:
-                            _set_creative_profile_form_state(project_name, recommended)
+                            _set_creative_profile_form_state(project_name, story_id, recommended)
                         st.rerun()
                     except Exception as exc:
                         st.error(f"讨论失败：{exc}")
-            if st.button("重置", key="reset_creative_profile_discussion", use_container_width=True):
+            if st.button("重置", key=scoped_widget_key("reset_creative_profile_discussion", project_name, story_id), use_container_width=True):
                 st.session_state[discussion_result_key] = {}
                 st.session_state[discussion_messages_key] = []
                 st.session_state[clear_input_flag_key] = True
@@ -3215,17 +3314,17 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                 discussion_payload = discussion_step.get("data", {}).get("discussion", {}) if discussion_step else {}
                 recommended_profile = discussion_payload.get("recommended_profile", {}) if isinstance(discussion_payload, dict) else {}
                 action_col1, action_col2 = st.columns(2)
-                if action_col1.button("应用推荐到表单", use_container_width=True, key="apply_profile_rec"):
+                if action_col1.button("应用推荐到表单", use_container_width=True, key=scoped_widget_key("apply_profile_rec", project_name, story_id)):
                     if not recommended_profile:
                         st.warning("当前还没有可应用的推荐配置。")
                     else:
-                        _set_creative_profile_form_state(project_name, recommended_profile)
+                        _set_creative_profile_form_state(project_name, story_id, recommended_profile)
                         st.success("已将推荐配置回填到表单。")
                         st.rerun()
-                if action_col2.button("批准并保存", use_container_width=True, key="approve_profile_rec"):
+                if action_col2.button("批准并保存", use_container_width=True, key=scoped_widget_key("approve_profile_rec", project_name, story_id)):
                     try:
                         result = approve_creative_profile_discussion(project_name, discussion_step, story_id=story_id)
-                        _set_creative_profile_form_state(project_name, result.get("saved_profile", {}))
+                        _set_creative_profile_form_state(project_name, story_id, result.get("saved_profile", {}))
                         st.success("已保存创作配置。")
                         st.rerun()
                     except Exception as exc:
@@ -3241,7 +3340,7 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                     placeholder="例如：我希望重点保留人物关系，但剧情走向可以明显偏离原作。",
                     label_visibility="collapsed",
                 )
-                if st.button("发送", key="send_creative_profile_discussion", use_container_width=True):
+                if st.button("发送", key=scoped_widget_key("send_creative_profile_discussion", project_name, story_id), use_container_width=True):
                     if not follow_up.strip():
                         st.warning("讨论消息不能为空。")
                     elif not user_idea.strip():
@@ -3260,20 +3359,20 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                             _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
                             recommended = result.get("data", {}).get("discussion", {}).get("recommended_profile", {})
                             if recommended:
-                                _set_creative_profile_form_state(project_name, recommended)
+                                _set_creative_profile_form_state(project_name, story_id, recommended)
                             st.session_state[clear_input_flag_key] = True
                             st.rerun()
                         except Exception as exc:
                             st.error(f"继续讨论失败：{exc}")
 
-    with st.form("creative_profile_form"):
+    with st.form(scoped_widget_key("creative_profile_form", project_name, story_id)):
         col_a, col_b = st.columns(2)
         story_mode = select_with_custom(
             col_a,
             "任务性质",
             story_modes,
             form_state.get("story_mode", "主线故事"),
-            CREATIVE_PROFILE_FORM_KEYS["story_mode"],
+            profile_keys["story_mode"],
             "例如：半架空续写、原角色现代都市篇、只补某角色死亡前一晚。",
         )
         target_length = select_with_custom(
@@ -3281,21 +3380,21 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             "目标篇幅",
             target_lengths,
             form_state.get("target_length", "长篇"),
-            CREATIVE_PROFILE_FORM_KEYS["target_length"],
+            profile_keys["target_length"],
             "例如：1.5 万字中短篇、五个小节、三幕式短篇。",
         )
         target_word_count = col_a.text_input(
             "目标字数（可选）",
             value=form_state.get("target_word_count", ""),
             placeholder="例如：8000、2万、20万",
-            key=CREATIVE_PROFILE_FORM_KEYS["target_word_count"],
+            key=profile_keys["target_word_count"],
         )
         workflow_depth = select_with_custom(
             col_b,
             "生成层级",
             workflow_depths,
             form_state.get("workflow_depth", "完整长篇流程"),
-            CREATIVE_PROFILE_FORM_KEYS["workflow_depth"],
+            profile_keys["workflow_depth"],
             "例如：先三幕式结构，再分 5 个小节写正文。",
         )
         reference_strength = select_with_custom(
@@ -3303,7 +3402,7 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             "资料参考强度",
             reference_strengths,
             form_state.get("reference_strength", "中参考"),
-            CREATIVE_PROFILE_FORM_KEYS["reference_strength"],
+            profile_keys["reference_strength"],
             "例如：强参考角色语气，弱参考世界观；只借人物关系。",
         )
         conflict_policy = select_with_custom(
@@ -3311,7 +3410,7 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             "资料冲突处理",
             conflict_policies,
             form_state.get("conflict_policy", "优先项目设定"),
-            CREATIVE_PROFILE_FORM_KEYS["conflict_policy"],
+            profile_keys["conflict_policy"],
             "例如：原作性格优先，但世界观以本项目为准。",
         )
         col_worldline_a, col_worldline_b, col_worldline_c = st.columns([1, 1, 1])
@@ -3319,46 +3418,46 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             "当前世界线 ID",
             value=form_state.get("worldline_id", DEFAULT_WORLDLINE_ID),
             placeholder="例如：main、au_modern、branch_01",
-            key=CREATIVE_PROFILE_FORM_KEYS["worldline_id"],
+            key=profile_keys["worldline_id"],
             help="用于 RAG 检索过滤和加权。建议使用稳定英文/拼音/数字 ID。",
         )
         worldline_label = col_worldline_b.text_input(
             "当前世界线名称",
             value=form_state.get("worldline_label", DEFAULT_WORLDLINE_LABEL),
             placeholder="例如：本项目主线、现代 AU、二周目分支",
-            key=CREATIVE_PROFILE_FORM_KEYS["worldline_label"],
+            key=profile_keys["worldline_label"],
         )
         worldline_retrieval_mode = col_worldline_c.selectbox(
             "世界线检索模式",
             options=["prefer", "strict"],
             index=0 if form_state.get("worldline_retrieval_mode", "prefer") != "strict" else 1,
             format_func=lambda value: {"prefer": "偏好匹配", "strict": "严格过滤"}.get(value, value),
-            key=CREATIVE_PROFILE_FORM_KEYS["worldline_retrieval_mode"],
+            key=profile_keys["worldline_retrieval_mode"],
             help="偏好匹配会保留其他世界线但降权；严格过滤会排除明确属于其他世界线的资料。",
         )
         reference_focus = st.multiselect(
             "重点参考方向",
             options=focus_options,
             default=form_state.get("reference_focus", ["角色", "世界观", "剧情事件"]),
-            key=CREATIVE_PROFILE_FORM_KEYS["reference_focus"],
+            key=profile_keys["reference_focus"],
         )
         custom_reference_focus = st.text_input(
             "自定义参考方向（用逗号分隔，可选）",
             value=form_state.get("custom_reference_focus", ""),
             placeholder="例如：人物关系、能力代价、心理活动、转场方式、口癖",
-            key=CREATIVE_PROFILE_FORM_KEYS["custom_reference_focus"],
+            key=profile_keys["custom_reference_focus"],
         )
         allow_canon_deviation = st.checkbox(
             "允许根据需求改写原设",
             value=bool(form_state.get("allow_canon_deviation", True)),
-            key=CREATIVE_PROFILE_FORM_KEYS["allow_canon_deviation"],
+            key=profile_keys["allow_canon_deviation"],
         )
         notes = st.text_area(
             "自由说明",
             value=form_state.get("notes", ""),
             height=140,
             placeholder="这里可以写任何复杂规则。例如：这次是半架空续写，只保留角色关系和说话风格，不保留原作结局；世界观改成现代都市，但能力体系保留原作限制。",
-            key=CREATIVE_PROFILE_FORM_KEYS["notes"],
+            key=profile_keys["notes"],
         )
         form_actions = st.columns([1, 1, 3])
         submitted = form_actions[0].form_submit_button("保存创作配置", use_container_width=True)
@@ -3379,7 +3478,7 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             worldline_retrieval_mode,
             notes,
         ), story_id=story_id, mark_configured=True)
-        _set_creative_profile_form_state(project_name, saved)
+        _set_creative_profile_form_state(project_name, story_id, saved)
         st.success("创作配置已保存。")
         profile = saved
     else:
@@ -3647,7 +3746,7 @@ def render_creative_task_wizard(project_name: str, story_id: str = "default"):
 
     if st.button("保存向导配置"):
         saved = save_creative_profile(project_name, preview_profile, story_id=story_id, mark_configured=True)
-        _set_creative_profile_form_state(project_name, saved)
+        _set_creative_profile_form_state(project_name, story_id, saved)
         st.success("已根据向导保存创作配置。")
         st.session_state["task_wizard_last_profile"] = saved
         st.rerun()
@@ -3801,7 +3900,12 @@ def render_pending_knowledge_queue(project_name: str):
                     rebuild_retrieval_assets(project_name, build_vectors=True)
                 st.success(f"已确认 {saved_count} 条结构化知识。")
                 st.rerun()
-        if col_b.button("丢弃所选待确认条目"):
+        if confirmed_button(
+            col_b,
+            "丢弃所选待确认条目",
+            "确认丢弃所选条目",
+            "discard_selected_pending_knowledge",
+        ):
             if not selected_ids:
                 st.error("请先选择条目。")
             else:
@@ -4300,7 +4404,15 @@ def render_confirmed_knowledge_item_editor(
 
             col_save, col_delete = st.columns(2)
             save_clicked = col_save.form_submit_button("保存正式知识并重建索引", use_container_width=True)
-            delete_clicked = col_delete.form_submit_button("删除该条正式知识", use_container_width=True)
+            delete_confirmed = col_delete.checkbox(
+                "确认删除该条正式知识",
+                key=scoped_widget_key("delete_confirmed_knowledge_confirm", project_name, category, selected_index),
+            )
+            delete_clicked = col_delete.form_submit_button(
+                "删除该条正式知识",
+                use_container_width=True,
+                disabled=not delete_confirmed,
+            )
 
         can_return_to_pending = bool(item.get("auto_review_run_id") or item.get("source_pending_id"))
         return_clicked = False
@@ -5666,7 +5778,12 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
                     st.error(f"结构化数据格式错误：{exc}")
 
         if selected_items:
-            if st.button("删除所选结构化知识", key=f"knowledge_organizer_delete_{category}"):
+            if confirmed_button(
+                st,
+                "删除所选结构化知识",
+                "确认删除所选结构化知识",
+                scoped_widget_key("knowledge_organizer_delete", project_name, category),
+            ):
                 selected_set = set(selected_indices)
                 remaining = [item for index, item in enumerate(items) if index not in selected_set]
                 save_knowledge_category(project_name, category, remaining)
@@ -7424,7 +7541,7 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             filtered_indices.append(index)
 
         selected_indices = st.multiselect(
-            "选择要继续处理的片段",
+            "选择可继续处理片段（一键处理会按上限处理前 N 个）",
             options=filtered_indices,
             default=filtered_indices[: min(20, len(filtered_indices))],
             format_func=lambda index: (
@@ -7468,6 +7585,12 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 "我确认要大量处理",
                 key=f"batch_quick_high_confirm_{selected_batch_id}",
             )
+        selected_count = len(selected_indices)
+        planned_quick_count = min(int(quick_continue_limit), selected_count)
+        st.info(
+            f"本次一键处理将按当前选择顺序处理 {planned_quick_count} 个片段；"
+            f"已选择 {selected_count} 个，当前过滤结果共 {len(filtered_indices)} 个片段。"
+        )
         with st.expander("高级设置：批次一键处理策略", expanded=False):
             quick_continue_auto_confirm = st.checkbox(
                 "自动审核并保存低风险知识",
@@ -7761,7 +7884,12 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                     format_func=lambda value: "不删除" if value == "__none__" else next((item.get("name", value) for item in project_plan_templates if item.get("id") == value), value),
                     key=f"batch_delete_extract_plan_template_select_{selected_batch_id}",
                 )
-                if delete_template_id != "__none__" and st.button("删除所选提取计划模板", key=f"batch_delete_extract_plan_template_{selected_batch_id}", use_container_width=True):
+                if delete_template_id != "__none__" and confirmed_button(
+                    st,
+                    "删除所选提取计划模板",
+                    "确认删除所选模板",
+                    scoped_widget_key("batch_delete_extract_plan_template", project_name, selected_batch_id),
+                ):
                     if delete_extraction_plan_template(project_name, delete_template_id):
                         st.success("已删除提取计划模板。")
                         st.rerun()
@@ -7976,7 +8104,12 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 )
 
         with st.expander("高级操作", expanded=False):
-            if st.button("删除当前批次记录", key=f"batch_delete_{selected_batch_id}"):
+            if confirmed_button(
+                st,
+                "删除当前批次记录",
+                "确认删除当前批次记录",
+                scoped_widget_key("batch_delete", project_name, selected_batch_id),
+            ):
                 delete_long_reference_batch(project_name, selected_batch_id)
                 st.success("已删除批次记录。已导入的资料文件和结构化知识不会被删除。")
                 st.rerun()
@@ -8146,7 +8279,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
 
         segment_options = list(range(len(segments)))
         selected_indices = st.multiselect(
-            "选择要处理的片段",
+            "选择可处理片段（一键处理会按上限处理前 N 个）",
             options=segment_options,
             default=segment_options,
             format_func=lambda index: f"{segments[index].get('index')}. {segments[index].get('title')}（{segments[index].get('char_count')} 字符）",
@@ -8191,6 +8324,12 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                 "我确认要大量处理",
                 key="long_reference_quick_high_confirm",
             )
+        selected_count = len(selected_indices)
+        planned_quick_count = min(int(quick_extract_limit), selected_count)
+        st.info(
+            f"本次一键处理将按当前选择顺序处理 {planned_quick_count} 个片段；"
+            f"已选择 {selected_count} 个，当前资料共 {len(segments)} 个片段。"
+        )
         with st.expander("一键处理选项", expanded=False):
             quick_import_to_index = st.checkbox(
                 "同时导入资料索引",
@@ -8743,7 +8882,13 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
     group = resource.get("group")
     if group == "run":
         st.code(resource.get("content", ""), language="json")
-        if st.button("删除该运行记录", key=f"browser_delete_{resource.get('id')}"):
+        delete_key = scoped_widget_key("browser_delete", project_name, story_id, resource.get("id"))
+        if confirmed_button(
+            st,
+            "删除该运行记录",
+            "确认删除该运行记录",
+            delete_key,
+        ):
             if _delete_browser_resource(project_name, resource, story_id=story_id):
                 st.success("运行记录已删除。")
                 st.session_state[_resource_browser_selection_key(project_name)] = {}
@@ -8754,7 +8899,13 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
         if resource.get("content"):
             st.markdown(resource.get("content", ""))
         render_step_json_expander("结构化数据", resource.get("discussion_payload", {}) or resource.get("chapter_plan_payload", {}))
-        if st.button("删除该工件", key=f"browser_delete_{resource.get('id')}"):
+        delete_key = scoped_widget_key("browser_delete", project_name, story_id, resource.get("id"))
+        if confirmed_button(
+            st,
+            "删除该工件",
+            "确认删除该讨论/计划工件",
+            delete_key,
+        ):
             if _delete_browser_resource(project_name, resource, story_id=story_id):
                 st.success("工件已删除。")
                 st.session_state[_resource_browser_selection_key(project_name)] = {}
@@ -8825,7 +8976,13 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
         except Exception as exc:
             st.error(f"保存资源失败：{exc}")
 
-    if resource.get("deletable") and delete_col.button("删除当前资源", key=f"browser_delete_{resource.get('id')}"):
+    delete_key = scoped_widget_key("browser_delete", project_name, story_id, resource.get("id"))
+    if resource.get("deletable") and confirmed_button(
+        delete_col,
+        "删除当前资源",
+        "确认删除当前资源",
+        delete_key,
+    ):
         try:
             if _delete_browser_resource(project_name, resource, story_id=story_id):
                 st.success("资源已删除。")
@@ -8838,7 +8995,7 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
 
 
 def render_resource_management_page(project_name: str):
-    st.subheader("项目资源管理")
+    st.subheader("资源浏览器")
     story_id = st.session_state.get("active_story_id", "default")
     browser_items = _build_resource_browser_items(project_name, story_id=story_id)
     selected = _get_resource_browser_selection(project_name)
@@ -8877,7 +9034,12 @@ def render_resource_management_page(project_name: str):
                 format_func=lambda value: f"第 {int(value)} 章",
                 key=f"resource_bulk_chapters_{project_name}"
             )
-            if bulk_chapter_selection and st.button("清理所选章节", key=f"bulk_delete_chapters_{project_name}"):
+            if bulk_chapter_selection and confirmed_button(
+                st,
+                "清理所选章节",
+                "确认清理所选章节的细纲、正文、审阅、分析、评价和运行记录",
+                scoped_widget_key("bulk_delete_chapters", project_name, story_id),
+            ):
                 results = []
                 for chapter_no in bulk_chapter_selection:
                     results.append({
@@ -8893,7 +9055,12 @@ def render_resource_management_page(project_name: str):
                 options=[run.get("run_id") for run in runs],
                 key=f"resource_bulk_runs_{project_name}"
             )
-            if bulk_runs and st.button("删除所选运行记录", key=f"bulk_delete_runs_{project_name}"):
+            if bulk_runs and confirmed_button(
+                st,
+                "删除所选运行记录",
+                "确认删除所选运行记录",
+                scoped_widget_key("bulk_delete_runs", project_name, story_id),
+            ):
                 deleted_count = 0
                 for run_id in bulk_runs:
                     if delete_pipeline_run(project_name, str(run_id), story_id=story_id):
@@ -8907,7 +9074,12 @@ def render_resource_management_page(project_name: str):
                 options=[source.get("relative_path") for source in sources],
                 key=f"resource_bulk_sources_{project_name}"
             )
-            if bulk_sources and st.button("删除所选外部资料", key=f"bulk_delete_sources_{project_name}"):
+            if bulk_sources and confirmed_button(
+                st,
+                "删除所选外部资料",
+                "确认删除所选外部资料并重建索引",
+                scoped_widget_key("bulk_delete_sources", project_name),
+            ):
                 deleted_count = 0
                 for relative_path in bulk_sources:
                     try:
@@ -9000,23 +9172,28 @@ def render_volume_outline_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     st.subheader("分卷大纲")
 
-    volume_no = st.number_input("分卷编号", min_value=1, value=1, key="volume_outline_no")
+    volume_no = st.number_input("分卷编号", min_value=1, value=1, key=scoped_widget_key("volume_outline_no", project_name, story_id))
+    volume_no = int(volume_no)
+    volume_scope = (project_name, story_id, volume_no)
+    volume_outline_step_key = scoped_session_key("volume_outline_step", *volume_scope)
+    volume_outline_text_key = scoped_session_key("volume_outline", *volume_scope)
+    volume_outline_editor_key = scoped_widget_key("volume_outline_editor", *volume_scope)
     metadata = load_volume_metadata(project_name, volume_no, story_id=story_id)
     existing_outline = load_volume_outline(project_name, volume_no, story_id=story_id)
-    step_result = st.session_state.get(f"volume_outline_step_{volume_no}", {})
+    step_result = st.session_state.get(volume_outline_step_key, {})
 
-    title = st.text_input("分卷标题", value=metadata.get("title", ""), key=f"volume_title_{volume_no}")
-    summary = st.text_area("分卷摘要", value=metadata.get("summary", ""), height=120, key=f"volume_summary_{volume_no}")
+    title = st.text_input("分卷标题", value=metadata.get("title", ""), key=scoped_widget_key("volume_title", *volume_scope))
+    summary = st.text_area("分卷摘要", value=metadata.get("summary", ""), height=120, key=scoped_widget_key("volume_summary", *volume_scope))
     status = st.selectbox(
         "分卷状态",
         options=["draft", "approved", "archived"],
         index=["draft", "approved", "archived"].index(metadata.get("status", "draft")) if metadata.get("status", "draft") in ["draft", "approved", "archived"] else 0,
         format_func=label_status,
-        key=f"volume_status_{volume_no}",
+        key=scoped_widget_key("volume_status", *volume_scope),
     )
 
-    requirement = st.text_area("本卷要求", height=180, key=f"volume_requirement_{volume_no}")
-    suffix = str(volume_no)
+    requirement = st.text_area("本卷要求", height=180, key=scoped_widget_key("volume_requirement", *volume_scope))
+    suffix = f"{project_name}:{story_id}:{volume_no}"
     messages_key = _discussion_messages_key("volume", suffix)
     result_key = _discussion_result_key("volume", suffix)
     input_key = _discussion_input_key("volume", suffix)
@@ -9026,7 +9203,7 @@ def render_volume_outline_page(project_name: str):
     approved_artifact = load_volume_discussion_artifact(project_name, volume_no, story_id=story_id)
 
     col_action_1, col_action_2 = st.columns(2)
-    if col_action_1.button("开始讨论分卷方向", key=f"start_volume_discussion_{volume_no}"):
+    if col_action_1.button("开始讨论分卷方向", key=scoped_widget_key("start_volume_discussion", *volume_scope)):
         try:
             result = discuss_volume(project_name, volume_no, title, summary, requirement, story_id=story_id)
             st.session_state[result_key] = result
@@ -9037,7 +9214,7 @@ def render_volume_outline_page(project_name: str):
         except Exception as exc:
             st.error(f"讨论失败：{exc}")
 
-    if col_action_2.button("重置分卷讨论", key=f"reset_volume_discussion_{volume_no}"):
+    if col_action_2.button("重置分卷讨论", key=scoped_widget_key("reset_volume_discussion", *volume_scope)):
         st.session_state[result_key] = {}
         st.session_state[messages_key] = []
         st.session_state[clear_input_flag_key] = True
@@ -9049,14 +9226,14 @@ def render_volume_outline_page(project_name: str):
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前分卷方向的结论。")
         render_step_retrieval(discussion_step, "本次分卷讨论参考的检索上下文")
         approve_col, clear_col = st.columns(2)
-        if approve_col.button("批准当前讨论", key=f"approve_volume_discussion_{volume_no}"):
+        if approve_col.button("批准当前讨论", key=scoped_widget_key("approve_volume_discussion", *volume_scope)):
             try:
                 result = approve_volume_discussion(project_name, volume_no, discussion_step, story_id=story_id)
                 st.success(f"已保存分卷讨论工件：{result.get('saved_path', '')}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"批准失败：{exc}")
-        if clear_col.button("清除已批准版本", key=f"clear_volume_discussion_{volume_no}"):
+        if clear_col.button("清除已批准版本", key=scoped_widget_key("clear_volume_discussion", *volume_scope)):
             if clear_volume_discussion_approval(project_name, volume_no, story_id=story_id):
                 st.success("已清除分卷已批准讨论工件。")
                 st.rerun()
@@ -9070,7 +9247,7 @@ def render_volume_outline_page(project_name: str):
         messages = st.session_state.get(messages_key, [])
         _render_discussion_chat(messages)
         follow_up = st.text_area("继续讨论分卷", key=input_key, height=120, placeholder="例如：这一卷我想更偏升级与站稳脚跟，不要太早引爆终局矛盾。")
-        if st.button("发送分卷讨论消息", key=f"send_volume_discussion_{volume_no}"):
+        if st.button("发送分卷讨论消息", key=scoped_widget_key("send_volume_discussion", *volume_scope)):
             if not follow_up.strip():
                 st.warning("讨论消息不能为空。")
             else:
@@ -9096,24 +9273,36 @@ def render_volume_outline_page(project_name: str):
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
 
-    if st.button("生成分卷大纲", key=f"generate_volume_outline_{volume_no}"):
+    if st.button("生成分卷大纲", key=scoped_widget_key("generate_volume_outline", *volume_scope)):
         try:
             result = generate_volume_outline(project_name, volume_no, title, summary, requirement, status=status, story_id=story_id)
-            st.session_state[f"volume_outline_step_{volume_no}"] = result
-            st.session_state[f"volume_outline_{volume_no}"] = result.get("data", {}).get("volume_outline", "")
+            outline_value = result.get("data", {}).get("volume_outline", "")
+            st.session_state[volume_outline_step_key] = result
+            st.session_state[volume_outline_text_key] = outline_value
+            st.session_state[volume_outline_editor_key] = outline_value
             st.rerun()
         except Exception as exc:
             st.error(f"生成分卷大纲失败：{exc}")
 
-    outline_text = st.text_area("分卷大纲内容", value=st.session_state.get(f"volume_outline_{volume_no}", existing_outline), height=500, key=f"volume_outline_editor_{volume_no}")
+    outline_text = st.text_area(
+        "分卷大纲内容",
+        value=st.session_state.get(volume_outline_text_key, existing_outline),
+        height=500,
+        key=volume_outline_editor_key,
+    )
 
     col1, col2 = st.columns(2)
-    if col1.button("保存分卷大纲", key=f"save_volume_{volume_no}"):
+    if col1.button("保存分卷大纲", key=scoped_widget_key("save_volume", *volume_scope)):
         save_volume_outline(project_name, volume_no, outline_text, story_id=story_id)
         save_volume_metadata(project_name, volume_no, {"title": title, "summary": summary, "status": status}, story_id=story_id)
         st.success(f"第 {volume_no} 卷大纲已保存")
         st.rerun()
-    if col2.button("删除分卷", key=f"delete_volume_{volume_no}"):
+    if confirmed_button(
+        col2,
+        "删除分卷",
+        f"确认删除第 {volume_no} 卷",
+        scoped_widget_key("delete_volume", project_name, story_id, volume_no),
+    ):
         if delete_volume(project_name, volume_no, story_id=story_id):
             st.success(f"第 {volume_no} 卷已删除")
             st.rerun()
@@ -9135,10 +9324,16 @@ def render_arc_outline_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     st.subheader("剧情段大纲")
 
-    arc_no = st.number_input("剧情段编号", min_value=1, value=1, key="arc_outline_no")
+    arc_no = st.number_input("剧情段编号", min_value=1, value=1, key=scoped_widget_key("arc_outline_no", project_name, story_id))
+    arc_no = int(arc_no)
+    arc_scope = (project_name, story_id, arc_no)
+    arc_outline_step_key = scoped_session_key("arc_outline_step", *arc_scope)
+    arc_outline_text_key = scoped_session_key("arc_outline", *arc_scope)
+    arc_outline_editor_key = scoped_widget_key("arc_outline_editor", *arc_scope)
+    arc_chapter_plan_step_key = scoped_session_key("arc_chapter_plan_step", *arc_scope)
     metadata = load_arc_metadata(project_name, arc_no, story_id=story_id)
     existing_outline = load_arc_outline(project_name, arc_no, story_id=story_id)
-    step_result = st.session_state.get(f"arc_outline_step_{arc_no}", {})
+    step_result = st.session_state.get(arc_outline_step_key, {})
 
     volume_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name, story_id=story_id)]
     current_volume = int(metadata.get("volume_no") or 0)
@@ -9147,22 +9342,22 @@ def render_arc_outline_page(project_name: str):
         options=volume_options,
         index=volume_options.index(current_volume) if current_volume in volume_options else 0,
         format_func=lambda value: "未指定分卷" if value == 0 else f"第 {value} 卷",
-        key=f"arc_volume_{arc_no}",
+        key=scoped_widget_key("arc_volume", *arc_scope),
     )
-    title = st.text_input("剧情段标题", value=metadata.get("title", ""), key=f"arc_title_{arc_no}")
-    summary = st.text_area("剧情段摘要", value=metadata.get("summary", ""), height=120, key=f"arc_summary_{arc_no}")
+    title = st.text_input("剧情段标题", value=metadata.get("title", ""), key=scoped_widget_key("arc_title", *arc_scope))
+    summary = st.text_area("剧情段摘要", value=metadata.get("summary", ""), height=120, key=scoped_widget_key("arc_summary", *arc_scope))
     status = st.selectbox(
         "剧情段状态",
         options=["draft", "approved", "archived"],
         index=["draft", "approved", "archived"].index(metadata.get("status", "draft")) if metadata.get("status", "draft") in ["draft", "approved", "archived"] else 0,
         format_func=label_status,
-        key=f"arc_status_{arc_no}",
+        key=scoped_widget_key("arc_status", *arc_scope),
     )
-    estimated_chapter_count = st.number_input("预计章节数", min_value=0, value=int(metadata.get("estimated_chapter_count") or 0), key=f"arc_estimated_chapters_{arc_no}")
-    target_word_count_range = st.text_input("目标总字数范围", value=metadata.get("target_word_count_range", ""), key=f"arc_word_range_{arc_no}")
-    requirement = st.text_area("本剧情段要求", height=180, key=f"arc_requirement_{arc_no}")
+    estimated_chapter_count = st.number_input("预计章节数", min_value=0, value=int(metadata.get("estimated_chapter_count") or 0), key=scoped_widget_key("arc_estimated_chapters", *arc_scope))
+    target_word_count_range = st.text_input("目标总字数范围", value=metadata.get("target_word_count_range", ""), key=scoped_widget_key("arc_word_range", *arc_scope))
+    requirement = st.text_area("本剧情段要求", height=180, key=scoped_widget_key("arc_requirement", *arc_scope))
 
-    suffix = str(arc_no)
+    suffix = f"{project_name}:{story_id}:{arc_no}"
     messages_key = _discussion_messages_key("arc", suffix)
     result_key = _discussion_result_key("arc", suffix)
     input_key = _discussion_input_key("arc", suffix)
@@ -9172,7 +9367,7 @@ def render_arc_outline_page(project_name: str):
     approved_artifact = load_arc_discussion_artifact(project_name, arc_no, story_id=story_id)
 
     col_action_1, col_action_2 = st.columns(2)
-    if col_action_1.button("开始讨论剧情段方向", key=f"start_arc_discussion_{arc_no}"):
+    if col_action_1.button("开始讨论剧情段方向", key=scoped_widget_key("start_arc_discussion", *arc_scope)):
         try:
             result = discuss_arc(
                 project_name,
@@ -9193,7 +9388,7 @@ def render_arc_outline_page(project_name: str):
         except Exception as exc:
             st.error(f"讨论失败：{exc}")
 
-    if col_action_2.button("重置剧情段讨论", key=f"reset_arc_discussion_{arc_no}"):
+    if col_action_2.button("重置剧情段讨论", key=scoped_widget_key("reset_arc_discussion", *arc_scope)):
         st.session_state[result_key] = {}
         st.session_state[messages_key] = []
         st.session_state[clear_input_flag_key] = True
@@ -9205,14 +9400,14 @@ def render_arc_outline_page(project_name: str):
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前剧情段方向的结论。")
         render_step_retrieval(discussion_step, "本次剧情段讨论参考的检索上下文")
         approve_col, clear_col = st.columns(2)
-        if approve_col.button("批准当前讨论", key=f"approve_arc_discussion_{arc_no}"):
+        if approve_col.button("批准当前讨论", key=scoped_widget_key("approve_arc_discussion", *arc_scope)):
             try:
                 result = approve_arc_discussion(project_name, arc_no, discussion_step, story_id=story_id)
                 st.success(f"已保存剧情段讨论工件：{result.get('saved_path', '')}")
                 st.rerun()
             except Exception as exc:
                 st.error(f"批准失败：{exc}")
-        if clear_col.button("清除已批准版本", key=f"clear_arc_discussion_{arc_no}"):
+        if clear_col.button("清除已批准版本", key=scoped_widget_key("clear_arc_discussion", *arc_scope)):
             if clear_arc_discussion_approval(project_name, arc_no, story_id=story_id):
                 st.success("已清除剧情段已批准讨论工件。")
                 st.rerun()
@@ -9226,7 +9421,7 @@ def render_arc_outline_page(project_name: str):
         messages = st.session_state.get(messages_key, [])
         _render_discussion_chat(messages)
         follow_up = st.text_area("继续讨论剧情段", key=input_key, height=120, placeholder="例如：这一段我想让冲突递进更快，但高潮不要提早透支。")
-        if st.button("发送剧情段讨论消息", key=f"send_arc_discussion_{arc_no}"):
+        if st.button("发送剧情段讨论消息", key=scoped_widget_key("send_arc_discussion", *arc_scope)):
             if not follow_up.strip():
                 st.warning("讨论消息不能为空。")
             else:
@@ -9255,7 +9450,7 @@ def render_arc_outline_page(project_name: str):
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
 
-    if st.button("生成剧情段大纲", key=f"generate_arc_outline_{arc_no}"):
+    if st.button("生成剧情段大纲", key=scoped_widget_key("generate_arc_outline", *arc_scope)):
         try:
             result = generate_arc_outline(
                 project_name,
@@ -9269,16 +9464,23 @@ def render_arc_outline_page(project_name: str):
                 status=status,
                 story_id=story_id,
             )
-            st.session_state[f"arc_outline_step_{arc_no}"] = result
-            st.session_state[f"arc_outline_{arc_no}"] = result.get("data", {}).get("arc_outline", "")
+            outline_value = result.get("data", {}).get("arc_outline", "")
+            st.session_state[arc_outline_step_key] = result
+            st.session_state[arc_outline_text_key] = outline_value
+            st.session_state[arc_outline_editor_key] = outline_value
             st.rerun()
         except Exception as exc:
             st.error(f"生成剧情段大纲失败：{exc}")
 
-    outline_text = st.text_area("剧情段大纲内容", value=st.session_state.get(f"arc_outline_{arc_no}", existing_outline), height=500, key=f"arc_outline_editor_{arc_no}")
+    outline_text = st.text_area(
+        "剧情段大纲内容",
+        value=st.session_state.get(arc_outline_text_key, existing_outline),
+        height=500,
+        key=arc_outline_editor_key,
+    )
 
     col1, col2 = st.columns(2)
-    if col1.button("保存剧情段大纲", key=f"save_arc_{arc_no}"):
+    if col1.button("保存剧情段大纲", key=scoped_widget_key("save_arc", *arc_scope)):
         save_arc_outline(project_name, arc_no, outline_text, story_id=story_id)
         save_arc_metadata(project_name, arc_no, {
             "volume_no": volume_no or None,
@@ -9290,7 +9492,12 @@ def render_arc_outline_page(project_name: str):
         }, story_id=story_id)
         st.success(f"剧情段 {arc_no:03d} 已保存")
         st.rerun()
-    if col2.button("删除剧情段", key=f"delete_arc_{arc_no}"):
+    if confirmed_button(
+        col2,
+        "删除剧情段",
+        f"确认删除剧情段 {arc_no:03d}",
+        scoped_widget_key("delete_arc", *arc_scope),
+    ):
         if delete_arc(project_name, arc_no, story_id=story_id):
             st.success(f"剧情段 {arc_no:03d} 已删除")
             st.rerun()
@@ -9334,18 +9541,18 @@ def render_arc_outline_page(project_name: str):
         "起始章节编号",
         min_value=1,
         value=min([int(item.get("chapter_no", 1)) for item in linked_chapters], default=1),
-        key=f"arc_plan_start_{arc_no}",
+        key=scoped_widget_key("arc_plan_start", *arc_scope),
     )
     default_plan_count = int(metadata.get("estimated_chapter_count") or 5)
     plan_chapter_count = plan_col2.number_input(
         "计划章节数",
         min_value=1,
         value=max(default_plan_count, 1),
-        key=f"arc_plan_count_{arc_no}",
+        key=scoped_widget_key("arc_plan_count", *arc_scope),
     )
-    plan_requirement = st.text_area("章节分配补充要求", height=120, key=f"arc_plan_requirement_{arc_no}")
-    plan_step = st.session_state.get(f"arc_chapter_plan_step_{arc_no}", {})
-    if st.button("生成剧情段章节分配计划", key=f"generate_arc_chapter_plan_{arc_no}"):
+    plan_requirement = st.text_area("章节分配补充要求", height=120, key=scoped_widget_key("arc_plan_requirement", *arc_scope))
+    plan_step = st.session_state.get(arc_chapter_plan_step_key, {})
+    if st.button("生成剧情段章节分配计划", key=scoped_widget_key("generate_arc_chapter_plan", *arc_scope)):
         try:
             result = generate_arc_chapter_plan(
                 project_name,
@@ -9355,12 +9562,12 @@ def render_arc_outline_page(project_name: str):
                 plan_requirement,
                 story_id=story_id,
             )
-            st.session_state[f"arc_chapter_plan_step_{arc_no}"] = result
+            st.session_state[arc_chapter_plan_step_key] = result
             st.success("章节分配计划已生成并保存。")
             st.rerun()
         except Exception as exc:
             st.error(f"生成章节分配计划失败：{exc}")
-    latest_plan = st.session_state.get(f"arc_chapter_plan_step_{arc_no}", {}).get("data", {}).get("report_markdown", "") or saved_plan.get("report_markdown", "")
+    latest_plan = st.session_state.get(arc_chapter_plan_step_key, {}).get("data", {}).get("report_markdown", "") or saved_plan.get("report_markdown", "")
     if latest_plan:
         with st.expander("当前剧情段章节分配计划", expanded=False):
             st.markdown(latest_plan)
@@ -9381,20 +9588,22 @@ def render_evaluation_page(project_name: str):
     st.subheader("章节评价")
     st.caption("综合评价会一次性给出：通过/需改/阻塞结论、质量评分、一致性诊断和优先修改项。旧的审阅/专项分析能力仍保留给流水线和历史兼容。")
 
-    chapter_no = st.number_input("章节编号", min_value=1, value=1, key="evaluation_chapter_no")
+    chapter_no = st.number_input("章节编号", min_value=1, value=1, key=scoped_widget_key("evaluation_chapter_no", project_name, story_id))
+    chapter_no = int(chapter_no)
+    evaluation_scope = (project_name, story_id, chapter_no)
     existing_chapter = load_chapter(project_name, chapter_no, story_id=story_id)
     chapter_text = st.text_area(
         "待评估正文",
         value=existing_chapter,
         height=420,
-        key=f"evaluation_chapter_text_{chapter_no}",
+        key=scoped_widget_key("evaluation_chapter_text", *evaluation_scope),
     )
-    step_key = f"evaluation_step_{chapter_no}"
-    report_key = f"evaluation_report_{chapter_no}"
+    step_key = scoped_session_key("evaluation_step", *evaluation_scope)
+    report_key = scoped_session_key("evaluation_report", *evaluation_scope)
     existing_report = load_evaluation_report(project_name, chapter_no, story_id=story_id)
     existing_json = load_evaluation_json(project_name, chapter_no, story_id=story_id) or {}
 
-    if st.button("生成综合章节评价"):
+    if st.button("生成综合章节评价", key=scoped_widget_key("generate_evaluation", *evaluation_scope)):
         try:
             with st.spinner("正在生成章节综合评价..."):
                 result = run_comprehensive_chapter_evaluation(project_name, chapter_no, chapter_text, story_id=story_id)
@@ -9409,7 +9618,7 @@ def render_evaluation_page(project_name: str):
         "评价报告",
         value=st.session_state.get(report_key, existing_report),
         height=460,
-        key=f"evaluation_report_text_{chapter_no}",
+        key=scoped_widget_key("evaluation_report_text", *evaluation_scope),
     )
     if report_text:
         st.markdown(report_text)
@@ -9740,7 +9949,12 @@ def render_retrieval_eval_workbench(project_name: str, manifest):
                     run = run_retrieval_eval_cases(project_name, [selected_case], note="手动运行单个评测用例")
                     st.session_state["rag_eval_last_run"] = run
                     st.success(f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}")
-            if action_col_c.button("删除所选用例", key="delete_selected_rag_eval", use_container_width=True):
+            if confirmed_button(
+                action_col_c,
+                "删除所选用例",
+                "确认删除所选用例",
+                scoped_widget_key("delete_selected_rag_eval", project_name),
+            ):
                 if delete_retrieval_eval_case(project_name, selected_case_id):
                     st.success("已删除评测用例。")
                     st.rerun()
@@ -9849,7 +10063,7 @@ def render_retrieval_feedback_controls(project_name: str, current_hits: list[dic
 
 def render_retrieval_page(project_name: str, mode: str = "center"):
     if mode == "ingestion":
-        st.subheader("资料录入")
+        st.subheader("资料导入")
         st.caption("导入原作资料、参考资料和样本文本，并把资料整理为检索条目或结构化知识。")
     else:
         st.subheader("检索中心")
@@ -9996,7 +10210,12 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     key="retrieval_source_delete_target"
                 )
                 st.caption("删除后会自动重建检索索引。")
-                if st.button("删除所选资料"):
+                if confirmed_button(
+                    st,
+                    "删除所选资料",
+                    "确认删除所选资料并重建索引",
+                    scoped_widget_key("delete_selected_retrieval_source", project_name),
+                ):
                     try:
                         deleted = delete_retrieval_source_file(project_name, selected_source_file)
                         if deleted:
@@ -10843,13 +11062,13 @@ elif page == "项目总览":
     render_project_overview_page(project_name)
 elif page == "创作配置":
     render_creative_profile_page(project_name)
-elif page == "设定":
+elif page == "核心设定":
     render_settings_page(project_name)
 elif page == "快速生成":
     render_dynamic_generation_page(project_name)
-elif page == "项目资源":
+elif page == "资源浏览器":
     render_resource_management_page(project_name)
-elif page == "资料录入":
+elif page == "资料导入":
     render_retrieval_page(project_name, mode="ingestion")
 elif page == "检索中心":
     render_retrieval_page(project_name, mode="center")

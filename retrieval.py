@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -25,6 +26,7 @@ from memory import (
     load_memory,
     load_outline,
     load_outline_discussion_artifact,
+    load_story_chapter_summaries,
     load_volume_outline,
     load_volume_metadata,
     load_review,
@@ -894,6 +896,27 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
     if doc:
         documents.append(doc)
 
+    for item in load_story_chapter_summaries(project_name, story_id):
+        if not isinstance(item, dict):
+            continue
+        chapter_no = item.get("chapter_no")
+        summary = str(item.get("summary", "") or "").strip()
+        if not summary:
+            continue
+        doc = _make_document(
+            project_name,
+            "chapter_summary",
+            f"{story_id}/chapter_summary_{chapter_no}",
+            f"[{story_id}] Chapter {chapter_no:03d} Summary" if isinstance(chapter_no, int) else f"[{story_id}] Chapter Summary",
+            summary,
+            chapter_no=chapter_no if isinstance(chapter_no, int) else None,
+            path=str(base_path / "chapter_summaries.json"),
+            tags=["summary", f"story:{story_id}"],
+            metadata={"memory_field": "chapter_summaries", "authority": "project", "story_id": story_id},
+        )
+        if doc:
+            documents.append(doc)
+
     creative_profile_discussion = creative_profile_discussion_artifact.get("report_markdown", "")
     doc = _make_document(
         project_name,
@@ -1262,7 +1285,11 @@ def _documents_from_external_sources(project_name: str) -> list[RetrievalDocumen
                 metadata.update(parsed.get("metadata", {}) if isinstance(parsed, dict) and isinstance(parsed.get("metadata"), dict) else {})
                 tags.extend(parsed.get("tags", []) if isinstance(parsed, dict) and isinstance(parsed.get("tags"), list) else [])
                 source_type = str(parsed.get("source_type", source_type)) if isinstance(parsed, dict) else source_type
-            except Exception:
+            except Exception as exc:
+                logging.getLogger("novelforge").warning(
+                    "Failed to parse external retrieval source as JSON: project=%s file=%s error=%s",
+                    project_name, file, exc,
+                )
                 content = raw_text
 
         doc = _make_document(
@@ -1318,8 +1345,11 @@ def gather_retrieval_documents(project_name: str) -> list[RetrievalDocument]:
         story_id = story.get("story_id", "default")
         try:
             documents.extend(_documents_from_project_files(project_name, story_id))
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger("novelforge").warning(
+                "Failed to gather story retrieval documents: project=%s story=%s error=%s",
+                project_name, story_id, exc,
+            )
     return documents
 
 

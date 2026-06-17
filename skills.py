@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime
 from urllib.request import Request, urlopen
@@ -697,8 +698,11 @@ def _build_retrieval_context(
                 worldline_id = profile.get("worldline_id")
             if worldline_mode is None:
                 worldline_mode = profile.get("worldline_retrieval_mode")
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger("novelforge").warning(
+                "Failed to load creative profile for retrieval context: project=%s story=%s error=%s",
+                project_name, story_id, exc,
+            )
     hits = retrieve_context(
         project_name,
         query,
@@ -2395,8 +2399,11 @@ def update_memory_from_chapter(
     try:
         from memory import save_story_chapter_summaries
         save_story_chapter_summaries(project_name, story_id, memory.get("chapter_summaries", []))
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.getLogger("novelforge").warning(
+            "Failed to save story chapter summaries: project=%s story=%s chapter=%s error=%s",
+            project_name, story_id, chapter_no, exc,
+        )
     return _make_step_result(
         "memory_update",
         success=True,
@@ -3038,7 +3045,7 @@ def pipeline_plan_write_review_update(
     if review_step.success:
         state.last_successful_step = "review_chapter"
 
-    if chapter_step.success:
+    if chapter_step.success and review_step.success:
         state.next_step = "memory_update"
         _transition_pipeline_state(state, "memory_update", "review step completed")
         try:
@@ -3054,15 +3061,21 @@ def pipeline_plan_write_review_update(
             )
             _record_pipeline_error(state, step_name="memory_update", message=str(exc), error_type="llm")
     else:
+        skip_reason = "review_chapter_failed" if chapter_step.success else "write_chapter_failed"
+        skip_warning = (
+            "Skipped because chapter review step did not complete successfully."
+            if chapter_step.success
+            else "Skipped because chapter writing step did not complete successfully."
+        )
         memory_step = _make_step_result(
             "memory_update",
             success=False,
             status="skipped",
-            warnings=["Skipped because chapter writing step did not complete successfully."],
+            warnings=[skip_warning],
             retrieval_hits=get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
         )
         if not state.halted:
-            _halt_pipeline(state, "write_chapter_failed")
+            _halt_pipeline(state, skip_reason)
 
     _record_pipeline_step(state, memory_step)
     state.memory_update = memory_step.data.get("applied_updates", {})

@@ -21,6 +21,8 @@ from memory import (
     load_review,
     load_review_json,
     load_source_package_report,
+    normalize_project_name,
+    project_dir,
     retrieval_sources_path,
     runs_path,
     story_path,
@@ -41,7 +43,12 @@ EVALUATION_PATTERN = re.compile(r"chapter_(\d+)\.md$")
 
 
 def _project_dir(project_name: str) -> Path:
-    return BASE_DIR / project_name.strip()
+    target = project_dir(project_name)
+    base = BASE_DIR.resolve()
+    resolved = target.resolve()
+    if base not in resolved.parents and resolved != base:
+        raise ValueError("Invalid project path.")
+    return target
 
 
 def _story_dir(project_name: str, story_id: str = "default") -> Path:
@@ -84,9 +91,7 @@ def delete_project(project_name: str) -> bool:
 
 def rename_project(old_name: str, new_name: str) -> str:
     source = _project_dir(old_name)
-    normalized_name = new_name.strip()
-    if not normalized_name:
-        raise ValueError("New project name cannot be empty.")
+    normalized_name = normalize_project_name(new_name)
     target = _project_dir(normalized_name)
     if not source.exists() or not source.is_dir():
         raise FileNotFoundError("Source project does not exist.")
