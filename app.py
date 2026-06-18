@@ -288,6 +288,27 @@ RETRIEVAL_MODE_LABELS = {
     "semantic": "语义检索",
 }
 
+LONG_REFERENCE_PRESET_INFO = {
+    "fanfic_foundation": {
+        "label": "同人创作地基（推荐）",
+        "button": "使用同人创作地基",
+        "summary": "第一次导入整本原作时优先选。它会尽量整理后续写作反复要用的角色、关系、时间线、世界观、能力道具和硬约束。",
+        "effect": "适合：搭完整资料库 / 范围=原作资料 / 可信度=官方资料 / 提取=平衡总管+深度提取 / 会自动整理散知识",
+    },
+    "canon_foundation": {
+        "label": "严格原作校验",
+        "button": "使用严格原作校验",
+        "summary": "只想补一层“不能错、不能改”的原作硬事实时选。它更保守，尽量少推测，适合防止后续写作违背原作。",
+        "effect": "适合：补硬事实和防错 / 范围=原作资料 / 可信度=官方资料 / 提取=原作审计+严格原作 / 不自动整理散知识",
+    },
+    "style_reference": {
+        "label": "文风参考",
+        "button": "使用文风参考",
+        "summary": "导入样本文本或只想学原作表达方式时选。它关注叙事节奏、对白、氛围和描写习惯，不适合拿来补全世界观资料。",
+        "effect": "适合：学文风 / 范围=参考资料 / 可信度=人工整理 / 提取=文风专家+文风专用 / 不自动整理散知识",
+    },
+}
+
 WEB_REFERENCE_INGESTION_ENABLED = False
 
 VERSION_SCOPE_LABELS = {
@@ -5151,6 +5172,8 @@ def render_extraction_diff_detail(project_name: str, diff: dict, key_prefix: str
 
 
 def apply_long_reference_fanfic_preset(preset: str):
+    if preset not in LONG_REFERENCE_PRESET_INFO:
+        return
     if preset == "canon_foundation":
         st.session_state["long_reference_scope"] = "canon"
         st.session_state["long_reference_authority"] = "official"
@@ -5181,6 +5204,8 @@ def apply_long_reference_fanfic_preset(preset: str):
         st.session_state["long_reference_shared_expert_preset"] = "style_expert"
         st.session_state["long_reference_shared_category_strategy_style_expert"] = "preset"
         st.session_state["long_reference_shared_mode_style_expert"] = "style"
+    st.session_state["long_reference_active_preset"] = preset
+    st.session_state["long_reference_preset_notice"] = f"已应用：{LONG_REFERENCE_PRESET_INFO[preset]['label']}"
 
 
 def render_extraction_coverage_report(project_name: str, batch: dict | None = None, key_prefix: str = "coverage"):
@@ -6104,29 +6129,30 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
     with st.expander("长篇文本导入", expanded=expanded):
         st.info("推荐顺序：选择处理方案 / 上传或粘贴文本 / 检查切分结果 / 自动处理。处理完成后，风险条目会留在“待确认知识”里。")
         with st.expander("1. 选择处理方案", expanded=True):
-            st.caption("先选一个处理目标，系统会自动设置资料范围、可信度、自动处理方式和提取模式。之后仍可手动调整。")
+            st.caption("先选资料用途。第一次整理整本原作，通常直接选“同人创作地基”。系统会自动设置资料范围、可信度、自动处理方式和提取模式，之后仍可手动调整。")
+            active_preset = st.session_state.get("long_reference_active_preset", "")
+            if active_preset in LONG_REFERENCE_PRESET_INFO:
+                active_info = LONG_REFERENCE_PRESET_INFO[active_preset]
+                st.success(st.session_state.get("long_reference_preset_notice", f"当前方案：{active_info['label']}"))
+                st.caption(active_info["effect"])
+            else:
+                st.info("当前还没有套用处理方案。第一次整理整本原作，建议选“同人创作地基（推荐）”。")
             preset_cols = st.columns(3)
-            with preset_cols[0]:
-                st.markdown("**严格原作地基**")
-                st.caption("适合先锁定不能违背的原作事实、关系、事件和硬约束。")
-                if st.button("使用严格原作方案", key="long_reference_preset_canon_foundation", use_container_width=True):
-                    apply_long_reference_fanfic_preset("canon_foundation")
-                    st.success("已切换为严格原作方案。")
-                    st.rerun()
-            with preset_cols[1]:
-                st.markdown("**同人创作地基**")
-                st.caption("适合第一次正式整理整本原作，兼顾角色、关系、时间线、世界观和约束。")
-                if st.button("使用同人地基方案", key="long_reference_preset_fanfic_foundation", use_container_width=True):
-                    apply_long_reference_fanfic_preset("fanfic_foundation")
-                    st.success("已切换为同人地基方案。")
-                    st.rerun()
-            with preset_cols[2]:
-                st.markdown("**文风参考地基**")
-                st.caption("适合导入样本文本或原作文风片段，优先提取叙事、对白和氛围。")
-                if st.button("使用文风参考方案", key="long_reference_preset_style_reference", use_container_width=True):
-                    apply_long_reference_fanfic_preset("style_reference")
-                    st.success("已切换为文风参考方案。")
-                    st.rerun()
+            for column, preset_key in zip(preset_cols, LONG_REFERENCE_PRESET_INFO):
+                preset_info = LONG_REFERENCE_PRESET_INFO[preset_key]
+                with column:
+                    is_active = active_preset == preset_key
+                    st.markdown(f"**{preset_info['label']}{'（当前）' if is_active else ''}**")
+                    st.caption(preset_info["summary"])
+                    st.caption(preset_info["effect"])
+                    if st.button(
+                        "已应用" if is_active else preset_info["button"],
+                        key=f"long_reference_preset_{preset_key}",
+                        use_container_width=True,
+                        type="primary" if is_active else "secondary",
+                    ):
+                        apply_long_reference_fanfic_preset(preset_key)
+                        st.rerun()
         with st.expander("流程说明", expanded=False):
             st.markdown(
                 """
