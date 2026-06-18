@@ -58,10 +58,11 @@ Current maturity can be summarized as:
 - core-setting-to-knowledge conversion for turning stable settings into pending structured knowledge before project-wide reuse
 - source ingestion page for importing canon/reference/sample text and extracting structured knowledge
 - source ledger for summarizing long-form batches, retrieval sources, knowledge-only sources, processing status, and segment-level provenance
+- duplicate source-name protection so long-form segments, organized references, and manual source cards receive unique filenames instead of silently overwriting existing retrieval sources
 - long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing, with strict-canon, fanfic-foundation, and style-reference initialization presets plus clearer guidance for saving batches, indexing source text, and extracting knowledge
 - long-form source batch manager for tracking whole-txt splitting, indexing, extraction, re-extraction, failures, and resume progress, with per-segment batch persistence after each extraction for terminal-interruption recovery
-- one-click source processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and showing batch progress; pages refresh automatically after long-running batch actions complete
-- pending-queue clear mode for auto-saving low-risk items, archiving weak-evidence items, and moving conflicts/duplicates into a manual review box; processing records support full rollback and restoring manual-review snapshots back into the pending queue
+- guided source auto-processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and showing batch progress; pages refresh automatically after long-running batch actions complete
+- pending-queue batch processing plan for auto-saving low-risk items, archiving weak-evidence items, and moving conflicts/duplicates into a manual review box; processing records support full rollback and restoring manual-review snapshots back into the pending queue
 - deep source-extraction modes for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction
 - specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes with matching categories and modes
 - extraction category default strategies for starting from specialist presets, all categories, or no preselected categories
@@ -181,7 +182,7 @@ Current retrieval capabilities include:
 - long-form source details can inspect segment text and trace related pending or confirmed knowledge items
 - pending review queue for accepting, discarding, or editing extracted knowledge before indexing
 - pending review includes extraction-quality checks for same-name duplicates, same-name field conflicts, fact-level conflicts, alias candidates, and existing confirmed-knowledge overlap, with suggestions and merge actions for same-name groups
-- automatic review policy and processing records for one-click, pasted-source, and pending-queue clear actions, including configurable thresholds, grade-B handling, manual-review categories, confirm/archive/manual-review decisions, pending snapshots, write targets, run-level rollback, single-item return, and manual-review snapshot restore
+- automatic review policy and processing records for source auto-processing, pasted-source extraction, and pending-queue batch actions, including configurable thresholds, grade-B handling, manual-review categories, confirm/archive/manual-review decisions, pending snapshots, write targets, run-level rollback, single-item return, and manual-review snapshot restore
 - alias-candidate hints can be saved into `knowledge/entities/aliases.json`; alias groups are indexed as `entity_alias_group`
 - pending review supports category, source, keyword, and quality-risk filtering, plus risk-first, low-evidence, low-confidence, high-importance, newest-first, and category/name sorting
 - pending review and confirmed-knowledge organization support worldline filtering for separating canon, project-main, and AU branch material
@@ -193,6 +194,7 @@ Current retrieval capabilities include:
 - selectable extraction strategies for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference passes
 - long-form batches include an extraction coverage report for category coverage, missing/weak categories, low-evidence items, low-confidence items, no-evidence items, and segment progress
 - re-extraction stores detailed comparisons against existing pending knowledge for that segment, including added, matched, possibly missing, changed fields, and old/new item snapshots
+- re-extraction updates pending items that reuse the same internal ID instead of creating duplicate same-ID candidates
 - re-extraction diff details can accept the new pass or keep the old pass by deleting the corresponding pending items
 - multi-specialist extraction plans record per-step processed segment counts, queued knowledge counts, failures, and the latest plan summary on the batch; plans can optionally consolidate batch pending knowledge after extraction
 - multi-specialist extraction plans can be saved as project templates and reused by later long-form batches
@@ -342,7 +344,7 @@ README keeps to usage-level guidance. The following content is maintained in [pr
 - architecture and module responsibilities
 - project storage layout
 - RAG, source extraction, workflow, and evaluation implementation notes
-- business-module extraction status, including pending-knowledge workflow, quality logic, and entity-card aggregation moved into `knowledge_workflows.py` / `knowledge_quality.py` / `knowledge_entities.py`
+- business-module extraction status, including pending-knowledge workflow, quality logic, entity-card aggregation, source processing, resource-browser data operations, settings-to-knowledge conversion, and RAG evaluation execution moved into dedicated modules
 - roadmap
 - development boundaries and extension guidance
 

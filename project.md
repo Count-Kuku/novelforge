@@ -72,9 +72,9 @@ Current practical status:
 * Automatic review run records for low-risk auto-confirm decisions, including decision reasons, pending snapshots, confirmed write targets, and run-level rollback
 * Project-level automatic review policy for confidence/evidence thresholds, grade-B handling, and manual-review categories
 * Pending-queue automatic-review preview for showing which filtered or selected items would be auto-confirmed before actually saving them
-* Pending-queue clear mode with low-risk auto-save, low-quality archive, conflict/duplicate manual review box, run-level rollback, and manual-review snapshot restore back into the pending queue
+* Pending-queue batch processing plan with low-risk auto-save, low-quality archive, conflict/duplicate manual review box, run-level rollback, and manual-review snapshot restore back into the pending queue
 * Long-form source batch manager for whole-txt processing progress, continue actions, failed extraction retries, and completed-segment re-extraction
-* Batch processing progress bars for long-form extraction, retry, re-extraction, multi-specialist extraction plans, and one-click source processing
+* Batch processing progress bars for long-form extraction, retry, re-extraction, multi-specialist extraction plans, and source auto-processing
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Consolidated creative profile page for direct profile editing, discussion-assisted recommendations, one-click form backfill, and approval-based persistence
@@ -202,6 +202,15 @@ User
 Streamlit UI
 (app.py)
 ↓
+Creative Profile Workflow Layer
+(creative_profile_workflows.py)
+↓
+Source Workflow Layer
+(source_workflows.py)
+↓
+Resource Browser Data Layer
+(resource_browser.py)
+↓
 Knowledge Workflow Layer
 (knowledge_workflows.py)
 ↓
@@ -260,6 +269,18 @@ novelforge/
 ├── knowledge_quality.py
 
 ├── knowledge_entities.py
+
+├── source_workflows.py
+
+├── resource_browser.py
+
+├── extraction_presets.py
+
+├── creative_profile_workflows.py
+
+├── settings_workflows.py
+
+├── retrieval_eval.py
 
 ├── requirements.txt
 
@@ -371,26 +392,25 @@ Responsibilities:
 * Consuming structured review/update results produced by the schema layer
 * Applying grouped workspace navigation, project-aware page headers, and shared app-level visual styling
 * Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
-* Managing source ingestion, retrieval sources, index rebuilds, and retrieval preview
-* Managing a source ingestion ledger that ties together batches, retrieval source files, knowledge-only origins, processing counts, and segment provenance
-* Managing long-form source splitting, batch import, and batch structured extraction into the pending queue
-* Managing long-form source batches with per-segment import/extraction state, retry controls, completed-segment re-extraction, extraction-mode selection, and batch-level pending-knowledge consolidation
-* Persisting batch state after each segment during extraction, enabling terminal-interruption resume without data loss or duplicate extraction
-* Reporting extraction coverage and re-extraction diffs so repeated passes are auditable rather than blind
+* Rendering source ingestion, retrieval-source, index-rebuild, and retrieval-preview controls while delegating workflow work to source/retrieval modules
+* Rendering a source ingestion ledger built by `source_workflows.py`, tying together batches, retrieval source files, knowledge-only origins, processing counts, and segment provenance
+* Rendering long-form source splitting, batch import, and batch structured-extraction controls while delegating batch mutation to `source_workflows.py`
+* Rendering long-form source batch controls for per-segment state, retry, completed-segment re-extraction, extraction-mode selection, and batch-level pending-knowledge consolidation
+* Displaying extraction coverage and re-extraction diffs so repeated passes are auditable rather than blind
 * Rendering auto-review decisions so low-risk automated confirmation remains auditable and reversible
 * Rendering automatic-review previews in the pending queue before manually running low-risk auto-confirmation
-* Rendering pending-queue clear-plan controls and handing execution to `knowledge_workflows.py`
+* Rendering pending-queue batch-processing controls and handing execution to `knowledge_workflows.py`
 * Returning individual auto-confirmed knowledge items to pending review without rolling back the whole run
 * Running multi-specialist extraction plans across selected long-form segments with per-step progress and failure summaries
-* Detecting repeated long-form uploads through content fingerprints, file names, total character counts, and segment counts
+* Showing repeated long-form upload hints calculated from content fingerprints, file names, total character counts, and segment counts
 * Managing a pending structured-knowledge queue for accept/discard/edit review before persistence
 * Surfacing pending extraction quality issues before confirmation, with same-name merge support
-* Filtering and sorting pending extracted knowledge so large ingestion batches can be reviewed by risk, source, category, or quality score
+* Rendering pending extracted-knowledge filters and passing selected values to `knowledge_workflows.py` for risk/source/category/quality sorting
 * Editing individual pending knowledge items through forms before saving or confirming them into indexed knowledge
 * Editing individual confirmed knowledge items through forms, including category moves, deletion, provenance, quality fields, and retrieval index rebuilds
 * Managing entity alias groups and saving alias candidates found during pending extraction quality review
 * Managing structured-knowledge cleanup with duplicate detection, merge preview, deletion, and raw category editing
-* Generating and saving source package reports from confirmed structured knowledge
+* Rendering source-package report controls and delegating report generation to `source_workflows.py`
 * Exposing retrieval mode and score breakdown for debugging/learning
 * Organizing pasted reference text into structured retrieval-ready entries before ingestion; URL page ingestion is retained behind an internal UI flag while it is being refined
 * Discussing outline and chapter direction in structured form before committing to formal generation steps
@@ -418,7 +438,7 @@ UI features:
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
 * Review and analysis result refresh via Streamlit session state synchronization
 * Retrieval hit inspection in generation, review, analysis, and pipeline result pages
-* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, fanfic-oriented initialization presets, guided one-click processing, batch indexing, guided batch saving, retrieval indexing, limited batch extraction, visible progress bars, and completion reruns
+* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, fanfic-oriented initialization presets, guided automatic processing, batch indexing, guided batch saving, retrieval indexing, limited batch extraction, visible progress bars, and completion reruns
 * Source ledger for inspecting source status, long-form segment text, and pending/confirmed knowledge linked to a segment
 * Long-form source batch manager for progress metrics, filtered segment lists, continue extraction, completed re-extraction, and failure retries
 * Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
@@ -447,7 +467,7 @@ Business logic should remain minimal.
 Current UI design note:
 
 * `app.py` now includes lightweight reusable render helpers so pages consume `WorkflowStepResult` objects consistently instead of hand-formatting each skill result independently
-* Pending-knowledge triage rules and clear-plan execution have been split out to `knowledge_workflows.py`; quality detection, fact-conflict helpers, alias upsert, and knowledge merge helpers have been split out to `knowledge_quality.py`; character/setting entity-card aggregation has been split out to `knowledge_entities.py`. `app.py` should keep only the Streamlit rendering and interaction glue for those flows
+* Pending-knowledge triage, item save/move helpers, filter/sort rules, and batch-plan execution have been split out to `knowledge_workflows.py`; quality detection, fact-conflict helpers, alias upsert, and knowledge merge helpers have been split out to `knowledge_quality.py`; character/setting entity-card aggregation has been split out to `knowledge_entities.py`; long-source import/extraction/ledger workflows and resume-state summaries have been split out to `source_workflows.py`; resource-browser item construction and save/delete actions have been split out to `resource_browser.py`; creative-profile defaults, recommendation rules, and form payload builders have been split out to `creative_profile_workflows.py`; core-setting knowledge conversion has been split out to `settings_workflows.py`; RAG evaluation, report data construction, and evaluation form parsing have been split out to `retrieval_eval.py`. `app.py` should keep only Streamlit rendering, UI state, and interaction glue for those flows
 
 ---
 
@@ -462,13 +482,15 @@ Responsibilities:
 * Convert quality issues into user-facing risk labels
 * Evaluate automatic-review decisions from item quality, policy, evidence, and quality-issue maps
 * Build automatic-review previews for pending-queue UI display
-* Build pending-queue clear plans that route entries into auto-save, archive, or manual-review snapshots
-* Execute pending-queue clear plans by coordinating confirmed knowledge writes, pending queue removal, processing records, and retrieval index rebuilds
+* Save edited pending items and move/delete confirmed knowledge items without UI code manipulating category files directly
+* Filter and sort pending-queue indices from UI-selected category/source/worldline/risk/keyword values
+* Build pending-queue batch processing plans that route entries into auto-save, archive, or manual-review snapshots
+* Execute pending-queue batch processing plans by coordinating confirmed knowledge writes, pending queue removal, processing records, and retrieval index rebuilds
 
 Design purpose:
 
 * Keep non-UI pending-knowledge decision logic out of `app.py`
-* Make future tests for auto-review policy, clear-plan routing, and rollback/restore behavior easier to add
+* Make future tests for auto-review policy, filter/sort behavior, item save/move behavior, clear-plan routing, and rollback/restore behavior easier to add
 
 ---
 
@@ -510,6 +532,116 @@ Design purpose:
 
 ---
 
+## source_workflows.py
+
+Source ingestion and long-reference processing logic.
+
+Responsibilities:
+
+* Decode uploaded text, split long sources into resumable segments, and detect duplicate batches by content fingerprint
+* Summarize long-form batch resume state so UI can explain what remains to import, extract, retry, or review
+* Import long-reference segments into retrieval sources without duplicating already imported segments, and preserve the actual saved source path on the segment
+* Save organized references and manual source cards with non-overwriting retrieval-source filenames
+* Extract structured knowledge from source segments into the pending queue, including evidence-context capture and re-extraction comparison
+* Build extraction coverage reports, ingestion health reports, source ledgers, and source package reports
+* Run batch automatic processing, multi-expert extraction plans, batch-level consolidation, and low-risk auto-confirm flows
+
+Design purpose:
+
+* Keep source ingestion decisions, batch mutation, and multi-step processing out of `app.py`
+* Make interruption/retry behavior testable without loading Streamlit UI state
+
+---
+
+## resource_browser.py
+
+Resource browser data and persistence support.
+
+Responsibilities:
+
+* Build resource-browser item lists for outlines, planning artifacts, chapters, reviews, reports, runs, retrieval sources, structured knowledge, pending knowledge, and long-reference batches
+* Save edited browser resources back through the correct persistence function
+* Delete supported browser resources and rebuild retrieval assets when needed
+* Provide stable browser item identities and read-only JSON payloads for structured resources
+
+Design purpose:
+
+* Keep resource listing and file mutation rules outside the Streamlit detail panel
+* Make project overview metric navigation and resource-browser behavior easier to maintain
+
+---
+
+## extraction_presets.py
+
+Source extraction presets.
+
+Responsibilities:
+
+* Define extraction mode labels and user-facing help text
+* Define expert extraction presets, multi-step extraction plans, and consolidation mode labels
+* Provide default category selection logic shared by source-ingestion UI and source workflow execution
+
+Design purpose:
+
+* Keep extraction presets as reusable configuration instead of duplicating them inside `app.py`
+* Make future source-processing presets easy to extend without editing UI rendering code
+
+---
+
+## creative_profile_workflows.py
+
+Creative-profile configuration rules.
+
+Responsibilities:
+
+* Keep story-mode workflow recommendations outside Streamlit page code
+* Normalize creative-profile form payloads, including reference-focus presets and custom focus items
+* Build creative-profile dictionaries from direct form values and legacy task-wizard inputs
+* Preserve shared creative-profile defaults such as custom-option labels and default worldline values
+
+Design purpose:
+
+* Keep creative-profile configuration decisions outside `app.py`
+* Make future tests for profile defaults, recommendation paths, and form payload normalization possible without loading Streamlit
+
+---
+
+## settings_workflows.py
+
+Settings-to-knowledge conversion logic.
+
+Responsibilities:
+
+* Define which core story/project setting fields can become structured knowledge
+* Convert stable settings into pending structured-knowledge candidates with provenance, evidence, confidence, and tags
+* Keep naming cleanup for generated knowledge items outside UI rendering
+
+Design purpose:
+
+* Keep core-setting conversion rules outside `app.py`
+* Make future settings-to-knowledge tests possible without loading Streamlit
+
+---
+
+## retrieval_eval.py
+
+Retrieval evaluation execution logic.
+
+Responsibilities:
+
+* Run fixed retrieval evaluation cases through the active retrieval stack
+* Compare hits against expected terms, chunk IDs, source types, and minimum-match thresholds
+* Persist evaluation runs with pass/fail summaries and detailed hit payloads
+* Build source-usage report data for workflow result panels without coupling report calculations to Streamlit widgets
+* Parse multiline/comma-separated evaluation fields and provide retrieval-profile labels shared by evaluation controls
+
+Design purpose:
+
+* Keep RAG evaluation scoring, run persistence, report data construction, and form parsing outside the workbench UI
+* Make retrieval quality checks easier to test and evolve independently from page layout
+
+---
+
 ## launcher.py
 
 Local desktop-style launcher.
@@ -539,7 +671,7 @@ Responsibilities:
 * Install `pyinstaller` into the local `.venv`
 * Build `NovelForge.exe` from `launcher.py`
 * Assemble a portable release directory
-* Copy the runtime, source files, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
+* Copy the runtime, entrypoint, split workflow modules, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
 * Copy optional `.streamlit` runtime configuration when present
 * Save a build transcript under `release/` for local diagnostics
 * Produce a zip archive suitable for GitHub Releases
@@ -658,6 +790,7 @@ Responsibilities:
 * Loading historical pipeline runs
 * Listing pipeline runs for inspection and future resume/replay flows
 * Loading and saving structured knowledge, pending knowledge, auto-review policy, and processing run records
+* Upserting pending knowledge by internal `pending_id` so deterministic re-extraction updates existing candidates instead of duplicating same-ID records
 * Rolling back processing runs and restoring manual-review snapshots back into the pending queue
 * Fetching recent chapter summaries (configurable limit, default 5)
 * Counting total written chapters
@@ -1462,9 +1595,9 @@ Current implementation status:
 * Implemented: persisted conflict resolutions for recurring evidence disagreements
 * Implemented: pasted reference organization into structured retrieval-ready entries
 * Implemented but temporarily hidden in the UI: single-page URL fetch and organization for controlled canon/reference ingestion
-* Implemented: long-form source importer with chapter-title splitting, length fallback splitting, guided one-click processing, conservative auto-confirm, guided batch saving, batch source indexing, mode help, extraction category default strategies, custom extraction instructions, and limited batch extraction
+* Implemented: long-form source importer with chapter-title splitting, length fallback splitting, guided automatic processing, conservative auto-confirm, guided batch saving, batch source indexing, mode help, extraction category default strategies, custom extraction instructions, and limited batch extraction
 * Implemented: automatic review records and rollback for low-risk auto-confirmed extracted knowledge
-* Implemented: pending-queue clear mode with auto-save/archive/manual-review routing, batch records, rollback, and manual-review snapshot restore
+* Implemented: pending-queue batch processing plan with auto-save/archive/manual-review routing, batch records, rollback, and manual-review snapshot restore
 * Implemented: project-level auto-review policy configuration and single confirmed-item return to pending review
 * Implemented: long-form source batch manager with progress tracking, visible batch progress bars, continue import/extraction actions, failed extraction retry, completed-segment re-extraction, and completion reruns
 * Implemented: repeated-upload detection using long-form source fingerprints and similarity hints
@@ -1658,11 +1791,11 @@ Metrics:
 
 The following items are acknowledged departures from the design philosophy and are tracked for future cleanup:
 
-1. **app.py still contains business logic beyond UI rendering.** Pending-knowledge auto-review, clear-plan execution, quality issue construction, fact-conflict helpers, alias upsert, knowledge merge helpers, and entity-card aggregation have started moving into `knowledge_workflows.py`, `knowledge_quality.py`, and `knowledge_entities.py`, but substantial logic remains in `app.py` (relationship graph analysis, source fingerprint matching, long-form batch orchestration). These should continue moving to `skills.py`, `memory.py`, `knowledge_workflows.py`, `knowledge_quality.py`, `knowledge_entities.py`, or additional dedicated modules.
+1. **app.py still contains UI-adjacent orchestration beyond pure rendering.** Pending-knowledge workflows, quality checks, entity-card aggregation, long-source processing, resource-browser data operations, extraction presets, creative-profile payload rules, core-setting conversion, and RAG evaluation execution have moved into dedicated modules, but `app.py` still owns Streamlit form/session state, discussion page composition, and several page-specific render helpers. These should continue moving to dedicated UI component modules as the app grows.
 
 2. **Duplicate code patterns exist across discussion/render functions.** Outline, volume, arc, and chapter discussion pages share ~70% of their structure. A shared discussion render helper would reduce maintenance cost.
 
-3. **Legacy creative-task-wizard helpers remain in app.py.** The separate user-facing wizard has been superseded by the consolidated creative profile page, but `build_profile_from_task_wizard` / `render_creative_task_wizard` still exist as unused compatibility code. They should be removed or folded into the current discussion-assisted profile flow.
+3. **Legacy creative-task-wizard UI remains in app.py.** The separate user-facing wizard has been superseded by the consolidated creative profile page. The payload builder now lives in `creative_profile_workflows.py`, but `render_creative_task_wizard` still exists as unused compatibility UI and should be removed or folded into the current discussion-assisted profile flow.
 
 4. **Entity save functions in memory.py are structurally identical** (`save_character_entities`, `save_setting_entities`, `save_entity_aliases`, `save_extraction_plan_templates`). A parametrized `_save_entity_list(path, items)` helper would eliminate the duplication.
 
@@ -1688,13 +1821,25 @@ Read files in the following order:
 
 5. knowledge_entities.py
 
-6. skills.py
+6. source_workflows.py
 
-7. memory.py
+7. resource_browser.py
 
-8. prompts.py
+8. extraction_presets.py
 
-9. llm.py
+9. creative_profile_workflows.py
+
+10. settings_workflows.py
+
+11. retrieval_eval.py
+
+12. skills.py
+
+13. memory.py
+
+14. prompts.py
+
+15. llm.py
 
 When implementing new features:
 

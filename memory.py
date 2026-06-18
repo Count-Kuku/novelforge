@@ -1372,8 +1372,14 @@ def queue_pending_knowledge_items(
     source_origin: str = "",
 ) -> int:
     pending = load_pending_knowledge_items(project_name)
+    pending_index_by_id = {
+        str(item.get("pending_id") or ""): index
+        for index, item in enumerate(pending)
+        if isinstance(item, dict) and str(item.get("pending_id") or "").strip()
+    }
     queued_at = datetime.now(timezone.utc).isoformat()
     added_count = 0
+    changed = False
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -1382,7 +1388,8 @@ def queue_pending_knowledge_items(
         if category not in KNOWLEDGE_CATEGORIES or not name:
             continue
         normalized = dict(item)
-        normalized["pending_id"] = normalized.get("pending_id") or f"pending_{uuid4().hex}"
+        pending_id = str(normalized.get("pending_id") or f"pending_{uuid4().hex}")
+        normalized["pending_id"] = pending_id
         normalized["category"] = category
         normalized["name"] = name
         normalized["scope"] = scope
@@ -1393,10 +1400,19 @@ def queue_pending_knowledge_items(
         normalized["worldline_id"] = normalized.get("worldline_id") or "main"
         normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
         normalized["status"] = "pending"
-        normalized["queued_at"] = queued_at
-        pending.append(normalized)
-        added_count += 1
-    if added_count:
+        existing_index = pending_index_by_id.get(pending_id)
+        if existing_index is not None:
+            existing_item = pending[existing_index] if isinstance(pending[existing_index], dict) else {}
+            normalized["queued_at"] = existing_item.get("queued_at") or queued_at
+            normalized["updated_at"] = queued_at
+            pending[existing_index] = normalized
+        else:
+            normalized["queued_at"] = queued_at
+            pending.append(normalized)
+            pending_index_by_id[pending_id] = len(pending) - 1
+            added_count += 1
+        changed = True
+    if changed:
         save_pending_knowledge_items(project_name, pending)
     return added_count
 

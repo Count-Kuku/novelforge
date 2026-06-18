@@ -2262,15 +2262,22 @@ def format_retrieval_context(hits: list[RetrievalHit]) -> str:
     return "\n".join(lines)
 
 
-def ingest_external_source_file(project_name: str, source_name: str, content: str):
+def ingest_external_source_file(project_name: str, source_name: str, content: str, *, overwrite: bool = True) -> str:
     safe_name = re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "_", source_name).strip("_") or "external_source"
     try:
         parsed = json.loads(content)
         suffix = ".json" if isinstance(parsed, dict) else ".md"
     except Exception:
         suffix = ".md"
-    target = retrieval_sources_path(project_name) / f"{safe_name}{suffix}"
+    source_root = retrieval_sources_path(project_name)
+    target = source_root / f"{safe_name}{suffix}"
+    if not overwrite:
+        counter = 2
+        while target.exists():
+            target = source_root / f"{safe_name}_{counter:02d}{suffix}"
+            counter += 1
     target.write_text(content, encoding="utf-8")
+    return target.relative_to(source_root).as_posix()
 
 
 def build_structured_external_source_payload(

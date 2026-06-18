@@ -6,7 +6,9 @@ from memory import (
     append_auto_review_run,
     confirm_pending_knowledge_items_with_records,
     load_auto_review_policy,
+    load_knowledge_category,
     load_pending_knowledge_items,
+    save_knowledge_category,
     save_pending_knowledge_items,
 )
 
@@ -145,6 +147,120 @@ def pending_item_has_auto_confirm_risk(item: dict, issue_map: dict, policy: dict
     return evaluate_pending_auto_review_decision(item, issue_map, policy).get("decision") != "confirm"
 
 
+def parse_comma_tags(value: str) -> list[str]:
+    return [item.strip() for item in str(value or "").replace("，", ",").split(",") if item.strip()]
+
+
+def update_pending_knowledge_item(project_name: str, pending_id: str, updated_item: dict) -> bool:
+    pending_items = load_pending_knowledge_items(project_name)
+    changed = False
+    normalized_pending_id = str(pending_id or "")
+    for index, item in enumerate(pending_items):
+        if str(item.get("pending_id", "")) != normalized_pending_id:
+            continue
+        merged = {
+            **item,
+            **updated_item,
+            "pending_id": normalized_pending_id,
+            "status": "pending",
+        }
+        pending_items[index] = merged
+        changed = True
+        break
+    if changed:
+        save_pending_knowledge_items(project_name, pending_items)
+    return changed
+
+
+def save_confirmed_knowledge_item(
+    project_name: str,
+    original_category: str,
+    original_index: int,
+    updated_item: dict,
+    *,
+    delete_only: bool = False,
+) -> bool:
+    category = str(original_category or "").strip()
+    if category not in KNOWLEDGE_CATEGORIES:
+        return False
+    items = load_knowledge_category(project_name, category)
+    if original_index < 0 or original_index >= len(items):
+        return False
+
+    target_category = str(updated_item.get("category") or category).strip()
+    if target_category not in KNOWLEDGE_CATEGORIES:
+        target_category = category
+
+    remaining = [item for index, item in enumerate(items) if index != original_index]
+    save_knowledge_category(project_name, category, remaining)
+    if delete_only:
+        return True
+
+    normalized = dict(updated_item)
+    normalized["category"] = target_category
+    normalized["status"] = normalized.get("status") or "confirmed"
+    if target_category == category:
+        target_items = remaining
+    else:
+        target_items = load_knowledge_category(project_name, target_category)
+    target_items.append(normalized)
+    save_knowledge_category(project_name, target_category, target_items)
+    return True
+
+
+def merge_confirmed_knowledge_items(
+    project_name: str,
+    category: str,
+    selected_indices: list[int],
+    merged_item: dict,
+) -> bool:
+    clean_category = str(category or "").strip()
+    if clean_category not in KNOWLEDGE_CATEGORIES:
+        return False
+    items = load_knowledge_category(project_name, clean_category)
+    selected_set = {
+        int(index)
+        for index in selected_indices
+        if isinstance(index, int) and 0 <= index < len(items)
+    }
+    if len(selected_set) < 2:
+        return False
+    normalized = dict(merged_item)
+    normalized["category"] = clean_category
+    remaining = [item for index, item in enumerate(items) if index not in selected_set]
+    remaining.append(normalized)
+    save_knowledge_category(project_name, clean_category, remaining)
+    return True
+
+
+def delete_confirmed_knowledge_items(project_name: str, category: str, selected_indices: list[int]) -> int:
+    clean_category = str(category or "").strip()
+    if clean_category not in KNOWLEDGE_CATEGORIES:
+        return 0
+    items = load_knowledge_category(project_name, clean_category)
+    selected_set = {
+        int(index)
+        for index in selected_indices
+        if isinstance(index, int) and 0 <= index < len(items)
+    }
+    if not selected_set:
+        return 0
+    remaining = [item for index, item in enumerate(items) if index not in selected_set]
+    save_knowledge_category(project_name, clean_category, remaining)
+    return len(selected_set)
+
+
+def replace_knowledge_category_items(project_name: str, category: str, items: list[dict]) -> int:
+    clean_category = str(category or "").strip()
+    if clean_category not in KNOWLEDGE_CATEGORIES:
+        return 0
+    normalized = [item for item in items if isinstance(item, dict)]
+    for item in normalized:
+        item["category"] = clean_category
+    save_knowledge_category(project_name, clean_category, normalized)
+    return len(normalized)
+
+
 def build_pending_auto_review_preview(items: list[dict], issue_map: dict, policy: dict | None = None) -> dict:
     rows = []
     confirmed_ids = []
@@ -187,6 +303,74 @@ def build_pending_auto_review_preview(items: list[dict], issue_map: dict, policy
         "blocked_reason_counts": blocked_reason_counts,
         "rows": rows,
     }
+
+
+def filter_pending_knowledge_indices_by_values(
+    pending_items: list[dict],
+    issue_map: dict[str, dict],
+    *,
+    selected_categories: list[str] | None = None,
+    selected_source_titles: list[str] | None = None,
+    selected_worldlines: list[str] | None = None,
+    risk_filter: list[str] | None = None,
+    keyword: str = "",
+    sort_mode: str = "risk_first",
+) -> list[int]:
+    category_filter = set(selected_categories or [])
+    source_filter = set(selected_source_titles or [])
+    worldline_filter = set(selected_worldlines or [])
+    risk_filter_set = set(risk_filter or [])
+    keyword_value = str(keyword or "").strip().lower()
+
+    filtered = []
+    for index, item in enumerate(pending_items):
+        if category_filter and item.get("category") not in category_filter:
+            continue
+        if source_filter and item.get("source_title") not in source_filter:
+            continue
+        item_worldline = str(item.get("worldline_label") or item.get("worldline_id") or "")
+        if worldline_filter and item_worldline not in worldline_filter:
+            continue
+        derived_risks = pending_item_risk_types(item, issue_map)
+        if risk_filter_set and not (risk_filter_set & derived_risks):
+            continue
+        if keyword_value:
+            search_text = " ".join([
+                str(item.get("name", "")),
+                str(item.get("summary", "")),
+                str(item.get("source_title", "")),
+                str(item.get("source_origin", "")),
+                str(item.get("source_segment_title", "")),
+                " ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags"), list) else "",
+            ]).lower()
+            if keyword_value not in search_text:
+                continue
+        filtered.append(index)
+
+    severity_rank = {"高": 0, "中": 1, "低": 2}
+
+    def sort_key(index: int):
+        item = pending_items[index]
+        issue_info = issue_map.get(str(item.get("pending_id") or ""), {})
+        if sort_mode == "risk_first":
+            return (
+                severity_rank.get(issue_info.get("severity", ""), 3),
+                safe_confidence(item.get("evidence_strength", 0.5)),
+                safe_confidence(item.get("confidence", 0.7)),
+                str(item.get("category") or ""),
+                str(item.get("name") or ""),
+            )
+        if sort_mode == "low_evidence":
+            return (safe_confidence(item.get("evidence_strength", 0.5)), str(item.get("name") or ""))
+        if sort_mode == "low_confidence":
+            return (safe_confidence(item.get("confidence", 0.7)), str(item.get("name") or ""))
+        if sort_mode == "high_importance":
+            return (-safe_confidence(item.get("importance", 0.5)), str(item.get("name") or ""))
+        if sort_mode == "newest":
+            return (-(index + 1),)
+        return (str(item.get("category") or ""), str(item.get("name") or ""))
+
+    return sorted(filtered, key=sort_key)
 
 
 def build_pending_triage_summary(pending_items: list[dict], issue_map: dict[str, dict], auto_preview: dict) -> dict:
@@ -375,8 +559,8 @@ def execute_pending_clear_plan(project_name: str, plan: dict, *, note: str = "")
     run = append_auto_review_run(project_name, {
         "run_id": run_id,
         "source_type": "pending_batch_process",
-        "source_title": "待确认清空模式",
-        "note": note or "执行待确认清空方案",
+        "source_title": "待确认批量处理方案",
+        "note": note or "执行待确认批量处理方案",
         "candidate_ids": candidate_ids,
         "confirmed_ids": confirm_ids,
         "blocked_ids": manual_ids,
