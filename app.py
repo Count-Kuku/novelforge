@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from llm import PROVIDER_PRESETS, test_llm_connection
 
 from memory import (
+    KNOWLEDGE_CATEGORIES,
     load_chapter_discussion_artifact,
     create_project,
     create_story,
@@ -33,6 +34,7 @@ from memory import (
     load_evaluation_json,
     load_evaluation_report,
     load_global_rules,
+    load_global_prompt_options,
     load_creative_profile,
     load_knowledge_base,
     load_knowledge_category,
@@ -58,9 +60,12 @@ from memory import (
     load_llm_settings,
     load_llm_profiles,
     load_project_rules,
+    load_project_prompt_options,
     load_rule_conflict_resolutions,
+    load_effective_rule_conflict_resolutions,
     load_story_memory,
     load_story_rules,
+    load_story_prompt_options,
     load_volume_discussion_artifact,
     load_volume_metadata,
     load_volume_outline,
@@ -73,7 +78,6 @@ from memory import (
     save_chapter_outline_metadata,
     save_global_rules,
     save_memory,
-    save_story_memory,
     save_character_entities,
     save_auto_review_policy,
     save_entity_aliases,
@@ -81,8 +85,6 @@ from memory import (
     save_setting_entities,
     confirm_pending_knowledge_items,
     copy_story_settings,
-    merge_story_to_project_memory,
-    merge_project_to_story_memory,
     merge_story_rules_to_project,
     merge_project_rules_to_story,
     merge_project_rules_to_global,
@@ -103,6 +105,8 @@ from memory import (
     save_story_rules,
     add_rule_conflict_resolution,
     delete_rule_conflict_resolution,
+    upsert_prompt_option,
+    delete_prompt_option,
     create_long_reference_batch,
     set_active_llm_profile,
     set_active_story,
@@ -123,13 +127,40 @@ from project_manager import (
     list_retrieval_sources,
     rename_project,
 )
-from settings_workflows import CORE_SETTING_KNOWLEDGE_FIELDS, build_core_setting_knowledge_items
 from creative_profile_workflows import (
     CUSTOM_OPTION_LABEL,
     build_creative_profile_from_form_values,
     build_profile_from_task_wizard,
     normalize_creative_form_state,
     recommended_workflow_for_profile,
+)
+from prompt_options import (
+    PROMPT_OPTION_CAPABILITIES,
+    PROMPT_OPTION_CATEGORIES,
+    PROMPT_OPTION_SLOTS,
+    builtin_prompt_options,
+    filter_prompt_options,
+    format_prompt_options_for_prompt,
+    merge_prompt_option_layers,
+    normalize_prompt_option,
+)
+from discussion_assets import build_discussion_asset_candidates
+from asset_guardrails import (
+    analyze_prompt_option_candidate,
+    analyze_rule_candidate,
+    analyze_setting_candidate,
+)
+from prompts import format_rules_for_prompt
+from setting_knowledge import (
+    SETTING_FIELD_SPECS,
+    build_generation_setting_context,
+    copy_project_core_settings_to_story,
+    copy_story_core_settings_to_project,
+    copy_story_core_settings_to_story,
+    delete_setting_item,
+    list_setting_items,
+    migrate_core_settings_to_knowledge,
+    upsert_setting_item,
 )
 from retrieval_eval import (
     build_retrieval_usage_report_from_payload,
@@ -216,7 +247,6 @@ from skills import (
     clear_arc_discussion_approval,
     clear_outline_discussion_approval,
     clear_volume_discussion_approval,
-    compact_memory,
     detect_potential_conflicts,
     discuss_arc,
     discuss_arc_turn,
@@ -241,7 +271,7 @@ from skills import (
     run_dynamic_generation_task,
     save_retrieval_conflict_resolution,
     save_rule_text,
-    update_memory_from_chapter,
+    extract_setting_candidates_from_chapter,
     write_chapter,
 )
 
@@ -252,7 +282,7 @@ RULE_SCOPE_OPTIONS = {
     "chapter_outline": "章节细纲",
     "write": "正文写作",
     "review": "章节审阅",
-    "memory_update": "设定更新",
+    "setting_extraction": "设定提炼",
 }
 
 STATUS_LABELS = {
@@ -394,7 +424,7 @@ SEVERITY_LABELS = {
 }
 
 PAGE_GROUPS = {
-    "工作台": ["项目总览", "模型配置", "生成规则", "资源浏览器"],
+    "工作台": ["项目总览", "模型配置", "生成规则", "提示词选项", "资源浏览器"],
     "资料": ["资料导入", "核心设定", "检索中心"],
     "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
     "写作": ["快速生成", "正文生成", "章节评价"],
@@ -410,11 +440,12 @@ PAGE_DESCRIPTIONS = {
     "分卷大纲": "维护中层分卷结构。",
     "剧情段大纲": "维护剧情段和章节分配计划。",
     "生成细纲": "生成具体章节细纲。",
-    "正文生成": "根据细纲或需求生成正文内容，可串联审阅和设定更新。适应章节制和自由写作两种模式。",
+    "正文生成": "根据细纲或需求生成正文内容，可串联审阅和设定提炼。适应章节制和自由写作两种模式。",
     "章节评价": "综合判断章节是否可继续、质量分数和一致性诊断。",
     "资料导入": "导入原作、参考资料和长篇文本。",
     "检索中心": "调试索引、召回证据和冲突裁决。",
     "生成规则": "管理全局、项目和故事级的生成约束，控制模型怎么写。",
+    "提示词选项": "管理可启用、可复用、可从讨论提炼的 Prompt 选项。",
     "模型配置": "配置模型端点、密钥和档案切换。",
 }
 
@@ -434,7 +465,7 @@ SCHEMA_LABELS = {
     "VolumeDiscussionResult": "分卷讨论结果",
     "ArcDiscussionResult": "剧情段讨论结果",
     "ArcChapterPlanResult": "剧情段章节分配计划",
-    "MemoryUpdateResult": "设定更新结果",
+    "MemoryUpdateResult": "章节设定提炼结果",
     "ReviewResult": "章节审阅结果",
     "CharacterAnalysisResult": "角色分析结果",
     "TimelineAnalysisResult": "时间线分析结果",
@@ -475,7 +506,7 @@ STEP_LABELS = {
     "chapter_outline": "章节细纲",
     "write_chapter": "写作正文",
     "review_chapter": "章节审阅",
-    "memory_update": "设定更新",
+    "setting_extraction": "设定提炼",
     "completed": "完成",
     "halted": "暂停",
 }
@@ -560,6 +591,7 @@ def apply_app_style():
         """
         <style>
         :root {
+            color-scheme: light;
             --nf-bg: #f7f8fb;
             --nf-panel: #ffffff;
             --nf-border: #d8dee8;
@@ -699,26 +731,26 @@ def apply_app_style():
         }
 
         .nf-hero {
-            background: linear-gradient(135deg, #ffffff 0%, #e8f5f3 100%);
-            border: 1px solid var(--nf-border);
-            border-radius: 8px;
-            padding: 1.25rem 1.35rem;
-            box-shadow: var(--nf-shadow);
-            margin-bottom: 1rem;
+            background: transparent;
+            border: 0;
+            border-bottom: 1px solid var(--nf-border);
+            border-radius: 0;
+            padding: 0.05rem 0 0.65rem;
+            box-shadow: none;
+            margin-bottom: 0.75rem;
         }
 
         .nf-kicker {
             color: var(--nf-accent);
             font-size: 0.78rem;
             font-weight: 700;
-            letter-spacing: 0.08em;
-            text-transform: uppercase;
-            margin-bottom: 0.35rem;
+            letter-spacing: 0;
+            margin-bottom: 0.3rem;
         }
 
         .nf-title {
             color: var(--nf-text);
-            font-size: 1.7rem;
+            font-size: 1.12rem;
             line-height: 1.25;
             font-weight: 750;
             margin: 0;
@@ -728,6 +760,32 @@ def apply_app_style():
             color: var(--nf-muted);
             margin-top: 0.35rem;
             margin-bottom: 0;
+        }
+
+        .nf-header-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            margin-top: 0.4rem;
+        }
+
+        .nf-header-meta span {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            min-height: 1.65rem;
+            padding: 0.15rem 0.55rem;
+            border: 1px solid var(--nf-border);
+            border-radius: 999px;
+            background: #ffffff;
+            color: var(--nf-muted);
+            font-size: 0.82rem;
+            line-height: 1.25;
+        }
+
+        .nf-header-meta b {
+            color: var(--nf-text);
+            font-weight: 650;
         }
 
         .nf-card-grid {
@@ -774,36 +832,534 @@ def apply_app_style():
             margin-bottom: 0.8rem;
         }
 
+        .nf-sidebar-note {
+            margin: 0.65rem 0 0.45rem;
+            padding: 0.65rem 0.75rem;
+            border-radius: 8px;
+            border: 1px solid rgba(94, 234, 212, 0.22);
+            background: rgba(15, 118, 110, 0.28);
+            color: #d9fbf7;
+            font-size: 0.84rem;
+            line-height: 1.5;
+        }
+
+        .nf-sidebar-note strong {
+            color: #ffffff;
+            font-weight: 700;
+        }
+
         .stButton > button {
             border-radius: 8px;
             border: 1px solid var(--nf-border);
-            background: var(--nf-panel);
+            background: var(--nf-panel) !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp .stButton button,
+        .stApp [data-testid="stButton"] button,
+        .stApp [data-testid="stFormSubmitButton"] button,
+        .stApp button[data-testid^="stBaseButton"] {
+            border-radius: 8px;
+            border: 1px solid var(--nf-border) !important;
+            background: var(--nf-panel) !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
         }
 
         .stButton > button[kind="primary"],
-        .stButton > button[data-kind="primary"] {
+        .stButton > button[data-kind="primary"],
+        .stApp .stButton button[kind="primary"],
+        .stApp .stButton button[data-kind="primary"],
+        .stApp [data-testid="stButton"] button[kind="primary"],
+        .stApp [data-testid="stButton"] button[data-kind="primary"],
+        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"],
+        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"],
+        .stApp button[data-testid^="stBaseButton"][kind="primary"],
+        .stApp button[data-testid^="stBaseButton"][data-kind="primary"] {
             background: var(--nf-accent) !important;
             color: #ffffff !important;
             border-color: var(--nf-accent-strong) !important;
             font-weight: 650 !important;
         }
 
+        .stButton > button[kind="primary"] *,
+        .stButton > button[data-kind="primary"] *,
+        .stButton > button[kind="primary"] [data-testid="stMarkdownContainer"],
+        .stButton > button[data-kind="primary"] [data-testid="stMarkdownContainer"],
+        .stButton > button[kind="primary"] [data-testid="stMarkdownContainer"] *,
+        .stButton > button[data-kind="primary"] [data-testid="stMarkdownContainer"] *,
+        .stApp .stButton button[kind="primary"] *,
+        .stApp .stButton button[data-kind="primary"] *,
+        .stApp [data-testid="stButton"] button[kind="primary"] *,
+        .stApp [data-testid="stButton"] button[data-kind="primary"] *,
+        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"] *,
+        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"] *,
+        .stApp button[data-testid^="stBaseButton"][kind="primary"] *,
+        .stApp button[data-testid^="stBaseButton"][data-kind="primary"] * {
+            color: #ffffff !important;
+            fill: #ffffff !important;
+            stroke: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+
         .stButton > button[kind="primary"]:hover,
-        .stButton > button[data-kind="primary"]:hover {
+        .stButton > button[data-kind="primary"]:hover,
+        .stApp .stButton button[kind="primary"]:hover,
+        .stApp .stButton button[data-kind="primary"]:hover,
+        .stApp [data-testid="stButton"] button[kind="primary"]:hover,
+        .stApp [data-testid="stButton"] button[data-kind="primary"]:hover,
+        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:hover,
+        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"]:hover,
+        .stApp button[data-testid^="stBaseButton"][kind="primary"]:hover,
+        .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:hover {
             background: var(--nf-accent-strong) !important;
             color: #ffffff !important;
             border-color: #084c47 !important;
         }
 
-        .stButton > button:hover {
+        .stButton > button:hover,
+        .stApp .stButton button:hover,
+        .stApp [data-testid="stButton"] button:hover,
+        .stApp [data-testid="stFormSubmitButton"] button:hover,
+        .stApp button[data-testid^="stBaseButton"]:hover {
             border-color: var(--nf-accent);
             color: var(--nf-accent);
+        }
+
+        .stButton > button:disabled,
+        .stButton > button[disabled],
+        .stButton > button:disabled *,
+        .stButton > button[disabled] *,
+        .stApp .stButton button:disabled,
+        .stApp .stButton button[disabled],
+        .stApp .stButton button:disabled *,
+        .stApp .stButton button[disabled] *,
+        .stApp [data-testid="stButton"] button:disabled,
+        .stApp [data-testid="stButton"] button[disabled],
+        .stApp [data-testid="stButton"] button:disabled *,
+        .stApp [data-testid="stButton"] button[disabled] *,
+        .stApp [data-testid="stFormSubmitButton"] button:disabled,
+        .stApp [data-testid="stFormSubmitButton"] button[disabled],
+        .stApp [data-testid="stFormSubmitButton"] button:disabled *,
+        .stApp [data-testid="stFormSubmitButton"] button[disabled] *,
+        .stApp button[data-testid^="stBaseButton"]:disabled,
+        .stApp button[data-testid^="stBaseButton"][disabled],
+        .stApp button[data-testid^="stBaseButton"]:disabled *,
+        .stApp button[data-testid^="stBaseButton"][disabled] * {
+            background: #f2f4f7 !important;
+            color: #667085 !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #667085 !important;
         }
 
         div[data-testid="stExpander"] {
             border: 1px solid var(--nf-border);
             border-radius: 8px;
-            background: rgba(255,255,255,0.72);
+            background: var(--nf-panel) !important;
+            color: var(--nf-text) !important;
+            overflow: hidden;
+        }
+
+        div[data-testid="stExpander"] details,
+        div[data-testid="stExpander"] details > summary,
+        div[data-testid="stExpander"] [data-testid="stExpanderToggleIcon"],
+        div[data-testid="stExpander"] [data-testid="stMarkdownContainer"],
+        div[data-testid="stExpander"] [data-testid="stMarkdownContainer"] *,
+        div[data-testid="stExpander"] p,
+        div[data-testid="stExpander"] span,
+        div[data-testid="stExpander"] label {
+            color: var(--nf-text) !important;
+            fill: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        div[data-testid="stExpander"] details > summary {
+            background: #f8fafc !important;
+            border-bottom: 1px solid var(--nf-border);
+        }
+
+        div[data-testid="stExpander"] details[open] > summary {
+            background: #eef6f5 !important;
+        }
+
+        .stApp label,
+        .stApp [data-testid="stWidgetLabel"],
+        .stApp [data-testid="stMarkdownContainer"],
+        .stApp [data-testid="stMarkdownContainer"] p,
+        .stApp [role="radiogroup"] label,
+        .stApp [data-testid="stCheckbox"] label {
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp input,
+        .stApp textarea,
+        .stApp [data-baseweb="select"] > div {
+            background: #ffffff !important;
+            color: var(--nf-text) !important;
+            border-color: var(--nf-border) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp [data-baseweb="select"] svg,
+        .stApp [data-baseweb="select"] svg *,
+        .stApp div[data-testid="stExpander"] svg,
+        .stApp div[data-testid="stExpander"] svg *,
+        .stApp [data-testid="stPopover"] > button svg,
+        .stApp [data-testid="stPopover"] > button svg * {
+            color: var(--nf-text) !important;
+            fill: var(--nf-text) !important;
+            stroke: var(--nf-text) !important;
+        }
+
+        div[data-baseweb="popover"] [role="listbox"],
+        div[data-baseweb="popover"] [role="option"] {
+            background: #ffffff !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp .stCodeBlock,
+        .stApp [data-testid="stCodeBlock"],
+        .stApp pre,
+        .stApp .stCodeBlock pre,
+        .stApp [data-testid="stCodeBlock"] pre,
+        .stApp pre code,
+        .stApp .stCodeBlock code,
+        .stApp [data-testid="stCodeBlock"] code {
+            background: #f8fafc !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp .stCodeBlock pre,
+        .stApp [data-testid="stCodeBlock"] pre,
+        .stApp pre {
+            border-radius: 8px !important;
+            border: 1px solid var(--nf-border) !important;
+            padding: 1rem 1.1rem !important;
+            line-height: 1.55 !important;
+        }
+
+        .stApp pre *,
+        .stApp pre span,
+        .stApp pre .token,
+        .stApp pre code *,
+        div[data-testid="stExpander"] pre *,
+        div[data-testid="stExpander"] pre span,
+        div[data-testid="stExpander"] pre .token {
+            color: var(--nf-text) !important;
+            fill: var(--nf-text) !important;
+            stroke: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp .stCodeBlock *,
+        .stApp [data-testid="stCodeBlock"] *,
+        div[data-testid="stExpander"] .stCodeBlock *,
+        div[data-testid="stExpander"] [data-testid="stCodeBlock"] * {
+            color: var(--nf-text) !important;
+            fill: var(--nf-text) !important;
+            stroke: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp [data-testid="stJson"],
+        .stApp [data-testid="stJson"] > div,
+        .stApp [data-testid="stJson"] .react-json-view,
+        .stApp [data-testid="stDataFrame"],
+        .stApp [data-testid="stDataFrame"] > div {
+            background: #ffffff !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp [data-testid="stJson"] *,
+        .stApp [data-testid="stDataFrame"] *,
+        .stApp table,
+        .stApp table * {
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        .stApp table,
+        .stApp thead,
+        .stApp tbody,
+        .stApp tr,
+        .stApp th,
+        .stApp td {
+            background: #ffffff !important;
+            border-color: var(--nf-border) !important;
+        }
+
+        .stApp input::placeholder,
+        .stApp textarea::placeholder {
+            color: #98a2b3 !important;
+            -webkit-text-fill-color: #98a2b3 !important;
+        }
+
+        .stApp .stMultiSelect [data-baseweb="select"] > div {
+            padding-left: 0.55rem !important;
+            overflow: visible !important;
+        }
+
+        .stApp .stMultiSelect [data-baseweb="select"] div {
+            overflow: visible !important;
+        }
+
+        .stApp [data-baseweb="tag"] {
+            display: inline-flex !important;
+            align-items: center !important;
+            min-width: 3rem !important;
+            min-height: 1.75rem !important;
+            margin: 0.12rem 0.25rem 0.12rem 0.28rem !important;
+            padding: 0.18rem 0.5rem 0.18rem 0.72rem !important;
+            background: var(--nf-accent) !important;
+            color: #ffffff !important;
+            border-color: var(--nf-accent-strong) !important;
+            border-radius: 8px !important;
+            overflow: visible !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+
+        .stApp [data-baseweb="tag"] *,
+        .stApp [data-baseweb="tag"] svg,
+        .stApp [data-baseweb="tag"] svg * {
+            color: #ffffff !important;
+            fill: #ffffff !important;
+            stroke: #ffffff !important;
+            overflow: visible !important;
+            text-overflow: clip !important;
+            white-space: nowrap !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+
+        .stAlert,
+        .stAlert div,
+        .stAlert p,
+        .stAlert span,
+        div[data-testid="stAlert"] div,
+        div[data-testid="stAlert"] p,
+        div[data-testid="stAlert"] span {
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        label[data-baseweb="radio"] {
+            gap: 0.45rem !important;
+        }
+
+        label[data-baseweb="radio"]:has(input:checked) > div:first-child {
+            background: var(--nf-accent) !important;
+            border-color: var(--nf-accent-strong) !important;
+        }
+
+        label[data-baseweb="radio"]:has(input:checked) > div:first-child > div {
+            background: #ffffff !important;
+            border-color: #ffffff !important;
+        }
+
+        label[data-baseweb="radio"]:not(:has(input:checked)) > div:first-child {
+            background: rgba(255, 255, 255, 0.14) !important;
+            border-color: rgba(238, 247, 246, 0.55) !important;
+        }
+
+        label[data-baseweb="checkbox"] {
+            gap: 0.45rem !important;
+        }
+
+        label[data-baseweb="checkbox"] > div:first-child {
+            background: #ffffff !important;
+            border-color: var(--nf-border) !important;
+            color: var(--nf-text) !important;
+        }
+
+        label[data-baseweb="checkbox"] > span:first-child {
+            background: #ffffff !important;
+            border-color: var(--nf-border) !important;
+            color: var(--nf-text) !important;
+        }
+
+        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child {
+            background: var(--nf-accent) !important;
+            border-color: var(--nf-accent-strong) !important;
+        }
+
+        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
+            background: var(--nf-accent) !important;
+            border-color: var(--nf-accent-strong) !important;
+        }
+
+        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child svg,
+        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child svg *,
+        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child path,
+        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child svg,
+        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child svg *,
+        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child path {
+            color: #ffffff !important;
+            fill: #ffffff !important;
+            stroke: #ffffff !important;
+        }
+
+        .stApp input[type="checkbox"],
+        .stApp input[type="radio"] {
+            accent-color: var(--nf-accent);
+        }
+
+        [data-testid="stSidebar"],
+        [data-testid="stSidebar"] .nf-sidebar-title,
+        [data-testid="stSidebar"] .nf-sidebar-meta,
+        [data-testid="stSidebar"] .nf-sidebar-note,
+        [data-testid="stSidebar"] .nf-sidebar-note *,
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+        [data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] [role="radiogroup"] label,
+        [data-testid="stSidebar"] [role="radiogroup"] label *,
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
+            color: #eef7f6 !important;
+            fill: #eef7f6 !important;
+            -webkit-text-fill-color: #eef7f6 !important;
+        }
+
+        [data-testid="stSidebar"] .stCaption,
+        [data-testid="stSidebar"] .nf-sidebar-meta,
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
+            color: rgba(238,247,246,0.78) !important;
+            -webkit-text-fill-color: rgba(238,247,246,0.78) !important;
+        }
+
+        [data-testid="stSidebar"] .nf-sidebar-note,
+        [data-testid="stSidebar"] .nf-sidebar-note * {
+            color: #d9fbf7 !important;
+            -webkit-text-fill-color: #d9fbf7 !important;
+        }
+
+        [data-testid="stSidebar"] .nf-sidebar-note strong {
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+
+        [data-testid="stSidebar"] [data-baseweb="select"] > div,
+        [data-testid="stSidebar"] [data-baseweb="select"] *,
+        [data-testid="stSidebar"] input,
+        [data-testid="stSidebar"] textarea,
+        [data-testid="stSidebar"] button,
+        [data-testid="stSidebar"] button *,
+        [data-testid="stSidebar"] button [data-testid="stMarkdownContainer"],
+        [data-testid="stSidebar"] button [data-testid="stMarkdownContainer"] *,
+        [data-testid="stSidebar"] button [data-testid="stMarkdownContainer"] p,
+        [data-testid="stSidebar"] [data-testid="stPopover"] button,
+        [data-testid="stSidebar"] [data-testid="stPopover"] button *,
+        [data-testid="stSidebar"] [data-testid="stPopover"] button [data-testid="stMarkdownContainer"],
+        [data-testid="stSidebar"] [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] *,
+        [data-testid="stSidebar"] [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] p,
+        [data-testid="stSidebar"] .stButton > button,
+        [data-testid="stSidebar"] .stButton > button *,
+        [data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"],
+        [data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"] *,
+        [data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"] p {
+            color: var(--nf-text) !important;
+            fill: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        [data-testid="stSidebar"] input::placeholder,
+        [data-testid="stSidebar"] textarea::placeholder {
+            color: #98a2b3 !important;
+            -webkit-text-fill-color: #98a2b3 !important;
+        }
+
+        html body .stApp button[data-testid^="stBaseButton"],
+        html body .stApp [data-testid="stButton"] button[data-testid^="stBaseButton"],
+        html body .stApp [data-testid="stFormSubmitButton"] button[data-testid^="stBaseButton"] {
+            background: #ffffff !important;
+            border: 1px solid var(--nf-border) !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        html body .stApp button[data-testid^="stBaseButton"] *,
+        html body .stApp [data-testid="stButton"] button[data-testid^="stBaseButton"] *,
+        html body .stApp [data-testid="stFormSubmitButton"] button[data-testid^="stBaseButton"] * {
+            color: var(--nf-text) !important;
+            fill: var(--nf-text) !important;
+            stroke: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
+        }
+
+        html body .stApp button[data-testid^="stBaseButton"][kind="primary"],
+        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"] {
+            background: var(--nf-accent) !important;
+            border-color: var(--nf-accent-strong) !important;
+            color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+
+        html body .stApp button[data-testid^="stBaseButton"][kind="primary"] *,
+        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"] * {
+            color: #ffffff !important;
+            fill: #ffffff !important;
+            stroke: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
+        }
+
+        html body .stApp button[data-testid^="stBaseButton"]:disabled,
+        html body .stApp button[data-testid^="stBaseButton"][disabled],
+        html body .stApp button[data-testid^="stBaseButton"]:disabled *,
+        html body .stApp button[data-testid^="stBaseButton"][disabled] * {
+            background: #f2f4f7 !important;
+            border-color: var(--nf-border) !important;
+            color: #667085 !important;
+            opacity: 1 !important;
+            -webkit-text-fill-color: #667085 !important;
+        }
+
+        html body .stApp label[data-baseweb="checkbox"] > div:first-child {
+            background: #ffffff !important;
+            border-color: var(--nf-border) !important;
+        }
+
+        html body .stApp label[data-baseweb="checkbox"] > span:first-child {
+            background: #ffffff !important;
+            border-color: var(--nf-border) !important;
+        }
+
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child {
+            background: var(--nf-accent) !important;
+            border-color: var(--nf-accent-strong) !important;
+        }
+
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
+            background: var(--nf-accent) !important;
+            border-color: var(--nf-accent-strong) !important;
+        }
+
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child *,
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child svg,
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child path,
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child *,
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child svg,
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child path {
+            color: #ffffff !important;
+            fill: #ffffff !important;
+            stroke: #ffffff !important;
+        }
+
+        html body .stApp .stMultiSelect [data-baseweb="select"] > div,
+        html body .stApp .stMultiSelect [data-baseweb="select"] > div > div {
+            padding-left: 0.65rem !important;
+            overflow: visible !important;
+        }
+
+        html body .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] {
+            margin-left: 0.45rem !important;
+            padding-left: 0.78rem !important;
+            overflow: visible !important;
         }
         </style>
         """,
@@ -817,14 +1373,17 @@ def render_app_header(project_name: str | None, page: str, memory: dict | None):
     canon_mode = html.escape(str((memory or {}).get("canon_mode") or "未设置原作对齐"))
     page_label = html.escape(str(page))
     project_label = html.escape(str(project_name or "-"))
-    description = html.escape(PAGE_DESCRIPTIONS.get(page, ""))
     st.markdown(
         f"""
         <div class="nf-hero">
-            <div class="nf-kicker">NovelForge / {page_label}</div>
-            <h1 class="nf-title">{title}</h1>
-            <p class="nf-subtitle">{description}</p>
-            <p class="nf-subtitle">项目：<b>{project_label}</b> / 类型：{genre} / 原作对齐：{canon_mode}</p>
+            <div class="nf-kicker">NovelForge</div>
+            <div class="nf-title">{page_label}</div>
+            <div class="nf-header-meta">
+                <span>作品 <b>{title}</b></span>
+                <span>项目 <b>{project_label}</b></span>
+                <span>类型 <b>{genre}</b></span>
+                <span>原作对齐 <b>{canon_mode}</b></span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1172,6 +1731,248 @@ def _render_discussion_summary(discussion_result: dict, empty_message: str):
     render_step_json_expander("讨论结构化数据", discussion)
 
 
+ASSET_GUARDRAIL_LEVEL_LABELS = {
+    "duplicate": "可能重复",
+    "warning": "需要确认",
+    "related": "相关内容",
+}
+
+
+def _guardrail_item_label(item: dict) -> str:
+    name = str(item.get("name") or item.get("title") or item.get("summary") or item.get("content") or "-").strip()
+    return name[:80] + ("..." if len(name) > 80 else "")
+
+
+def _render_asset_guardrail_issues(issues: list[dict]):
+    if not issues:
+        return
+    duplicate_count = sum(1 for item in issues if item.get("level") == "duplicate")
+    warning_count = sum(1 for item in issues if item.get("level") == "warning")
+    if duplicate_count:
+        st.warning(f"检测到 {duplicate_count} 个可能重复项，确认前建议检查是否需要覆盖。")
+    elif warning_count:
+        st.warning("检测到名称或同类内容相近的已有项，确认前建议检查。")
+    else:
+        st.info("检测到相关已有内容，可确认是并列补充还是重复记录。")
+    for issue in issues:
+        existing = issue.get("item") if isinstance(issue.get("item"), dict) else {}
+        layer = str(issue.get("layer") or "")
+        layer_text = f" / {layer}" if layer else ""
+        label = ASSET_GUARDRAIL_LEVEL_LABELS.get(issue.get("level", ""), "相关内容")
+        score = issue.get("score")
+        score_text = f" / 相似度 {score}" if score else ""
+        st.caption(f"{label}{layer_text}{score_text}：{issue.get('reason', '')} {_guardrail_item_label(existing)}")
+
+
+def _guardrail_replace_target(issues: list[dict]) -> dict | None:
+    for level in ["duplicate", "warning", "related"]:
+        for issue in issues:
+            if issue.get("level") != level:
+                continue
+            item = issue.get("item")
+            if isinstance(item, dict) and item.get("id"):
+                return item
+    return None
+
+
+def _setting_scope_pair(item: dict, fallback_story_id: str = "default") -> tuple[str, str]:
+    scope = str(item.get("setting_scope") or "project").strip() or "project"
+    if scope not in {"project", "story"}:
+        scope = "project"
+    item_story_id = str(item.get("story_id") or fallback_story_id).strip() if scope == "story" else ""
+    return scope, item_story_id
+
+
+def _same_setting_scope(candidate: dict, existing: dict, story_id: str) -> bool:
+    normalized_candidate = dict(candidate)
+    normalized_candidate["setting_scope"] = str(normalized_candidate.get("setting_scope") or "story")
+    if normalized_candidate["setting_scope"] == "story":
+        normalized_candidate["story_id"] = str(normalized_candidate.get("story_id") or story_id)
+    candidate_scope, candidate_story_id = _setting_scope_pair(normalized_candidate, story_id)
+    existing_scope, existing_story_id = _setting_scope_pair(existing, story_id)
+    return candidate_scope == existing_scope and (candidate_scope != "story" or candidate_story_id == existing_story_id)
+
+
+def _setting_replace_target(issues: list[dict], candidate: dict, story_id: str) -> dict | None:
+    for level in ["duplicate", "warning", "related"]:
+        for issue in issues:
+            if issue.get("level") != level:
+                continue
+            item = issue.get("item")
+            if isinstance(item, dict) and item.get("id") and _same_setting_scope(candidate, item, story_id):
+                return item
+    return None
+
+
+def _setting_candidate_has_blocked_id_conflict(issues: list[dict], candidate_id: str, replace_target: dict | None) -> bool:
+    target_id = str((replace_target or {}).get("id") or "")
+    for issue in issues:
+        item = issue.get("item")
+        if not isinstance(item, dict):
+            continue
+        existing_id = str(item.get("id") or "")
+        if existing_id and existing_id == candidate_id and existing_id != target_id:
+            return True
+    return False
+
+
+def _fork_setting_candidate_id(item: dict, story_id: str) -> str:
+    base_id = str(item.get("id") or "discussion_setting").strip() or "discussion_setting"
+    raw = f"{story_id}:{item.get('category', '')}:{item.get('setting_field', '')}:{item.get('name', '')}:{item.get('summary', '')}"
+    digest = hashlib.md5(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{base_id}_{digest}"
+
+
+def _discussion_guardrail_inputs(project_name: str, story_id: str) -> tuple[list[dict], list[dict], list[tuple[str, dict]]]:
+    try:
+        existing_settings = list_setting_items(project_name, story_id, core_only=True)
+    except Exception:
+        existing_settings = []
+    try:
+        existing_prompt_options = merge_prompt_option_layers(
+            load_global_prompt_options(),
+            load_project_prompt_options(project_name),
+            load_story_prompt_options(project_name, story_id),
+        )
+    except Exception:
+        existing_prompt_options = []
+    rule_layers: list[tuple[str, dict]] = []
+    for label, loader in [
+        ("故事", lambda: load_story_rules(project_name, story_id)),
+        ("项目", lambda: load_project_rules(project_name)),
+        ("全局", load_global_rules),
+    ]:
+        try:
+            rule_layers.append((label, loader()))
+        except Exception:
+            rule_layers.append((label, {}))
+    return existing_settings, existing_prompt_options, rule_layers
+
+
+def _render_discussion_asset_candidates(
+    project_name: str,
+    story_id: str,
+    discussion_step: dict,
+    discussion_kind: str,
+    source_ref: str,
+    key_prefix: str,
+):
+    candidates = build_discussion_asset_candidates(
+        discussion_step,
+        discussion_kind,
+        story_id=story_id,
+        source_ref=source_ref,
+    )
+    setting_candidates = candidates.get("settings", [])
+    prompt_option_candidates = candidates.get("prompt_options", [])
+    rule_candidates = candidates.get("rules", [])
+    if not (setting_candidates or prompt_option_candidates or rule_candidates):
+        return
+    existing_settings, existing_prompt_options, rule_layers = _discussion_guardrail_inputs(project_name, story_id)
+    with st.expander("从讨论提炼可复用资产", expanded=False):
+        st.caption("这些候选不会自动生效；确认后才会写入核心设定、Prompt 选项或故事规则。")
+        if setting_candidates:
+            st.markdown("#### 核心设定候选")
+            for item in setting_candidates:
+                issues = analyze_setting_candidate(item, existing_settings)
+                replace_target = _setting_replace_target(issues, item, story_id)
+                st.markdown(f"**{html.escape(str(item.get('name') or '未命名设定'))}**")
+                st.caption(
+                    f"{label_knowledge_category(str(item.get('category') or ''))} / "
+                    f"{_setting_field_label(str(item.get('setting_field') or ''))}"
+                )
+                st.write(str(item.get("summary") or ""))
+                _render_asset_guardrail_issues(issues)
+                replace_existing = False
+                if replace_target:
+                    replace_existing = st.checkbox(
+                        f"用这个候选覆盖：{_guardrail_item_label(replace_target)}",
+                        value=False,
+                        key=scoped_widget_key("replace_discussion_setting", key_prefix, item.get("id", "")),
+                    )
+                elif issues:
+                    st.caption("相近设定属于项目级或其他故事，不会被当前故事候选覆盖；如需调整，请到对应层级的核心设定页编辑。")
+                if st.button(
+                    "确认/更新核心设定并生效",
+                    key=scoped_widget_key("apply_discussion_setting", key_prefix, item.get("id", "")),
+                    use_container_width=True,
+                ):
+                    payload = dict(item)
+                    target_category = str(payload.get("category") or "")
+                    if replace_existing and replace_target:
+                        payload["id"] = str(replace_target.get("id") or payload.get("id") or "")
+                        payload["setting_scope"] = str(replace_target.get("setting_scope") or payload.get("setting_scope") or "story")
+                        payload["story_id"] = str(replace_target.get("story_id") or payload.get("story_id") or story_id) if payload["setting_scope"] == "story" else ""
+                        target_category = str(replace_target.get("category") or target_category)
+                    else:
+                        payload["setting_scope"] = "story"
+                        payload["story_id"] = str(payload.get("story_id") or story_id)
+                        if _setting_candidate_has_blocked_id_conflict(issues, str(payload.get("id") or ""), replace_target):
+                            payload["id"] = _fork_setting_candidate_id(payload, story_id)
+                    saved = upsert_setting_item(project_name, target_category, payload)
+                    st.success(f"已保存核心设定：{saved.get('name')}")
+                    st.rerun()
+        if prompt_option_candidates:
+            st.markdown("#### Prompt 选项候选")
+            for option in prompt_option_candidates:
+                issues = analyze_prompt_option_candidate(option, existing_prompt_options)
+                replace_target = _guardrail_replace_target(issues)
+                st.markdown(f"**{_prompt_option_label(option)}**")
+                st.code(option.get("content", ""), language="markdown")
+                _render_asset_guardrail_issues(issues)
+                option_enabled = st.checkbox(
+                    "保存后启用",
+                    value=True,
+                    key=scoped_widget_key("enable_discussion_prompt_option", key_prefix, option.get("id", "")),
+                )
+                replace_existing = False
+                if replace_target:
+                    replace_existing = st.checkbox(
+                        f"在当前故事层覆盖：{_guardrail_item_label(replace_target)}",
+                        value=False,
+                        key=scoped_widget_key("replace_discussion_prompt_option", key_prefix, option.get("id", "")),
+                    )
+                if st.button(
+                    "保存到当前故事",
+                    key=scoped_widget_key("apply_discussion_prompt_option", key_prefix, option.get("id", "")),
+                    use_container_width=True,
+                ):
+                    payload = dict(option)
+                    if replace_existing and replace_target:
+                        payload["id"] = str(replace_target.get("id") or payload.get("id") or "")
+                    payload["scope"] = "story"
+                    payload["enabled"] = option_enabled
+                    payload["source"] = "discussion"
+                    upsert_prompt_option(project_name, "story", payload, story_id=story_id)
+                    st.success("已保存为当前故事的 Prompt 选项。")
+                    st.rerun()
+        if rule_candidates:
+            st.markdown("#### 生成规则候选")
+            for rule in rule_candidates:
+                issues = analyze_rule_candidate(rule, rule_layers)
+                st.markdown(f"**{html.escape(str(rule.get('title') or '讨论规则'))}**")
+                st.caption(f"作用范围：{RULE_SCOPE_OPTIONS.get(rule.get('scope', 'all'), rule.get('scope', 'all'))} / 目标：当前故事")
+                st.code(rule.get("content", ""), language="markdown")
+                _render_asset_guardrail_issues(issues)
+                if st.button(
+                    "保存为当前故事规则",
+                    key=scoped_widget_key("apply_discussion_rule", key_prefix, rule.get("id", "")),
+                    use_container_width=True,
+                ):
+                    result = save_rule_text(
+                        project_name,
+                        str(rule.get("scope") or "all"),
+                        "story",
+                        str(rule.get("content") or ""),
+                        story_id=story_id,
+                    )
+                    if result.get("status") == "saved":
+                        st.success(f"已保存 {len(result.get('saved_rules', []))} 条故事规则。")
+                    else:
+                        st.info("没有新增规则，可能已经存在。")
+                    st.rerun()
+
+
 def _render_approved_discussion_artifact(artifact: dict, empty_message: str):
     discussion = artifact.get("discussion", {}) if isinstance(artifact, dict) else {}
     report_markdown = artifact.get("report_markdown", "") if isinstance(artifact, dict) else ""
@@ -1446,6 +2247,201 @@ def _render_rule_conflict_resolution_tools(project_name: str, story_id: str, cur
                         st.rerun()
         if not has_items:
             st.caption("暂无人工裁决。")
+
+
+PROMPT_OPTION_LAYER_LABELS = {
+    "story": "故事",
+    "project": "项目",
+    "global": "全局",
+}
+
+
+def _prompt_option_label(option: dict) -> str:
+    capability = PROMPT_OPTION_CAPABILITIES.get(option.get("capability", ""), option.get("capability", ""))
+    category = PROMPT_OPTION_CATEGORIES.get(option.get("category", ""), option.get("category", ""))
+    enabled = "启用" if option.get("enabled", True) else "停用"
+    return f"{option.get('name') or option.get('id')} · {capability} · {category} · {enabled}"
+
+
+def _load_prompt_option_layer(project_name: str, layer: str, story_id: str) -> list[dict]:
+    if layer == "global":
+        return load_global_prompt_options()
+    if layer == "project":
+        return load_project_prompt_options(project_name)
+    return load_story_prompt_options(project_name, story_id)
+
+
+def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str, option: dict, key_prefix: str):
+    with st.form(key_prefix):
+        option_id = st.text_input("ID", value=option.get("id", ""), disabled=bool(option.get("built_in")))
+        name = st.text_input("名称", value=option.get("name", ""))
+        capability_keys = list(PROMPT_OPTION_CAPABILITIES.keys())
+        category_keys = list(PROMPT_OPTION_CATEGORIES.keys())
+        slot_keys = list(PROMPT_OPTION_SLOTS.keys())
+        capability = st.selectbox(
+            "适用能力",
+            options=capability_keys,
+            index=capability_keys.index(option.get("capability", "write")) if option.get("capability", "write") in capability_keys else 0,
+            format_func=lambda value: PROMPT_OPTION_CAPABILITIES.get(value, value),
+        )
+        category = st.selectbox(
+            "类型",
+            options=category_keys,
+            index=category_keys.index(option.get("category", "custom")) if option.get("category", "custom") in category_keys else category_keys.index("custom"),
+            format_func=lambda value: PROMPT_OPTION_CATEGORIES.get(value, value),
+        )
+        slot = st.selectbox(
+            "插槽",
+            options=slot_keys,
+            index=slot_keys.index(option.get("slot", "custom")) if option.get("slot", "custom") in slot_keys else slot_keys.index("custom"),
+            format_func=lambda value: PROMPT_OPTION_SLOTS.get(value, value),
+        )
+        priority = st.number_input("优先级（数字越小越靠前）", value=int(option.get("priority", 50)), step=1)
+        enabled = st.checkbox("启用", value=bool(option.get("enabled", True)))
+        content = st.text_area("Prompt 内容", value=option.get("content", ""), height=180)
+        tags = st.text_input("标签（逗号分隔）", value=", ".join(option.get("tags", []) or []))
+        delete_checked = st.checkbox("删除这个选项", value=False, disabled=bool(option.get("built_in")))
+        col_save, col_delete = st.columns(2)
+        save_clicked = col_save.form_submit_button("保存", use_container_width=True)
+        delete_clicked = col_delete.form_submit_button("删除", use_container_width=True, disabled=bool(option.get("built_in")) or not delete_checked)
+
+    if save_clicked:
+        payload = normalize_prompt_option(
+            {
+                **option,
+                "id": option_id,
+                "name": name,
+                "capability": capability,
+                "category": category,
+                "slot": slot,
+                "priority": priority,
+                "enabled": enabled,
+                "content": content,
+                "tags": [item.strip() for item in tags.split(",") if item.strip()],
+                "source": option.get("source") or "manual",
+            },
+            scope=layer,
+        )
+        upsert_prompt_option(project_name, layer, payload, story_id=story_id)
+        st.success("Prompt 选项已保存。")
+        st.rerun()
+    if delete_clicked:
+        if delete_prompt_option(project_name, layer, option.get("id", ""), story_id=story_id):
+            st.success("Prompt 选项已删除。")
+            st.rerun()
+        else:
+            st.warning("没有找到要删除的选项。")
+
+
+def _render_prompt_option_layer(project_name: str, story_id: str, layer: str):
+    options = _load_prompt_option_layer(project_name, layer, story_id)
+    if not options:
+        st.caption("当前层级还没有自定义 Prompt 选项。")
+        return
+    for option in options:
+        with st.expander(_prompt_option_label(option), expanded=False):
+            st.caption(f"ID: {option.get('id')} / 来源: {option.get('source') or 'manual'}")
+            _render_prompt_option_edit_form(
+                project_name,
+                story_id,
+                layer,
+                option,
+                scoped_widget_key("prompt_option_edit", project_name, story_id, layer, option.get("id", "")),
+            )
+
+
+def render_prompt_options_page(project_name: str):
+    story_id = st.session_state.get("active_story_id", "default")
+    stories = list_stories(project_name)
+    current_story_name = next((s.get("name", story_id) for s in stories if s.get("story_id") == story_id), story_id)
+
+    st.subheader("提示词选项")
+    st.caption("这里管理可复用的 Prompt 片段。数据格式和结构化输出仍由系统强制约束；这些选项只影响写作偏好、规划方法、审稿标准等可调部分。")
+
+    with st.expander("新建 Prompt 选项", expanded=False):
+        layer_label = st.selectbox("保存位置", options=list(PROMPT_OPTION_LAYER_LABELS.values()), key="new_prompt_option_layer")
+        layer = next(key for key, value in PROMPT_OPTION_LAYER_LABELS.items() if value == layer_label)
+        with st.form("new_prompt_option_form"):
+            name = st.text_input("名称", placeholder="例如：冷峻悬疑文风")
+            option_id = st.text_input("ID（可留空自动生成）", placeholder="例如：style_cold_suspense")
+            capability = st.selectbox("适用能力", options=list(PROMPT_OPTION_CAPABILITIES.keys()), format_func=lambda value: PROMPT_OPTION_CAPABILITIES.get(value, value), index=list(PROMPT_OPTION_CAPABILITIES.keys()).index("write"))
+            category = st.selectbox("类型", options=list(PROMPT_OPTION_CATEGORIES.keys()), format_func=lambda value: PROMPT_OPTION_CATEGORIES.get(value, value), index=list(PROMPT_OPTION_CATEGORIES.keys()).index("custom"))
+            slot = st.selectbox("插槽", options=list(PROMPT_OPTION_SLOTS.keys()), format_func=lambda value: PROMPT_OPTION_SLOTS.get(value, value), index=list(PROMPT_OPTION_SLOTS.keys()).index("custom"))
+            enabled = st.checkbox("保存后立即启用", value=True)
+            priority = st.number_input("优先级", value=50, step=1)
+            content = st.text_area("Prompt 内容", height=180, placeholder="写清楚希望模型遵守的创作偏好或执行准则。")
+            submitted = st.form_submit_button("保存新选项", type="primary")
+        if submitted:
+            if not content.strip():
+                st.warning("Prompt 内容不能为空。")
+            else:
+                payload = normalize_prompt_option(
+                    {
+                        "id": option_id,
+                        "name": name,
+                        "capability": capability,
+                        "category": category,
+                        "slot": slot,
+                        "enabled": enabled,
+                        "priority": priority,
+                        "content": content,
+                        "source": "manual",
+                    },
+                    scope=layer,
+                )
+                upsert_prompt_option(project_name, layer, payload, story_id=story_id)
+                st.success(f"已保存到{PROMPT_OPTION_LAYER_LABELS[layer]}层级。")
+                st.rerun()
+
+    global_options = load_global_prompt_options()
+    project_options = load_project_prompt_options(project_name)
+    story_options = load_story_prompt_options(project_name, story_id)
+    effective_options = merge_prompt_option_layers(global_options, project_options, story_options)
+
+    tab_story, tab_project, tab_global, tab_builtin, tab_preview = st.tabs([
+        f"当前故事：{current_story_name}",
+        "项目",
+        "全局",
+        "内置预设",
+        "生效预览",
+    ])
+
+    with tab_story:
+        _render_prompt_option_layer(project_name, story_id, "story")
+    with tab_project:
+        _render_prompt_option_layer(project_name, story_id, "project")
+    with tab_global:
+        _render_prompt_option_layer(project_name, story_id, "global")
+    with tab_builtin:
+        builtin_options = builtin_prompt_options()
+        st.caption("内置预设默认不直接生效；复制到当前故事后可以编辑并启用。")
+        for option in builtin_options:
+            with st.expander(_prompt_option_label(option), expanded=False):
+                st.write(option.get("content", ""))
+                if st.button("复制到当前故事并启用", key=scoped_widget_key("copy_builtin_prompt_option", project_name, story_id, option.get("id", ""))):
+                    payload = dict(option)
+                    payload["scope"] = "story"
+                    payload["built_in"] = False
+                    payload["enabled"] = True
+                    payload["source"] = "builtin_copy"
+                    upsert_prompt_option(project_name, "story", payload, story_id=story_id)
+                    st.success("已复制到当前故事并启用。")
+                    st.rerun()
+    with tab_preview:
+        capability = st.selectbox(
+            "预览能力",
+            options=list(PROMPT_OPTION_CAPABILITIES.keys()),
+            format_func=lambda value: PROMPT_OPTION_CAPABILITIES.get(value, value),
+            index=list(PROMPT_OPTION_CAPABILITIES.keys()).index("write"),
+            key="prompt_option_preview_capability",
+        )
+        active_options = filter_prompt_options(effective_options, capability)
+        st.caption(f"当前生效选项：{len(active_options)} 个")
+        preview = format_prompt_options_for_prompt(effective_options, capability)
+        if preview:
+            st.code(preview, language="markdown")
+        else:
+            st.info("当前能力没有启用的 Prompt 选项。")
 
 
 def render_rules_page(project_name: str):
@@ -1789,6 +2785,11 @@ def init_project_state() -> str | None:
     return None
 
 
+def copy_story_workspace_settings(project_name: str, source_story_id: str, target_story_id: str) -> dict:
+    result = copy_story_settings(project_name, source_story_id, target_story_id)
+    return result if isinstance(result, dict) else {"copied": 0, "updated": 0, "skipped": 0}
+
+
 def render_sidebar(project_name: str | None, projects: list[str]) -> str:
     st.sidebar.markdown(
         """
@@ -1851,7 +2852,7 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
                 if new_story_name.strip():
                     meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
                     if copy_from:
-                        copy_story_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
+                        copy_story_workspace_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
                     set_active_story(project_name, meta["story_id"])
                     st.session_state["active_story_id"] = meta["story_id"]
                     st.success(f"已创建故事：{new_story_name.strip()}")
@@ -1893,9 +2894,6 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
     if active_page not in group_pages:
         active_page = group_pages[0]
 
-    if selected_group == "规划" and project_name and not is_story_creative_profile_configured(project_name, current_story_id):
-        st.sidebar.warning("规划页已锁定：先完成当前故事的「创作配置」。保存后会按篇幅和生成层级展开后续入口。")
-
     selected_page = st.sidebar.radio(
         "页面",
         options=group_pages,
@@ -1904,6 +2902,17 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
         format_func=lambda page: page,
     )
     st.session_state["active_page"] = selected_page
+
+    if selected_group == "规划" and project_name and not is_story_creative_profile_configured(project_name, current_story_id):
+        st.sidebar.markdown(
+            """
+            <div class="nf-sidebar-note">
+                <strong>规划页暂未展开</strong><br>
+                先保存「创作配置」，之后会按篇幅和生成层级开放大纲、分卷、剧情段和细纲入口。
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     description = PAGE_DESCRIPTIONS.get(selected_page, "")
     if description:
@@ -1926,209 +2935,7 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
 
 def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
     current_story_id = st.session_state.get("active_story_id", "default")
-    if not embedded:
-        stories = list_stories(project_name)
-        current_story_name = "默认"
-        for s in stories:
-            if s.get("story_id") == current_story_id:
-                current_story_name = s.get("name", current_story_id)
-                break
-        st.subheader(f"核心设定 · {current_story_name}")
-        st.caption("生成时始终优先注入的核心状态。故事级别的设定只影响当前故事，项目级别的资料库（知识库、原材料、规则）为所有故事共享。")
-
-    changed = False
-    new_memory = dict(memory)
-
-    new_title = st.text_input("书名", value=memory.get("title", ""), key=f"memory_title_{current_story_id}")
-    if new_title != memory.get("title"):
-        new_memory["title"] = new_title
-        changed = True
-
-    new_genre = st.text_input("类型", value=memory.get("genre", ""), key=f"memory_genre_{current_story_id}")
-    if new_genre != memory.get("genre"):
-        new_memory["genre"] = new_genre
-        changed = True
-
-    new_canon_mode = st.text_input(
-        "原作对齐方式（如：严格贴合 / 轻度架空 / 完全架空）",
-        value=memory.get("canon_mode", ""),
-        key=f"memory_canon_{current_story_id}"
-    )
-    if new_canon_mode != memory.get("canon_mode", ""):
-        new_memory["canon_mode"] = new_canon_mode
-        changed = True
-
-    new_au_rules = st.text_area(
-        "架空规则（每行一条）",
-        value="\n".join(memory.get("au_rules", [])),
-        height=100,
-        key=f"memory_au_{current_story_id}"
-    )
-    au_rule_items = [line.strip() for line in new_au_rules.split("\n") if line.strip()]
-    if au_rule_items != memory.get("au_rules", []):
-        new_memory["au_rules"] = au_rule_items
-        changed = True
-
-    new_world = st.text_area(
-        "世界观（每行一条）",
-        value="\n".join(memory.get("world", [])),
-        height=120,
-        key=f"memory_world_{current_story_id}"
-    )
-    world_items = [line.strip() for line in new_world.split("\n") if line.strip()]
-    if world_items != memory.get("world", []):
-        new_memory["world"] = world_items
-        changed = True
-
-    new_characters = st.text_area(
-        "角色（每行一条）",
-        value="\n".join(memory.get("characters", [])),
-        height=150,
-        key=f"memory_characters_{current_story_id}"
-    )
-    character_items = [line.strip() for line in new_characters.split("\n") if line.strip()]
-    if character_items != memory.get("characters", []):
-        new_memory["characters"] = character_items
-        changed = True
-
-    new_relationships = st.text_area(
-        "角色关系（每行一条）",
-        value="\n".join(memory.get("relationships", [])),
-        height=120,
-        key=f"memory_relationships_{current_story_id}"
-    )
-    relationship_items = [line.strip() for line in new_relationships.split("\n") if line.strip()]
-    if relationship_items != memory.get("relationships", []):
-        new_memory["relationships"] = relationship_items
-        changed = True
-
-    new_timeline = st.text_area(
-        "时间线（每行一条）",
-        value="\n".join(memory.get("timeline", [])),
-        height=120,
-        key=f"memory_timeline_{current_story_id}"
-    )
-    timeline_items = [line.strip() for line in new_timeline.split("\n") if line.strip()]
-    if timeline_items != memory.get("timeline", []):
-        new_memory["timeline"] = timeline_items
-        changed = True
-
-    new_foreshadowing = st.text_area(
-        "伏笔（每行一条）",
-        value="\n".join(memory.get("foreshadowing", [])),
-        height=120,
-        key=f"memory_foreshadowing_{current_story_id}"
-    )
-    foreshadowing_items = [line.strip() for line in new_foreshadowing.split("\n") if line.strip()]
-    if foreshadowing_items != memory.get("foreshadowing", []):
-        new_memory["foreshadowing"] = foreshadowing_items
-        changed = True
-
-    new_constraints = st.text_area(
-        "当前硬性约束（每行一条）",
-        value="\n".join(memory.get("active_constraints", [])),
-        height=100,
-        key=f"memory_constraints_{current_story_id}"
-    )
-    constraint_items = [line.strip() for line in new_constraints.split("\n") if line.strip()]
-    if constraint_items != memory.get("active_constraints", []):
-        new_memory["active_constraints"] = constraint_items
-        changed = True
-
-    expanded_setting_fields = [
-        ("locations", "地点资料（每行一条）"),
-        ("organizations", "组织资料（每行一条）"),
-        ("power_systems", "能力体系（每行一条）"),
-        ("relationship_graph", "关系图补充（每行一条）"),
-    ]
-    for field_name, label in expanded_setting_fields:
-        value = "\n".join(str(item) for item in memory.get(field_name, []))
-        new_value = st.text_area(
-            label,
-            value=value,
-            height=90,
-            key=f"memory_{field_name}_{current_story_id}",
-        )
-        items = [line.strip() for line in new_value.split("\n") if line.strip()]
-        if items != memory.get(field_name, []):
-            new_memory[field_name] = items
-            changed = True
-
-    col1, col2 = st.columns(2)
-    if col1.button("保存设定", disabled=not changed):
-        save_story_memory(project_name, current_story_id, new_memory)
-        st.success("已保存")
-        st.rerun()
-    if not changed:
-        col1.caption("当前表单没有未保存改动。")
-
-    if col2.button("精简核心设定"):
-        with st.spinner("正在压缩旧设定..."):
-            result = compact_memory(project_name, story_id=current_story_id)
-        if result.get("status") == "accepted":
-            st.success("核心设定已精简")
-            st.rerun()
-        else:
-            st.error(f"精简失败：{result.get('reason', 'unknown')}")
-
-    render_core_setting_to_knowledge_tool(
-        project_name,
-        new_memory,
-        f"故事核心设定：{current_story_id}",
-        f"story_{current_story_id}",
-    )
-
-    with st.expander("原始结构化数据（高级编辑）", expanded=False):
-        raw_json = st.text_area(
-            "memory.json",
-            value=json.dumps(new_memory, ensure_ascii=False, indent=2),
-            height=400
-        )
-        if st.button("从结构化数据保存"):
-            try:
-                parsed = json.loads(raw_json)
-                save_story_memory(project_name, current_story_id, parsed)
-                st.success("已保存")
-                st.rerun()
-            except json.JSONDecodeError as exc:
-                st.error(f"结构化数据格式错误：{exc}")
-
-
-def render_core_setting_to_knowledge_tool(project_name: str, memory: dict, source_title: str, key_prefix: str):
-    with st.expander("核心设定转入知识库", expanded=False):
-        st.caption("适合把稳定、长期复用的设定转成结构化知识。结果会先进入待确认队列，不会直接写入正式知识库。")
-        available_fields = [
-            field for field in CORE_SETTING_KNOWLEDGE_FIELDS
-            if memory.get(field) and (not isinstance(memory.get(field), list) or len(memory.get(field)) > 0)
-        ]
-        if not available_fields:
-            st.caption("当前没有可转入知识库的核心设定。")
-            return
-        selected_fields = st.multiselect(
-            "选择要转入的设定字段",
-            options=available_fields,
-            default=[field for field in available_fields if field in {"world", "characters", "relationships", "timeline", "active_constraints"}],
-            format_func=lambda field: CORE_SETTING_KNOWLEDGE_FIELDS[field][1],
-            key=f"{key_prefix}_setting_knowledge_fields",
-        )
-        preview_items = build_core_setting_knowledge_items(memory, source_title, selected_fields)
-        st.caption(f"将生成 {len(preview_items)} 条待确认知识。")
-        if preview_items:
-            render_step_json_expander("设定入库预览", {"items": preview_items[:20]})
-        if st.button("加入待确认知识队列", key=f"{key_prefix}_queue_setting_knowledge", use_container_width=True):
-            if not preview_items:
-                st.error("没有可加入队列的设定条目。")
-            else:
-                queued_count = queue_pending_knowledge_items(
-                    project_name,
-                    preview_items,
-                    scope="project",
-                    authority="project",
-                    source_title=source_title,
-                    source_origin="core_settings",
-                )
-                st.success(f"已加入 {queued_count} 条待确认知识。请到“资料导入 / 待确认知识”审核确认。")
-                st.rerun()
+    render_setting_items_editor(project_name, current_story_id, "story")
 
 
 def render_outline_page(project_name: str):
@@ -2170,6 +2977,14 @@ def render_outline_page(project_name: str):
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前收敛出的结论。")
         render_step_retrieval(discussion_step, "本次大纲讨论参考的检索上下文")
+        _render_discussion_asset_candidates(
+            project_name,
+            story_id,
+            discussion_step,
+            "outline",
+            f"outline:{project_name}:{story_id}",
+            scoped_widget_key("outline_discussion_prompt_options", project_name, story_id),
+        )
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前讨论", key="approve_outline_discussion"):
             try:
@@ -2233,7 +3048,7 @@ def render_outline_page(project_name: str):
         st.success("大纲已保存")
 
     render_step_validation(step_result)
-    render_step_retrieval(step_result, "本次大纲生成使用的检索上下文", get_retrieval_trace(f"outline:{project_name}"))
+    render_step_retrieval(step_result, "本次大纲生成使用的检索上下文", get_retrieval_trace(f"outline:{project_name}:{story_id}"))
 
 
 def render_chapter_outline_page(project_name: str):
@@ -2345,6 +3160,14 @@ def render_chapter_outline_page(project_name: str):
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示本章方向的当前结论。")
         render_step_retrieval(discussion_step, "本次章节讨论参考的检索上下文")
+        _render_discussion_asset_candidates(
+            project_name,
+            story_id,
+            discussion_step,
+            "chapter",
+            f"chapter:{project_name}:{story_id}:{chapter_no}",
+            scoped_widget_key("chapter_discussion_prompt_options", *chapter_scope),
+        )
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前章节讨论", key=scoped_widget_key("approve_chapter_discussion", *chapter_scope)):
             try:
@@ -2438,7 +3261,7 @@ def render_chapter_outline_page(project_name: str):
     render_step_retrieval(
         step_result,
         "本次细纲生成使用的检索上下文",
-        get_retrieval_trace(f"chapter_outline:{project_name}:{chapter_no}")
+        get_retrieval_trace(f"chapter_outline:{project_name}:{story_id}:{chapter_no}")
     )
 
 
@@ -2450,7 +3273,7 @@ def render_chapter_page(project_name: str):
     mode_hint = "章节模式" if is_chapter_mode else "自由模式"
 
     st.subheader("正文生成")
-    st.caption(f"根据细纲或需求生成正文，可串联审阅和设定更新。当前：{mode_hint}")
+    st.caption(f"根据细纲或需求生成正文，可串联审阅和设定提炼。当前：{mode_hint}")
 
     chapter_no = st.number_input(
         "编号" if not is_chapter_mode else "章节编号",
@@ -2468,7 +3291,7 @@ def render_chapter_page(project_name: str):
     pipeline_result_key = scoped_session_key("pipeline_result", *chapter_scope)
     review_markdown_key = scoped_session_key("review_markdown", *chapter_scope)
     review_inline_step_key = scoped_session_key("review_step_inline", *chapter_scope)
-    memory_update_step_key = scoped_session_key("memory_update_step", *chapter_scope)
+    setting_extraction_step_key = scoped_session_key("setting_extraction_step", *chapter_scope)
     chapter_outline_editor_key = scoped_widget_key("chapter_write_outline_editor", *chapter_scope)
     chapter_text_editor_key = scoped_widget_key("chapter_text_editor", *chapter_scope)
 
@@ -2511,7 +3334,7 @@ def render_chapter_page(project_name: str):
                         except Exception as exc:
                             st.error(f"细纲生成失败：{exc}")
             with col_full_pipeline:
-                if st.button("细纲→写作→审阅→更新设定", use_container_width=True, type="primary", key=scoped_widget_key("full_pipeline_btn", *chapter_scope)):
+                if st.button("细纲→写作→审阅→提炼设定", use_container_width=True, type="primary", key=scoped_widget_key("full_pipeline_btn", *chapter_scope)):
                     if not gen_requirement.strip():
                         st.warning("请先填写创作需求。")
                     else:
@@ -2569,6 +3392,29 @@ def render_chapter_page(project_name: str):
         )
 
     st.markdown("### 当前写作设置")
+    try:
+        effective_prompt_options = merge_prompt_option_layers(
+            load_global_prompt_options(),
+            load_project_prompt_options(project_name),
+            load_story_prompt_options(project_name, story_id),
+        )
+        write_prompt_options = filter_prompt_options(effective_prompt_options, "write", enabled_only=False)
+    except Exception as exc:
+        st.warning(f"Prompt 选项加载失败：{exc}")
+        write_prompt_options = []
+    selected_prompt_option_ids = None
+    if write_prompt_options:
+        option_ids = [option.get("id", "") for option in write_prompt_options]
+        option_labels = {option.get("id", ""): _prompt_option_label(option) for option in write_prompt_options}
+        default_option_ids = [option.get("id", "") for option in write_prompt_options if option.get("enabled", True)]
+        selected_prompt_option_ids = st.multiselect(
+            "本次使用 Prompt 选项",
+            options=option_ids,
+            default=default_option_ids,
+            format_func=lambda option_id: option_labels.get(option_id, option_id),
+            key=scoped_widget_key("write_prompt_option_ids", *chapter_scope),
+            help="默认勾选已启用选项；也可以临时选择未启用的预设，仅影响本次生成。",
+        )
     tone = st.selectbox(
         "文风/基调",
         options=["", "克制", "热血", "轻快", "压抑", "爽文推进"],
@@ -2619,15 +3465,25 @@ def render_chapter_page(project_name: str):
         "ending_strength": ending_strength,
         "extra_requirements": combined_extra_requirements,
     }
+    if selected_prompt_option_ids is not None:
+        writing_guidance["prompt_option_ids"] = selected_prompt_option_ids
 
     has_outline = bool(chapter_outline.strip())
+
+    _render_generation_injection_preview(
+        project_name,
+        story_id,
+        "write",
+        selected_prompt_option_ids,
+        writing_guidance,
+    )
 
     col_write, col_pipeline = st.columns([1, 1])
     with col_write:
         write_clicked = st.button("写正文", type="primary" if has_outline else "secondary", use_container_width=True, key=scoped_widget_key("write_chapter_btn", *chapter_scope))
     with col_pipeline:
         pipeline_clicked = st.button(
-            "细纲→写作→审阅→更新设定" if has_outline else "需要先填写或生成细纲",
+            "细纲→写作→审阅→提炼设定" if has_outline else "需要先填写或生成细纲",
             disabled=not has_outline,
             use_container_width=True,
             key=scoped_widget_key("inline_pipeline_btn", *chapter_scope),
@@ -2657,15 +3513,15 @@ def render_chapter_page(project_name: str):
 
                 review_success = bool(review_result.get("success")) and review_result.get("status") not in {"failed", "rejected", "blocked"}
                 if review_success:
-                    memory_result = update_memory_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
+                    memory_result = extract_setting_candidates_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
                 else:
                     memory_result = {
-                        "step_name": "memory_update",
+                        "step_name": "setting_extraction",
                         "success": False,
                         "status": "skipped",
-                        "warnings": ["章节审阅未通过或未完成，已跳过核心设定更新。"],
+                        "warnings": ["章节审阅未通过或未完成，已跳过设定提炼。"],
                     }
-                steps_result["memory_update"] = memory_result
+                steps_result["setting_extraction"] = memory_result
 
             st.session_state[chapter_text_key] = chapter
             st.session_state[chapter_text_editor_key] = chapter
@@ -2717,17 +3573,21 @@ def render_chapter_page(project_name: str):
 
     with memory_col:
         do_memory = st.button(
-            "更新核心设定" if has_chapter else "需要先生成正文",
+            "提炼待确认设定" if has_chapter else "需要先生成正文",
             disabled=not has_chapter,
             key=scoped_widget_key("memory_inline", *chapter_scope),
             use_container_width=True,
         )
         if do_memory and has_chapter:
-            result = update_memory_from_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-            st.session_state[memory_update_step_key] = result
-            render_step_status_message(result, "核心设定更新成功", "核心设定更新失败：")
-            render_step_validation(result)
-            render_step_json_expander("设定更新结构化数据", result)
+            try:
+                result = extract_setting_candidates_from_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
+                st.session_state[setting_extraction_step_key] = result
+                queued_count = result.get("data", {}).get("queued_knowledge_count", 0)
+                render_step_status_message(result, f"已提炼 {queued_count} 条候选设定，等待确认后生效", "设定提炼失败：")
+                render_step_validation(result)
+                render_step_json_expander("章节设定提炼结构化数据", result)
+            except Exception as exc:
+                st.error(f"设定提炼失败：{exc}")
 
     review_markdown = st.session_state.get(review_markdown_key, "")
     if review_markdown:
@@ -2739,7 +3599,7 @@ def render_chapter_page(project_name: str):
         expanded_by_default = bool(pipeline_result.get("steps", {}).get("write_chapter", {}).get("success"))
         with st.expander("流水线执行详情", expanded=not expanded_by_default):
             pipeline_steps = pipeline_result.get("steps", {})
-            for step_label, step_key in [("细纲", "chapter_outline"), ("写作", "write_chapter"), ("审阅", "review_chapter"), ("设定更新", "memory_update")]:
+            for step_label, step_key in [("细纲", "chapter_outline"), ("写作", "write_chapter"), ("审阅", "review_chapter"), ("设定提炼", "setting_extraction")]:
                 step_result = pipeline_steps.get(step_key, {})
                 if step_result:
                     status = step_result.get("status", "-")
@@ -2754,17 +3614,17 @@ def render_chapter_page(project_name: str):
     render_step_retrieval(
         chapter_step,
         "本次正文生成使用的检索上下文",
-        get_retrieval_trace(f"write:{project_name}:{chapter_no}")
+        get_retrieval_trace(f"write:{project_name}:{story_id}:{chapter_no}")
     )
     render_step_retrieval(
         st.session_state.get(review_inline_step_key, {}),
         "本次审阅使用的检索上下文",
-        get_retrieval_trace(f"review:{project_name}:{chapter_no}")
+        get_retrieval_trace(f"review:{project_name}:{story_id}:{chapter_no}")
     )
     render_step_retrieval(
-        st.session_state.get(memory_update_step_key, {}),
-        "本次设定更新使用的检索上下文",
-        get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}")
+        st.session_state.get(setting_extraction_step_key, {}),
+        "本次设定提炼使用的检索上下文",
+        get_retrieval_trace(f"setting_extraction:{project_name}:{story_id}:{chapter_no}")
     )
 
 
@@ -2796,7 +3656,7 @@ def render_project_overview_page(project_name: str):
     with action_col1:
         render_quick_action("快速生成", "快速生成", "实验性快速生成入口，适合测试或临时片段。")
     with action_col2:
-        render_quick_action("正文生成", "正文生成", "根据细纲或需求写作，可串联审阅和设定更新。")
+        render_quick_action("正文生成", "正文生成", "根据细纲或需求写作，可串联审阅和设定提炼。")
     with action_col3:
         render_quick_action("整理资料", "资料导入", "导入原作、参考和长文本资料。")
     with action_col4:
@@ -2839,7 +3699,7 @@ def render_project_overview_page(project_name: str):
     with st.expander("危险操作", expanded=False):
         st.warning("删除项目会移除该项目下的全部设定、章节、审阅、分析、检索资料和运行记录。")
         confirm_value = st.text_input("输入项目名以确认删除", key=f"delete_project_confirm_{project_name}")
-        if st.button("删除当前项目", type="primary"):
+        if st.button("删除当前项目"):
             if confirm_value.strip() != project_name:
                 st.error("项目名确认不匹配，已取消删除。")
             else:
@@ -2852,6 +3712,491 @@ def render_project_overview_page(project_name: str):
                     st.error("项目删除失败，目标项目可能不存在。")
 
 
+def _setting_field_label(field_name: str) -> str:
+    spec = SETTING_FIELD_SPECS.get(str(field_name or ""), {})
+    return str(spec.get("label") or field_name or "设定")
+
+
+def _setting_scope_label(scope: str) -> str:
+    return {"project": "项目级", "story": "当前故事级"}.get(str(scope or ""), str(scope or "未知层级"))
+
+
+def _setting_injection_label(policy: str) -> str:
+    return {
+        "always": "总是注入",
+        "retrieval": "检索命中时注入",
+        "manual_only": "仅手动管理",
+    }.get(str(policy or ""), str(policy or "未设置"))
+
+
+def _setting_item_title(item: dict) -> str:
+    field_label = _setting_field_label(str(item.get("setting_field") or ""))
+    scope_label = _setting_scope_label(str(item.get("setting_scope") or "project"))
+    policy_label = _setting_injection_label(str(item.get("injection_policy") or "always"))
+    name = str(item.get("name") or "未命名设定")
+    return f"{name} · {field_label} · {scope_label} · {policy_label}"
+
+
+def _render_setting_item_form(project_name: str, story_id: str, setting_scope: str, item: dict | None, key_prefix: str):
+    current = dict(item or {})
+    field_options = list(SETTING_FIELD_SPECS.keys())
+    current_field = str(current.get("setting_field") or "world")
+    if current_field not in field_options:
+        current_field = "world"
+    default_category = str(current.get("category") or SETTING_FIELD_SPECS[current_field]["category"])
+    category_options = list(KNOWLEDGE_CATEGORIES.keys())
+    if default_category not in category_options:
+        category_options.append(default_category)
+
+    with st.form(key_prefix):
+        field_name = st.selectbox(
+            "设定类型",
+            options=field_options,
+            index=field_options.index(current_field),
+            format_func=_setting_field_label,
+        )
+        category = st.selectbox(
+            "知识分类",
+            options=category_options,
+            index=category_options.index(default_category) if default_category in category_options else 0,
+            format_func=label_knowledge_category,
+        )
+        name = st.text_input("名称", value=str(current.get("name") or ""))
+        summary = st.text_area("设定内容", value=str(current.get("summary") or ""), height=120)
+        injection_policy = st.selectbox(
+            "生成注入方式",
+            options=["always", "retrieval", "manual_only"],
+            index=["always", "retrieval", "manual_only"].index(str(current.get("injection_policy") or "always")) if str(current.get("injection_policy") or "always") in {"always", "retrieval", "manual_only"} else 0,
+            format_func=_setting_injection_label,
+        )
+        importance = st.slider("重要性", min_value=0.0, max_value=1.0, value=float(current.get("importance", 0.9) or 0.9), step=0.05)
+        tags = st.text_input("标签（逗号分隔）", value=", ".join(current.get("tags", []) or []))
+        delete_checked = st.checkbox("删除这个设定", value=False, disabled=not bool(current.get("id")))
+        col_save, col_delete = st.columns(2)
+        save_clicked = col_save.form_submit_button("保存设定", type="primary", use_container_width=True)
+        delete_clicked = col_delete.form_submit_button("删除设定", use_container_width=True, disabled=not bool(current.get("id")) or not delete_checked)
+
+    if save_clicked:
+        if not summary.strip():
+            st.warning("设定内容不能为空。")
+            return
+        payload = {
+            **current,
+            "category": category,
+            "name": name.strip() or summary.strip()[:36],
+            "summary": summary.strip(),
+            "setting_field": field_name,
+            "setting_scope": setting_scope,
+            "story_id": story_id if setting_scope == "story" else "",
+            "setting_role": "core",
+            "injection_policy": injection_policy,
+            "importance": importance,
+            "source_origin": current.get("source_origin") or "manual_setting",
+            "tags": [part.strip() for part in tags.split(",") if part.strip()],
+            "details": {
+                **(current.get("details") if isinstance(current.get("details"), dict) else {}),
+                "原始设定": summary.strip(),
+                "来源字段": field_name,
+            },
+        }
+        saved = upsert_setting_item(project_name, category, payload)
+        old_category = str(current.get("category") or "")
+        if current.get("id") and old_category and old_category != category:
+            delete_setting_item(project_name, old_category, str(current.get("id") or ""))
+        st.success(f"已保存设定：{saved.get('name')}")
+        st.rerun()
+
+    if delete_clicked:
+        if delete_setting_item(project_name, str(current.get("category") or category), str(current.get("id") or "")):
+            st.success("设定已删除。")
+            st.rerun()
+        st.warning("没有找到要删除的设定。")
+
+
+def render_setting_items_editor(project_name: str, story_id: str, setting_scope: str):
+    all_items = list_setting_items(project_name, story_id, core_only=True)
+    editable_items_all = [
+        item for item in all_items
+        if str(item.get("setting_scope") or "project") == setting_scope
+        and (setting_scope != "story" or str(item.get("story_id") or "") == story_id)
+    ]
+    inherited_items = [
+        item for item in all_items
+        if setting_scope == "story" and str(item.get("setting_scope") or "project") == "project"
+    ]
+
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("当前可用核心设定", len(all_items))
+    metric_cols[1].metric(f"{_setting_scope_label(setting_scope)}设定", len(editable_items_all))
+    metric_cols[2].metric("总是注入", len([item for item in all_items if str(item.get("injection_policy") or "") == "always"]))
+
+    filter_cols = st.columns([1, 1, 1.3])
+    available_categories = sorted({str(item.get("category") or "") for item in editable_items_all if item.get("category")})
+    category_filter = filter_cols[0].selectbox(
+        "分类筛选",
+        options=[""] + available_categories,
+        format_func=lambda value: "全部分类" if not value else label_knowledge_category(value),
+        key=scoped_widget_key("setting_category_filter", project_name, story_id, setting_scope),
+    )
+    policy_filter = filter_cols[1].selectbox(
+        "注入方式",
+        options=["", "always", "retrieval", "manual_only"],
+        format_func=lambda value: "全部方式" if not value else _setting_injection_label(value),
+        key=scoped_widget_key("setting_policy_filter", project_name, story_id, setting_scope),
+    )
+    keyword_filter = filter_cols[2].text_input(
+        "关键词",
+        key=scoped_widget_key("setting_keyword_filter", project_name, story_id, setting_scope),
+        placeholder="按名称或内容过滤",
+    ).strip()
+    editable_items = []
+    for item in editable_items_all:
+        if category_filter and str(item.get("category") or "") != category_filter:
+            continue
+        if policy_filter and str(item.get("injection_policy") or "") != policy_filter:
+            continue
+        if keyword_filter:
+            haystack = f"{item.get('name', '')}\n{item.get('summary', '')}".casefold()
+            if keyword_filter.casefold() not in haystack:
+                continue
+        editable_items.append(item)
+
+    with st.expander(f"新增{_setting_scope_label(setting_scope)}设定", expanded=False):
+        _render_setting_item_form(
+            project_name,
+            story_id,
+            setting_scope,
+            None,
+            scoped_widget_key("new_setting_item", project_name, story_id, setting_scope),
+        )
+
+    if inherited_items:
+        with st.expander("继承的项目级核心设定", expanded=False):
+            for item in inherited_items:
+                st.markdown(f"- **{html.escape(str(item.get('name') or '-'))}**：{html.escape(str(item.get('summary') or ''))}")
+
+    if not editable_items:
+        if editable_items_all:
+            st.info("当前筛选条件下没有匹配的核心设定。")
+        else:
+            st.info(f"当前还没有{_setting_scope_label(setting_scope)}核心设定。可以直接新增，底层会保存为正式知识条目。")
+        return
+
+    for item in editable_items:
+        with st.expander(_setting_item_title(item), expanded=False):
+            st.caption(f"ID: {item.get('id', '')} / 分类: {label_knowledge_category(str(item.get('category') or ''))} / 来源: {item.get('source_origin') or 'manual_setting'}")
+            _render_setting_item_form(
+                project_name,
+                story_id,
+                setting_scope,
+                item,
+                scoped_widget_key("edit_setting_item", project_name, story_id, item.get("category", ""), item.get("id", "")),
+            )
+
+
+def render_generation_setting_context_preview(project_name: str, story_id: str):
+    with st.expander("当前生成会看到的核心设定", expanded=False):
+        try:
+            context = build_generation_setting_context(project_name, story_id)
+        except Exception as exc:
+            st.warning(f"生成上下文预览失败：{exc}")
+            return
+        setting_context = str(context.get("_setting_context") or "").strip()
+        if not setting_context:
+            st.caption("当前没有会优先注入生成的核心设定。")
+            return
+        st.caption("这里是统一设定知识合成后的只读预览。正文、细纲、审阅等生成流程会优先参考这些内容。")
+        st.code(setting_context, language="markdown")
+
+
+def _format_creative_profile_for_preview(project_name: str, story_id: str) -> str:
+    try:
+        profile = load_creative_profile(project_name, story_id)
+    except Exception:
+        profile = {}
+    if not profile:
+        return ""
+    lines = [
+        "项目创作配置：",
+        f"- 任务性质：{profile.get('story_mode', '-')}",
+        f"- 目标篇幅：{profile.get('target_length', '-')}",
+        f"- 目标字数：{profile.get('target_word_count', '') or '未设置'}",
+        f"- 生成层级：{profile.get('workflow_depth', '-')}",
+        f"- 资料参考强度：{profile.get('reference_strength', '-')}",
+        f"- 重点参考方向：{', '.join(profile.get('reference_focus', []) or []) or '未设置'}",
+        f"- 允许改写原设：{'是' if profile.get('allow_canon_deviation', True) else '否'}",
+        f"- 资料冲突处理：{profile.get('conflict_policy', '-')}",
+        f"- 当前世界线：{profile.get('worldline_label') or profile.get('worldline_id') or '未设置'}",
+        f"- 世界线检索模式：{profile.get('worldline_retrieval_mode', 'prefer')}",
+    ]
+    notes = str(profile.get("notes", "") or "").strip()
+    if notes:
+        lines.append(f"- 补充说明：{notes}")
+    return "\n".join(lines)
+
+
+def _build_generation_injection_preview(
+    project_name: str,
+    story_id: str,
+    scope: str,
+    prompt_option_ids: list[str] | None,
+    generation_guidance: dict,
+) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    try:
+        setting_context = str(build_generation_setting_context(project_name, story_id).get("_setting_context") or "").strip()
+    except Exception as exc:
+        setting_context = f"核心设定预览失败：{exc}"
+    if setting_context:
+        sections["核心设定"] = setting_context
+
+    try:
+        rules_text = format_rules_for_prompt(
+            load_global_rules(),
+            load_project_rules(project_name),
+            scope,
+            story_rules=load_story_rules(project_name, story_id),
+            conflict_resolutions=load_effective_rule_conflict_resolutions(project_name, story_id, scope),
+        )
+    except Exception as exc:
+        rules_text = f"规则预览失败：{exc}"
+    if rules_text:
+        sections["生成规则与人工裁决"] = rules_text
+
+    profile_text = _format_creative_profile_for_preview(project_name, story_id)
+    if profile_text:
+        sections["创作配置"] = profile_text
+
+    try:
+        options = merge_prompt_option_layers(
+            load_global_prompt_options(),
+            load_project_prompt_options(project_name),
+            load_story_prompt_options(project_name, story_id),
+        )
+        option_text = format_prompt_options_for_prompt(options, scope, selected_ids=prompt_option_ids)
+    except Exception as exc:
+        option_text = f"Prompt 选项预览失败：{exc}"
+    if option_text:
+        sections["Prompt 选项"] = option_text
+
+    cleaned_guidance = {
+        key: value
+        for key, value in (generation_guidance or {}).items()
+        if value not in ("", [], {}, None)
+    }
+    if cleaned_guidance:
+        sections["本次临时写作参数"] = json.dumps(cleaned_guidance, ensure_ascii=False, indent=2)
+    return sections
+
+
+def _render_generation_injection_preview(
+    project_name: str,
+    story_id: str,
+    scope: str,
+    prompt_option_ids: list[str] | None,
+    generation_guidance: dict,
+):
+    with st.expander("本次生成注入预览", expanded=False):
+        st.caption("这是点击生成前的只读检查。它不会保存新内容，只展示本次会影响模型的设定、规则、Prompt 选项和临时参数。")
+        sections = _build_generation_injection_preview(
+            project_name,
+            story_id,
+            scope,
+            prompt_option_ids,
+            generation_guidance,
+        )
+        if not sections:
+            st.info("当前没有额外注入内容。")
+            return
+        for title, content in sections.items():
+            st.markdown(f"#### {title}")
+            st.code(content, language="markdown")
+
+
+def _pending_core_items_for_scope(project_name: str, story_id: str, setting_scope: str) -> list[dict]:
+    setting_scope = str(setting_scope or "project")
+    rows: list[dict] = []
+    for item in load_pending_knowledge_items(project_name):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("setting_role") or "")
+        policy = str(item.get("injection_policy") or "")
+        if role != "core" and policy != "always":
+            continue
+        item_scope = str(item.get("setting_scope") or "project")
+        item_story_id = str(item.get("story_id") or "")
+        if item_scope != setting_scope:
+            continue
+        if setting_scope == "story" and item_story_id != story_id:
+            continue
+        rows.append(item)
+    rows.sort(key=lambda item: (
+        str(item.get("source_chapter_no") or ""),
+        str(item.get("category") or ""),
+        str(item.get("name") or ""),
+    ))
+    return rows
+
+
+def _render_pending_core_setting_item_editor(project_name: str, item: dict, key_prefix: str):
+    pending_id = str(item.get("pending_id") or "")
+    if not pending_id:
+        return
+    current_field = str(item.get("setting_field") or "world")
+    field_options = list(SETTING_FIELD_SPECS.keys())
+    if current_field not in field_options:
+        field_options.append(current_field)
+    current_category = str(item.get("category") or SETTING_FIELD_SPECS.get(current_field, {}).get("category") or "world_rules")
+    category_options = list(KNOWLEDGE_CATEGORIES.keys())
+    if current_category not in category_options:
+        category_options.append(current_category)
+    current_policy = str(item.get("injection_policy") or "always")
+    policy_options = ["always", "retrieval", "manual_only"]
+    if current_policy not in policy_options:
+        policy_options.append(current_policy)
+
+    st.markdown(f"**{html.escape(str(item.get('name') or '未命名设定'))}**")
+    st.caption(
+        f"{label_knowledge_category(current_category)} / "
+        f"{_setting_field_label(current_field)} / "
+        f"来源：{item.get('source_title') or '-'}"
+    )
+    evidence_lines = summarize_item_evidence(item)
+    if evidence_lines:
+        st.caption("证据：" + "；".join(evidence_lines[:2]))
+
+    with st.form(f"{key_prefix}_form_{pending_id}"):
+        col_meta_1, col_meta_2, col_meta_3 = st.columns([1, 1, 1])
+        field_name = col_meta_1.selectbox(
+            "设定类型",
+            options=field_options,
+            index=field_options.index(current_field),
+            format_func=_setting_field_label,
+            key=f"{key_prefix}_field_{pending_id}",
+        )
+        default_category = current_category if current_category in category_options else category_options[0]
+        category = col_meta_2.selectbox(
+            "知识分类",
+            options=category_options,
+            index=category_options.index(default_category),
+            format_func=label_knowledge_category,
+            key=f"{key_prefix}_category_{pending_id}",
+        )
+        injection_policy = col_meta_3.selectbox(
+            "注入方式",
+            options=policy_options,
+            index=policy_options.index(current_policy),
+            format_func=_setting_injection_label,
+            key=f"{key_prefix}_policy_{pending_id}",
+        )
+        name = st.text_input("名称", value=str(item.get("name") or ""), key=f"{key_prefix}_name_{pending_id}")
+        summary = st.text_area("设定内容", value=str(item.get("summary") or ""), height=100, key=f"{key_prefix}_summary_{pending_id}")
+        col_quality_1, col_quality_2 = st.columns([1, 1])
+        importance = col_quality_1.slider(
+            "重要性",
+            min_value=0.0,
+            max_value=1.0,
+            value=safe_confidence(item.get("importance", 0.75)),
+            step=0.05,
+            key=f"{key_prefix}_importance_{pending_id}",
+        )
+        tags = col_quality_2.text_input(
+            "标签（逗号分隔）",
+            value=", ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags"), list) else "",
+            key=f"{key_prefix}_tags_{pending_id}",
+        )
+        col_save, col_confirm, col_discard = st.columns(3)
+        save_clicked = col_save.form_submit_button("保存修改", use_container_width=True)
+        confirm_clicked = col_confirm.form_submit_button("保存并确认", type="primary", use_container_width=True)
+        discard_clicked = col_discard.form_submit_button("丢弃", use_container_width=True)
+
+    if not (save_clicked or confirm_clicked or discard_clicked):
+        return
+    if discard_clicked:
+        removed_count = discard_pending_knowledge_items(project_name, [pending_id])
+        st.success(f"已丢弃 {removed_count} 条候选设定。")
+        st.rerun()
+    if not summary.strip():
+        st.warning("设定内容不能为空。")
+        return
+    updated_item = {
+        **item,
+        "category": category,
+        "name": name.strip() or summary.strip()[:36],
+        "summary": summary.strip(),
+        "setting_field": field_name,
+        "setting_role": "core",
+        "injection_policy": injection_policy,
+        "importance": importance,
+        "tags": parse_comma_tags(tags),
+        "details": {
+            **(item.get("details") if isinstance(item.get("details"), dict) else {}),
+            "原始设定": summary.strip(),
+            "来源字段": field_name,
+        },
+    }
+    update_pending_knowledge_item(project_name, pending_id, updated_item)
+    if confirm_clicked:
+        saved_count = confirm_pending_knowledge_items(project_name, [pending_id])
+        if saved_count:
+            rebuild_retrieval_assets(project_name, build_vectors=True)
+        st.success(f"已确认 {saved_count} 条核心设定。")
+    else:
+        st.success("候选设定已保存。")
+    st.rerun()
+
+
+def render_pending_core_setting_panel(project_name: str, story_id: str, setting_scope: str = "story"):
+    pending_items = _pending_core_items_for_scope(project_name, story_id, setting_scope)
+    if not pending_items:
+        return
+
+    scope_label = _setting_scope_label(setting_scope)
+    key_prefix = scoped_widget_key("pending_core_settings", project_name, story_id, setting_scope)
+    with st.expander(f"待确认{scope_label}设定（{len(pending_items)}）", expanded=True):
+        st.caption("这些条目来自章节设定提炼或讨论提炼。确认后会成为正式知识条目，并按注入方式影响后续生成。")
+        pending_ids = [str(item.get("pending_id") or "") for item in pending_items if item.get("pending_id")]
+        selected_ids = st.multiselect(
+            "选择要处理的候选设定",
+            options=pending_ids,
+            default=pending_ids[: min(8, len(pending_ids))],
+            format_func=lambda pending_id: next(
+                (
+                    f"{label_knowledge_category(item.get('category', ''))} / {item.get('name', '未命名')}"
+                    for item in pending_items
+                    if str(item.get("pending_id") or "") == pending_id
+                ),
+                pending_id,
+            ),
+            key=f"{key_prefix}_selected",
+        )
+        preview_limit = min(8, len(pending_items))
+        st.caption(f"下方可直接编辑前 {preview_limit} 条候选设定；完整队列仍可在资料导入页批量处理。")
+        for index, item in enumerate(pending_items[:preview_limit], start=1):
+            st.divider()
+            _render_pending_core_setting_item_editor(project_name, item, f"{key_prefix}_{index}")
+        if len(pending_items) > preview_limit:
+            st.caption(f"这里只展示前 {preview_limit} 条，共 {len(pending_items)} 条。")
+
+        col_confirm, col_discard = st.columns(2)
+        if col_confirm.button("确认所选设定", key=f"{key_prefix}_confirm", use_container_width=True):
+            if not selected_ids:
+                st.warning("请先选择候选设定。")
+            else:
+                saved_count = confirm_pending_knowledge_items(project_name, selected_ids)
+                if saved_count:
+                    rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.success(f"已确认 {saved_count} 条核心设定。")
+                st.rerun()
+        if col_discard.button("丢弃所选候选", key=f"{key_prefix}_discard", use_container_width=True):
+            if not selected_ids:
+                st.warning("请先选择候选设定。")
+            else:
+                removed_count = discard_pending_knowledge_items(project_name, selected_ids)
+                st.success(f"已丢弃 {removed_count} 条候选设定。")
+                st.rerun()
+
+
 def render_settings_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     stories = list_stories(project_name)
@@ -2862,7 +4207,18 @@ def render_settings_page(project_name: str):
             break
 
     st.subheader(f"核心设定 · {current_story_name}")
-    st.caption("故事级设定仅影响当前故事；项目级设定为所有故事共享。创意方向和生成流程请到「创作配置」页面配置。")
+    migration_key = f"setting_knowledge_migration:{project_name}"
+    if not st.session_state.get(migration_key):
+        try:
+            migration_result = migrate_core_settings_to_knowledge(project_name)
+            st.session_state[migration_key] = True
+            if migration_result.get("migrated") or migration_result.get("updated"):
+                st.success(
+                    f"已将旧核心设定同步为统一知识条目：新增 {migration_result.get('migrated', 0)} 条，更新 {migration_result.get('updated', 0)} 条。"
+                )
+        except Exception as exc:
+            st.warning(f"旧核心设定迁移失败，当前仍可继续编辑新的统一设定：{exc}")
+    st.caption("正式设定现在统一保存为知识条目。核心设定页只展示会优先影响生成的高优先级设定。")
 
     story_tab, project_tab = st.tabs(["故事设定", "项目设定"])
 
@@ -2875,91 +4231,39 @@ def render_settings_page(project_name: str):
 
 def _render_story_settings_tab(project_name: str, story_id: str, story_name: str):
     st.markdown("#### 设定复制与导入")
+    st.caption("这里复制的是正式知识条目里的核心设定；创作配置、生成规则和提示词选项仍通过故事复制入口复制。")
+    col_a, col_b, col_c = st.columns(3)
+    if col_a.button("复制项目设定到当前故事", use_container_width=True):
+        result = copy_project_core_settings_to_story(project_name, story_id)
+        st.success(f"已处理项目核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
+        st.rerun()
 
-    merge_key = f"merge_preview_{story_id}"
-    pending_merge = st.session_state.get(merge_key)
-
-    if pending_merge:
-        st.markdown("##### 合并预览")
-        for opt in pending_merge:
-            if opt.conflict:
-                st.markdown(f"**{opt.label}**")
-                st.caption(f"来源：`{opt.source_value}`　目标：`{opt.target_value}`")
-                choice = st.radio(
-                    "保留",
-                    options=["source", "target", "merged"] if opt.field_type == "list" else ["source", "target"],
-                    format_func=lambda c: {"source": "来源值", "target": "目标值", "merged": "合并去重"}.get(c, c),
-                    horizontal=True,
-                    key=f"merge_{opt.path}",
-                )
-                opt.resolution_choice = choice
-                opt.resolution = {"source": opt.source_value, "target": opt.target_value, "merged": (
-                    list(dict.fromkeys(str(v) for v in (opt.source_value or []) + (opt.target_value or [])))
-                    if opt.field_type == "list" else opt.source_value
-                )}.get(choice, opt.source_value)
-            else:
-                opt.resolution = opt.source_value if opt.source_value is not None else opt.target_value
-                opt.resolution_choice = "source"
-
-        confirm_col, cancel_col = st.columns(2)
-        if confirm_col.button("确认合并", use_container_width=True):
-            action = pending_merge[0].path.split(".")[0] if pending_merge else ""
-            field_resolutions = {}
-            for opt in pending_merge:
-                parts = opt.path.split(".", 1)
-                if len(parts) != 2:
-                    continue
-                field_resolutions[f"memory.{parts[1]}"] = opt.resolution
-            if action == "project_to_story":
-                merge_project_to_story_memory(project_name, story_id, field_resolutions=field_resolutions)
-                st.success("已从项目导入设定到当前故事")
-            elif action == "story_to_project":
-                merge_story_to_project_memory(project_name, story_id, field_resolutions=field_resolutions)
-                st.success("已合并当前故事设定到项目基础设定")
-            elif action == "story_to_story":
-                copy_story_settings(project_name, pending_merge[0].path.split(".")[1] if len(pending_merge[0].path.split(".")) > 1 else "", story_id)
-                st.success("已从其他故事导入设定")
-            st.session_state.pop(merge_key)
-            st.rerun()
-        if cancel_col.button("取消", use_container_width=True):
-            st.session_state.pop(merge_key)
+    other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
+    if other_stories:
+        sel_story = col_b.selectbox(
+            "从其他故事导入",
+            options=[s.get("story_id") for s in other_stories],
+            format_func=lambda sid: next((s.get("name", sid) for s in other_stories if s["story_id"] == sid), sid),
+            key="settings_import_story",
+            label_visibility="collapsed",
+        )
+        if col_b.button("复制该故事设定", use_container_width=True, key="import_other_story"):
+            result = copy_story_core_settings_to_story(project_name, sel_story, story_id)
+            st.success(f"已复制故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
             st.rerun()
     else:
-        col_a, col_b, col_c = st.columns(3)
-        if col_a.button("从项目导入设定", use_container_width=True):
-            from merge import build_merge_plan
-            base = load_memory(project_name)
-            story = load_story_memory(project_name, story_id)
-            plan = build_merge_plan(base, story, source_label="项目", target_label="故事")
-            for opt in plan:
-                opt.path = f"project_to_story.{opt.path}"
-            st.session_state[merge_key] = plan
-            st.rerun()
+        col_b.caption("暂无其他故事可复制。")
 
-        other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
-        if other_stories:
-            sel_story = col_b.selectbox("从其他故事导入", options=[s.get("story_id") for s in other_stories],
-                                         format_func=lambda sid: next((s.get("name", sid) for s in other_stories if s["story_id"] == sid), sid),
-                                         key="settings_import_story", label_visibility="collapsed")
-            if col_b.button("导入", use_container_width=True, key="import_other_story"):
-                copy_story_settings(project_name, sel_story, story_id)
-                st.success("已从其他故事导入设定到当前故事")
-                st.rerun()
-
-        if col_c.button("设为项目默认", use_container_width=True):
-            from merge import build_merge_plan
-            base = load_memory(project_name)
-            story = load_story_memory(project_name, story_id)
-            plan = build_merge_plan(story, base, source_label="故事", target_label="项目")
-            for opt in plan:
-                opt.path = f"story_to_project.{opt.path}"
-            st.session_state[merge_key] = plan
-            st.rerun()
+    if col_c.button("提升为项目设定", use_container_width=True):
+        result = copy_story_core_settings_to_project(project_name, story_id)
+        st.success(f"已提升当前故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
+        st.rerun()
 
     st.divider()
     st.markdown(f"#### {story_name} 的核心设定")
-    memory = load_story_memory(project_name, story_id)
-    render_memory_page(project_name, memory, embedded=True)
+    render_pending_core_setting_panel(project_name, story_id)
+    render_generation_setting_context_preview(project_name, story_id)
+    render_memory_page(project_name, {}, embedded=True)
 
 
 def _render_project_settings_tab(project_name: str):
@@ -2977,65 +4281,29 @@ def _render_project_settings_tab(project_name: str):
         new_memory["genre"] = new_genre
         changed = True
 
-    for field in [
-        "canon_mode",
-        "au_rules",
-        "world",
-        "characters",
-        "relationships",
-        "timeline",
-        "foreshadowing",
-        "active_constraints",
-        "locations",
-        "organizations",
-        "power_systems",
-        "relationship_graph",
-    ]:
-        label_map = {
-            "canon_mode": "原作对齐方式",
-            "au_rules": "架空规则",
-            "world": "世界观", "characters": "角色", "relationships": "角色关系",
-            "timeline": "时间线", "foreshadowing": "伏笔", "active_constraints": "硬性约束",
-            "locations": "地点资料", "organizations": "组织资料", "power_systems": "能力体系",
-            "relationship_graph": "关系图补充",
-        }
-        raw_value = base_memory.get(field, "")
-        value = raw_value if isinstance(raw_value, str) else "\n".join(str(item) for item in raw_value)
-        new_value = st.text_area(label_map.get(field, field), value=value, height=100, key=f"project_{field}")
-        if isinstance(raw_value, str):
-            if new_value != raw_value:
-                new_memory[field] = new_value
-                changed = True
-        else:
-            new_items = [line.strip() for line in new_value.split("\n") if line.strip()]
-            if new_items != base_memory.get(field, []):
-                new_memory[field] = new_items
-                changed = True
-
-    if st.button("保存项目设定", disabled=not changed):
+    if st.button("保存项目元信息", disabled=not changed):
         save_memory(project_name, new_memory)
-        st.success("已保存")
+        st.success("项目元信息已保存。")
         st.rerun()
     if not changed:
-        st.caption("当前表单没有未保存改动。")
+        st.caption("书名和类型没有未保存改动。")
 
-    render_core_setting_to_knowledge_tool(
-        project_name,
-        new_memory,
-        "项目基础设定",
-        "project_base",
-    )
+    st.divider()
+    render_pending_core_setting_panel(project_name, "default", "project")
+    render_generation_setting_context_preview(project_name, "default")
+    render_setting_items_editor(project_name, "default", "project")
 
     st.divider()
     st.markdown("#### 项目知识库")
     knowledge = load_knowledge_base(project_name)
     total_items = sum(len(items) for items in knowledge.values())
-    st.caption(f"共 {len(knowledge)} 个分类，{total_items} 条知识条目。详细信息请到「资料导入」页面管理。")
+    st.caption(f"共 {len(knowledge)} 个分类，{total_items} 条知识条目。详细管理请到「资料导入」页面。")
     for cat, items in knowledge.items():
         if items:
             with st.expander(f"{label_knowledge_category(cat)}（{len(items)} 条）", expanded=False):
                 for item in items:
-                    st.markdown(f"- **{item.get('name', '-')}**：{str(item.get('content', ''))[:200]}")
+                    summary = str(item.get("summary") or item.get("content") or "")[:200]
+                    st.markdown(f"- **{item.get('name', '-')}**：{summary}")
     if st.button("前往资料导入", use_container_width=True, key="goto_ingestion"):
         navigate_to("资料导入")
 
@@ -3082,7 +4350,7 @@ def _render_story_management_tab(project_name: str):
             try:
                 new_story_name = f"{s.get('name') or story_id} 副本"
                 meta = create_story(project_name, new_story_name, str(s.get("description") or ""))
-                copy_story_settings(project_name, story_id, meta["story_id"])
+                copy_story_workspace_settings(project_name, story_id, meta["story_id"])
                 st.success(f"已复制设定到新故事：{meta.get('name') or meta['story_id']}")
                 st.rerun()
             except Exception as exc:
@@ -3099,7 +4367,7 @@ def _render_story_management_tab(project_name: str):
             if new_story_name.strip():
                 meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
                 if copy_from:
-                    copy_story_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
+                    copy_story_workspace_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
                 set_active_story(project_name, meta["story_id"])
                 st.session_state["active_story_id"] = meta["story_id"]
                 st.success(f"已创建故事：{new_story_name.strip()}")
@@ -3189,6 +4457,14 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                 st.markdown("##### 当前结论")
                 _render_discussion_summary(discussion_step, "")
                 render_step_retrieval(discussion_step, "讨论参考的上传资料")
+                _render_discussion_asset_candidates(
+                    project_name,
+                    story_id,
+                    discussion_step,
+                    "creative_profile",
+                    f"creative_profile:{project_name}:{story_id}",
+                    scoped_widget_key("creative_profile_discussion_prompt_options", project_name, story_id),
+                )
                 discussion_payload = discussion_step.get("data", {}).get("discussion", {}) if discussion_step else {}
                 recommended_profile = discussion_payload.get("recommended_profile", {}) if isinstance(discussion_payload, dict) else {}
                 action_col1, action_col2 = st.columns(2)
@@ -6920,6 +8196,14 @@ def render_volume_outline_page(project_name: str):
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前分卷方向的结论。")
         render_step_retrieval(discussion_step, "本次分卷讨论参考的检索上下文")
+        _render_discussion_asset_candidates(
+            project_name,
+            story_id,
+            discussion_step,
+            "volume",
+            f"volume:{project_name}:{story_id}:{volume_no}",
+            scoped_widget_key("volume_discussion_prompt_options", *volume_scope),
+        )
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前讨论", key=scoped_widget_key("approve_volume_discussion", *volume_scope)):
             try:
@@ -7012,7 +8296,7 @@ def render_volume_outline_page(project_name: str):
             st.caption(f"第 {int(item.get('volume_no', 0))} 卷 / {item.get('title', '') or '未命名'} / 状态={label_status(item.get('status', 'draft'))} / {approval_label}")
 
     render_step_validation(step_result)
-    render_step_retrieval(step_result, "本次分卷大纲生成使用的检索上下文", get_retrieval_trace(f"volume_outline:{project_name}:{volume_no}"))
+    render_step_retrieval(step_result, "本次分卷大纲生成使用的检索上下文", get_retrieval_trace(f"volume_outline:{project_name}:{story_id}:{volume_no}"))
 
 
 def render_arc_outline_page(project_name: str):
@@ -7094,6 +8378,14 @@ def render_arc_outline_page(project_name: str):
         st.markdown("### 当前讨论结论")
         _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前剧情段方向的结论。")
         render_step_retrieval(discussion_step, "本次剧情段讨论参考的检索上下文")
+        _render_discussion_asset_candidates(
+            project_name,
+            story_id,
+            discussion_step,
+            "arc",
+            f"arc:{project_name}:{story_id}:{arc_no}",
+            scoped_widget_key("arc_discussion_prompt_options", *arc_scope),
+        )
         approve_col, clear_col = st.columns(2)
         if approve_col.button("批准当前讨论", key=scoped_widget_key("approve_arc_discussion", *arc_scope)):
             try:
@@ -7268,10 +8560,10 @@ def render_arc_outline_page(project_name: str):
             st.markdown(latest_plan)
             render_step_json_expander("章节分配结构化数据", saved_plan.get("plan", {}))
     render_step_validation(plan_step)
-    render_step_retrieval(plan_step, "本次章节分配使用的检索上下文", get_retrieval_trace(f"arc_chapter_plan:{project_name}:{arc_no}"))
+    render_step_retrieval(plan_step, "本次章节分配使用的检索上下文", get_retrieval_trace(f"arc_chapter_plan:{project_name}:{story_id}:{arc_no}"))
 
     render_step_validation(step_result)
-    render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{arc_no}"))
+    render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{story_id}:{arc_no}"))
 
 
 def run_comprehensive_chapter_evaluation(project_name: str, chapter_no: int, chapter_text: str, story_id: str = "default") -> dict:
@@ -7332,7 +8624,7 @@ def render_evaluation_page(project_name: str):
     render_step_retrieval(
         evaluation_step,
         "本次评价使用的检索上下文",
-        get_retrieval_trace(f"evaluation:comprehensive:{project_name}:{chapter_no}") or get_retrieval_trace(f"evaluation:chapter:{project_name}:{chapter_no}")
+        get_retrieval_trace(f"evaluation:comprehensive:{project_name}:{story_id}:{chapter_no}") or get_retrieval_trace(f"evaluation:chapter:{project_name}:{story_id}:{chapter_no}")
     )
 
 
@@ -7652,6 +8944,7 @@ def render_retrieval_feedback_controls(project_name: str, current_hits: list[dic
 
 
 def render_retrieval_page(project_name: str, mode: str = "center"):
+    current_story_id = st.session_state.get("active_story_id", "default")
     if mode == "ingestion":
         st.subheader("资料导入")
         st.caption("导入原作资料、参考资料和样本文本，并把资料整理为检索条目或结构化知识。")
@@ -8096,6 +9389,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     retrieval_profile=retrieval_profile or None,
                     worldline_id=worldline_filter or None,
                     worldline_mode=worldline_mode,
+                    story_id=current_story_id,
                 )
                 st.session_state["retrieval_hits"] = [hit.model_dump() for hit in hits]
                 st.session_state["retrieval_last_query"] = query
@@ -8109,6 +9403,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                     retrieval_profile=retrieval_profile or None,
                     worldline_id=worldline_filter or None,
                     worldline_mode=worldline_mode,
+                    story_id=current_story_id,
                 ) if include_debug else {}
             except Exception as exc:
                 st.error(f"检索失败：{exc}")
@@ -8219,7 +9514,7 @@ page = render_sidebar(project_name, projects)
 
 if project_name:
     story_id = st.session_state.get("active_story_id", "default")
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
 else:
     story_id = "default"
     memory = None
@@ -8247,6 +9542,8 @@ elif page == "检索中心":
     render_retrieval_page(project_name, mode="center")
 elif page == "生成规则":
     render_rules_page(project_name)
+elif page == "提示词选项":
+    render_prompt_options_page(project_name)
 elif page == "生成大纲":
     render_outline_page(project_name)
 elif page == "分卷大纲":

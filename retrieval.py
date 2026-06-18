@@ -111,6 +111,29 @@ KNOWLEDGE_SOURCE_TYPES = [
     "knowledge_constraints",
 ]
 
+STORY_SCOPED_SOURCE_TYPES = {
+    "outline",
+    "chapter_summary",
+    "creative_profile_discussion",
+    "outline_discussion",
+    "volume_outline",
+    "volume_discussion",
+    "arc_outline",
+    "arc_discussion",
+    "arc_chapter_plan",
+    "chapter_outline",
+    "chapter_discussion",
+    "chapter_content",
+    "review_summary",
+    "review_issue",
+    "review_characters_check",
+    "review_world_check",
+    "review_timeline_check",
+    "review_foreshadowing_check",
+    "review_markdown",
+    "evaluation_chapter",
+}
+
 RETRIEVAL_TASK_PROFILES = {
     "creative_profile_discussion": {
         "top_k": 8,
@@ -675,6 +698,38 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
     return documents
 
 
+def _knowledge_item_retrieval_metadata(category: str, item: dict) -> dict:
+    return {
+        "knowledge_category": category,
+        "authority": str(item.get("authority") or "project"),
+        "source_title": str(item.get("source_title") or ""),
+        "source_origin": str(item.get("source_origin") or ""),
+        "confidence": item.get("confidence", 0.7),
+        "status": str(item.get("status") or "confirmed"),
+        "canon_status": str(item.get("canon_status") or "unknown"),
+        "setting_scope": str(item.get("setting_scope") or ""),
+        "setting_role": str(item.get("setting_role") or ""),
+        "setting_field": str(item.get("setting_field") or ""),
+        "story_id": str(item.get("story_id") or ""),
+        "injection_policy": str(item.get("injection_policy") or ""),
+        "version_scope": str(item.get("version_scope") or ""),
+        "worldline_id": str(item.get("worldline_id") or ""),
+        "worldline_label": str(item.get("worldline_label") or ""),
+    }
+
+
+def _knowledge_metadata_by_doc_id(project_name: str) -> dict[str, dict]:
+    knowledge_base = load_knowledge_base(project_name)
+    metadata_by_doc_id: dict[str, dict] = {}
+    for category, items in knowledge_base.items():
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+            doc_id = _document_id(f"knowledge_{category}", project_name, str(item.get("id") or index))
+            metadata_by_doc_id[doc_id] = _knowledge_item_retrieval_metadata(category, item)
+    return metadata_by_doc_id
+
+
 def _documents_from_knowledge(project_name: str) -> list[RetrievalDocument]:
     knowledge_base = load_knowledge_base(project_name)
     documents: list[RetrievalDocument] = []
@@ -710,18 +765,7 @@ def _documents_from_knowledge(project_name: str) -> list[RetrievalDocument]:
                 scope=str(item.get("scope") or "project"),
                 path=str(project_path(project_name) / "knowledge" / f"{category}.json"),
                 tags=[str(tag) for tag in item.get("tags", []) if str(tag).strip()] if isinstance(item.get("tags"), list) else [],
-                metadata={
-                    "knowledge_category": category,
-                    "authority": str(item.get("authority") or "project"),
-                    "source_title": str(item.get("source_title") or ""),
-                    "source_origin": str(item.get("source_origin") or ""),
-                    "confidence": item.get("confidence", 0.7),
-                    "status": str(item.get("status") or "confirmed"),
-                    "canon_status": str(item.get("canon_status") or "unknown"),
-                    "version_scope": str(item.get("version_scope") or ""),
-                    "worldline_id": str(item.get("worldline_id") or ""),
-                    "worldline_label": str(item.get("worldline_label") or ""),
-                },
+                metadata=_knowledge_item_retrieval_metadata(category, item),
             )
             if doc:
                 documents.append(doc)
@@ -947,6 +991,7 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
         tags=["outline_discussion", "approved_discussion"],
         metadata={
             "authority": "project",
+            "story_id": story_id,
             "approval_ready": bool((outline_discussion_artifact.get("discussion") or {}).get("approval_ready")),
         },
     )
@@ -961,13 +1006,14 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
         doc = _make_document(
             project_name,
             "volume_outline",
-            f"volume_{volume_no:03d}",
+            f"{story_id}/volume_{volume_no:03d}",
             volume_meta.get("title") or f"Volume {volume_no:03d}",
             volume_outline,
             path=str(base_path / "volumes" / f"volume_{volume_no:03d}.md"),
             tags=["volume_outline", f"volume_{volume_no:03d}"],
             metadata={
                 "authority": "project",
+                "story_id": story_id,
                 "volume_no": volume_no,
                 "status": volume_meta.get("status", "draft"),
                 "summary": volume_meta.get("summary", ""),
@@ -980,13 +1026,14 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
         doc = _make_document(
             project_name,
             "volume_discussion",
-            f"volume_{volume_no:03d}",
+            f"{story_id}/volume_{volume_no:03d}",
             f"{volume_meta.get('title') or f'Volume {volume_no:03d}'} Approved Discussion",
             volume_discussion,
             path=str(base_path / "volumes" / f"volume_{volume_no:03d}.discussion.json"),
             tags=["volume_discussion", f"volume_{volume_no:03d}", "approved_discussion"],
             metadata={
                 "authority": "project",
+                "story_id": story_id,
                 "volume_no": volume_no,
                 "approval_ready": bool((volume_discussion_artifact.get("discussion") or {}).get("approval_ready")),
             },
@@ -1002,13 +1049,14 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
         doc = _make_document(
             project_name,
             "arc_outline",
-            f"arc_{arc_no:03d}",
+            f"{story_id}/arc_{arc_no:03d}",
             arc_meta.get("title") or f"Arc {arc_no:03d}",
             arc_outline,
             path=str(base_path / "arcs" / f"arc_{arc_no:03d}.md"),
             tags=["arc_outline", f"arc_{arc_no:03d}"],
             metadata={
                 "authority": "project",
+                "story_id": story_id,
                 "arc_no": arc_no,
                 "volume_no": arc_meta.get("volume_no"),
                 "status": arc_meta.get("status", "draft"),
@@ -1024,13 +1072,14 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
         doc = _make_document(
             project_name,
             "arc_discussion",
-            f"arc_{arc_no:03d}",
+            f"{story_id}/arc_{arc_no:03d}",
             f"{arc_meta.get('title') or f'Arc {arc_no:03d}'} Approved Discussion",
             arc_discussion,
             path=str(base_path / "arcs" / f"arc_{arc_no:03d}.discussion.json"),
             tags=["arc_discussion", f"arc_{arc_no:03d}", "approved_discussion"],
             metadata={
                 "authority": "project",
+                "story_id": story_id,
                 "arc_no": arc_no,
                 "volume_no": arc_meta.get("volume_no"),
                 "approval_ready": bool((arc_discussion_artifact.get("discussion") or {}).get("approval_ready")),
@@ -1044,13 +1093,14 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
         doc = _make_document(
             project_name,
             "arc_chapter_plan",
-            f"arc_{arc_no:03d}",
+            f"{story_id}/arc_{arc_no:03d}",
             f"{arc_meta.get('title') or f'Arc {arc_no:03d}'} Chapter Plan",
             plan_markdown,
             path=str(base_path / "arcs" / f"arc_{arc_no:03d}.chapter_plan.json"),
             tags=["arc_chapter_plan", f"arc_{arc_no:03d}"],
             metadata={
                 "authority": "project",
+                "story_id": story_id,
                 "arc_no": arc_no,
                 "volume_no": arc_meta.get("volume_no"),
             },
@@ -1073,7 +1123,7 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
             doc = _make_document(
                 project_name,
                 "chapter_outline",
-                file.stem,
+                f"{story_id}/{file.stem}",
                 f"Chapter {chapter_no:03d} Outline" if chapter_no is not None else file.stem,
                 load_chapter_outline(project_name, chapter_no, story_id=story_id) if chapter_no is not None else file.read_text(encoding="utf-8"),
                 chapter_no=chapter_no,
@@ -1081,6 +1131,7 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 tags=["chapter_outline"],
                 metadata={
                     "authority": "project",
+                    "story_id": story_id,
                     "volume_no": chapter_meta.get("volume_no"),
                     "arc_no": chapter_meta.get("arc_no"),
                 },
@@ -1095,7 +1146,7 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
             doc = _make_document(
                 project_name,
                 "chapter_discussion",
-                f"chapter_{chapter_no:03d}",
+                f"{story_id}/chapter_{chapter_no:03d}",
                 f"Chapter {chapter_no:03d} Approved Discussion",
                 chapter_discussion,
                 chapter_no=chapter_no,
@@ -1103,6 +1154,7 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 tags=["chapter_discussion", f"chapter_{chapter_no:03d}", "approved_discussion"],
                 metadata={
                     "authority": "project",
+                    "story_id": story_id,
                     "chapter_no": chapter_no,
                     "volume_no": chapter_meta.get("volume_no"),
                     "arc_no": chapter_meta.get("arc_no"),
@@ -1121,13 +1173,13 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
             doc = _make_document(
                 project_name,
                 "chapter_content",
-                file.stem,
+                f"{story_id}/{file.stem}",
                 f"Chapter {chapter_no:03d} Content" if chapter_no is not None else file.stem,
                 content,
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["chapter"],
-                metadata={"authority": "project"},
+                metadata={"authority": "project", "story_id": story_id},
             )
             if doc:
                 documents.append(doc)
@@ -1145,13 +1197,13 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
             summary_doc = _make_document(
                 project_name,
                 "review_summary",
-                f"summary_{chapter_no:03d}",
+                f"{story_id}/summary_{chapter_no:03d}",
                 f"Chapter {chapter_no:03d} Review Summary",
                 review_json.get("summary", ""),
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["review", "summary", review_json.get("status", "")],
-                metadata={"status": review_json.get("status", ""), "authority": "project"},
+                metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
             )
             if summary_doc:
                 documents.append(summary_doc)
@@ -1160,13 +1212,13 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 doc = _make_document(
                     project_name,
                     "review_issue",
-                    f"{chapter_no:03d}_{index:02d}",
+                    f"{story_id}/{chapter_no:03d}_{index:02d}",
                     f"Chapter {chapter_no:03d} Review Issue {index}",
                     issue,
                     chapter_no=chapter_no,
                     path=str(file),
                     tags=["review", "issue"],
-                    metadata={"status": review_json.get("status", ""), "authority": "project"},
+                    metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
                 )
                 if doc:
                     documents.append(doc)
@@ -1181,13 +1233,13 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 doc = _make_document(
                     project_name,
                     label,
-                    f"{chapter_no:03d}_{field_name}",
+                    f"{story_id}/{chapter_no:03d}_{field_name}",
                     f"Chapter {chapter_no:03d} {field_name.title()} Check",
                     content,
                     chapter_no=chapter_no,
                     path=str(file),
                     tags=["review", field_name],
-                    metadata={"status": review_json.get("status", ""), "authority": "project"},
+                    metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
                 )
                 if doc:
                     documents.append(doc)
@@ -1199,13 +1251,13 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
             doc = _make_document(
                 project_name,
                 "review_markdown",
-                file.stem,
+                f"{story_id}/{file.stem}",
                 f"Chapter {chapter_no:03d} Review Markdown" if chapter_no is not None else file.stem,
                 content,
                 chapter_no=chapter_no,
                 path=str(file),
                 tags=["review", "markdown"],
-                metadata={"authority": "project"},
+                metadata={"authority": "project", "story_id": story_id},
             )
             if doc:
                 documents.append(doc)
@@ -1222,13 +1274,13 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 doc = _make_document(
                     project_name,
                     f"analysis_{analysis_type}",
-                    identifier,
+                    f"{story_id}/{identifier}",
                     section_title or f"{analysis_type} analysis",
                     section_body,
                     chapter_no=chapter_no,
                     path=str(file),
                     tags=["analysis", analysis_type],
-                    metadata={"authority": "project"},
+                    metadata={"authority": "project", "story_id": story_id},
                 )
                 if doc:
                     documents.append(doc)
@@ -1242,7 +1294,7 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
             doc = _make_document(
                 project_name,
                 "evaluation_chapter",
-                file.stem,
+                f"{story_id}/{file.stem}",
                 f"Chapter {chapter_no:03d} Evaluation" if chapter_no is not None else file.stem,
                 content,
                 chapter_no=chapter_no,
@@ -1250,6 +1302,7 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 tags=["evaluation"],
                 metadata={
                     "authority": "project",
+                    "story_id": story_id,
                     "evaluation": load_evaluation_json(project_name, chapter_no, story_id=story_id) if chapter_no is not None else {},
                 },
             )
@@ -1581,12 +1634,64 @@ def rebuild_retrieval_assets(project_name: str, *, build_vectors: bool = True) -
     return manifest
 
 
+def _refresh_manifest_knowledge_metadata(project_name: str, manifest: RetrievalIndexManifest) -> RetrievalIndexManifest:
+    metadata_by_doc_id = _knowledge_metadata_by_doc_id(project_name)
+    if not metadata_by_doc_id:
+        return manifest
+    changed = False
+    for document in manifest.documents:
+        if not document.source_type.startswith("knowledge_"):
+            continue
+        metadata = metadata_by_doc_id.get(document.doc_id)
+        if not metadata:
+            continue
+        merged = {**document.metadata, **metadata}
+        if merged != document.metadata:
+            document.metadata = merged
+            changed = True
+    for chunk in manifest.chunks:
+        if not chunk.source_type.startswith("knowledge_"):
+            continue
+        metadata = metadata_by_doc_id.get(chunk.document_id)
+        if not metadata:
+            continue
+        merged = {**chunk.metadata, **metadata}
+        if merged != chunk.metadata:
+            chunk.metadata = merged
+            changed = True
+    if changed:
+        save_retrieval_manifest(project_name, manifest.model_dump_json(indent=2))
+    return manifest
+
+
+def _is_story_scoped_source_type(source_type: str) -> bool:
+    normalized = str(source_type or "")
+    return normalized in STORY_SCOPED_SOURCE_TYPES or normalized.startswith("analysis_")
+
+
+def _manifest_needs_story_scope_rebuild(manifest: RetrievalIndexManifest) -> bool:
+    seen_doc_ids: set[str] = set()
+    for document in manifest.documents:
+        if document.doc_id in seen_doc_ids:
+            return True
+        seen_doc_ids.add(document.doc_id)
+        if _is_story_scoped_source_type(document.source_type) and not str(document.metadata.get("story_id") or "").strip():
+            return True
+    for chunk in manifest.chunks:
+        if _is_story_scoped_source_type(chunk.source_type) and not str(chunk.metadata.get("story_id") or "").strip():
+            return True
+    return False
+
+
 def load_retrieval_index(project_name: str) -> RetrievalIndexManifest:
     content = load_retrieval_manifest(project_name)
     if not content.strip():
         return build_retrieval_index(project_name)
     try:
-        return RetrievalIndexManifest.model_validate_json(content)
+        manifest = RetrievalIndexManifest.model_validate_json(content)
+        if _manifest_needs_story_scope_rebuild(manifest):
+            return build_retrieval_index(project_name)
+        return _refresh_manifest_knowledge_metadata(project_name, manifest)
     except Exception:
         return build_retrieval_index(project_name)
 
@@ -1722,6 +1827,19 @@ def _worldline_allowed(chunk: RetrievalChunk, worldline_id: str | None, worldlin
     if mode != "strict":
         return True
     return _worldline_match_state(chunk, worldline_id) in {"off", "global", "match"}
+
+
+def _story_scope_allowed(chunk: RetrievalChunk, story_id: str | None = "default") -> bool:
+    if not isinstance(chunk.metadata, dict):
+        return True
+    target_story_id = str(story_id or "default").strip() or "default"
+    chunk_story_id = str(chunk.metadata.get("story_id") or "").strip()
+    if chunk_story_id:
+        return chunk_story_id == target_story_id
+    setting_scope = str(chunk.metadata.get("setting_scope") or "").strip().lower()
+    if setting_scope == "story":
+        return False
+    return True
 
 
 def _expand_query_terms(query: str) -> list[str]:
@@ -1989,6 +2107,7 @@ def _run_retrieval(
     retrieval_profile: str | None = None,
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
+    story_id: str = "default",
 ) -> dict:
     resolved = resolve_retrieval_params(
         reference_focus,
@@ -2019,6 +2138,8 @@ def _run_retrieval(
         if chunk.scope not in scope_filter:
             continue
         if source_filter and chunk.source_type not in source_filter:
+            continue
+        if not _story_scope_allowed(chunk, story_id):
             continue
         if not _worldline_allowed(chunk, normalized_worldline, normalized_worldline_mode):
             continue
@@ -2088,6 +2209,7 @@ def _run_retrieval(
         "source_type_filter": sorted(source_filter),
         "candidate_chunk_count": len(filtered_chunks),
         "semantic_enabled": bool(semantic_scores),
+        "story_id": str(story_id or "default"),
         "worldline_id": normalized_worldline,
         "worldline_mode": normalized_worldline_mode,
         "initial_hits": initial_hits,
@@ -2108,6 +2230,7 @@ def retrieve_context(
     retrieval_profile: str | None = None,
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
+    story_id: str = "default",
 ) -> list[RetrievalHit]:
     result = _run_retrieval(
         project_name,
@@ -2121,6 +2244,7 @@ def retrieve_context(
         retrieval_profile=retrieval_profile,
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
+        story_id=story_id,
     )
     return result["reranked_hits"]
 
@@ -2138,6 +2262,7 @@ def debug_retrieve_context(
     reference_strength: str | None = None,
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
+    story_id: str = "default",
 ) -> dict:
     result = _run_retrieval(
         project_name,
@@ -2151,6 +2276,7 @@ def debug_retrieve_context(
         retrieval_profile=retrieval_profile,
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
+        story_id=story_id,
     )
     return {
         **{key: value for key, value in result.items() if key not in {"initial_hits", "reranked_hits"}},

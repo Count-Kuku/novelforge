@@ -381,9 +381,10 @@ def load_text_file(path: Path, fallback: str = "") -> str:
 
 def get_project_summary(project_name: str, story_id: str = "default") -> dict:
     base = _project_dir(project_name)
-    from memory import load_story_chapter_summaries, load_story_memory
+    from memory import load_story_chapter_summaries
+    from setting_knowledge import build_generation_setting_context
 
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     knowledge_base = load_knowledge_base(project_name)
     files = [item for item in base.rglob("*") if item.is_file()]
     analysis_reports = list_analysis_reports(project_name, story_id=story_id)

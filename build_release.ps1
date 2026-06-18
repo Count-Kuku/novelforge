@@ -63,7 +63,9 @@ New-Item -ItemType Directory -Path $PortableRoot | Out-Null
 
 $filesToCopy = @(
     "app.py",
+    "asset_guardrails.py",
     "creative_profile_workflows.py",
+    "discussion_assets.py",
     "extraction_presets.py",
     "knowledge_entities.py",
     "knowledge_quality.py",
@@ -75,8 +77,9 @@ $filesToCopy = @(
     "retrieval_eval.py",
     "resource_browser.py",
     "schemas.py",
-    "settings_workflows.py",
+    "setting_knowledge.py",
     "prompts.py",
+    "prompt_options.py",
     "skills.py",
     "source_workflows.py",
     "project_manager.py",

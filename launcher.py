@@ -16,6 +16,7 @@ READY_TIMEOUT_SECONDS = 45
 READY_POLL_INTERVAL_SECONDS = 0.5
 APP_MARKER = "NovelForge"
 LOG_FILE_NAME = "launcher.log"
+STREAMLIT_MARKERS = ("streamlit", "stapp")
 
 
 def _project_root() -> Path:
@@ -94,6 +95,25 @@ def _is_novelforge_instance(url: str) -> bool:
         return False
 
 
+def _looks_like_streamlit_shell(page: str) -> bool:
+    lowered = str(page or "").lower()
+    return any(marker in lowered for marker in STREAMLIT_MARKERS)
+
+
+def _clean_subprocess_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    seen_keys: set[str] = set()
+    for key, value in os.environ.items():
+        normalized = key.upper() if os.name == "nt" else key
+        if normalized == "PATH":
+            env["Path" if os.name == "nt" else "PATH"] = value
+            seen_keys.add(normalized)
+        elif normalized not in seen_keys:
+            env[key] = value
+            seen_keys.add(normalized)
+    return env
+
+
 def _find_available_port(root: Path) -> tuple[int | None, int | None]:
     first_conflicting_port = None
     for port in PORT_CANDIDATES:
@@ -117,7 +137,7 @@ def _wait_for_http_ready(url: str, timeout_seconds: int) -> bool:
             request = Request(url, headers={"User-Agent": "NovelForge-Launcher/1.0"})
             with urlopen(request, timeout=2) as response:
                 page = response.read().decode("utf-8", errors="ignore")
-                if response.status < 500 and APP_MARKER in page:
+                if response.status < 500 and (APP_MARKER in page or _looks_like_streamlit_shell(page)):
                     return True
         except Exception:
             time.sleep(READY_POLL_INTERVAL_SECONDS)
@@ -139,6 +159,16 @@ def _launch_streamlit(root: Path, python_executable: Path, port: int):
         "true",
         "--browser.gatherUsageStats",
         "false",
+        "--theme.base",
+        "light",
+        "--theme.primaryColor",
+        "#0f766e",
+        "--theme.backgroundColor",
+        "#f7f8fb",
+        "--theme.secondaryBackgroundColor",
+        "#ffffff",
+        "--theme.textColor",
+        "#17202a",
         "--server.port",
         str(port),
         "--server.address",
@@ -160,6 +190,7 @@ def _launch_streamlit(root: Path, python_executable: Path, port: int):
         process = subprocess.Popen(
             streamlit_command,
             cwd=root,
+            env=_clean_subprocess_env(),
             stdout=log_file,
             stderr=subprocess.STDOUT,
             creationflags=creation_flags,

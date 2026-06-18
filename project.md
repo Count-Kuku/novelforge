@@ -43,16 +43,16 @@ Current practical status:
 * Chapter outline generation
 * Chapter writing
 * Chapter review
-* Memory update
+* Setting extraction
 * DeepSeek API integration
 * Configurable OpenAI-compatible model endpoint
 * Structured review status output
-* Safer memory update validation
+* Safer setting-extraction validation
 * Streamlit UI
 * Configurable temperature and system message for LLM calls
-* Form-based memory editing (no raw JSON required)
+* Form-based core-setting editing backed by structured knowledge
 * Configurable target word count per chapter
-* Memory compaction for long-running projects
+* Core-setting knowledge consolidation for long-running projects
 * Pipeline with per-step error isolation and partial result recovery
 * Configurable recent summary count (default 5)
 * Layered prompt rules (global + project scope)
@@ -79,8 +79,8 @@ Current practical status:
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Consolidated creative profile page for direct profile editing, discussion-assisted recommendations, one-click form backfill, and approval-based persistence
 * Lightweight quick-generation playground supporting prompt-only or fully-configured execution for testing and experimentation
-* Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and memory-update chaining
-* Content generation chained pipeline: write → review → memory update, plus reset-based full pipeline from requirement
+* Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and setting-extraction chaining
+* Content generation chained pipeline: write → review → setting extraction, plus reset-based full pipeline from requirement
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 * Deep source extraction modes for fan-fiction groundwork: general, deep, characters, relationships, timeline, world, style, strict canon, and fanfic reference
 * Specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes
@@ -260,7 +260,15 @@ novelforge/
 
 ├── schemas.py
 
+├── setting_knowledge.py
+
 ├── prompts.py
+
+├── prompt_options.py
+
+├── discussion_assets.py
+
+├── asset_guardrails.py
 
 ├── skills.py
 
@@ -278,7 +286,6 @@ novelforge/
 
 ├── creative_profile_workflows.py
 
-├── settings_workflows.py
 
 ├── retrieval_eval.py
 
@@ -307,13 +314,17 @@ novelforge/
 
 ├── global_rules.json
 
+├── prompt_options.json
+
 └── projects/
 
     └── {project_name}/
 
-        ├── memory.json          ← shared base memory
+        ├── memory.json          ← project metadata only (title, genre)
 
         ├── rules.json           ← shared project rules
+
+        ├── prompt_options.json  ← shared project prompt option overrides
 
         ├── knowledge/           ← shared structured knowledge
         │   └── entities/         ← generated entity cards such as character profiles
@@ -331,6 +342,8 @@ novelforge/
                 ├── memory_overrides.json
 
                 ├── rules_overrides.json
+
+                ├── prompt_options.json
 
                 ├── outline.md
 
@@ -428,11 +441,10 @@ Responsibilities:
 
 UI features:
 
-* Core story state editing via structured form (title, genre, world, characters, etc.)
-  with raw JSON fallback in collapsible section
+* Core-setting editing via structured forms backed by confirmed knowledge items
 * Word count configuration per chapter
-* Content generation page supports chained pipelines (write → review → memory update) with per-step status and partial results, plus a full requirement-based pipeline (outline → write → review → memory update)
-* One-click memory compaction button
+* Content generation page supports chained pipelines (write → review → setting extraction) with per-step status and partial results, plus a full requirement-based pipeline (outline → write → review → setting extraction)
+* Pending core-setting confirmation and editing directly on the core-setting page
 * Rule center for managing global/project prompt constraints
 * Quick requirement capture with selectable target scope
 * Dedicated analysis page for consistency / character / timeline / foreshadowing checks
@@ -467,7 +479,7 @@ Business logic should remain minimal.
 Current UI design note:
 
 * `app.py` now includes lightweight reusable render helpers so pages consume `WorkflowStepResult` objects consistently instead of hand-formatting each skill result independently
-* Pending-knowledge triage, item save/move helpers, filter/sort rules, and batch-plan execution have been split out to `knowledge_workflows.py`; quality detection, fact-conflict helpers, alias upsert, and knowledge merge helpers have been split out to `knowledge_quality.py`; character/setting entity-card aggregation has been split out to `knowledge_entities.py`; long-source import/extraction/ledger workflows and resume-state summaries have been split out to `source_workflows.py`; resource-browser item construction and save/delete actions have been split out to `resource_browser.py`; creative-profile defaults, recommendation rules, and form payload builders have been split out to `creative_profile_workflows.py`; core-setting knowledge conversion has been split out to `settings_workflows.py`; RAG evaluation, report data construction, and evaluation form parsing have been split out to `retrieval_eval.py`. `app.py` should keep only Streamlit rendering, UI state, and interaction glue for those flows
+* Pending-knowledge triage, item save/move helpers, filter/sort rules, and batch-plan execution have been split out to `knowledge_workflows.py`; quality detection, fact-conflict helpers, alias upsert, and knowledge merge helpers have been split out to `knowledge_quality.py`; character/setting entity-card aggregation has been split out to `knowledge_entities.py`; long-source import/extraction/ledger workflows and resume-state summaries have been split out to `source_workflows.py`; resource-browser item construction and save/delete actions have been split out to `resource_browser.py`; creative-profile defaults, recommendation rules, and form payload builders have been split out to `creative_profile_workflows.py`; unified core-setting knowledge migration, editing helpers, and generation-context assembly live in `setting_knowledge.py`; RAG evaluation, report data construction, and evaluation form parsing have been split out to `retrieval_eval.py`. `app.py` should keep only Streamlit rendering, UI state, and interaction glue for those flows
 
 ---
 
@@ -588,6 +600,27 @@ Design purpose:
 
 ---
 
+## prompt_options.py
+
+User-editable prompt option engine.
+
+Responsibilities:
+
+* Define built-in prompt option presets for writing style, planning method, review rubric, and setting-extraction policy
+* Normalize user-created prompt options into a fixed schema before persistence
+* Merge built-in, global, project, and story-level prompt options with deterministic override order
+* Filter active options by capability such as `outline`, `chapter_outline`, `write`, `review`, and `setting_extraction`
+* Render active prompt options as bounded prompt blocks that cannot replace structured output contracts
+* Extract candidate prompt options from approved or in-progress planning discussions, requiring explicit user confirmation before saving them to story storage
+
+Design purpose:
+
+* Keep data/storage formats strict while allowing advanced users to customize selectable generation behavior
+* Avoid letting free-form user prompt text override JSON schemas, persistence format, workflow result contracts, or other hard system requirements
+* Provide a reusable layer between the existing rule system and task-specific prompt templates
+
+---
+
 ## creative_profile_workflows.py
 
 Creative-profile configuration rules.
@@ -606,20 +639,57 @@ Design purpose:
 
 ---
 
-## settings_workflows.py
+## setting_knowledge.py
 
-Settings-to-knowledge conversion logic.
+Unified core-setting knowledge helpers.
 
 Responsibilities:
 
-* Define which core story/project setting fields can become structured knowledge
-* Convert stable settings into pending structured-knowledge candidates with provenance, evidence, confidence, and tags
-* Keep naming cleanup for generated knowledge items outside UI rendering
+* Migrate legacy project/story memory settings into confirmed structured knowledge items
+* Keep core-setting item metadata normalized, including scope, story ID, setting role, and injection policy
+* Provide editing helpers for core-setting views without duplicating storage rules in `app.py`
+* Copy project/story core-setting knowledge items between scopes with stable IDs and duplicate protection
+* Build generation-time memory dictionaries from unified setting knowledge while preserving legacy fallback behavior
 
 Design purpose:
 
-* Keep core-setting conversion rules outside `app.py`
-* Make future settings-to-knowledge tests possible without loading Streamlit
+* Make structured knowledge the formal storage layer for stable settings
+* Keep the core-setting page as a lightweight view over knowledge items instead of a parallel storage path
+
+---
+
+## discussion_assets.py
+
+Discussion-to-asset candidate builder.
+
+Responsibilities:
+
+* Convert structured discussion results into confirmable core-setting candidates
+* Convert discussion constraints and risks into story-level rule candidates
+* Reuse prompt-option candidate generation so discussion pages can expose all reusable assets together
+* Keep candidate generation deterministic and side-effect free; UI code applies candidates only after user confirmation
+
+Design purpose:
+
+* Let discussions become durable project assets without allowing free-form conversation to bypass storage schemas or structured output contracts
+* Keep discussion asset extraction separate from Streamlit rendering and persistence functions
+
+---
+
+## asset_guardrails.py
+
+Reusable candidate safety checks for discussion-derived assets.
+
+Responsibilities:
+
+* Normalize text for duplicate and near-duplicate checks across settings, prompt options, and rules
+* Compare discussion-derived candidates with existing project/story assets before the UI saves them
+* Return side-effect-free warning records so Streamlit can ask the user whether to add, overwrite, or skip
+
+Design purpose:
+
+* Keep confirmation safeguards separate from asset extraction and persistence
+* Reduce accidental duplicate Prompt options, repeated rules, and conflicting core settings without blocking deliberate user overrides
 
 ---
 
@@ -654,6 +724,8 @@ Responsibilities:
 * Open the browser automatically for local packaged usage
 * Reuse an already-running localhost instance only when it is confirmed to be NovelForge
 * Fall back across a small local port range when the default port is unavailable
+* Treat the Streamlit shell as a valid readiness signal after launching the app, because the initial HTML may not contain app-specific text
+* Normalize duplicated `Path` / `PATH` environment keys before spawning the Streamlit process on Windows
 * Write launcher diagnostics to `launcher.log` and surface blocking startup errors to the user
 
 Design purpose:
@@ -743,8 +815,8 @@ Persistence layer.
 Responsibilities:
 
 * Project creation
-* Loading memory
-* Saving memory
+* Loading compatibility memory dictionaries for older workflow helpers
+* Saving slim project metadata to `memory.json`
 * Loading global rules
 * Saving global rules
 * Loading project rules
@@ -795,6 +867,11 @@ Responsibilities:
 * Fetching recent chapter summaries (configurable limit, default 5)
 * Counting total written chapters
 
+Current storage note:
+
+* `memory.json` is no longer the primary storage layer for stable settings. It is intentionally slimmed to project metadata such as title and genre.
+* Stable settings are managed as structured knowledge through `setting_knowledge.py`, with legacy memory-shaped dictionaries assembled only as compatibility views for prompt builders.
+
 No LLM logic should exist here.
 
 ---
@@ -831,7 +908,7 @@ Responsibilities:
 * Define machine-readable output contracts for LLM steps
 * Define machine-readable output contracts for workflow steps and pipeline state
 * Validate review payloads
-* Validate memory update payloads
+* Validate setting-extraction payloads
 * Define structured analysis result models
 * Define structured reference-organization result models for controlled knowledge ingestion
 * Define structured discussion result models for outline-level, volume-level, arc-level, and chapter-level planning conversations
@@ -884,7 +961,7 @@ Current retrieval design notes:
 * Formatted retrieval context includes a compact briefing for source distribution, priority references, constraints/settings, and conflict resolutions before full chunks
 * Retrieval documents are separated from prompt logic so the indexing contract remains reusable
 * Scope priority currently prefers `project`, then `canon`, then `reference`
-* Retrieval is already injected into outline, chapter planning, writing, review, memory update, and analysis steps
+* Retrieval is already injected into outline, chapter planning, writing, review, setting extraction, and analysis steps
 * Project volume outlines and arc outlines are now indexed as first-class retrieval documents so chapter planning can use story-level, volume-level, and arc-level context together
 * Approved creative-profile / outline / volume / arc / chapter discussion artifacts are now indexed as first-class retrieval documents so configuration and planning approvals remain visible to retrieval-aware workflows
 * Story-level content (outlines, chapters, reviews, evaluations, pipeline runs) is now stored under `stories/{story_id}` and indexed separately per story
@@ -972,13 +1049,13 @@ Current skill design notes:
 
 * Review results are validated through Pydantic schemas before persistence
 * Analysis skills validate JSON through Pydantic schemas, normalize object-shaped list items into strings when needed, then render Markdown reports under the project `analysis/` directory
-* Analysis skills now return the same workflow step contract as generation/review/memory-update steps, including validated structured payloads and persisted Markdown reports
-* Memory updates are validated through Pydantic schemas before being written into project storage
+* Analysis skills now return the same workflow step contract as generation/review/setting-extraction steps, including validated structured payloads and persisted Markdown reports
+* Setting extraction payloads are validated through Pydantic schemas before being queued for confirmation
 * All LLM-calling functions check for empty responses and raise explicit errors
 * `pipeline_plan_write_review_update` executes steps independently — if one fails,
   remaining steps are skipped and partial results are still returned
 * Key workflow steps now return a common structure containing `success`, `status`, `data`, `error`, `warnings`, `retrieval_hits`, `validation`, and `artifacts`
-* The same step-result contract now covers outline generation, chapter planning, chapter writing, chapter review, memory update, and the combined pipeline
+* The same step-result contract now covers outline generation, chapter planning, chapter writing, chapter review, setting extraction, and the combined pipeline
 * The chapter pipeline now maintains an explicit state object with current step, step history, warnings, halt reason, and structured error records
 * Pipeline runs are now persisted under project storage so state snapshots can be inspected after execution
 * Step failures are now normalized into structured workflow errors with typed categories such as `validation`, `persistence`, `retrieval`, `input`, and `llm`
@@ -1082,7 +1159,7 @@ The step now returns a structured result object with:
 
 ---
 
-Memory Update
+Setting Extraction
 
 Chapter
  +
@@ -1090,22 +1167,22 @@ Retrieved Context
  +
 Applicable Rules
 ↓
-update_memory_from_chapter
+extract_setting_candidates_from_chapter
 ↓
-memory.json
+pending knowledge queue + chapter summary
 
 If JSON validation fails:
 ↓
-return rejected result without modifying memory.json
+return rejected result without modifying confirmed knowledge
 
 Validation is performed through `schemas.py`.
 
 The step now returns a structured result object:
 
-* `success` / `status` indicate whether the update completed, failed, or was rejected
+* `success` / `status` indicate whether the extraction completed, failed, or was rejected
 * `validation` records schema-pass or schema-fail information
 * `artifacts.raw_response` preserves the raw model output when rejection happens
-* `retrieval_hits` keeps the exact supporting context used during the update attempt
+* `retrieval_hits` keeps the exact supporting context used during the extraction attempt
 
 ---
 
@@ -1148,7 +1225,7 @@ Pipeline Result Contract
 * `steps.chapter_outline`
 * `steps.write_chapter`
 * `steps.review_chapter`
-* `steps.memory_update`
+* `steps.setting_extraction`
 
 Each step uses the shared workflow step schema so the UI can render status, errors, validation state, retrieval evidence, and saved artifacts without special-case parsing.
 
@@ -1161,7 +1238,7 @@ The pipeline now also returns a chapter workflow state object containing:
 * `chapter`
 * `review`
 * `review_markdown`
-* `memory_update`
+* `setting_extraction`
 * `completed_steps`
 * `failed_steps`
 * `retry_counts`
@@ -1226,11 +1303,10 @@ memory.json
 
 Stores:
 
-* characters
-* world settings
-* timeline
-* foreshadowing
-* chapter summaries
+* project title
+* project genre
+
+Stable settings, timelines, relationships, and constraints are stored under `knowledge/` as structured knowledge items. Chapter summaries are story-level files under `stories/{story_id}/chapter_summaries.json`.
 
 rules.json
 
@@ -1241,7 +1317,7 @@ Stores project-scoped prompt rules by capability:
 * chapter_outline
 * write
 * review
-* memory_update
+* setting_extraction
 
 creative_profile.json
 
@@ -1380,7 +1456,7 @@ Current rule schema:
 "chapter_outline": [],
 "write": [],
 "review": [],
-"memory_update": []
+"setting_extraction": []
 }
 
 Usage notes:
@@ -1392,27 +1468,64 @@ Usage notes:
 
 ---
 
-# Memory Structure
+# Prompt Option Structure
 
-Current memory schema (as defined in `memory.py`):
+Prompt options are user-editable prompt fragments with fixed metadata.
+
+Current prompt option schema:
+
+{
+"id": "",
+"name": "",
+"scope": "story",
+"capability": "write",
+"category": "custom",
+"slot": "custom",
+"content": "",
+"enabled": true,
+"built_in": false,
+"priority": 50,
+"source": "manual",
+"source_kind": "",
+"source_ref": "",
+"tags": [],
+"created_at": "",
+"updated_at": ""
+}
+
+Usage notes:
+
+* Prompt options are stored at three editable levels: `data/prompt_options.json`, `data/projects/{project_name}/prompt_options.json`, and `data/projects/{project_name}/stories/{story_id}/prompt_options.json`
+* Built-in options are defined in `prompt_options.py`; they are visible in the UI but disabled by default until copied or explicitly selected
+* Merge order is built-in → global → project → story, with later layers overriding earlier entries by `id`
+* Active options are injected after layered rules and creative-profile context, but before fixed output-format requirements in the concrete prompt templates
+* Discussion pages can derive candidate prompt options from the structured discussion result; candidates only become active after the user saves them
+* Prompt options may influence style, planning, review criteria, setting-extraction policy, extraction focus, and similar user-configurable behavior, but must not change storage schemas or structured LLM output contracts
+
+---
+
+# Project Metadata And Setting Storage
+
+Current `memory.json` storage is intentionally small:
 
 {
 "title": "",
-"genre": "",
-"canon_mode": "",
-"au_rules": [],
-"world": [],
-"characters": [],
-"relationships": [],
-"timeline": [],
-"foreshadowing": [],
-"active_constraints": [],
-"chapter_summaries": [],
-"locations": [],
-"organizations": [],
-"power_systems": [],
-"relationship_graph": []
+"genre": ""
 }
+
+Compatibility views returned by `load_memory()` / `load_story_memory()` still include legacy fields such as `world`, `characters`, `timeline`, and `active_constraints` so older prompt builders and migration helpers do not break. New stable settings should be written as structured knowledge items through `setting_knowledge.py`.
+
+Structured core settings use a strict scope contract:
+
+* `setting_scope` is normalized to either `project` or `story`
+* project settings are shared by every story
+* story settings must include `story_id` and are only injected or retrieved for that story
+* deleting a story removes its story-scoped setting knowledge from the shared knowledge store
+* copying a story copies creative profile, rules, prompt options, approved discussion artifacts, legacy memory overrides, and story-scoped core settings
+
+Story IDs are filesystem and retrieval-key identifiers, not display labels. They are generated as ASCII slugs when possible, and fall back to stable `story_<hash>` IDs for names that do not produce a useful ASCII slug. The UI should continue showing the story `name` to the user.
+
+Story-scoped retrieval documents must include `story_id` in both document IDs and metadata. This includes outlines, volume outlines, arc outlines, chapter plans, chapter outlines, chapter content, approved discussion artifacts, review outputs, analysis outputs, evaluation outputs, and story chapter summaries. `load_retrieval_index()` rebuilds the keyword manifest when it detects an older story-scoped manifest without `story_id`; semantic vectors remain opt-in through the full index rebuild action.
 
 ---
 
@@ -1504,20 +1617,20 @@ Current implementation status:
 * Implemented: chapter review persistence
 * Implemented: recent chapter summaries as planning context
 * Implemented: structured review status normalization
-* Implemented: reject invalid memory update payloads before persistence
+* Implemented: reject invalid setting-extraction payloads before queuing
 * Implemented: expose structured review status directly in UI controls
 * Implemented: configurable word count target per chapter
-* Implemented: memory compaction for long-running projects
+* Implemented: unified core-setting knowledge management for long-running projects
 * Implemented: per-step error isolation in pipeline
-* Implemented: form-based memory editing (non-JSON users)
+* Implemented: form-based core-setting editing backed by structured knowledge
 * Implemented: persistent global/project rule storage
 * Implemented: in-app rule center and quick requirement capture
 * Implemented: chapter-level consistency / character / timeline / foreshadowing analysis
 * Implemented: persistent Markdown analysis reports under project storage
 * Implemented: review page result refresh fix for Streamlit session state behavior
-* Implemented: `schemas.py` Pydantic schema layer for review, memory update, and analysis outputs
+* Implemented: `schemas.py` Pydantic schema layer for review, setting extraction, and analysis outputs
 * Implemented: schema-validated JSON-to-Markdown rendering pipeline for analysis results
-* Implemented: unified workflow step result contract for outline / chapter outline / writing / review / memory update / pipeline
+* Implemented: unified workflow step result contract for outline / chapter outline / writing / review / setting extraction / pipeline
 * Implemented: unified workflow step result contract for consistency / character / timeline / foreshadowing analysis
 * Implemented: structured outline discussion before formal outline generation
 * Implemented: structured chapter discussion before formal chapter outline generation
@@ -1664,7 +1777,7 @@ Features:
 
 Current implementation status:
 
-* Implemented: one-click chapter pipeline across planning, writing, review, and memory update
+* Implemented: one-click chapter pipeline across planning, writing, review, and setting extraction
 * Implemented: story-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
 * Implemented: consolidated creative profile page that maps plain Chinese discussion and direct form choices into the current story creative profile
 * Implemented: quick-generation playground for direct prose, short-form structure + prose, and chapter-plan + prose tasks
@@ -1675,7 +1788,7 @@ Current implementation status:
 * Implemented: transition logs and resumable workflow hints in the UI
 * Implemented: resumable failed chapter runs from the last successful step
 * Pending: full LangGraph or equivalent workflow runtime adoption
-* Pending: full long-form dynamic orchestration that can automatically branch across outline, volume, arc, chapter plan, writing, review, and memory update
+* Pending: full long-form dynamic orchestration that can automatically branch across outline, volume, arc, chapter plan, writing, review, and setting extraction
 * Pending: first-class branching, retry policy, and richer resume execution
 
 Workflow:
@@ -1686,7 +1799,7 @@ Write
 ↓
 Review
 ↓
-Update Memory
+Extract Settings
 
 Interpretation:
 
@@ -1791,7 +1904,7 @@ Metrics:
 
 The following items are acknowledged departures from the design philosophy and are tracked for future cleanup:
 
-1. **app.py still contains UI-adjacent orchestration beyond pure rendering.** Pending-knowledge workflows, quality checks, entity-card aggregation, long-source processing, resource-browser data operations, extraction presets, creative-profile payload rules, core-setting conversion, and RAG evaluation execution have moved into dedicated modules, but `app.py` still owns Streamlit form/session state, discussion page composition, and several page-specific render helpers. These should continue moving to dedicated UI component modules as the app grows.
+1. **app.py still contains UI-adjacent orchestration beyond pure rendering.** Pending-knowledge workflows, quality checks, entity-card aggregation, long-source processing, resource-browser data operations, extraction presets, creative-profile payload rules, unified setting knowledge helpers, and RAG evaluation execution have moved into dedicated modules, but `app.py` still owns Streamlit form/session state, discussion page composition, and several page-specific render helpers. These should continue moving to dedicated UI component modules as the app grows.
 
 2. **Duplicate code patterns exist across discussion/render functions.** Outline, volume, arc, and chapter discussion pages share ~70% of their structure. A shared discussion render helper would reduce maintenance cost.
 
@@ -1829,7 +1942,7 @@ Read files in the following order:
 
 9. creative_profile_workflows.py
 
-10. settings_workflows.py
+10. setting_knowledge.py
 
 11. retrieval_eval.py
 
@@ -1839,7 +1952,12 @@ Read files in the following order:
 
 14. prompts.py
 
-15. llm.py
+15. prompt_options.py
+
+16. asset_guardrails.py
+
+17. llm.py
+
 
 When implementing new features:
 

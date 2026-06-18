@@ -4,8 +4,11 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+streamlit-codex.*.log
 .spec
-.streamlit/
+.streamlit/*
+!.streamlit/
+!.streamlit/config.toml
 data/
 build/
 dist/

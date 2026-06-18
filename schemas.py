@@ -538,10 +538,35 @@ class ChapterWritingGuidance(NovelForgeSchema):
     focus: list[str] = Field(default_factory=list)
     ending_strength: str = ""
     extra_requirements: str = ""
+    prompt_option_ids: list[str] = Field(default_factory=list)
 
-    @field_validator("focus", mode="before")
+    @field_validator("focus", "prompt_option_ids", mode="before")
     @classmethod
-    def _normalize_focus(cls, value: Any) -> list[str]:
+    def _normalize_lists(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+
+class PromptOption(NovelForgeSchema):
+    id: str = ""
+    name: str = ""
+    scope: str = "story"
+    capability: str = "write"
+    category: str = "custom"
+    slot: str = "custom"
+    content: str = ""
+    enabled: bool = True
+    built_in: bool = False
+    priority: int = 50
+    source: str = "manual"
+    source_kind: str = ""
+    source_ref: str = ""
+    tags: list[str] = Field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
+
+    @field_validator("tags", mode="before")
+    @classmethod
+    def _normalize_tags(cls, value: Any) -> list[str]:
         return _normalize_string_list(value)
 
 
@@ -791,7 +816,7 @@ class ChapterPipelineState(NovelForgeSchema):
     chapter: str = ""
     review: dict[str, Any] = Field(default_factory=dict)
     review_markdown: str = ""
-    memory_update: dict[str, Any] = Field(default_factory=dict)
+    setting_extraction: dict[str, Any] = Field(default_factory=dict)
     steps: dict[str, WorkflowStepResult] = Field(default_factory=dict)
     completed_steps: list[str] = Field(default_factory=list)
     failed_steps: list[str] = Field(default_factory=list)
@@ -811,9 +836,13 @@ def validate_review_result(data: dict[str, Any]) -> ReviewResult:
     return ReviewResult.model_validate(data)
 
 
-def validate_memory_update_result(data: dict[str, Any], chapter_no: int) -> MemoryUpdateResult:
+def validate_setting_extraction_result(data: dict[str, Any], chapter_no: int) -> MemoryUpdateResult:
     payload = MemoryUpdatePayload.model_validate(data)
     return MemoryUpdateResult(chapter_no=chapter_no, **payload.model_dump())
+
+
+def validate_memory_update_result(data: dict[str, Any], chapter_no: int) -> MemoryUpdateResult:
+    return validate_setting_extraction_result(data, chapter_no)
 
 
 def parse_operation_result(data: str | dict[str, Any]) -> OperationResult:

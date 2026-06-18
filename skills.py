@@ -1,4 +1,5 @@
 import json
+import hashlib
 import logging
 import re
 from datetime import datetime
@@ -34,19 +35,17 @@ from prompts import (
     volume_outline_prompt,
     timeline_analysis_prompt,
     write_chapter_prompt,
-    update_memory_prompt,
+    setting_extraction_prompt,
     review_chapter_prompt,
-    compact_memory_prompt,
 )
 from memory import (
-    chapter_count,
     delete_creative_profile_discussion_artifact,
     delete_chapter_discussion_artifact,
     delete_arc_discussion_artifact,
     delete_outline_discussion_artifact,
     delete_volume_discussion_artifact,
     get_recent_chapter_summaries,
-    load_story_memory,
+    load_story_chapter_summaries,
     load_chapter_discussion_artifact,
     load_arc_discussion_artifact,
     load_arc_metadata,
@@ -55,12 +54,16 @@ from memory import (
     load_chapter_outline_metadata,
     load_creative_profile,
     load_global_rules,
+    load_global_prompt_options,
     load_entity_aliases,
     load_outline,
     load_outline_discussion_artifact,
     load_pipeline_run,
     load_project_rules,
+    load_project_prompt_options,
     load_story_rules,
+    load_story_prompt_options,
+    queue_pending_knowledge_items,
     load_effective_rule_conflict_resolutions,
     load_volume_discussion_artifact,
     load_volume_outline,
@@ -86,11 +89,12 @@ from memory import (
     save_review_json,
     save_outline_discussion_artifact,
     save_story_rules,
-    save_story_memory,
+    save_story_chapter_summaries,
     save_volume_metadata,
     save_volume_discussion_artifact,
     save_volume_outline,
 )
+from prompt_options import format_prompt_options_for_prompt, merge_prompt_option_layers
 from schemas import (
     ChapterWritingGuidance,
     ArcChapterPlanResult,
@@ -126,13 +130,20 @@ from schemas import (
     render_knowledge_extraction_markdown,
     render_organized_reference_markdown,
     render_timeline_analysis_markdown,
-    validate_memory_update_result,
+    validate_setting_extraction_result,
     validate_review_result,
 )
 from retrieval import format_retrieval_context, retrieve_context
+from setting_knowledge import build_generation_setting_context
 
 
 _LAST_RETRIEVAL_TRACES: dict[str, list[dict]] = {}
+
+
+def _story_trace_key(prefix: str, project_name: str, story_id: str = "default", *parts: object) -> str:
+    cleaned_parts = [prefix, project_name, str(story_id or "default")]
+    cleaned_parts.extend(str(part) for part in parts)
+    return ":".join(cleaned_parts)
 
 SCOPE_LABELS = {
     "project": "项目资料",
@@ -633,7 +644,129 @@ def _dedupe_list_items(items: list) -> list:
     return result
 
 
-def _build_rules_text(project_name: str, scope: str, story_id: str = "default") -> str:
+SETTING_EXTRACTION_KNOWLEDGE_FIELDS = {
+    "new_characters": ("characters", "characters", "角色"),
+    "world_updates": ("world_rules", "world", "世界观"),
+    "timeline_updates": ("timeline_events", "timeline", "时间线"),
+    "foreshadowing_updates": ("narrative_techniques", "foreshadowing", "伏笔"),
+}
+
+
+def _stringify_knowledge_candidate(value) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        for key in ["summary", "content", "description", "name", "title", "event", "detail"]:
+            item = value.get(key)
+            if isinstance(item, str) and item.strip():
+                return item.strip()
+        return json.dumps(value, ensure_ascii=False)
+    return str(value).strip()
+
+
+def _knowledge_candidate_name(text: str, fallback: str) -> str:
+    cleaned = " ".join(str(text or "").split())
+    if not cleaned:
+        return fallback
+    for separator in ["：", ":", "，", ",", "。", ".", "；", ";"]:
+        if separator in cleaned:
+            head = cleaned.split(separator, 1)[0].strip()
+            if head:
+                cleaned = head
+                break
+    return cleaned[:36].rstrip() or fallback
+
+
+def _stable_pending_knowledge_id(story_id: str, chapter_no: int, field_name: str, index: int, summary: str) -> str:
+    digest = hashlib.md5(f"{story_id}:{chapter_no}:{field_name}:{index}:{summary}".encode("utf-8")).hexdigest()[:12]
+    return f"pending_chapter_update_{story_id}_{chapter_no:04d}_{field_name}_{index:03d}_{digest}"
+
+
+def build_pending_knowledge_from_setting_extraction(update_data: dict, story_id: str, chapter_no: int) -> list[dict]:
+    items: list[dict] = []
+    for field_name, (category, setting_field, label) in SETTING_EXTRACTION_KNOWLEDGE_FIELDS.items():
+        values = update_data.get(field_name, [])
+        if not isinstance(values, list):
+            values = [values]
+        for index, value in enumerate(values, start=1):
+            summary = _stringify_knowledge_candidate(value)
+            if not summary:
+                continue
+            details = {
+                "原始提炼": summary,
+                "来源字段": setting_field,
+                "来源章节": str(chapter_no),
+            }
+            if isinstance(value, dict):
+                details.update({
+                    str(key): _stringify_knowledge_candidate(item)
+                    for key, item in value.items()
+                    if _stringify_knowledge_candidate(item)
+                })
+            items.append({
+                "pending_id": _stable_pending_knowledge_id(story_id, chapter_no, field_name, index, summary),
+                "category": category,
+                "name": _knowledge_candidate_name(summary, f"第 {chapter_no} 章{label}更新 {index}"),
+                "summary": summary,
+                "details": details,
+                "evidence": [{
+                    "source_title": f"第 {chapter_no} 章正文",
+                    "quote": summary[:160],
+                    "note": "由章节设定提炼流程生成，确认后成为故事级核心设定条目。",
+                }],
+                "confidence": 0.7,
+                "importance": 0.75,
+                "evidence_strength": 0.6,
+                "canon_status": "project",
+                "extraction_mode": "chapter_update",
+                "tags": ["章节更新", label, f"chapter:{chapter_no}", setting_field],
+                "setting_role": "core",
+                "setting_scope": "story",
+                "setting_field": setting_field,
+                "story_id": story_id,
+                "injection_policy": "always",
+                "source_chapter_no": chapter_no,
+            })
+    return items
+
+
+def build_pending_knowledge_from_memory_update(update_data: dict, story_id: str, chapter_no: int) -> list[dict]:
+    return build_pending_knowledge_from_setting_extraction(update_data, story_id, chapter_no)
+
+
+def _append_prompt_options_to_rules(
+    rules_text: str,
+    project_name: str,
+    scope: str,
+    story_id: str,
+    prompt_option_ids: list[str] | None = None,
+) -> str:
+    try:
+        options = merge_prompt_option_layers(
+            load_global_prompt_options(),
+            load_project_prompt_options(project_name),
+            load_story_prompt_options(project_name, story_id),
+        )
+        option_text = format_prompt_options_for_prompt(options, scope, selected_ids=prompt_option_ids)
+    except Exception as exc:
+        logging.getLogger("novelforge").warning(
+            "Failed to build prompt option text: project=%s story=%s scope=%s error=%s",
+            project_name, story_id, scope, exc,
+        )
+        option_text = ""
+    if not option_text:
+        return rules_text
+    return f"{rules_text}\n\n{option_text}"
+
+
+def _build_rules_text(
+    project_name: str,
+    scope: str,
+    story_id: str = "default",
+    prompt_option_ids: list[str] | None = None,
+) -> str:
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
     story_rules = load_story_rules(project_name, story_id)
@@ -650,7 +783,7 @@ def _build_rules_text(project_name: str, scope: str, story_id: str = "default") 
     except Exception:
         profile = {}
     if not profile:
-        return rules_text
+        return _append_prompt_options_to_rules(rules_text, project_name, scope, story_id, prompt_option_ids)
 
     profile_lines = [
         "项目创作配置：",
@@ -668,7 +801,7 @@ def _build_rules_text(project_name: str, scope: str, story_id: str = "default") 
     notes = str(profile.get("notes", "") or "").strip()
     if notes:
         profile_lines.append(f"- 补充说明：{notes}")
-    return f"{rules_text}\n\n" + "\n".join(profile_lines)
+    return _append_prompt_options_to_rules(f"{rules_text}\n\n" + "\n".join(profile_lines), project_name, scope, story_id, prompt_option_ids)
 
 
 def _build_retrieval_context(
@@ -715,6 +848,7 @@ def _build_retrieval_context(
         retrieval_profile=retrieval_profile,
         worldline_id=worldline_id,
         worldline_mode=worldline_mode or "prefer",
+        story_id=story_id,
     )
     _set_retrieval_trace(trace_key, hits)
     return format_retrieval_context(hits)
@@ -995,8 +1129,8 @@ def organize_reference_url(project_name: str, source_title: str, source_url: str
 
 
 def discuss_outline(project_name: str, user_idea: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
-    trace_key = f"outline_discuss:{project_name}"
+    memory = build_generation_setting_context(project_name, story_id)
+    trace_key = _story_trace_key("outline_discuss", project_name, story_id)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         user_idea,
@@ -1029,9 +1163,9 @@ def discuss_outline(project_name: str, user_idea: str, story_id: str = "default"
 
 
 def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     current_profile = load_creative_profile(project_name, story_id)
-    trace_key = f"creative_profile_discuss:{project_name}"
+    trace_key = _story_trace_key("creative_profile_discuss", project_name, story_id)
     retrieval_context = _build_retrieval_context(
         project_name,
         user_idea,
@@ -1069,7 +1203,7 @@ def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = 
 
 
 def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
     chapter_metadata = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
     volume_no = chapter_metadata.get("volume_no")
@@ -1089,7 +1223,7 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, s
         "当前章节暂无已批准讨论结论。",
     )
     recent_summaries = get_recent_chapter_summaries(project_name, story_id=story_id)
-    trace_key = f"chapter_discuss:{project_name}:{chapter_no}"
+    trace_key = _story_trace_key("chapter_discuss", project_name, story_id, chapter_no)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         f"第{chapter_no}章 {user_requirement} {outline} {volume_outline} {arc_outline} {volume_discussion_context} {arc_discussion_context} {chapter_discussion_context}",
@@ -1142,8 +1276,8 @@ def discuss_outline_turn(
     latest_user_message: str,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
-    trace_key = f"outline_discuss_turn:{project_name}"
+    memory = build_generation_setting_context(project_name, story_id)
+    trace_key = _story_trace_key("outline_discuss_turn", project_name, story_id)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         f"{user_idea} {latest_user_message} {current_discussion or {}}",
@@ -1196,7 +1330,7 @@ def discuss_chapter_turn(
     latest_user_message: str,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
     chapter_metadata = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
     volume_no = chapter_metadata.get("volume_no")
@@ -1216,7 +1350,7 @@ def discuss_chapter_turn(
         "当前章节暂无已批准讨论结论。",
     )
     recent_summaries = get_recent_chapter_summaries(project_name, story_id=story_id)
-    trace_key = f"chapter_discuss_turn:{project_name}:{chapter_no}"
+    trace_key = _story_trace_key("chapter_discuss_turn", project_name, story_id, chapter_no)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         f"第{chapter_no}章 {user_requirement} {latest_user_message} {outline} {volume_outline} {arc_outline} {volume_discussion_context} {arc_discussion_context} {chapter_discussion_context} {current_discussion or {}}",
@@ -1276,9 +1410,9 @@ def discuss_creative_profile_turn(
     latest_user_message: str,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     current_profile = load_creative_profile(project_name, story_id)
-    trace_key = f"creative_profile_discuss_turn:{project_name}"
+    trace_key = _story_trace_key("creative_profile_discuss_turn", project_name, story_id)
     retrieval_context = _build_retrieval_context(
         project_name,
         latest_user_message,
@@ -1332,9 +1466,9 @@ def discuss_volume(
     user_requirement: str,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
-    trace_key = f"volume_discuss:{project_name}:{volume_no}"
+    trace_key = _story_trace_key("volume_discuss", project_name, story_id, volume_no)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         f"第{volume_no}卷 {volume_title} {volume_summary} {user_requirement} {story_outline}",
@@ -1386,9 +1520,9 @@ def discuss_volume_turn(
     latest_user_message: str,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
-    trace_key = f"volume_discuss_turn:{project_name}:{volume_no}"
+    trace_key = _story_trace_key("volume_discuss_turn", project_name, story_id, volume_no)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         f"第{volume_no}卷 {volume_title} {volume_summary} {user_requirement} {latest_user_message} {story_outline} {current_discussion or {}}",
@@ -1447,10 +1581,10 @@ def discuss_arc(
     user_requirement: str,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
     volume_outline = load_volume_outline(project_name, int(volume_no), story_id=story_id) if volume_no else ""
-    trace_key = f"arc_discuss:{project_name}:{arc_no}"
+    trace_key = _story_trace_key("arc_discuss", project_name, story_id, arc_no)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         f"剧情段 {arc_no:03d} 第{volume_no or 0}卷 {arc_title} {arc_summary} {estimated_chapter_count or ''} {target_word_count_range} {user_requirement} {story_outline} {volume_outline}",
@@ -1508,10 +1642,10 @@ def discuss_arc_turn(
     latest_user_message: str,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
     volume_outline = load_volume_outline(project_name, int(volume_no), story_id=story_id) if volume_no else ""
-    trace_key = f"arc_discuss_turn:{project_name}:{arc_no}"
+    trace_key = _story_trace_key("arc_discuss_turn", project_name, story_id, arc_no)
     retrieval_context = _build_discussion_retrieval_context(
         project_name,
         f"剧情段 {arc_no:03d} 第{volume_no or 0}卷 {arc_title} {arc_summary} {estimated_chapter_count or ''} {target_word_count_range} {user_requirement} {latest_user_message} {story_outline} {volume_outline} {current_discussion or {}}",
@@ -1710,12 +1844,12 @@ def _format_review_markdown(review: ReviewResult | dict) -> str:
 """
 
 def generate_outline(project_name: str, user_idea: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     approved_discussion_context = _format_discussion_context(
         load_outline_discussion_artifact(project_name, story_id=story_id),
         "当前全书暂无已批准讨论结论。",
     )
-    trace_key = f"outline:{project_name}"
+    trace_key = _story_trace_key("outline", project_name, story_id)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"{user_idea} {approved_discussion_context}",
@@ -1752,13 +1886,13 @@ def generate_volume_outline(
     status: str = "draft",
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
     approved_discussion_context = _format_discussion_context(
         load_volume_discussion_artifact(project_name, volume_no, story_id=story_id),
         "当前分卷暂无已批准讨论结论。",
     )
-    trace_key = f"volume_outline:{project_name}:{volume_no}"
+    trace_key = _story_trace_key("volume_outline", project_name, story_id, volume_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{volume_no}卷 {volume_title} {volume_summary} {approved_discussion_context} {user_requirement} {story_outline}",
@@ -1826,14 +1960,14 @@ def generate_arc_outline(
     status: str = "draft",
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
     volume_outline = load_volume_outline(project_name, int(volume_no), story_id=story_id) if volume_no else ""
     approved_discussion_context = _format_discussion_context(
         load_arc_discussion_artifact(project_name, arc_no, story_id=story_id),
         "当前剧情段暂无已批准讨论结论。",
     )
-    trace_key = f"arc_outline:{project_name}:{arc_no}"
+    trace_key = _story_trace_key("arc_outline", project_name, story_id, arc_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"剧情段 {arc_no:03d} 第{volume_no or 0}卷 {arc_title} {arc_summary} {approved_discussion_context} {user_requirement} {story_outline} {volume_outline}",
@@ -1926,11 +2060,11 @@ def generate_arc_chapter_plan(
 ) -> dict:
     arc_meta = load_arc_metadata(project_name, arc_no, story_id=story_id)
     volume_no = arc_meta.get("volume_no")
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
     volume_outline = load_volume_outline(project_name, int(volume_no), story_id=story_id) if volume_no else ""
     arc_outline = load_arc_outline(project_name, arc_no, story_id=story_id)
-    trace_key = f"arc_chapter_plan:{project_name}:{arc_no}"
+    trace_key = _story_trace_key("arc_chapter_plan", project_name, story_id, arc_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"剧情段 {arc_no:03d} 章节分配 {arc_meta.get('title', '')} {arc_meta.get('summary', '')} {arc_outline} {user_requirement}",
@@ -2007,9 +2141,9 @@ def generate_creative_structure(
     save_as_chapter_outline: bool = True,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     profile = load_creative_profile(project_name, story_id)
-    trace_key = f"creative_structure:{project_name}:{chapter_no}"
+    trace_key = _story_trace_key("creative_structure", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"{profile} {user_requirement}",
@@ -2059,7 +2193,7 @@ def generate_chapter_outline(
     arc_no: int | None = None,
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
     existing_metadata = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
     effective_volume_no = volume_no if volume_no is not None else existing_metadata.get("volume_no")
@@ -2078,7 +2212,7 @@ def generate_chapter_outline(
         load_chapter_discussion_artifact(project_name, chapter_no, story_id=story_id),
         "当前章节暂无已批准讨论结论。",
     )
-    trace_key = f"chapter_outline:{project_name}:{chapter_no}"
+    trace_key = _story_trace_key("chapter_outline", project_name, story_id, chapter_no)
     recent_summaries = get_recent_chapter_summaries(project_name, story_id=story_id)
     retrieval_context = _build_retrieval_context(
         project_name,
@@ -2146,9 +2280,11 @@ def write_chapter(
     word_count: str = "2000-2500",
     story_id: str = "default",
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
-    normalized_guidance = ChapterWritingGuidance.model_validate(writing_guidance or {}).model_dump()
-    trace_key = f"write:{project_name}:{chapter_no}"
+    memory = build_generation_setting_context(project_name, story_id)
+    raw_guidance = writing_guidance if isinstance(writing_guidance, dict) else {}
+    selected_prompt_option_ids = raw_guidance.get("prompt_option_ids") if "prompt_option_ids" in raw_guidance else None
+    normalized_guidance = ChapterWritingGuidance.model_validate(raw_guidance).model_dump()
+    trace_key = _story_trace_key("write", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章 {chapter_outline} {normalized_guidance}",
@@ -2178,7 +2314,18 @@ def write_chapter(
         retrieval_profile="drafting",
     )
     prompt = merge_retrieval_context(
-        write_chapter_prompt(memory, chapter_outline, normalized_guidance, word_count, _build_rules_text(project_name, "write", story_id=story_id)),
+        write_chapter_prompt(
+            memory,
+            chapter_outline,
+            normalized_guidance,
+            word_count,
+            _build_rules_text(
+                project_name,
+                "write",
+                story_id=story_id,
+                prompt_option_ids=selected_prompt_option_ids,
+            ),
+        ),
         retrieval_context,
     )
     chapter = call_llm(prompt)
@@ -2315,17 +2462,17 @@ def run_dynamic_generation_task(
         "warnings": warnings,
     }
 
-def update_memory_from_chapter(
+def extract_setting_candidates_from_chapter(
     project_name: str,
     chapter_no: int,
     chapter: str,
     story_id: str = "default"
 ) -> dict:
-    memory = load_story_memory(project_name, story_id)
-    trace_key = f"memory_update:{project_name}:{chapter_no}"
+    memory = build_generation_setting_context(project_name, story_id)
+    trace_key = _story_trace_key("setting_extraction", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
-        f"第{chapter_no}章设定更新 {chapter}",
+        f"第{chapter_no}章设定提炼 {chapter}",
         allowed_source_types=["memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "chapter_summary", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
         allowed_scopes=["project", "canon", "reference"],
         trace_key=trace_key,
@@ -2333,20 +2480,20 @@ def update_memory_from_chapter(
         retrieval_profile="review",
     )
     prompt = merge_retrieval_context(
-        update_memory_prompt(memory, chapter, _build_rules_text(project_name, "memory_update", story_id=story_id)),
+        setting_extraction_prompt(memory, chapter, _build_rules_text(project_name, "setting_extraction", story_id=story_id)),
         retrieval_context,
     )
     result = call_llm(prompt)
     if not result.strip():
-        raise RuntimeError("设定更新失败：模型返回了空响应。")
+        raise RuntimeError("设定提炼失败：模型返回了空响应。")
     retrieval_hits = get_retrieval_trace(trace_key)
 
     try:
-        updates = validate_memory_update_result(_extract_json_object(result), chapter_no)
+        updates = validate_setting_extraction_result(_extract_json_object(result), chapter_no)
     except ValidationError as exc:
         reason = format_schema_validation_error(exc)
         return _make_step_result(
-            "memory_update",
+            "setting_extraction",
             success=False,
             status="rejected",
             error=reason,
@@ -2354,14 +2501,14 @@ def update_memory_from_chapter(
             validation=_make_validation_status(
                 status="failed",
                 schema_name="MemoryUpdateResult",
-                message="设定更新结构校验失败。",
+                message="设定提炼结构校验失败。",
                 errors=[reason],
             ),
             artifacts={"raw_response": result},
         ).model_dump()
     except Exception as exc:
         return _make_step_result(
-            "memory_update",
+            "setting_extraction",
             success=False,
             status="rejected",
             error=str(exc),
@@ -2369,60 +2516,74 @@ def update_memory_from_chapter(
             validation=_make_validation_status(
                 status="failed",
                 schema_name="MemoryUpdateResult",
-                message="设定更新结果提取失败。",
+                message="设定提炼结果提取失败。",
                 errors=[str(exc)],
             ),
             artifacts={"raw_response": result},
         ).model_dump()
 
     update_data = updates.model_dump()
-
-    memory["world"].extend(update_data["world_updates"])
-    memory["characters"].extend(update_data["new_characters"])
-    memory["timeline"].extend(update_data["timeline_updates"])
-    memory["foreshadowing"].extend(update_data["foreshadowing_updates"])
-    memory["world"] = _dedupe_list_items(memory["world"])
-    memory["characters"] = _dedupe_list_items(memory["characters"])
-    memory["timeline"] = _dedupe_list_items(memory["timeline"])
-    memory["foreshadowing"] = _dedupe_list_items(memory["foreshadowing"])
-
-    memory["chapter_summaries"] = [
-        item for item in memory["chapter_summaries"]
-        if not isinstance(item, dict) or item.get("chapter_no") != chapter_no
-    ]
-    memory["chapter_summaries"].append({
-        "chapter_no": update_data["chapter_no"],
-        "summary": update_data["chapter_summary"]
-    })
-
-    save_story_memory(project_name, story_id, memory)
+    pending_items = build_pending_knowledge_from_setting_extraction(update_data, story_id, chapter_no)
+    queued_count = queue_pending_knowledge_items(
+        project_name,
+        pending_items,
+        scope="project",
+        authority="project",
+        source_title=f"第 {chapter_no} 章正文",
+        source_origin="chapter_update",
+    )
     try:
-        from memory import save_story_chapter_summaries
-        save_story_chapter_summaries(project_name, story_id, memory.get("chapter_summaries", []))
+        summaries = [
+            item for item in load_story_chapter_summaries(project_name, story_id)
+            if not isinstance(item, dict) or item.get("chapter_no") != chapter_no
+        ]
+        summaries.append({
+            "chapter_no": update_data["chapter_no"],
+            "summary": update_data["chapter_summary"]
+        })
+        save_story_chapter_summaries(project_name, story_id, summaries)
     except Exception as exc:
         logging.getLogger("novelforge").warning(
             "Failed to save story chapter summaries: project=%s story=%s chapter=%s error=%s",
             project_name, story_id, chapter_no, exc,
         )
     return _make_step_result(
-        "memory_update",
+        "setting_extraction",
         success=True,
         status="completed",
-        data={"applied_updates": update_data},
+        data={
+            "applied_updates": update_data,
+            "pending_knowledge_items": pending_items,
+            "queued_knowledge_count": queued_count,
+            "chapter_summary_saved": True,
+        },
         retrieval_hits=retrieval_hits,
         validation=_make_validation_status(
             status="passed",
             schema_name="MemoryUpdateResult",
-            message="设定更新已通过结构校验并应用。",
+            message="章节设定提炼已通过结构校验，候选设定已加入待确认知识队列。",
         ),
-        artifacts={"memory_saved": True},
+        artifacts={
+            "memory_saved": False,
+            "pending_knowledge_count": len(pending_items),
+            "queued_knowledge_count": queued_count,
+        },
     ).model_dump()
 
 
+def update_memory_from_chapter(
+    project_name: str,
+    chapter_no: int,
+    chapter: str,
+    story_id: str = "default",
+) -> dict:
+    return extract_setting_candidates_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
+
+
 def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
-    trace_key = f"review:{project_name}:{chapter_no}"
+    trace_key = _story_trace_key("review", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章审阅 {chapter_outline} {chapter}",
@@ -2568,19 +2729,13 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
 
 
 def compact_memory(project_name: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
-    count = chapter_count(project_name, story_id=story_id)
-    prompt = compact_memory_prompt(memory, count)
-    result = call_llm(prompt)
-    if not result.strip():
-        raise RuntimeError("记忆压缩失败：模型返回了空响应。")
-
-    try:
-        updates = _extract_json_object(result)
-        save_story_memory(project_name, story_id, updates)
-        return {"status": "accepted"}
-    except Exception as exc:
-        return {"status": "rejected", "reason": str(exc), "raw_response": result}
+    return {
+        "status": "skipped",
+        "reason": "memory_compaction_deprecated",
+        "message": "核心设定已改为结构化知识管理；章节提炼会写入待确认知识队列，不再压缩写回 memory.json。",
+        "project_name": project_name,
+        "story_id": story_id,
+    }
 
 
 def _run_analysis(
@@ -2641,8 +2796,8 @@ def _finalize_analysis_step(
 
 
 def analyze_characters(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
-    trace_key = f"analysis:characters:{project_name}:{chapter_no}"
+    memory = build_generation_setting_context(project_name, story_id)
+    trace_key = _story_trace_key("analysis:characters", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章角色分析 {chapter}",
@@ -2674,8 +2829,8 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str, story_i
 
 
 def analyze_timeline(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
-    trace_key = f"analysis:timeline:{project_name}:{chapter_no}"
+    memory = build_generation_setting_context(project_name, story_id)
+    trace_key = _story_trace_key("analysis:timeline", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章时间线分析 {chapter}",
@@ -2707,8 +2862,8 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str, story_id:
 
 
 def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
-    trace_key = f"analysis:foreshadowing:{project_name}:{chapter_no}"
+    memory = build_generation_setting_context(project_name, story_id)
+    trace_key = _story_trace_key("analysis:foreshadowing", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章伏笔分析 {chapter}",
@@ -2740,8 +2895,8 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str, stor
 
 
 def run_consistency_check(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
-    trace_key = f"analysis:consistency:{project_name}:{chapter_no}"
+    memory = build_generation_setting_context(project_name, story_id)
+    trace_key = _story_trace_key("analysis:consistency", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章一致性检查 {chapter}",
@@ -2788,9 +2943,9 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str, stor
 
 
 def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
-    trace_key = f"evaluation:chapter:{project_name}:{chapter_no}"
+    trace_key = _story_trace_key("evaluation:chapter", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章质量评估 {chapter_outline} {chapter}",
@@ -2863,9 +3018,9 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id:
 
 
 def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
-    memory = load_story_memory(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id)
     chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
-    trace_key = f"evaluation:comprehensive:{project_name}:{chapter_no}"
+    trace_key = _story_trace_key("evaluation:comprehensive", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
         project_name,
         f"第{chapter_no}章综合评价 {chapter_outline} {chapter}",
@@ -2974,7 +3129,7 @@ def pipeline_plan_write_review_update(
             success=False,
             status="failed",
             error=str(exc),
-            retrieval_hits=get_retrieval_trace(f"chapter_outline:{project_name}:{chapter_no}"),
+            retrieval_hits=get_retrieval_trace(_story_trace_key("chapter_outline", project_name, story_id, chapter_no)),
         )
         _record_pipeline_error(state, step_name="chapter_outline", message=str(exc), error_type="llm")
 
@@ -2995,7 +3150,7 @@ def pipeline_plan_write_review_update(
                 success=False,
                 status="failed",
                 error=str(exc),
-                retrieval_hits=get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
+                retrieval_hits=get_retrieval_trace(_story_trace_key("write", project_name, story_id, chapter_no)),
             )
             _record_pipeline_error(state, step_name="write_chapter", message=str(exc), error_type="llm")
     else:
@@ -3004,7 +3159,7 @@ def pipeline_plan_write_review_update(
             success=False,
             status="skipped",
             warnings=["Skipped because chapter outline step did not complete successfully."],
-            retrieval_hits=get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
+            retrieval_hits=get_retrieval_trace(_story_trace_key("write", project_name, story_id, chapter_no)),
         )
         _halt_pipeline(state, "chapter_outline_failed")
 
@@ -3025,7 +3180,7 @@ def pipeline_plan_write_review_update(
                 success=False,
                 status="failed",
                 error=str(exc),
-                retrieval_hits=get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
+                retrieval_hits=get_retrieval_trace(_story_trace_key("review", project_name, story_id, chapter_no)),
             )
             _record_pipeline_error(state, step_name="review_chapter", message=str(exc), error_type="llm")
     else:
@@ -3034,7 +3189,7 @@ def pipeline_plan_write_review_update(
             success=False,
             status="skipped",
             warnings=["Skipped because chapter writing step did not complete successfully."],
-            retrieval_hits=get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
+            retrieval_hits=get_retrieval_trace(_story_trace_key("review", project_name, story_id, chapter_no)),
         )
         if not state.halted:
             _halt_pipeline(state, "write_chapter_failed")
@@ -3046,20 +3201,20 @@ def pipeline_plan_write_review_update(
         state.last_successful_step = "review_chapter"
 
     if chapter_step.success and review_step.success:
-        state.next_step = "memory_update"
-        _transition_pipeline_state(state, "memory_update", "review step completed")
+        state.next_step = "setting_extraction"
+        _transition_pipeline_state(state, "setting_extraction", "review step completed")
         try:
-            memory_step_data = update_memory_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id)
+            memory_step_data = extract_setting_candidates_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id)
             memory_step = WorkflowStepResult.model_validate(memory_step_data)
         except Exception as exc:
             memory_step = _make_step_result(
-                "memory_update",
+                "setting_extraction",
                 success=False,
                 status="failed",
                 error=str(exc),
-                retrieval_hits=get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
+                retrieval_hits=get_retrieval_trace(_story_trace_key("setting_extraction", project_name, story_id, chapter_no)),
             )
-            _record_pipeline_error(state, step_name="memory_update", message=str(exc), error_type="llm")
+            _record_pipeline_error(state, step_name="setting_extraction", message=str(exc), error_type="llm")
     else:
         skip_reason = "review_chapter_failed" if chapter_step.success else "write_chapter_failed"
         skip_warning = (
@@ -3068,21 +3223,21 @@ def pipeline_plan_write_review_update(
             else "Skipped because chapter writing step did not complete successfully."
         )
         memory_step = _make_step_result(
-            "memory_update",
+            "setting_extraction",
             success=False,
             status="skipped",
             warnings=[skip_warning],
-            retrieval_hits=get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
+            retrieval_hits=get_retrieval_trace(_story_trace_key("setting_extraction", project_name, story_id, chapter_no)),
         )
         if not state.halted:
             _halt_pipeline(state, skip_reason)
 
     _record_pipeline_step(state, memory_step)
-    state.memory_update = memory_step.data.get("applied_updates", {})
+    state.setting_extraction = memory_step.data
     if memory_step.success:
-        state.last_successful_step = "memory_update"
+        state.last_successful_step = "setting_extraction"
     elif not state.halted:
-        _halt_pipeline(state, "memory_update_failed")
+        _halt_pipeline(state, "setting_extraction_failed")
 
     if not state.halted:
         state.next_step = ""
@@ -3130,7 +3285,7 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         chapter=str(previous.get("chapter", "") or ""),
         review=previous.get("review", {}) if isinstance(previous.get("review", {}), dict) else {},
         review_markdown=str(previous.get("review_markdown", "") or ""),
-        memory_update=previous.get("memory_update", {}) if isinstance(previous.get("memory_update", {}), dict) else {},
+        setting_extraction=previous.get("setting_extraction", {}) if isinstance(previous.get("setting_extraction", {}), dict) else {},
         completed_steps=list(previous.get("completed_steps", [])),
     )
     _transition_pipeline_state(state, "resume", f"resuming from {run_id}")
@@ -3146,7 +3301,7 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         except Exception as exc:
             chapter_step = _make_step_result(
                 "write_chapter", success=False, status="failed", error=str(exc),
-                retrieval_hits=get_retrieval_trace(f"write:{project_name}:{chapter_no}"),
+                retrieval_hits=get_retrieval_trace(_story_trace_key("write", project_name, story_id, chapter_no)),
             )
             _record_pipeline_error(state, step_name="write_chapter", message=str(exc), error_type="llm")
         _record_pipeline_step(state, chapter_step)
@@ -3165,7 +3320,7 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         except Exception as exc:
             review_step = _make_step_result(
                 "review_chapter", success=False, status="failed", error=str(exc),
-                retrieval_hits=get_retrieval_trace(f"review:{project_name}:{chapter_no}"),
+                retrieval_hits=get_retrieval_trace(_story_trace_key("review", project_name, story_id, chapter_no)),
             )
             _record_pipeline_error(state, step_name="review_chapter", message=str(exc), error_type="llm")
         _record_pipeline_step(state, review_step)
@@ -3176,29 +3331,29 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
             last_successful_step = "review_chapter"
 
     if last_successful_step == "review_chapter":
-        state.next_step = "memory_update"
-        _transition_pipeline_state(state, "memory_update", "resuming after review")
+        state.next_step = "setting_extraction"
+        _transition_pipeline_state(state, "setting_extraction", "resuming after review")
         try:
-            memory_step = WorkflowStepResult.model_validate(update_memory_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id))
+            memory_step = WorkflowStepResult.model_validate(extract_setting_candidates_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id))
         except Exception as exc:
             memory_step = _make_step_result(
-                "memory_update", success=False, status="failed", error=str(exc),
-                retrieval_hits=get_retrieval_trace(f"memory_update:{project_name}:{chapter_no}"),
+                "setting_extraction", success=False, status="failed", error=str(exc),
+                retrieval_hits=get_retrieval_trace(_story_trace_key("setting_extraction", project_name, story_id, chapter_no)),
             )
-            _record_pipeline_error(state, step_name="memory_update", message=str(exc), error_type="llm")
+            _record_pipeline_error(state, step_name="setting_extraction", message=str(exc), error_type="llm")
         _record_pipeline_step(state, memory_step)
-        state.memory_update = memory_step.data.get("applied_updates", {})
+        state.setting_extraction = memory_step.data
         if memory_step.success:
-            state.last_successful_step = "memory_update"
+            state.last_successful_step = "setting_extraction"
 
-    if state.last_successful_step == "memory_update":
+    if state.last_successful_step == "setting_extraction":
         state.next_step = ""
         _transition_pipeline_state(state, "completed", "resume finished")
     elif not state.halted:
         _halt_pipeline(state, "resume_incomplete")
 
     state.finished_at = datetime.now().isoformat(timespec="seconds")
-    state.success = state.last_successful_step == "memory_update" and not state.halted
+    state.success = state.last_successful_step == "setting_extraction" and not state.halted
     state.resumable = bool(state.halted and state.last_successful_step)
     pipeline_result = WorkflowPipelineResult(
         success=state.success,

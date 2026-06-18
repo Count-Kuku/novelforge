@@ -1,4 +1,6 @@
 import json
+import hashlib
+import logging
 import os
 import re
 from datetime import datetime, timezone
@@ -9,13 +11,15 @@ from uuid import uuid4
 from dotenv import dotenv_values
 
 from schemas import ArcOutlineMetadata, ChapterOutlineMetadata, ConflictResolution, CreativeProfile, StoryMeta, StoriesIndex, VolumeOutlineMetadata
+from prompt_options import normalize_prompt_options_payload
 
 BASE_DIR = Path("data/projects")
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
+GLOBAL_PROMPT_OPTIONS_PATH = Path("data/prompt_options.json")
 GLOBAL_RULE_CONFLICT_RESOLUTIONS_PATH = Path("data/global_rule_conflict_resolutions.json")
 ENV_PATH = Path(".env")
 LLM_PROFILES_PATH = Path("data/llm_profiles.json")
-RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "memory_update"]
+RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "setting_extraction"]
 DEFAULT_LLM_BASE_URL = "https://api.deepseek.com"
 DEFAULT_LLM_MODEL = "deepseek-v4-flash"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -44,6 +48,7 @@ DEFAULT_MEMORY = {
     "power_systems": [],
     "relationship_graph": [],
 }
+MEMORY_META_FIELDS = ("title", "genre")
 KNOWLEDGE_CATEGORIES = {
     "characters": "角色知识",
     "items": "物品与道具",
@@ -67,7 +72,7 @@ def _default_rules() -> dict:
         "chapter_outline": [],
         "write": [],
         "review": [],
-        "memory_update": [],
+        "setting_extraction": [],
     }
 
 
@@ -408,6 +413,14 @@ def normalize_memory(project_name: str, memory: dict | None) -> dict:
     return normalized
 
 
+def slim_memory_for_storage(project_name: str, memory: dict | None) -> dict:
+    normalized = normalize_memory(project_name, memory)
+    return {
+        "title": normalized.get("title") or project_name,
+        "genre": normalized.get("genre", ""),
+    }
+
+
 def sync_project_retrieval_assets(project_name: str):
     try:
         from retrieval import rebuild_retrieval_assets
@@ -427,26 +440,21 @@ def load_memory(project_name: str) -> dict:
 
     if not path.exists():
         memory = normalize_memory(project_name, None)
-        save_memory(project_name, memory)
+        save_memory(project_name, slim_memory_for_storage(project_name, memory))
         return memory
 
     try:
         memory = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         memory = normalize_memory(project_name, None)
-        save_memory(project_name, memory)
+        save_memory(project_name, slim_memory_for_storage(project_name, memory))
         return memory
-    normalized = normalize_memory(project_name, memory)
-
-    if normalized != memory:
-        save_memory(project_name, normalized)
-
-    return normalized
+    return normalize_memory(project_name, memory)
 
 
 def save_memory(project_name: str, memory: dict):
     path = project_path(project_name) / "memory.json"
-    normalized = normalize_memory(project_name, memory)
+    normalized = slim_memory_for_storage(project_name, memory)
     path.write_text(
         json.dumps(normalized, ensure_ascii=False, indent=2),
         encoding="utf-8"
@@ -533,8 +541,15 @@ def delete_creative_profile_discussion_artifact(project_name: str, story_id: str
 # ---------------------------------------------------------------------------
 
 def _story_id_slug(name: str) -> str:
-    slug = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff_-]", "", str(name or "untitled").strip())
-    return slug[:48] or "untitled"
+    text = str(name or "").strip()
+    if not text:
+        return "untitled"
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", text).strip("_").lower()
+    slug = re.sub(r"_+", "_", slug)
+    if slug and (re.search(r"[a-zA-Z]", slug) or len(slug) >= 3):
+        return slug[:48]
+    digest = hashlib.md5(text.encode("utf-8")).hexdigest()[:10]
+    return f"story_{digest}"
 
 
 def stories_index_path(project_name: str) -> Path:
@@ -555,6 +570,14 @@ def _story_memory_overrides_path(project_name: str, story_id: str) -> Path:
 
 def _story_rules_overrides_path(project_name: str, story_id: str) -> Path:
     return story_path(project_name, story_id) / "rules_overrides.json"
+
+
+def _project_prompt_options_path(project_name: str) -> Path:
+    return project_path(project_name) / "prompt_options.json"
+
+
+def _story_prompt_options_path(project_name: str, story_id: str) -> Path:
+    return story_path(project_name, story_id) / "prompt_options.json"
 
 
 def _project_rule_conflict_resolutions_path(project_name: str) -> Path:
@@ -660,7 +683,7 @@ def rename_story(project_name: str, story_id: str, name: str, description: str |
 
 
 def copy_story_settings(project_name: str, source_story_id: str, target_story_id: str):
-    """将源故事的创作配置、创作配置讨论工件、记忆覆盖和生成规则复制到目标故事。"""
+    """复制故事级创作配置、讨论工件、Prompt 选项、规则、旧 memory 覆盖层和正式核心设定。"""
     from shutil import copy2
 
     src_profile = creative_profile_path(project_name, source_story_id)
@@ -687,13 +710,33 @@ def copy_story_settings(project_name: str, source_story_id: str, target_story_id
         dst_rules.parent.mkdir(parents=True, exist_ok=True)
         copy2(str(src_rules), str(dst_rules))
 
+    src_prompt_options = _story_prompt_options_path(project_name, source_story_id)
+    if src_prompt_options.exists():
+        dst_prompt_options = _story_prompt_options_path(project_name, target_story_id)
+        dst_prompt_options.parent.mkdir(parents=True, exist_ok=True)
+        copy2(str(src_prompt_options), str(dst_prompt_options))
+
     src_rule_conflicts = _story_rule_conflict_resolutions_path(project_name, source_story_id)
     if src_rule_conflicts.exists():
         dst_rule_conflicts = _story_rule_conflict_resolutions_path(project_name, target_story_id)
         dst_rule_conflicts.parent.mkdir(parents=True, exist_ok=True)
         copy2(str(src_rule_conflicts), str(dst_rule_conflicts))
 
+    core_result = {"copied": 0, "updated": 0, "skipped": 0}
+    try:
+        from setting_knowledge import copy_story_core_settings_to_story
+        core_result = copy_story_core_settings_to_story(project_name, source_story_id, target_story_id)
+    except Exception as exc:
+        logging.getLogger("novelforge").warning(
+            "Failed to copy story core settings: project=%s source=%s target=%s error=%s",
+            project_name,
+            source_story_id,
+            target_story_id,
+            exc,
+        )
+
     sync_project_retrieval_assets(project_name)
+    return core_result
 
 
 def _merge_list_values(source: list | None, target: list | None) -> list:
@@ -1008,6 +1051,15 @@ def delete_story(project_name: str, story_id: str) -> bool:
             index["stories"].append(default.model_dump())
             index["active_story_id"] = "default"
     save_stories_index(project_name, index)
+    try:
+        from setting_knowledge import delete_story_setting_items
+
+        delete_story_setting_items(project_name, story_id)
+    except Exception as exc:
+        logging.getLogger("novelforge").warning(
+            "Failed to delete story-scoped settings: project=%s story=%s error=%s",
+            project_name, story_id, exc,
+        )
     sp = story_path(project_name, story_id)
     if sp.exists():
         import shutil
@@ -1873,6 +1925,103 @@ def save_project_rules(project_name: str, rules: dict):
         json.dumps(normalized, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
+
+
+def _load_prompt_options_file(path: Path, scope: str) -> list[dict]:
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    return normalize_prompt_options_payload(raw, scope=scope)
+
+
+def _save_prompt_options_file(path: Path, options: list[dict], scope: str) -> list[dict]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalized = normalize_prompt_options_payload(options, scope=scope)
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def load_global_prompt_options() -> list[dict]:
+    GLOBAL_PROMPT_OPTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    return _load_prompt_options_file(GLOBAL_PROMPT_OPTIONS_PATH, "global")
+
+
+def save_global_prompt_options(options: list[dict]) -> list[dict]:
+    return _save_prompt_options_file(GLOBAL_PROMPT_OPTIONS_PATH, options, "global")
+
+
+def load_project_prompt_options(project_name: str) -> list[dict]:
+    return _load_prompt_options_file(_project_prompt_options_path(project_name), "project")
+
+
+def save_project_prompt_options(project_name: str, options: list[dict]) -> list[dict]:
+    return _save_prompt_options_file(_project_prompt_options_path(project_name), options, "project")
+
+
+def load_story_prompt_options(project_name: str, story_id: str = "default") -> list[dict]:
+    return _load_prompt_options_file(_story_prompt_options_path(project_name, story_id), "story")
+
+
+def save_story_prompt_options(project_name: str, story_id: str, options: list[dict]) -> list[dict]:
+    return _save_prompt_options_file(_story_prompt_options_path(project_name, story_id), options, "story")
+
+
+def upsert_prompt_option(project_name: str, layer: str, option: dict, story_id: str = "default") -> dict:
+    normalized_layer = str(layer or "story").strip().lower()
+    if normalized_layer == "global":
+        existing = load_global_prompt_options()
+        scope = "global"
+    elif normalized_layer == "project":
+        existing = load_project_prompt_options(project_name)
+        scope = "project"
+    elif normalized_layer == "story":
+        existing = load_story_prompt_options(project_name, story_id)
+        scope = "story"
+    else:
+        raise ValueError(f"Unknown prompt option layer: {layer}")
+
+    normalized_option = normalize_prompt_options_payload([option], scope=scope)[0]
+    updated = []
+    replaced = False
+    for item in existing:
+        if item.get("id") == normalized_option["id"]:
+            updated.append(normalized_option)
+            replaced = True
+        else:
+            updated.append(item)
+    if not replaced:
+        updated.append(normalized_option)
+
+    if normalized_layer == "global":
+        save_global_prompt_options(updated)
+    elif normalized_layer == "project":
+        save_project_prompt_options(project_name, updated)
+    else:
+        save_story_prompt_options(project_name, story_id, updated)
+    return normalized_option
+
+
+def delete_prompt_option(project_name: str, layer: str, option_id: str, story_id: str = "default") -> bool:
+    target_id = str(option_id or "").strip()
+    normalized_layer = str(layer or "story").strip().lower()
+    if normalized_layer == "global":
+        existing = load_global_prompt_options()
+        kept = [item for item in existing if item.get("id") != target_id]
+        save_global_prompt_options(kept)
+    elif normalized_layer == "project":
+        existing = load_project_prompt_options(project_name)
+        kept = [item for item in existing if item.get("id") != target_id]
+        save_project_prompt_options(project_name, kept)
+    elif normalized_layer == "story":
+        existing = load_story_prompt_options(project_name, story_id)
+        kept = [item for item in existing if item.get("id") != target_id]
+        save_story_prompt_options(project_name, story_id, kept)
+    else:
+        raise ValueError(f"Unknown prompt option layer: {layer}")
+    return len(kept) != len(existing)
 
 
 def save_outline(project_name: str, outline: str, story_id: str = "default"):
