@@ -38,10 +38,12 @@ from memory import (
     load_evaluation_json,
     load_knowledge_base,
     load_llm_settings,
+    list_asset_payload_records,
     list_arcs,
     list_volumes,
     load_retrieval_manifest,
     load_retrieval_vectors,
+    list_retrieval_source_files,
     list_stories,
     project_path,
     retrieval_sources_path,
@@ -550,6 +552,18 @@ def _infer_authority(scope: str, metadata: dict | None) -> str:
     if scope == "project":
         return "project"
     return "unknown"
+
+
+def _chapter_no_from_asset_record(record: dict) -> int | None:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    try:
+        value = metadata.get("chapter_no")
+        if value is not None:
+            return int(value)
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r"chapter_(\d+)", str(record.get("logical_key") or record.get("relative_path") or ""))
+    return int(match.group(1)) if match else None
 
 
 def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
@@ -1110,6 +1124,10 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
 
     chapter_outline_dir = base_path / "chapter_outlines"
     chapter_discussion_numbers: set[int] = set()
+    for record in list_asset_payload_records(project_name, asset_type="chapter_discussion", story_id=story_id):
+        chapter_no = _chapter_no_from_asset_record(record)
+        if isinstance(chapter_no, int):
+            chapter_discussion_numbers.add(chapter_no)
     if chapter_outline_dir.exists():
         for file in chapter_outline_dir.glob("chapter_*.discussion.json"):
             match = re.search(r"chapter_(\d+)\.discussion\.json$", file.name)
@@ -1185,6 +1203,14 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 documents.append(doc)
 
     reviews_dir = base_path / "reviews"
+    review_payloads: dict[int, dict] = {}
+    review_paths: dict[int, str] = {}
+    for record in list_asset_payload_records(project_name, asset_type="review_json", story_id=story_id):
+        chapter_no = _chapter_no_from_asset_record(record)
+        payload = record.get("payload")
+        if isinstance(chapter_no, int) and isinstance(payload, dict):
+            review_payloads[chapter_no] = payload
+            review_paths[chapter_no] = str(base_path / str(record.get("relative_path") or f"reviews/chapter_{chapter_no:03d}.json"))
     if reviews_dir.exists():
         for file in sorted(reviews_dir.glob("chapter_*.json")):
             match = re.search(r"chapter_(\d+)\.json$", file.name)
@@ -1192,58 +1218,83 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                 continue
             chapter_no = int(match.group(1))
             review_json = load_review_json(project_name, chapter_no, story_id=story_id)
-            if not review_json:
-                continue
-            summary_doc = _make_document(
+            if isinstance(review_json, dict):
+                review_payloads[chapter_no] = review_json
+                review_paths[chapter_no] = str(file)
+    for chapter_no in sorted(review_payloads):
+        review_json = review_payloads[chapter_no]
+        review_path = review_paths.get(chapter_no, str(base_path / "reviews" / f"chapter_{chapter_no:03d}.json"))
+        payload_doc = _make_document(
+            project_name,
+            "review_payload",
+            f"{story_id}/payload_{chapter_no:03d}",
+            f"Chapter {chapter_no:03d} Review Payload",
+            json.dumps(review_json, ensure_ascii=False, indent=2),
+            chapter_no=chapter_no,
+            path=review_path,
+            tags=["review", "payload", str(review_json.get("status", ""))],
+            metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
+        )
+        if payload_doc:
+            documents.append(payload_doc)
+        summary_doc = _make_document(
+            project_name,
+            "review_summary",
+            f"{story_id}/summary_{chapter_no:03d}",
+            f"Chapter {chapter_no:03d} Review Summary",
+            str(review_json.get("summary", "")),
+            chapter_no=chapter_no,
+            path=review_path,
+            tags=["review", "summary", str(review_json.get("status", ""))],
+            metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
+        )
+        if summary_doc:
+            documents.append(summary_doc)
+
+        issues = review_json.get("issues", [])
+        if not isinstance(issues, list):
+            issues = []
+        for index, issue in enumerate(issues, start=1):
+            issue_content = json.dumps(issue, ensure_ascii=False) if isinstance(issue, dict) else str(issue)
+            doc = _make_document(
                 project_name,
-                "review_summary",
-                f"{story_id}/summary_{chapter_no:03d}",
-                f"Chapter {chapter_no:03d} Review Summary",
-                review_json.get("summary", ""),
+                "review_issue",
+                f"{story_id}/{chapter_no:03d}_{index:02d}",
+                f"Chapter {chapter_no:03d} Review Issue {index}",
+                issue_content,
                 chapter_no=chapter_no,
-                path=str(file),
-                tags=["review", "summary", review_json.get("status", "")],
+                path=review_path,
+                tags=["review", "issue"],
                 metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
             )
-            if summary_doc:
-                documents.append(summary_doc)
+            if doc:
+                documents.append(doc)
 
-            for index, issue in enumerate(review_json.get("issues", []), start=1):
-                doc = _make_document(
-                    project_name,
-                    "review_issue",
-                    f"{story_id}/{chapter_no:03d}_{index:02d}",
-                    f"Chapter {chapter_no:03d} Review Issue {index}",
-                    issue,
-                    chapter_no=chapter_no,
-                    path=str(file),
-                    tags=["review", "issue"],
-                    metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
-                )
-                if doc:
-                    documents.append(doc)
+        consistency_checks = review_json.get("consistency_checks", {})
+        if not isinstance(consistency_checks, dict):
+            consistency_checks = {}
+        for field_name, label in [
+            ("characters", "review_characters_check"),
+            ("world", "review_world_check"),
+            ("timeline", "review_timeline_check"),
+            ("foreshadowing", "review_foreshadowing_check"),
+        ]:
+            content = consistency_checks.get(field_name, "")
+            doc = _make_document(
+                project_name,
+                label,
+                f"{story_id}/{chapter_no:03d}_{field_name}",
+                f"Chapter {chapter_no:03d} {field_name.title()} Check",
+                str(content),
+                chapter_no=chapter_no,
+                path=review_path,
+                tags=["review", field_name],
+                metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
+            )
+            if doc:
+                documents.append(doc)
 
-            for field_name, label in [
-                ("characters", "review_characters_check"),
-                ("world", "review_world_check"),
-                ("timeline", "review_timeline_check"),
-                ("foreshadowing", "review_foreshadowing_check"),
-            ]:
-                content = review_json.get("consistency_checks", {}).get(field_name, "")
-                doc = _make_document(
-                    project_name,
-                    label,
-                    f"{story_id}/{chapter_no:03d}_{field_name}",
-                    f"Chapter {chapter_no:03d} {field_name.title()} Check",
-                    content,
-                    chapter_no=chapter_no,
-                    path=str(file),
-                    tags=["review", field_name],
-                    metadata={"status": review_json.get("status", ""), "authority": "project", "story_id": story_id},
-                )
-                if doc:
-                    documents.append(doc)
-
+    if reviews_dir.exists():
         for file in sorted(reviews_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
             chapter_no = int(match.group(1)) if match else None
@@ -1286,6 +1337,40 @@ def _documents_from_project_files(project_name: str, story_id: str = "default") 
                     documents.append(doc)
 
     evaluation_dir = base_path / "evaluation"
+    evaluation_payloads: dict[int, dict] = {}
+    evaluation_paths: dict[int, str] = {}
+    for record in list_asset_payload_records(project_name, asset_type="evaluation_json", story_id=story_id):
+        chapter_no = _chapter_no_from_asset_record(record)
+        payload = record.get("payload")
+        if isinstance(chapter_no, int) and isinstance(payload, dict):
+            evaluation_payloads[chapter_no] = payload
+            evaluation_paths[chapter_no] = str(base_path / str(record.get("relative_path") or f"evaluation/chapter_{chapter_no:03d}.json"))
+    if evaluation_dir.exists():
+        for file in sorted(evaluation_dir.glob("chapter_*.json")):
+            match = re.search(r"chapter_(\d+)\.json$", file.name)
+            if not match:
+                continue
+            chapter_no = int(match.group(1))
+            evaluation_json = load_evaluation_json(project_name, chapter_no, story_id=story_id)
+            if isinstance(evaluation_json, dict):
+                evaluation_payloads[chapter_no] = evaluation_json
+                evaluation_paths[chapter_no] = str(file)
+    for chapter_no in sorted(evaluation_payloads):
+        evaluation_json = evaluation_payloads[chapter_no]
+        evaluation_path = evaluation_paths.get(chapter_no, str(base_path / "evaluation" / f"chapter_{chapter_no:03d}.json"))
+        doc = _make_document(
+            project_name,
+            "evaluation_payload",
+            f"{story_id}/payload_{chapter_no:03d}",
+            f"Chapter {chapter_no:03d} Evaluation Payload",
+            json.dumps(evaluation_json, ensure_ascii=False, indent=2),
+            chapter_no=chapter_no,
+            path=evaluation_path,
+            tags=["evaluation", "payload"],
+            metadata={"authority": "project", "story_id": story_id, "evaluation": evaluation_json},
+        )
+        if doc:
+            documents.append(doc)
     if evaluation_dir.exists():
         for file in sorted(evaluation_dir.glob("chapter_*.md")):
             match = re.search(r"chapter_(\d+)\.md$", file.name)
@@ -1316,7 +1401,24 @@ def _documents_from_external_sources(project_name: str) -> list[RetrievalDocumen
     source_dir = retrieval_sources_path(project_name)
     documents: list[RetrievalDocument] = []
 
+    source_files = []
+    seen_source_paths: set[str] = set()
+    for relative_path in list_retrieval_source_files(project_name):
+        clean_relative_path = str(relative_path or "").replace("\\", "/").strip()
+        if not clean_relative_path or clean_relative_path in seen_source_paths:
+            continue
+        seen_source_paths.add(clean_relative_path)
+        source_files.append((clean_relative_path, source_dir / clean_relative_path))
     for file in sorted(source_dir.rglob("*")):
+        if not file.is_file():
+            continue
+        relative_path = file.relative_to(source_dir).as_posix()
+        if relative_path in seen_source_paths:
+            continue
+        seen_source_paths.add(relative_path)
+        source_files.append((relative_path, file))
+
+    for relative_path, file in source_files:
         if not file.is_file() or file.suffix.lower() not in {".md", ".txt", ".json"}:
             continue
 
@@ -1348,7 +1450,7 @@ def _documents_from_external_sources(project_name: str) -> list[RetrievalDocumen
         doc = _make_document(
             project_name,
             source_type,
-            file.stem,
+            relative_path,
             title,
             content,
             scope=scope if scope in {"project", "canon", "reference"} else "reference",

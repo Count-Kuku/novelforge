@@ -4,6 +4,7 @@ import re
 import shutil
 import os
 import stat
+import hashlib
 from datetime import datetime
 from pathlib import Path
 
@@ -15,14 +16,20 @@ from memory import (
     load_evaluation_json,
     load_evaluation_report,
     load_knowledge_base,
+    list_asset_records,
+    list_asset_payload_records,
     list_long_reference_batches,
     load_outline,
     load_pending_knowledge_items,
+    list_pipeline_run_summaries,
+    list_retrieval_source_files,
     load_review,
     load_review_json,
     load_source_package_report,
+    mark_asset_deleted_record,
     normalize_project_name,
     project_dir,
+    register_asset_file_record,
     retrieval_sources_path,
     runs_path,
     story_path,
@@ -31,6 +38,8 @@ from memory import (
     save_evaluation_report,
     save_review,
     save_review_json,
+    delete_pipeline_run_record,
+    sync_retrieval_source_file_record,
     sync_project_retrieval_assets,
 )
 
@@ -73,6 +82,31 @@ def _latest_mtime(paths: list[Path]) -> float | None:
     return max(values) if values else None
 
 
+def _chapter_no_from_asset_record(record: dict) -> int | None:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    try:
+        value = metadata.get("chapter_no")
+        if value is not None:
+            return int(value)
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r"chapter_(\d+)", str(record.get("logical_key") or record.get("relative_path") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _asset_record_exists(
+    project_name: str,
+    *,
+    asset_type: str,
+    logical_key: str,
+    story_id: str | None = None,
+) -> bool:
+    for record in list_asset_records(project_name, asset_type=asset_type, story_id=story_id):
+        if str(record.get("logical_key") or "") == logical_key:
+            return True
+    return False
+
+
 def delete_project(project_name: str) -> bool:
     target = _project_dir(project_name)
     if not target.exists() or not target.is_dir():
@@ -102,32 +136,67 @@ def rename_project(old_name: str, new_name: str) -> str:
 
 
 def delete_outline(project_name: str, story_id: str = "default") -> bool:
-    deleted = _safe_unlink(_story_dir(project_name, story_id) / "outline.md")
+    deleted_file = _safe_unlink(_story_dir(project_name, story_id) / "outline.md")
+    deleted = deleted_file or _asset_record_exists(project_name, asset_type="outline", logical_key="main", story_id=story_id)
     if deleted:
+        mark_asset_deleted_record(project_name, asset_type="outline", logical_key="main", story_id=story_id)
         sync_project_retrieval_assets(project_name)
     return deleted
 
 
 def delete_chapter_outline(project_name: str, chapter_no: int, story_id: str = "default") -> bool:
-    deleted = _safe_unlink(_story_dir(project_name, story_id) / "chapter_outlines" / f"chapter_{chapter_no:03d}.md")
+    logical_key = f"chapter_{chapter_no:03d}"
+    deleted_file = _safe_unlink(_story_dir(project_name, story_id) / "chapter_outlines" / f"{logical_key}.md")
+    deleted = deleted_file or _asset_record_exists(project_name, asset_type="chapter_outline", logical_key=logical_key, story_id=story_id)
     if deleted:
+        mark_asset_deleted_record(
+            project_name,
+            asset_type="chapter_outline",
+            logical_key=logical_key,
+            story_id=story_id,
+        )
         sync_project_retrieval_assets(project_name)
     return deleted
 
 
 def delete_chapter_content(project_name: str, chapter_no: int, story_id: str = "default") -> bool:
-    deleted = _safe_unlink(_story_dir(project_name, story_id) / "chapters" / f"chapter_{chapter_no:03d}.md")
+    logical_key = f"chapter_{chapter_no:03d}"
+    deleted_file = _safe_unlink(_story_dir(project_name, story_id) / "chapters" / f"{logical_key}.md")
+    deleted = deleted_file or _asset_record_exists(project_name, asset_type="chapter", logical_key=logical_key, story_id=story_id)
     if deleted:
+        mark_asset_deleted_record(
+            project_name,
+            asset_type="chapter",
+            logical_key=logical_key,
+            story_id=story_id,
+        )
         sync_project_retrieval_assets(project_name)
     return deleted
 
 
 def delete_chapter_review(project_name: str, chapter_no: int, story_id: str = "default") -> bool:
     review_dir = _story_dir(project_name, story_id) / "reviews"
+    logical_key = f"chapter_{chapter_no:03d}"
     deleted_md = _safe_unlink(review_dir / f"chapter_{chapter_no:03d}.md")
+    had_md_asset = _asset_record_exists(project_name, asset_type="review_markdown", logical_key=logical_key, story_id=story_id)
+    had_json_payload = load_review_json(project_name, chapter_no, story_id=story_id) is not None
     deleted_json = _safe_unlink(review_dir / f"chapter_{chapter_no:03d}.json")
-    deleted = deleted_md or deleted_json
+    deleted = deleted_md or had_md_asset or deleted_json or had_json_payload
     if deleted:
+        if deleted_md or had_md_asset:
+            mark_asset_deleted_record(
+                project_name,
+                asset_type="review_markdown",
+                logical_key=logical_key,
+                story_id=story_id,
+            )
+        if deleted_json or had_json_payload:
+            mark_asset_deleted_record(
+                project_name,
+                asset_type="review_json",
+                logical_key=logical_key,
+                story_id=story_id,
+            )
         sync_project_retrieval_assets(project_name)
     return deleted
 
@@ -135,31 +204,95 @@ def delete_chapter_review(project_name: str, chapter_no: int, story_id: str = "d
 def delete_analysis_report(project_name: str, analysis_type: str, chapter_no: int, story_id: str = "default") -> bool:
     file_name = SOURCE_PACKAGE_REPORT_NAME if analysis_type == "source_package" and chapter_no <= 0 else f"{analysis_type}_chapter_{chapter_no:03d}.md"
     base = _project_dir(project_name) if analysis_type == "source_package" and chapter_no <= 0 else _story_dir(project_name, story_id)
-    deleted = _safe_unlink(base / "analysis" / file_name)
+    if analysis_type == "source_package" and chapter_no <= 0:
+        asset_type = "source_package_report"
+        logical_key = "source_package"
+        asset_story_id = None
+    else:
+        asset_type = "analysis_markdown"
+        logical_key = f"{analysis_type}_chapter_{chapter_no:03d}"
+        asset_story_id = story_id
+    deleted_file = _safe_unlink(base / "analysis" / file_name)
+    deleted = deleted_file or _asset_record_exists(project_name, asset_type=asset_type, logical_key=logical_key, story_id=asset_story_id)
     if deleted:
+        if analysis_type == "source_package" and chapter_no <= 0:
+            mark_asset_deleted_record(
+                project_name,
+                asset_type=asset_type,
+                logical_key=logical_key,
+            )
+        else:
+            mark_asset_deleted_record(
+                project_name,
+                asset_type=asset_type,
+                logical_key=logical_key,
+                story_id=story_id,
+            )
         sync_project_retrieval_assets(project_name)
     return deleted
 
 
 def delete_evaluation_report(project_name: str, chapter_no: int, story_id: str = "default") -> bool:
     evaluation_dir = _story_dir(project_name, story_id) / "evaluation"
+    logical_key = f"chapter_{chapter_no:03d}"
     deleted_md = _safe_unlink(evaluation_dir / f"chapter_{chapter_no:03d}.md")
+    had_md_asset = _asset_record_exists(project_name, asset_type="evaluation_markdown", logical_key=logical_key, story_id=story_id)
+    had_json_payload = load_evaluation_json(project_name, chapter_no, story_id=story_id) is not None
     deleted_json = _safe_unlink(evaluation_dir / f"chapter_{chapter_no:03d}.json")
-    deleted = deleted_md or deleted_json
+    deleted = deleted_md or had_md_asset or deleted_json or had_json_payload
     if deleted:
+        if deleted_md or had_md_asset:
+            mark_asset_deleted_record(
+                project_name,
+                asset_type="evaluation_markdown",
+                logical_key=logical_key,
+                story_id=story_id,
+            )
+        if deleted_json or had_json_payload:
+            mark_asset_deleted_record(
+                project_name,
+                asset_type="evaluation_json",
+                logical_key=logical_key,
+                story_id=story_id,
+            )
         sync_project_retrieval_assets(project_name)
     return deleted
 
 
 def delete_chapter_analysis_bundle(project_name: str, chapter_no: int, story_id: str = "default") -> int:
+    deleted = 0
+    seen_keys: set[str] = set()
+    for report in list_analysis_reports(project_name, story_id=story_id):
+        if report.get("chapter_no") != chapter_no:
+            continue
+        analysis_type = str(report.get("analysis_type") or "")
+        if not analysis_type or analysis_type == "source_package":
+            continue
+        logical_key = f"{analysis_type}_chapter_{chapter_no:03d}"
+        if logical_key in seen_keys:
+            continue
+        seen_keys.add(logical_key)
+        if delete_analysis_report(project_name, analysis_type, chapter_no, story_id=story_id):
+            deleted += 1
+
     analysis_dir = _story_dir(project_name, story_id) / "analysis"
     if not analysis_dir.exists():
-        return 0
+        return deleted
 
-    deleted = 0
     for file in analysis_dir.glob(f"*_chapter_{chapter_no:03d}.md"):
+        match = ANALYSIS_PATTERN.match(file.name)
+        logical_key = f"{match.group(1)}_chapter_{chapter_no:03d}" if match else file.stem
+        if logical_key in seen_keys:
+            continue
         if _safe_unlink(file):
             deleted += 1
+            if match:
+                mark_asset_deleted_record(
+                    project_name,
+                    asset_type="analysis_markdown",
+                    logical_key=f"{match.group(1)}_chapter_{chapter_no:03d}",
+                    story_id=story_id,
+                )
 
     if deleted:
         sync_project_retrieval_assets(project_name)
@@ -167,7 +300,16 @@ def delete_chapter_analysis_bundle(project_name: str, chapter_no: int, story_id:
 
 
 def delete_pipeline_run(project_name: str, run_id: str, story_id: str = "default") -> bool:
-    return _safe_unlink(runs_path(project_name, story_id) / f"{run_id}.json")
+    deleted = _safe_unlink(runs_path(project_name, story_id) / f"{run_id}.json")
+    deleted_db = delete_pipeline_run_record(project_name, run_id, story_id=story_id)
+    if deleted or deleted_db:
+        mark_asset_deleted_record(
+            project_name,
+            asset_type="workflow_run_snapshot",
+            logical_key=str(run_id),
+            story_id=story_id,
+        )
+    return deleted or deleted_db
 
 
 def save_review_resources(project_name: str, chapter_no: int, markdown: str, json_payload: dict | None = None, story_id: str = "default"):
@@ -199,14 +341,51 @@ def save_retrieval_source_content(project_name: str, relative_path: str, content
     if not target.exists() or not target.is_file():
         raise FileNotFoundError("Retrieval source does not exist.")
     target.write_text(content, encoding="utf-8")
+    normalized_relative_path = str(relative_path).replace("\\", "/")
+    register_asset_file_record(
+        project_name,
+        target,
+        asset_type="retrieval_source",
+        logical_key=normalized_relative_path,
+        title=target.name,
+        mime_type="text/plain",
+        source_kind="retrieval_source",
+        metadata={"relative_path": normalized_relative_path},
+    )
+    sync_retrieval_source_file_record(
+        project_name,
+        relative_path=normalized_relative_path,
+        title=target.name,
+        content_hash=hashlib.sha256(target.read_bytes()).hexdigest(),
+        source_type="reference",
+        metadata={"relative_path": normalized_relative_path},
+    )
     sync_project_retrieval_assets(project_name)
 
 
 def delete_chapter_runs(project_name: str, chapter_no: int, story_id: str = "default") -> int:
     deleted = 0
+    seen_run_ids: set[str] = set()
+    for run in list_project_runs(project_name, story_id=story_id):
+        if run.get("chapter_no") != chapter_no:
+            continue
+        run_id = str(run.get("run_id") or "")
+        if not run_id or run_id in seen_run_ids:
+            continue
+        seen_run_ids.add(run_id)
+        if delete_pipeline_run(project_name, run_id, story_id=story_id):
+            deleted += 1
     for file in runs_path(project_name, story_id).glob(f"chapter_{chapter_no:03d}_*.json"):
+        if file.stem in seen_run_ids:
+            continue
         if _safe_unlink(file):
             deleted += 1
+            mark_asset_deleted_record(
+                project_name,
+                asset_type="workflow_run_snapshot",
+                logical_key=file.stem,
+                story_id=story_id,
+            )
     return deleted
 
 
@@ -244,11 +423,43 @@ def list_analysis_reports(project_name: str, story_id: str = "default") -> list[
         analysis_dirs.append(project_analysis_dir)
     reports = []
     seen_paths: set[str] = set()
+    root = _project_dir(project_name)
+    for record in [
+        *list_asset_records(project_name, asset_type="analysis_markdown", story_id=story_id),
+        *list_asset_records(project_name, asset_type="source_package_report"),
+    ]:
+        relative_path = str(record.get("relative_path") or "").replace("\\", "/")
+        logical_key = str(record.get("logical_key") or "")
+        dedupe_key = relative_path or f"{record.get('asset_type')}:{logical_key}"
+        if dedupe_key in seen_paths:
+            continue
+        seen_paths.add(dedupe_key)
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        file = root / relative_path if relative_path else root / "analysis" / SOURCE_PACKAGE_REPORT_NAME
+        if record.get("asset_type") == "source_package_report":
+            analysis_type = "source_package"
+            chapter_no = None
+        else:
+            match = ANALYSIS_PATTERN.search(file.name)
+            analysis_type = str(metadata.get("analysis_type") or (match.group(1) if match else logical_key.split("_chapter_")[0] or file.stem))
+            try:
+                chapter_no = int(metadata.get("chapter_no") if metadata.get("chapter_no") is not None else (match.group(2) if match else ""))
+            except (TypeError, ValueError):
+                chapter_no = None
+        reports.append({
+            "analysis_type": analysis_type,
+            "chapter_no": chapter_no,
+            "file_name": file.name,
+            "updated_at": str(record.get("updated_at") or ""),
+            "path": str(file),
+            "preview": load_source_package_report(project_name) if analysis_type == "source_package" else load_text_file(file, fallback=""),
+        })
     for analysis_dir in analysis_dirs:
         if not analysis_dir.exists():
             continue
         for file in sorted(analysis_dir.glob("*.md")):
-            if str(file) in seen_paths:
+            relative_key = file.relative_to(root).as_posix() if root in file.resolve().parents or file.resolve() == root else str(file)
+            if str(file) in seen_paths or relative_key in seen_paths:
                 continue
             seen_paths.add(str(file))
             match = ANALYSIS_PATTERN.search(file.name)
@@ -272,24 +483,60 @@ def list_analysis_reports(project_name: str, story_id: str = "default") -> list[
 
 def list_evaluation_reports(project_name: str, story_id: str = "default") -> list[dict]:
     evaluation_dir = _story_dir(project_name, story_id) / "evaluation"
-    if not evaluation_dir.exists():
-        return []
     reports = []
-    for file in sorted(evaluation_dir.glob("chapter_*.md")):
-        match = EVALUATION_PATTERN.search(file.name)
-        chapter_no = int(match.group(1)) if match else None
+    seen_paths: set[str] = set()
+    root = _project_dir(project_name)
+    for record in list_asset_records(project_name, asset_type="evaluation_markdown", story_id=story_id):
+        relative_path = str(record.get("relative_path") or "").replace("\\", "/")
+        logical_key = str(record.get("logical_key") or "")
+        dedupe_key = relative_path or f"evaluation_markdown:{logical_key}"
+        if dedupe_key in seen_paths:
+            continue
+        seen_paths.add(dedupe_key)
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        file = root / relative_path if relative_path else evaluation_dir / f"{logical_key}.md"
+        chapter_no = _chapter_no_from_asset_record(record)
         reports.append({
             "chapter_no": chapter_no,
             "file_name": file.name,
-            "updated_at": _timestamp_or_empty(file.stat().st_mtime),
+            "updated_at": str(record.get("updated_at") or ""),
             "path": str(file),
         })
+    if evaluation_dir.exists():
+        for file in sorted(evaluation_dir.glob("chapter_*.md")):
+            relative_key = file.relative_to(root).as_posix() if root in file.resolve().parents or file.resolve() == root else str(file)
+            if str(file) in seen_paths or relative_key in seen_paths:
+                continue
+            match = EVALUATION_PATTERN.search(file.name)
+            chapter_no = int(match.group(1)) if match else None
+            reports.append({
+                "chapter_no": chapter_no,
+                "file_name": file.name,
+                "updated_at": _timestamp_or_empty(file.stat().st_mtime),
+                "path": str(file),
+            })
     return reports
 
 
 def list_project_runs(project_name: str, story_id: str = "default") -> list[dict]:
-    items = []
+    items: list[dict] = []
+    seen_run_ids: set[str] = set()
+    for run in list_pipeline_run_summaries(project_name, story_id=story_id):
+        run_id = str(run.get("run_id") or "")
+        if not run_id:
+            continue
+        seen_run_ids.add(run_id)
+        items.append({
+            "run_id": run_id,
+            "chapter_no": run.get("chapter_no"),
+            "updated_at": str(run.get("updated_at") or ""),
+            "path": str(runs_path(project_name, story_id) / f"{run_id}.json"),
+            "status": run.get("status", ""),
+            "workflow_type": run.get("workflow_type", ""),
+        })
     for file in sorted(runs_path(project_name, story_id).glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        if file.stem in seen_run_ids:
+            continue
         chapter_no = None
         match = re.search(r"chapter_(\d+)_", file.stem)
         if match:
@@ -300,6 +547,7 @@ def list_project_runs(project_name: str, story_id: str = "default") -> list[dict
             "updated_at": _timestamp_or_empty(file.stat().st_mtime),
             "path": str(file),
         })
+    items.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
     return items
 
 
@@ -322,6 +570,17 @@ def list_chapter_inventory(project_name: str, story_id: str = "default") -> list
         if match:
             chapter_numbers.add(int(match.group(1)))
 
+    db_markdown_records = [
+        *list_asset_records(project_name, asset_type="chapter_outline", story_id=story_id),
+        *list_asset_records(project_name, asset_type="chapter", story_id=story_id),
+        *list_asset_records(project_name, asset_type="review_markdown", story_id=story_id),
+        *list_asset_records(project_name, asset_type="evaluation_markdown", story_id=story_id),
+    ]
+    for record in db_markdown_records:
+        chapter_no = _chapter_no_from_asset_record(record)
+        if isinstance(chapter_no, int):
+            chapter_numbers.add(chapter_no)
+
     for report in list_analysis_reports(project_name, story_id=story_id):
         if isinstance(report.get("chapter_no"), int):
             chapter_numbers.add(int(report["chapter_no"]))
@@ -330,12 +589,35 @@ def list_chapter_inventory(project_name: str, story_id: str = "default") -> list
         if isinstance(report.get("chapter_no"), int):
             chapter_numbers.add(int(report["chapter_no"]))
 
+    db_json_records = [
+        *list_asset_payload_records(project_name, asset_type="chapter_outline_metadata", story_id=story_id),
+        *list_asset_payload_records(project_name, asset_type="chapter_discussion", story_id=story_id),
+        *list_asset_payload_records(project_name, asset_type="review_json", story_id=story_id),
+        *list_asset_payload_records(project_name, asset_type="evaluation_json", story_id=story_id),
+    ]
+    for record in db_json_records:
+        chapter_no = _chapter_no_from_asset_record(record)
+        if isinstance(chapter_no, int):
+            chapter_numbers.add(chapter_no)
+
+    for run in list_project_runs(project_name, story_id=story_id):
+        if isinstance(run.get("chapter_no"), int):
+            chapter_numbers.add(int(run["chapter_no"]))
+
     inventory = []
     for chapter_no in sorted(chapter_numbers):
         outline_file = base / "chapter_outlines" / f"chapter_{chapter_no:03d}.md"
         content_file = base / "chapters" / f"chapter_{chapter_no:03d}.md"
         review_md = base / "reviews" / f"chapter_{chapter_no:03d}.md"
         review_json = base / "reviews" / f"chapter_{chapter_no:03d}.json"
+        review_payload_raw = load_review_json(project_name, chapter_no, story_id=story_id)
+        evaluation_payload_raw = load_evaluation_json(project_name, chapter_no, story_id=story_id)
+        review_payload = review_payload_raw or {}
+        evaluation_payload = evaluation_payload_raw or {}
+        has_outline_asset = _asset_record_exists(project_name, asset_type="chapter_outline", logical_key=f"chapter_{chapter_no:03d}", story_id=story_id)
+        has_content_asset = _asset_record_exists(project_name, asset_type="chapter", logical_key=f"chapter_{chapter_no:03d}", story_id=story_id)
+        has_review_markdown_asset = _asset_record_exists(project_name, asset_type="review_markdown", logical_key=f"chapter_{chapter_no:03d}", story_id=story_id)
+        has_evaluation_markdown_asset = _asset_record_exists(project_name, asset_type="evaluation_markdown", logical_key=f"chapter_{chapter_no:03d}", story_id=story_id)
         analysis_reports = [
             report for report in list_analysis_reports(project_name, story_id=story_id)
             if report.get("chapter_no") == chapter_no
@@ -355,20 +637,20 @@ def list_chapter_inventory(project_name: str, story_id: str = "default") -> list
         inventory.append({
             "chapter_no": chapter_no,
             "metadata": load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id),
-            "has_outline": outline_file.exists(),
-            "has_content": content_file.exists(),
-            "has_review_markdown": review_md.exists(),
-            "has_review_json": review_json.exists(),
+            "has_outline": outline_file.exists() or has_outline_asset,
+            "has_content": content_file.exists() or has_content_asset,
+            "has_review_markdown": review_md.exists() or has_review_markdown_asset,
+            "has_review_json": review_json.exists() or review_payload_raw is not None,
             "analysis_types": sorted({str(report.get("analysis_type", "")) for report in analysis_reports if report.get("analysis_type")}),
-            "has_evaluation": bool(evaluation_report.strip() or load_evaluation_json(project_name, chapter_no)),
+            "has_evaluation": bool(evaluation_report.strip() or evaluation_payload_raw is not None or has_evaluation_markdown_asset),
             "run_count": len(run_items),
             "updated_at": updated_at,
             "outline_preview": load_text_file(outline_file, fallback=""),
             "content_preview": load_text_file(content_file, fallback=""),
             "review_preview": load_review(project_name, chapter_no, story_id=story_id),
-            "review_payload": load_review_json(project_name, chapter_no, story_id=story_id) or {},
+            "review_payload": review_payload,
             "evaluation_preview": evaluation_report,
-            "evaluation_payload": load_evaluation_json(project_name, chapter_no, story_id=story_id) or {},
+            "evaluation_payload": evaluation_payload,
         })
     return inventory
 
@@ -426,11 +708,29 @@ def get_project_summary(project_name: str, story_id: str = "default") -> dict:
 def list_retrieval_sources(project_name: str) -> list[dict]:
     source_root = retrieval_sources_path(project_name)
     items = []
+    seen_paths: set[str] = set()
+    for relative_path in list_retrieval_source_files(project_name):
+        normalized_relative_path = str(relative_path or "").replace("\\", "/").strip()
+        if not normalized_relative_path or normalized_relative_path in seen_paths:
+            continue
+        seen_paths.add(normalized_relative_path)
+        file = source_root / normalized_relative_path
+        items.append({
+            "relative_path": normalized_relative_path,
+            "file_name": file.name,
+            "updated_at": _timestamp_or_empty(file.stat().st_mtime if file.exists() else None),
+            "path": str(file),
+            "suffix": file.suffix.lower(),
+            "preview": load_text_file(file, fallback=""),
+        })
     for file in sorted(source_root.rglob("*")):
         if not file.is_file():
             continue
+        relative_path = file.relative_to(source_root).as_posix()
+        if relative_path in seen_paths:
+            continue
         items.append({
-            "relative_path": file.relative_to(source_root).as_posix(),
+            "relative_path": relative_path,
             "file_name": file.name,
             "updated_at": _timestamp_or_empty(file.stat().st_mtime),
             "path": str(file),

@@ -4,6 +4,8 @@ This document is the architecture and implementation reference for NovelForge. I
 
 For user-facing feature introductions, setup steps, and workflow guidance, see `README.md`.
 
+For the planned SQLite-first long-term storage architecture, see `storage_architecture.md`.
+
 Current release marker: `v0.5.0`
 
 ## Project Overview
@@ -817,8 +819,8 @@ Responsibilities:
 * Project creation
 * Loading compatibility memory dictionaries for older workflow helpers
 * Saving slim project metadata to `memory.json`
-* Loading global rules
-* Saving global rules
+* Loading global rules from `global.db` first, with JSON compatibility fallback
+* Saving global rules to `global.db` plus JSON compatibility mirror
 * Loading project rules
 * Saving project rules
 * Loading saved LLM configuration profiles
@@ -871,6 +873,9 @@ Current storage note:
 
 * `memory.json` is no longer the primary storage layer for stable settings. It is intentionally slimmed to project metadata such as title and genre.
 * Stable settings are managed as structured knowledge through `setting_knowledge.py`, with legacy memory-shaped dictionaries assembled only as compatibility views for prompt builders.
+* Structured data is SQLite-first as of schema version 5: project-local data is read from `project.db` first, including stories, story profiles, project/story rules, prompt options, structured knowledge, pending knowledge, aliases, source batches, retrieval source registry, retrieval manifest/chunks/vectors, retrieval feedback/evals, conflict resolutions, workflow run snapshots, project-manager run/inventory listings, RAG rebuild inputs for review/evaluation/discussion payloads, volume/arc/chapter metadata discovery, DB-only deletion for small JSON artifacts, and small JSON artifacts in `asset_payloads`; global data is read from `global.db` first, including LLM profiles, global rules, global prompt options, and global rule conflict resolutions. Schema version 5 adds active asset uniqueness indexes for both project-level and story-level assets. Legacy JSON files are compatibility mirrors and backfill sources.
+* Structured JSON compatibility mirrors are disabled by default. Set `NOVELFORGE_WRITE_JSON_MIRRORS=1` before launching the app or tools only when temporary legacy JSON mirror output is needed. SQLite remains authoritative; old JSON can still be read as fallback/backfill until the corresponding structured resource is saved again, at which point that stale mirror is removed. Markdown/TXT long-text assets remain file-backed.
+* In the default no-JSON-mirror mode, SQLite is required rather than best-effort: database read/write/delete failures raise errors so structured data is not silently lost.
 
 No LLM logic should exist here.
 
@@ -1440,9 +1445,9 @@ Note:
 * Analysis reports are stored as Markdown for human reading
 * Their source LLM outputs are now expected to conform to Pydantic-backed JSON schemas before rendering
 
-global_rules.json
+global.db / global_rules.json
 
-Stored under `data/` and shared across all projects.
+`data/global.db` is the authoritative global structured store. Legacy JSON mirrors such as `data/global_rules.json`, `data/prompt_options.json`, `data/llm_profiles.json`, and `data/global_rule_conflict_resolutions.json` remain as compatibility and backfill files.
 
 ---
 
@@ -1463,8 +1468,8 @@ Usage notes:
 
 * `all` applies to every generation step
 * Other fields apply only to their matching capability
-* Global rules are loaded from `data/global_rules.json`
-* Project rules are loaded from `data/projects/{project_name}/rules.json`
+* Global rules are loaded from `data/global.db` first, then `data/global_rules.json` as compatibility fallback
+* Project rules are loaded from `data/projects/{project_name}/project.db` first, then `data/projects/{project_name}/rules.json` as compatibility fallback
 
 ---
 
@@ -1898,6 +1903,8 @@ Metrics:
 
 16. Retrieval index assets (manifest + vectors) must stay consistent: every save/delete that modifies retrieval-relevant data must call `sync_project_retrieval_assets` (or document why it shouldn't)
 
+17. On Windows, project Python commands should use the local virtual environment interpreter `.\.venv\Scripts\python.exe` instead of bare `python`, because bare `python` may resolve to Anaconda or another global interpreter without the project dependencies.
+
 ---
 
 # Known Technical Debt
@@ -1914,13 +1921,19 @@ The following items are acknowledged departures from the design philosophy and a
 
 5. **launcher.py currently has limited cross-platform support.** The Python executable resolution defaults to Windows paths; Linux/macOS fall back to `sys.executable`. A proper multi-platform venv resolution is pending.
 
-6. **No dedicated vector database backend.** Vectors are persisted as flat JSON files (`vectors.json`), which works for small-to-medium projects but will not scale. Migration to Chroma/SQLite+FAISS is planned for V2 completion.
+6. **No dedicated external vector database backend.** Vectors are now persisted into project SQLite for the local DB-first path, while `vectors.json` remains a compatibility mirror. Migration to Chroma/SQLite+FAISS is still planned only if project scale requires a specialized vector index.
 
 ---
 
 # Instructions For Future LLMs
 
 Before modifying the project:
+
+Use the local project virtual environment for Python commands:
+
+`.\.venv\Scripts\python.exe`
+
+Do not assume bare `python` points to the project environment.
 
 Read files in the following order:
 

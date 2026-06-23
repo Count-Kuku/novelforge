@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 *.pyd
 streamlit-codex.*.log
+.tmp_*/
 .spec
 .streamlit/*
 !.streamlit/
