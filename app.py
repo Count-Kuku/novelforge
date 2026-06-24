@@ -1,6 +1,7 @@
 import json
 import hashlib
 import html
+import logging
 
 import streamlit as st
 from urllib.parse import urlparse
@@ -172,6 +173,13 @@ from resource_browser import (
     _build_resource_browser_items,
     _delete_browser_resource,
     _save_browser_resource,
+)
+from ui.navigation import (
+    ADVANCED_PAGE_GROUPS,
+    DEFAULT_PAGE,
+    LEGACY_PAGE_ALIASES,
+    PAGE_DESCRIPTIONS,
+    page_groups_for_story as navigation_page_groups_for_story,
 )
 from retrieval import RETRIEVAL_TASK_PROFILES, debug_retrieve_context, inspect_retrieval_health, rebuild_retrieval_assets, load_retrieval_index, retrieve_context
 from extraction_presets import (
@@ -422,40 +430,9 @@ SEVERITY_LABELS = {
     "medium": "中",
     "high": "高",
 }
+APP_LOGGER = logging.getLogger("novelforge.app")
 
-PAGE_GROUPS = {
-    "工作台": ["项目总览", "模型配置", "生成规则", "提示词选项", "资源浏览器"],
-    "资料": ["资料导入", "核心设定", "检索中心"],
-    "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
-    "写作": ["快速生成", "正文生成", "章节评价"],
-}
-
-PAGE_DESCRIPTIONS = {
-    "项目总览": "查看项目进度、资源规模和基础管理。",
-    "快速生成": "实验性快速生成。只凭一段提示词就能生成，也可展开复杂配置，适合测试或临时片段。",
-    "资源浏览器": "集中浏览、编辑和清理项目文件。",
-    "创作配置": "定义任务类型、篇幅、流程深度和参考强度。",
-    "核心设定": "管理故事级和项目级的核心设定（角色、世界观、时间线等）。",
-    "生成大纲": "规划全书方向并生成全局大纲。",
-    "分卷大纲": "维护中层分卷结构。",
-    "剧情段大纲": "维护剧情段和章节分配计划。",
-    "生成细纲": "生成具体章节细纲。",
-    "正文生成": "根据细纲或需求生成正文内容，可串联审阅和设定提炼。适应章节制和自由写作两种模式。",
-    "章节评价": "综合判断章节是否可继续、质量分数和一致性诊断。",
-    "资料导入": "导入原作、参考资料和长篇文本。",
-    "检索中心": "调试索引、召回证据和冲突裁决。",
-    "生成规则": "管理全局、项目和故事级的生成约束，控制模型怎么写。",
-    "提示词选项": "管理可启用、可复用、可从讨论提炼的 Prompt 选项。",
-    "模型配置": "配置模型端点、密钥和档案切换。",
-}
-
-DEFAULT_PAGE = "项目总览"
-
-LEGACY_PAGE_ALIASES = {
-    "设定": "核心设定",
-    "资料录入": "资料导入",
-    "项目资源": "资源浏览器",
-}
+PAGE_GROUPS = ADVANCED_PAGE_GROUPS
 
 SCHEMA_LABELS = {
     "OrganizedReferenceResult": "资料整理结果",
@@ -592,43 +569,44 @@ def apply_app_style():
         <style>
         :root {
             color-scheme: light;
-            --nf-bg: #f7f8fb;
+            --nf-bg: #f8fbff;
             --nf-panel: #ffffff;
-            --nf-border: #d8dee8;
-            --nf-text: #17202a;
-            --nf-muted: #667085;
-            --nf-accent: #0f766e;
-            --nf-accent-strong: #0b5f59;
+            --nf-border: #dbe6f2;
+            --nf-text: #1f2937;
+            --nf-muted: #66758a;
+            --nf-accent: #6b9edb;
+            --nf-accent-strong: #4d7fbd;
+            --nf-accent-soft: #eef6ff;
             --nf-danger: #b42318;
-            --nf-shadow: 0 16px 42px rgba(15, 35, 55, 0.08);
+            --nf-shadow: 0 16px 42px rgba(44, 82, 130, 0.08);
         }
 
         .stApp {
             background:
-                linear-gradient(180deg, rgba(255,255,255,0.86), rgba(247,248,251,0.98)),
+                linear-gradient(180deg, rgba(255,255,255,0.9), rgba(248,251,255,0.98)),
                 var(--nf-bg);
             color: var(--nf-text);
         }
 
         [data-testid="stSidebar"] {
-            background: #123733;
-            border-right: 1px solid rgba(255,255,255,0.08);
+            background: #f3f8ff;
+            border-right: 1px solid var(--nf-border);
         }
 
         [data-testid="stSidebar"] * {
-            color: #eef7f6;
+            color: var(--nf-text);
         }
 
         [data-testid="stSidebar"] .stCaption,
         [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-            color: rgba(238,247,246,0.74);
+            color: var(--nf-muted);
         }
 
         [data-testid="stSidebar"] [data-baseweb="select"] > div,
         [data-testid="stSidebar"] input,
         [data-testid="stSidebar"] textarea {
             background: #ffffff !important;
-            border-color: rgba(255,255,255,0.18) !important;
+            border-color: var(--nf-border) !important;
             color: var(--nf-text) !important;
         }
 
@@ -651,7 +629,7 @@ def apply_app_style():
 
         [data-testid="stSidebar"] .stButton > button {
             background: #ffffff !important;
-            border-color: rgba(255,255,255,0.22) !important;
+            border-color: var(--nf-border) !important;
             color: var(--nf-text) !important;
             font-weight: 650 !important;
         }
@@ -659,7 +637,7 @@ def apply_app_style():
         [data-testid="stSidebar"] button,
         [data-testid="stSidebar"] [data-testid="stPopover"] button {
             background: #ffffff !important;
-            border-color: rgba(255,255,255,0.22) !important;
+            border-color: var(--nf-border) !important;
             color: var(--nf-text) !important;
             font-weight: 650 !important;
             opacity: 1 !important;
@@ -681,7 +659,7 @@ def apply_app_style():
         }
 
         [data-testid="stSidebar"] .stButton > button:hover {
-            background: #e6fffb !important;
+            background: var(--nf-accent-soft) !important;
             border-color: var(--nf-accent) !important;
             color: var(--nf-accent-strong) !important;
         }
@@ -702,7 +680,7 @@ def apply_app_style():
         [data-testid="stSidebar"] button:disabled *,
         [data-testid="stSidebar"] button[disabled] * {
             background: #ffffff !important;
-            border-color: rgba(255,255,255,0.22) !important;
+            border-color: var(--nf-border) !important;
             color: var(--nf-text) !important;
             opacity: 1 !important;
             -webkit-text-fill-color: var(--nf-text) !important;
@@ -723,7 +701,7 @@ def apply_app_style():
             border: 1px solid var(--nf-border);
             border-radius: 8px;
             padding: 0.85rem 1rem;
-            box-shadow: 0 10px 28px rgba(15, 35, 55, 0.05);
+            box-shadow: 0 10px 28px rgba(44, 82, 130, 0.05);
         }
 
         div[data-testid="stMetric"] label {
@@ -800,7 +778,7 @@ def apply_app_style():
             border: 1px solid var(--nf-border);
             border-radius: 8px;
             padding: 1rem;
-            box-shadow: 0 10px 26px rgba(15, 35, 55, 0.05);
+            box-shadow: 0 10px 26px rgba(44, 82, 130, 0.05);
         }
 
         .nf-card-title {
@@ -826,7 +804,7 @@ def apply_app_style():
         }
 
         .nf-sidebar-meta {
-            color: rgba(247,240,231,0.68);
+            color: var(--nf-muted);
             font-size: 0.82rem;
             line-height: 1.45;
             margin-bottom: 0.8rem;
@@ -836,15 +814,15 @@ def apply_app_style():
             margin: 0.65rem 0 0.45rem;
             padding: 0.65rem 0.75rem;
             border-radius: 8px;
-            border: 1px solid rgba(94, 234, 212, 0.22);
-            background: rgba(15, 118, 110, 0.28);
-            color: #d9fbf7;
+            border: 1px solid #c9ddf5;
+            background: #eaf4ff;
+            color: var(--nf-text);
             font-size: 0.84rem;
             line-height: 1.5;
         }
 
         .nf-sidebar-note strong {
-            color: #ffffff;
+            color: var(--nf-text);
             font-weight: 700;
         }
 
@@ -915,7 +893,7 @@ def apply_app_style():
         .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:hover {
             background: var(--nf-accent-strong) !important;
             color: #ffffff !important;
-            border-color: #084c47 !important;
+            border-color: #3869a8 !important;
         }
 
         .stButton > button:hover,
@@ -980,7 +958,7 @@ def apply_app_style():
         }
 
         div[data-testid="stExpander"] details[open] > summary {
-            background: #eef6f5 !important;
+            background: var(--nf-accent-soft) !important;
         }
 
         .stApp label,
@@ -1220,28 +1198,28 @@ def apply_app_style():
         [data-testid="stSidebar"] [role="radiogroup"] label *,
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
-            color: #eef7f6 !important;
-            fill: #eef7f6 !important;
-            -webkit-text-fill-color: #eef7f6 !important;
+            color: var(--nf-text) !important;
+            fill: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
         }
 
         [data-testid="stSidebar"] .stCaption,
         [data-testid="stSidebar"] .nf-sidebar-meta,
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
         [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
-            color: rgba(238,247,246,0.78) !important;
-            -webkit-text-fill-color: rgba(238,247,246,0.78) !important;
+            color: var(--nf-muted) !important;
+            -webkit-text-fill-color: var(--nf-muted) !important;
         }
 
         [data-testid="stSidebar"] .nf-sidebar-note,
         [data-testid="stSidebar"] .nf-sidebar-note * {
-            color: #d9fbf7 !important;
-            -webkit-text-fill-color: #d9fbf7 !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
         }
 
         [data-testid="stSidebar"] .nf-sidebar-note strong {
-            color: #ffffff !important;
-            -webkit-text-fill-color: #ffffff !important;
+            color: var(--nf-text) !important;
+            -webkit-text-fill-color: var(--nf-text) !important;
         }
 
         [data-testid="stSidebar"] [data-baseweb="select"] > div,
@@ -1559,39 +1537,25 @@ def is_story_creative_profile_configured(project_name: str | None, story_id: str
             return False
         profile = load_creative_profile(project_name, story_id=story_id)
         return bool(profile.get("is_configured"))
-    except Exception:
+    except Exception as exc:
+        APP_LOGGER.warning(
+            "Failed to inspect creative profile for project=%s story=%s: %s",
+            project_name,
+            story_id,
+            exc,
+        )
         return False
 
 
 def planning_pages_for_story(project_name: str | None, story_id: str = "default") -> list[str]:
-    if not is_story_creative_profile_configured(project_name, story_id):
-        return ["创作配置"]
-
-    try:
-        profile = load_creative_profile(project_name, story_id=story_id) if project_name else {}
-    except Exception:
-        profile = {}
-
-    workflow_depth = str(profile.get("workflow_depth", "") or "")
-    target_length = str(profile.get("target_length", "") or "")
-    story_mode = str(profile.get("story_mode", "") or "")
-    combined = f"{workflow_depth} {target_length} {story_mode}"
-
-    if "完整长篇流程" in workflow_depth or "分卷/剧情段/章节" in workflow_depth or "长篇" in combined:
-        return ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"]
-    if "章节计划+正文" in workflow_depth or "中篇" in combined:
-        return ["创作配置", "生成大纲", "生成细纲"]
-    if "短篇结构+正文" in workflow_depth or "短篇" in combined or "片段" in combined or "单场景" in combined:
-        return ["创作配置", "生成细纲"]
-    if "只生成正文" in workflow_depth:
-        return ["创作配置"]
-    return ["创作配置", "生成大纲", "生成细纲"]
+    return list(PAGE_GROUPS.get("规划", ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"]))
 
 
 def page_groups_for_story(project_name: str | None, story_id: str = "default") -> dict[str, list[str]]:
-    groups = {group: list(pages) for group, pages in PAGE_GROUPS.items()}
-    groups["规划"] = planning_pages_for_story(project_name, story_id)
-    return groups
+    return navigation_page_groups_for_story(
+        project_name=project_name,
+        planning_pages=planning_pages_for_story(project_name, story_id),
+    )
 
 
 def select_with_custom(container, label: str, options: list[str], current_value: str, key: str, help_text: str = "") -> str:
@@ -1655,9 +1619,11 @@ def _get_creative_profile_form_state(project_name: str, story_id: str) -> dict:
     return dict(st.session_state.get(_creative_profile_state_key(project_name, story_id), {}))
 
 
-def _set_creative_profile_form_state(project_name: str, story_id: str, profile: dict):
+def _set_creative_profile_form_state(project_name: str, story_id: str, profile: dict, *, sync_widgets: bool = True):
     normalized = normalize_creative_form_state(profile)
     st.session_state[_creative_profile_state_key(project_name, story_id)] = normalized
+    if not sync_widgets:
+        return
     form_keys = _creative_profile_form_keys(project_name, story_id)
     st.session_state[f"{form_keys['story_mode']}_select"] = normalized["story_mode"] if normalized["story_mode"] in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写", CUSTOM_OPTION_LABEL} else CUSTOM_OPTION_LABEL
     st.session_state[f"{form_keys['story_mode']}_custom"] = normalized["story_mode"] if normalized["story_mode"] not in {"主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"} else ""
@@ -1826,7 +1792,13 @@ def _fork_setting_candidate_id(item: dict, story_id: str) -> str:
 def _discussion_guardrail_inputs(project_name: str, story_id: str) -> tuple[list[dict], list[dict], list[tuple[str, dict]]]:
     try:
         existing_settings = list_setting_items(project_name, story_id, core_only=True)
-    except Exception:
+    except Exception as exc:
+        APP_LOGGER.warning(
+            "Failed to load discussion setting guardrail inputs for project=%s story=%s: %s",
+            project_name,
+            story_id,
+            exc,
+        )
         existing_settings = []
     try:
         existing_prompt_options = merge_prompt_option_layers(
@@ -1834,7 +1806,13 @@ def _discussion_guardrail_inputs(project_name: str, story_id: str) -> tuple[list
             load_project_prompt_options(project_name),
             load_story_prompt_options(project_name, story_id),
         )
-    except Exception:
+    except Exception as exc:
+        APP_LOGGER.warning(
+            "Failed to load discussion prompt-option guardrail inputs for project=%s story=%s: %s",
+            project_name,
+            story_id,
+            exc,
+        )
         existing_prompt_options = []
     rule_layers: list[tuple[str, dict]] = []
     for label, loader in [
@@ -1844,7 +1822,14 @@ def _discussion_guardrail_inputs(project_name: str, story_id: str) -> tuple[list
     ]:
         try:
             rule_layers.append((label, loader()))
-        except Exception:
+        except Exception as exc:
+            APP_LOGGER.warning(
+                "Failed to load %s discussion rule guardrail inputs for project=%s story=%s: %s",
+                label,
+                project_name,
+                story_id,
+                exc,
+            )
             rule_layers.append((label, {}))
     return existing_settings, existing_prompt_options, rule_layers
 
@@ -2116,7 +2101,8 @@ def _render_rule_editor(title: str, storage_key: str, rules: dict) -> dict:
             f"{label}规则（每行一条）",
             value="\n".join(rules.get(scope, [])),
             height=120,
-            key=f"{storage_key}_{scope}"
+            key=f"{storage_key}_{scope}",
+            help="每行写一条必须长期遵守的硬约束。可切换的文风、节奏和描写偏好建议放到提示词选项。",
         ).split("\n") if line.strip()]
     return updated
 
@@ -2253,6 +2239,7 @@ PROMPT_OPTION_LAYER_LABELS = {
     "story": "故事",
     "project": "项目",
     "global": "全局",
+    "builtin": "内置预设",
 }
 
 
@@ -2268,13 +2255,86 @@ def _load_prompt_option_layer(project_name: str, layer: str, story_id: str) -> l
         return load_global_prompt_options()
     if layer == "project":
         return load_project_prompt_options(project_name)
+    if layer == "builtin":
+        return builtin_prompt_options()
     return load_story_prompt_options(project_name, story_id)
 
 
-def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str, option: dict, key_prefix: str):
+def _render_prompt_option_create_form(
+    project_name: str,
+    story_id: str,
+    layer: str,
+    key_prefix: str,
+    *,
+    default_capability: str = "write",
+    submit_label: str | None = None,
+):
+    capability_keys = list(PROMPT_OPTION_CAPABILITIES.keys())
+    category_keys = list(PROMPT_OPTION_CATEGORIES.keys())
+    slot_keys = list(PROMPT_OPTION_SLOTS.keys())
+    capability_index = capability_keys.index(default_capability) if default_capability in capability_keys else capability_keys.index("write")
     with st.form(key_prefix):
-        option_id = st.text_input("ID", value=option.get("id", ""), disabled=bool(option.get("built_in")))
-        name = st.text_input("名称", value=option.get("name", ""))
+        name = st.text_input("名称", placeholder="例如：冷峻悬疑文风", key=f"{key_prefix}_name")
+        option_id = st.text_input("ID（可留空自动生成）", placeholder="例如：style_cold_suspense", key=f"{key_prefix}_id")
+        capability = st.selectbox(
+            "适用能力",
+            options=capability_keys,
+            format_func=lambda value: PROMPT_OPTION_CAPABILITIES.get(value, value),
+            index=capability_index,
+            key=f"{key_prefix}_capability",
+        )
+        category = st.selectbox(
+            "类型",
+            options=category_keys,
+            format_func=lambda value: PROMPT_OPTION_CATEGORIES.get(value, value),
+            index=category_keys.index("custom"),
+            key=f"{key_prefix}_category",
+        )
+        slot = st.selectbox(
+            "插槽",
+            options=slot_keys,
+            format_func=lambda value: PROMPT_OPTION_SLOTS.get(value, value),
+            index=slot_keys.index("custom"),
+            key=f"{key_prefix}_slot",
+        )
+        enabled = st.checkbox("保存后立即启用", value=True, key=f"{key_prefix}_enabled")
+        priority = st.number_input("优先级", value=50, step=1, key=f"{key_prefix}_priority")
+        content = st.text_area(
+            "选项内容（可复用写作提示）",
+            height=180,
+            placeholder="例如：多写角色的即时心理反应；战斗段落保持动作连续；日常对话更口语化。",
+            help="这里的内容应该是可开关、可替换的写作偏好，而不是长期设定或硬性禁忌。",
+            key=f"{key_prefix}_content",
+        )
+        submitted = st.form_submit_button(submit_label or f"保存到{PROMPT_OPTION_LAYER_LABELS.get(layer, layer)}")
+    if submitted:
+        if not content.strip():
+            st.warning("选项内容不能为空。")
+            return
+        payload = normalize_prompt_option(
+            {
+                "id": option_id,
+                "name": name,
+                "capability": capability,
+                "category": category,
+                "slot": slot,
+                "enabled": enabled,
+                "priority": priority,
+                "content": content,
+                "source": "manual",
+            },
+            scope=layer,
+        )
+        upsert_prompt_option(project_name, layer, payload, story_id=story_id)
+        st.success(f"已保存到{PROMPT_OPTION_LAYER_LABELS.get(layer, layer)}。")
+        st.rerun()
+
+
+def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str, option: dict, key_prefix: str):
+    original_option_id = str(option.get("id") or "")
+    with st.form(key_prefix):
+        option_id = st.text_input("ID", value=option.get("id", ""), disabled=bool(option.get("built_in")), key=f"{key_prefix}_id")
+        name = st.text_input("名称", value=option.get("name", ""), key=f"{key_prefix}_name")
         capability_keys = list(PROMPT_OPTION_CAPABILITIES.keys())
         category_keys = list(PROMPT_OPTION_CATEGORIES.keys())
         slot_keys = list(PROMPT_OPTION_SLOTS.keys())
@@ -2283,24 +2343,33 @@ def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str
             options=capability_keys,
             index=capability_keys.index(option.get("capability", "write")) if option.get("capability", "write") in capability_keys else 0,
             format_func=lambda value: PROMPT_OPTION_CAPABILITIES.get(value, value),
+            key=f"{key_prefix}_capability",
         )
         category = st.selectbox(
             "类型",
             options=category_keys,
             index=category_keys.index(option.get("category", "custom")) if option.get("category", "custom") in category_keys else category_keys.index("custom"),
             format_func=lambda value: PROMPT_OPTION_CATEGORIES.get(value, value),
+            key=f"{key_prefix}_category",
         )
         slot = st.selectbox(
             "插槽",
             options=slot_keys,
             index=slot_keys.index(option.get("slot", "custom")) if option.get("slot", "custom") in slot_keys else slot_keys.index("custom"),
             format_func=lambda value: PROMPT_OPTION_SLOTS.get(value, value),
+            key=f"{key_prefix}_slot",
         )
-        priority = st.number_input("优先级（数字越小越靠前）", value=int(option.get("priority", 50)), step=1)
-        enabled = st.checkbox("启用", value=bool(option.get("enabled", True)))
-        content = st.text_area("Prompt 内容", value=option.get("content", ""), height=180)
-        tags = st.text_input("标签（逗号分隔）", value=", ".join(option.get("tags", []) or []))
-        delete_checked = st.checkbox("删除这个选项", value=False, disabled=bool(option.get("built_in")))
+        priority = st.number_input("优先级（数字越小越靠前）", value=int(option.get("priority", 50)), step=1, key=f"{key_prefix}_priority")
+        enabled = st.checkbox("启用", value=bool(option.get("enabled", True)), key=f"{key_prefix}_enabled")
+        content = st.text_area(
+            "选项内容（可复用写作提示）",
+            value=option.get("content", ""),
+            height=180,
+            help="适合放可切换的写作偏好，例如文风、节奏、描写重点、审稿关注点；不适合放必须长期遵守的设定事实或禁忌。",
+            key=f"{key_prefix}_content",
+        )
+        tags = st.text_input("标签（逗号分隔）", value=", ".join(option.get("tags", []) or []), key=f"{key_prefix}_tags")
+        delete_checked = st.checkbox("删除这个选项", value=False, disabled=bool(option.get("built_in")), key=f"{key_prefix}_delete_checked")
         col_save, col_delete = st.columns(2)
         save_clicked = col_save.form_submit_button("保存", use_container_width=True)
         delete_clicked = col_delete.form_submit_button("删除", use_container_width=True, disabled=bool(option.get("built_in")) or not delete_checked)
@@ -2322,7 +2391,15 @@ def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str
             },
             scope=layer,
         )
+        new_option_id = str(payload.get("id") or "")
+        if new_option_id != original_option_id:
+            existing_options = _load_prompt_option_layer(project_name, layer, story_id)
+            if any(str(item.get("id") or "") == new_option_id for item in existing_options):
+                st.warning("这个 ID 已经存在。请换一个 ID，或先删除同名选项。")
+                return
         upsert_prompt_option(project_name, layer, payload, story_id=story_id)
+        if original_option_id and new_option_id != original_option_id:
+            delete_prompt_option(project_name, layer, original_option_id, story_id=story_id)
         st.success("Prompt 选项已保存。")
         st.rerun()
     if delete_clicked:
@@ -2331,6 +2408,156 @@ def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str
             st.rerun()
         else:
             st.warning("没有找到要删除的选项。")
+
+
+def _render_prompt_option_inline_tools(
+    project_name: str,
+    story_id: str,
+    options: list[dict],
+    *,
+    capability: str,
+    key_prefix: str,
+):
+    st.caption("需要新的写作偏好时，可以在这里直接新增；想微调已有选项，也可以直接修改。")
+    add_tab, edit_tab = st.tabs(["新增选项", "修改已有"])
+    with add_tab:
+        tab_story, tab_project, tab_global = st.tabs(["新增到当前故事", "新增到项目", "新增到全局"])
+        with tab_story:
+            _render_prompt_option_create_form(
+                project_name,
+                story_id,
+                "story",
+                scoped_widget_key("inline_prompt_option_create_story", key_prefix, project_name, story_id),
+                default_capability=capability,
+            )
+        with tab_project:
+            _render_prompt_option_create_form(
+                project_name,
+                story_id,
+                "project",
+                scoped_widget_key("inline_prompt_option_create_project", key_prefix, project_name, story_id),
+                default_capability=capability,
+            )
+        with tab_global:
+            _render_prompt_option_create_form(
+                project_name,
+                story_id,
+                "global",
+                scoped_widget_key("inline_prompt_option_create_global", key_prefix, project_name, story_id),
+                default_capability=capability,
+            )
+    with edit_tab:
+        editable_options = [option for option in options if not option.get("built_in") and option.get("scope") in {"story", "project", "global"}]
+        if editable_options:
+            selected_id = st.selectbox(
+                "选择要修改的提示词",
+                options=[f"{option.get('scope')}::{option.get('id')}" for option in editable_options],
+                format_func=lambda value: next(
+                    (
+                        f"{PROMPT_OPTION_LAYER_LABELS.get(option.get('scope', ''), option.get('scope', ''))} / {_prompt_option_label(option)}"
+                        for option in editable_options
+                        if value == f"{option.get('scope')}::{option.get('id')}"
+                    ),
+                    value,
+                ),
+                key=scoped_widget_key("inline_prompt_option_edit_select", key_prefix, project_name, story_id),
+            )
+            selected_option = next(
+                option for option in editable_options
+                if selected_id == f"{option.get('scope')}::{option.get('id')}"
+            )
+            st.caption(f"正在修改：{PROMPT_OPTION_LAYER_LABELS.get(selected_option.get('scope', ''), selected_option.get('scope', ''))}层级")
+            _render_prompt_option_edit_form(
+                project_name,
+                story_id,
+                selected_option.get("scope", "story"),
+                selected_option,
+                scoped_widget_key("inline_prompt_option_edit", key_prefix, project_name, story_id, selected_option.get("scope", ""), selected_option.get("id", "")),
+            )
+        else:
+            st.caption("还没有可修改的自定义提示词。内置预设需要先复制到当前故事后再修改。")
+        builtin_options_for_capability = [
+            option for option in options
+            if option.get("built_in") and option.get("capability") in {capability, "all"}
+        ]
+        if builtin_options_for_capability:
+            st.markdown("##### 复制内置预设后修改")
+            builtin_id = st.selectbox(
+                "选择内置预设",
+                options=[option.get("id", "") for option in builtin_options_for_capability],
+                format_func=lambda option_id: next((_prompt_option_label(option) for option in builtin_options_for_capability if option.get("id") == option_id), option_id),
+                key=scoped_widget_key("inline_prompt_option_builtin_select", key_prefix, project_name, story_id),
+            )
+            selected_builtin = next(option for option in builtin_options_for_capability if option.get("id") == builtin_id)
+            st.code(selected_builtin.get("content", ""), language="markdown")
+            if st.button("复制到当前故事并启用", key=scoped_widget_key("inline_prompt_option_copy_builtin", key_prefix, project_name, story_id, builtin_id), use_container_width=True):
+                payload = dict(selected_builtin)
+                payload["scope"] = "story"
+                payload["built_in"] = False
+                payload["enabled"] = True
+                payload["source"] = "builtin_copy"
+                upsert_prompt_option(project_name, "story", payload, story_id=story_id)
+                st.success("已复制到当前故事，可以继续修改。")
+                st.rerun()
+
+
+def _load_prompt_options_for_capability(project_name: str, story_id: str, capability: str) -> tuple[list[dict], str]:
+    try:
+        effective_prompt_options = merge_prompt_option_layers(
+            load_global_prompt_options(),
+            load_project_prompt_options(project_name),
+            load_story_prompt_options(project_name, story_id),
+        )
+        return filter_prompt_options(effective_prompt_options, capability, enabled_only=False), ""
+    except Exception as exc:
+        return [], str(exc)
+
+
+def _render_prompt_option_capability_tools(
+    project_name: str,
+    story_id: str,
+    capability: str,
+    key_prefix: str,
+    *,
+    select_for_run: bool = False,
+) -> list[str] | None:
+    capability_label = PROMPT_OPTION_CAPABILITIES.get(capability, capability)
+    prompt_options, error = _load_prompt_options_for_capability(project_name, story_id, capability)
+    st.markdown(f"#### {capability_label}提示词选项")
+    if select_for_run:
+        st.caption("这里可以临时选择本次生成使用哪些提示词，也可以直接新增或修改正文写作提示词。")
+    else:
+        st.caption("这里管理该能力默认生效的提示词。保存并启用后，会影响后续同类生成。")
+    if error:
+        st.warning(f"Prompt 选项加载失败：{error}")
+
+    selected_prompt_option_ids = None
+    if select_for_run and prompt_options:
+        option_ids = [option.get("id", "") for option in prompt_options]
+        option_labels = {option.get("id", ""): _prompt_option_label(option) for option in prompt_options}
+        default_option_ids = [option.get("id", "") for option in prompt_options if option.get("enabled", True)]
+        selected_prompt_option_ids = st.multiselect(
+            f"本次使用{capability_label} Prompt 选项",
+            options=option_ids,
+            default=default_option_ids,
+            format_func=lambda option_id: option_labels.get(option_id, option_id),
+            key=scoped_widget_key("prompt_option_run_ids", key_prefix, project_name, story_id, capability),
+            help="默认勾选已启用选项；也可以临时选择未启用的预设，仅影响本次生成。",
+        )
+    elif prompt_options:
+        enabled_count = len([option for option in prompt_options if option.get("enabled", True)])
+        st.caption(f"当前可用 {len(prompt_options)} 个，其中已启用 {enabled_count} 个。")
+    else:
+        st.info(f"还没有{capability_label} Prompt 选项。可以在下面新增，或复制内置预设后修改。")
+
+    _render_prompt_option_inline_tools(
+        project_name,
+        story_id,
+        prompt_options,
+        capability=capability,
+        key_prefix=scoped_widget_key("prompt_option_tools", key_prefix, project_name, story_id, capability),
+    )
+    return selected_prompt_option_ids
 
 
 def _render_prompt_option_layer(project_name: str, story_id: str, layer: str):
@@ -2355,63 +2582,95 @@ def render_prompt_options_page(project_name: str):
     stories = list_stories(project_name)
     current_story_name = next((s.get("name", story_id) for s in stories if s.get("story_id") == story_id), story_id)
 
-    st.subheader("提示词选项")
-    st.caption("这里管理可复用的 Prompt 片段。数据格式和结构化输出仍由系统强制约束；这些选项只影响写作偏好、规划方法、审稿标准等可调部分。")
-
-    with st.expander("新建 Prompt 选项", expanded=False):
-        layer_label = st.selectbox("保存位置", options=list(PROMPT_OPTION_LAYER_LABELS.values()), key="new_prompt_option_layer")
-        layer = next(key for key, value in PROMPT_OPTION_LAYER_LABELS.items() if value == layer_label)
-        with st.form("new_prompt_option_form"):
-            name = st.text_input("名称", placeholder="例如：冷峻悬疑文风")
-            option_id = st.text_input("ID（可留空自动生成）", placeholder="例如：style_cold_suspense")
-            capability = st.selectbox("适用能力", options=list(PROMPT_OPTION_CAPABILITIES.keys()), format_func=lambda value: PROMPT_OPTION_CAPABILITIES.get(value, value), index=list(PROMPT_OPTION_CAPABILITIES.keys()).index("write"))
-            category = st.selectbox("类型", options=list(PROMPT_OPTION_CATEGORIES.keys()), format_func=lambda value: PROMPT_OPTION_CATEGORIES.get(value, value), index=list(PROMPT_OPTION_CATEGORIES.keys()).index("custom"))
-            slot = st.selectbox("插槽", options=list(PROMPT_OPTION_SLOTS.keys()), format_func=lambda value: PROMPT_OPTION_SLOTS.get(value, value), index=list(PROMPT_OPTION_SLOTS.keys()).index("custom"))
-            enabled = st.checkbox("保存后立即启用", value=True)
-            priority = st.number_input("优先级", value=50, step=1)
-            content = st.text_area("Prompt 内容", height=180, placeholder="写清楚希望模型遵守的创作偏好或执行准则。")
-            submitted = st.form_submit_button("保存新选项", type="primary")
-        if submitted:
-            if not content.strip():
-                st.warning("Prompt 内容不能为空。")
-            else:
-                payload = normalize_prompt_option(
-                    {
-                        "id": option_id,
-                        "name": name,
-                        "capability": capability,
-                        "category": category,
-                        "slot": slot,
-                        "enabled": enabled,
-                        "priority": priority,
-                        "content": content,
-                        "source": "manual",
-                    },
-                    scope=layer,
-                )
-                upsert_prompt_option(project_name, layer, payload, story_id=story_id)
-                st.success(f"已保存到{PROMPT_OPTION_LAYER_LABELS[layer]}层级。")
-                st.rerun()
+    st.subheader("提示词选项工作台")
+    st.caption("把这里当成“本次生成可以选择启用的写作方式”。它们适合描述文风、节奏、描写重点、规划方法和审稿关注点；如果内容属于不能违反的设定事实、边界或禁忌，请放到生成规则。")
+    st.info("提示词选项不需要先讨论才会出现。你可以在「新增」里手动创建，也可以在「内置预设」里复制现成选项；讨论只是另一种把建议保存成选项的方式。")
+    st.caption("它决定的是生成时额外注入哪些可切换提示，例如“正文更快节奏”“多写心理活动”“审稿时重点检查人物 OOC”。")
 
     global_options = load_global_prompt_options()
     project_options = load_project_prompt_options(project_name)
     story_options = load_story_prompt_options(project_name, story_id)
     effective_options = merge_prompt_option_layers(global_options, project_options, story_options)
 
-    tab_story, tab_project, tab_global, tab_builtin, tab_preview = st.tabs([
-        f"当前故事：{current_story_name}",
-        "项目",
-        "全局",
+    tab_overview, tab_create, tab_manage, tab_builtin, tab_preview = st.tabs([
+        "全部总览",
+        "新增",
+        "增删改",
         "内置预设",
         "生效预览",
     ])
 
-    with tab_story:
-        _render_prompt_option_layer(project_name, story_id, "story")
-    with tab_project:
-        _render_prompt_option_layer(project_name, story_id, "project")
-    with tab_global:
-        _render_prompt_option_layer(project_name, story_id, "global")
+    all_records = [
+        ("story", option) for option in story_options
+    ] + [
+        ("project", option) for option in project_options
+    ] + [
+        ("global", option) for option in global_options
+    ] + [
+        ("builtin", option) for option in builtin_prompt_options()
+    ]
+
+    with tab_overview:
+        query = st.text_input("搜索提示词", placeholder="输入名称、ID、内容或标签", key="prompt_option_overview_query").strip().lower()
+        capability_filter = st.selectbox(
+            "按适用能力筛选",
+            options=[""] + list(PROMPT_OPTION_CAPABILITIES.keys()),
+            format_func=lambda value: "全部能力" if not value else PROMPT_OPTION_CAPABILITIES.get(value, value),
+            key="prompt_option_overview_capability",
+        )
+        rows = []
+        for layer, option in all_records:
+            haystack = " ".join([
+                str(option.get("id", "")),
+                str(option.get("name", "")),
+                str(option.get("content", "")),
+                " ".join(option.get("tags", []) or []),
+            ]).lower()
+            option_capability = str(option.get("capability") or "")
+            if query and query not in haystack:
+                continue
+            if capability_filter and option_capability not in {capability_filter, "all"}:
+                continue
+            rows.append({
+                "层级": PROMPT_OPTION_LAYER_LABELS.get(layer, layer),
+                "名称": option.get("name") or option.get("id"),
+                "适用能力": PROMPT_OPTION_CAPABILITIES.get(option_capability, option_capability),
+                "类型": PROMPT_OPTION_CATEGORIES.get(option.get("category", ""), option.get("category", "")),
+                "状态": "启用" if option.get("enabled", True) else "停用",
+                "优先级": option.get("priority", 50),
+                "ID": option.get("id", ""),
+            })
+        st.caption(f"共找到 {len(rows)} 个提示词选项。")
+        if rows:
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        else:
+            st.info("没有匹配的提示词选项。")
+
+    with tab_create:
+        tab_story_new, tab_project_new, tab_global_new = st.tabs([
+            f"新增到当前故事：{current_story_name}",
+            "新增到项目",
+            "新增到全局",
+        ])
+        with tab_story_new:
+            _render_prompt_option_create_form(project_name, story_id, "story", "new_prompt_option_form_story")
+        with tab_project_new:
+            _render_prompt_option_create_form(project_name, story_id, "project", "new_prompt_option_form_project")
+        with tab_global_new:
+            _render_prompt_option_create_form(project_name, story_id, "global", "new_prompt_option_form_global")
+
+    with tab_manage:
+        tab_story, tab_project, tab_global = st.tabs([
+            f"当前故事：{current_story_name}",
+            "项目",
+            "全局",
+        ])
+        with tab_story:
+            _render_prompt_option_layer(project_name, story_id, "story")
+        with tab_project:
+            _render_prompt_option_layer(project_name, story_id, "project")
+        with tab_global:
+            _render_prompt_option_layer(project_name, story_id, "global")
     with tab_builtin:
         builtin_options = builtin_prompt_options()
         st.caption("内置预设默认不直接生效；复制到当前故事后可以编辑并启用。")
@@ -2453,11 +2712,18 @@ def render_rules_page(project_name: str):
             current_story_name = s.get("name", story_id)
             break
 
-    st.subheader("生成规则")
-    st.caption("将长期要求存成规则，系统会在对应能力里自动注入这些约束，控制模型怎么写。规则生效优先级：故事 > 项目 > 全局。")
+    st.subheader("生成规则（长期硬约束）")
+    st.caption("把这里当成“模型不能违背的边界”。它适合保存角色底线、世界观事实、禁忌、视角限制、一致性要求等长期约束；如果只是某次想换文风或节奏，请放到提示词选项。规则生效优先级：故事 > 项目 > 全局。")
+    st.info("判断标准：这条要求被违反会导致设定错误、剧情矛盾或越过底线，就放到生成规则；只是影响表达口味，就放到提示词选项。")
 
     with st.expander("快速记录新要求", expanded=True):
-        rule_text = st.text_area("输入你的要求", height=140, key="rule_capture_text")
+        rule_text = st.text_area(
+            "输入必须长期遵守的要求",
+            height=140,
+            key="rule_capture_text",
+            placeholder="例如：主角不能主动伤害无辜者；全文保持第三人称有限视角；魔法不能复活已彻底死亡的人。",
+            help="适合放硬约束、禁忌、世界观边界和一致性要求。",
+        )
         col1, col2, col3 = st.columns(3)
         scope_label = col1.selectbox("适用能力", options=list(RULE_SCOPE_OPTIONS.values()), key="rule_capture_scope")
         target_label = col2.selectbox("保存位置", options=["故事规则", "项目规则", "全局规则"], key="rule_capture_target")
@@ -2712,7 +2978,7 @@ def render_llm_settings_page():
         st.markdown(
             f"""
             <div class="{card_class}">
-            <div class="nf-card-title">{html.escape(label)} { '<span style="color:#0f766e;font-size:0.85rem;">（当前生效）</span>' if is_active else ''}</div>
+                    <div class="nf-card-title">{html.escape(label)} { '<span style="color:var(--nf-accent-strong);font-size:0.85rem;">（当前生效）</span>' if is_active else ''}</div>
                 <div class="nf-card-copy">
                     <b>标识：</b>{html.escape(profile.get("id", ""))}<br>
                     <b>服务地址：</b>{html.escape(profile.get("base_url", ""))}<br>
@@ -2875,14 +3141,16 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
     if active_page not in available_pages:
         if active_page in PAGE_GROUPS.get("规划", []) and "创作配置" in available_pages:
             active_page = "创作配置"
-        else:
+        elif DEFAULT_PAGE in available_pages:
             active_page = DEFAULT_PAGE
+        else:
+            active_page = available_pages[0]
 
+    group_names = list(visible_page_groups.keys())
     active_group = next(
         (group for group, pages in visible_page_groups.items() if active_page in pages),
-        "工作台",
+        group_names[0],
     )
-    group_names = list(visible_page_groups.keys())
     nav_revision = int(st.session_state.get("nav_revision", 0))
     selected_group = st.sidebar.radio(
         "工作区",
@@ -2907,8 +3175,8 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
         st.sidebar.markdown(
             """
             <div class="nf-sidebar-note">
-                <strong>规划页暂未展开</strong><br>
-                先保存「创作配置」，之后会按篇幅和生成层级开放大纲、分卷、剧情段和细纲入口。
+                <strong>建议先讨论配置</strong><br>
+                规划页面都可以进入；先保存「创作配置」能让生成更贴合目标。
             </div>
             """,
             unsafe_allow_html=True,
@@ -2927,7 +3195,13 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
             )
             updated_at = summary.get("updated_at") or "-"
             st.sidebar.caption(f"最近更新：{updated_at}")
-        except Exception:
+        except Exception as exc:
+            APP_LOGGER.warning(
+                "Failed to load sidebar project summary for project=%s story=%s: %s",
+                project_name,
+                st.session_state.get("active_story_id", "default"),
+                exc,
+            )
             st.sidebar.caption("项目摘要暂不可用。")
 
     return selected_page
@@ -3031,6 +3305,14 @@ def render_outline_page(project_name: str):
                     st.rerun()
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
+
+    with st.expander("高级：全书大纲提示词选项", expanded=False):
+        _render_prompt_option_capability_tools(
+            project_name,
+            story_id,
+            "outline",
+            scoped_widget_key("outline_prompt_options", project_name, story_id),
+        )
 
     if st.button("生成全书大纲"):
         result = generate_outline(project_name, user_idea, story_id=story_id)
@@ -3222,6 +3504,14 @@ def render_chapter_outline_page(project_name: str):
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
 
+    with st.expander("高级：章节细纲提示词选项", expanded=False):
+        _render_prompt_option_capability_tools(
+            project_name,
+            story_id,
+            "chapter_outline",
+            scoped_widget_key("chapter_outline_prompt_options", *chapter_scope),
+        )
+
     if st.button("生成章节细纲", key=scoped_widget_key("generate_chapter_outline", *chapter_scope)):
         if approval_required:
             if volume_no and not (volume_discussion_artifact.get("discussion", {}) or {}).get("approval_ready"):
@@ -3391,7 +3681,9 @@ def render_chapter_page(project_name: str):
             placeholder="例如：整体语气轻松，结尾留悬念。",
         )
 
-    st.markdown("### 当前写作设置")
+    write_settings_ui = st.expander("高级：写作设置", expanded=False)
+    write_settings_ui.markdown("### 当前写作设置")
+    write_settings_ui.caption("Prompt 选项只影响本次生成会额外采用哪些写作提示。没有选项也能生成；需要时可在下方直接新增。")
     try:
         effective_prompt_options = merge_prompt_option_layers(
             load_global_prompt_options(),
@@ -3400,14 +3692,14 @@ def render_chapter_page(project_name: str):
         )
         write_prompt_options = filter_prompt_options(effective_prompt_options, "write", enabled_only=False)
     except Exception as exc:
-        st.warning(f"Prompt 选项加载失败：{exc}")
+        write_settings_ui.warning(f"Prompt 选项加载失败：{exc}")
         write_prompt_options = []
     selected_prompt_option_ids = None
     if write_prompt_options:
         option_ids = [option.get("id", "") for option in write_prompt_options]
         option_labels = {option.get("id", ""): _prompt_option_label(option) for option in write_prompt_options}
         default_option_ids = [option.get("id", "") for option in write_prompt_options if option.get("enabled", True)]
-        selected_prompt_option_ids = st.multiselect(
+        selected_prompt_option_ids = write_settings_ui.multiselect(
             "本次使用 Prompt 选项",
             options=option_ids,
             default=default_option_ids,
@@ -3415,36 +3707,47 @@ def render_chapter_page(project_name: str):
             key=scoped_widget_key("write_prompt_option_ids", *chapter_scope),
             help="默认勾选已启用选项；也可以临时选择未启用的预设，仅影响本次生成。",
         )
-    tone = st.selectbox(
+    else:
+        write_settings_ui.info("还没有可用于正文写作的 Prompt 选项。它不是讨论后才会出现；展开下面的管理区就能新增，或去工作台的「提示词选项」页复制内置预设。")
+    write_settings_ui.markdown("#### 提示词选项")
+    with write_settings_ui.container():
+        _render_prompt_option_inline_tools(
+            project_name,
+            story_id,
+            write_prompt_options,
+            capability="write",
+            key_prefix=scoped_widget_key("write_prompt_option_tools", *chapter_scope),
+        )
+    tone = write_settings_ui.selectbox(
         "文风/基调",
         options=["", "克制", "热血", "轻快", "压抑", "爽文推进"],
         format_func=lambda value: value or "未特别指定",
         key=scoped_widget_key("write_tone", *chapter_scope),
     )
-    pacing = st.selectbox(
+    pacing = write_settings_ui.selectbox(
         "节奏",
         options=["", "慢铺", "均衡", "快推"],
         format_func=lambda value: value or "未特别指定",
         key=scoped_widget_key("write_pacing", *chapter_scope),
     )
-    dialogue_density = st.selectbox(
+    dialogue_density = write_settings_ui.selectbox(
         "对话密度",
         options=["", "低", "中", "高"],
         format_func=lambda value: value or "未特别指定",
         key=scoped_widget_key("write_dialogue_density", *chapter_scope),
     )
-    focus = st.multiselect(
+    focus = write_settings_ui.multiselect(
         "描写重点",
         options=["动作", "心理", "环境", "关系拉扯", "战斗", "信息揭示"],
         key=scoped_widget_key("write_focus", *chapter_scope),
     )
-    ending_strength = st.selectbox(
+    ending_strength = write_settings_ui.selectbox(
         "结尾力度",
         options=["", "轻钩子", "强钩子", "悬念断点"],
         format_func=lambda value: value or "未特别指定",
         key=scoped_widget_key("write_ending_strength", *chapter_scope),
     )
-    extra_requirements = st.text_area(
+    extra_requirements = write_settings_ui.text_area(
         "写作补充要求",
         height=120,
         key=scoped_widget_key("write_extra_requirements", *chapter_scope),
@@ -3547,6 +3850,23 @@ def render_chapter_page(project_name: str):
         height=600,
         key=chapter_text_editor_key,
     )
+
+    with st.expander("高级：审阅与设定提炼提示词选项", expanded=False):
+        tab_review_prompts, tab_memory_prompts = st.tabs(["章节审阅", "设定提炼"])
+        with tab_review_prompts:
+            _render_prompt_option_capability_tools(
+                project_name,
+                story_id,
+                "review",
+                scoped_widget_key("review_prompt_options", *chapter_scope),
+            )
+        with tab_memory_prompts:
+            _render_prompt_option_capability_tools(
+                project_name,
+                story_id,
+                "setting_extraction",
+                scoped_widget_key("setting_extraction_prompt_options", *chapter_scope),
+            )
 
     save_col, review_col, memory_col = st.columns(3)
     with save_col:
@@ -3652,14 +3972,16 @@ def render_project_overview_page(project_name: str):
     )
 
     st.markdown("### 常用入口")
-    action_col1, action_col2, action_col3, action_col4 = st.columns(4)
+    action_col1, action_col2, action_col3, action_col4, action_col5 = st.columns(5)
     with action_col1:
-        render_quick_action("快速生成", "快速生成", "实验性快速生成入口，适合测试或临时片段。")
+        render_quick_action("讨论配置", "创作配置", "用自然语言说明想写什么，由讨论结果自动确定配置。")
     with action_col2:
-        render_quick_action("正文生成", "正文生成", "根据细纲或需求写作，可串联审阅和设定提炼。")
+        render_quick_action("开始生成", "正文生成", "根据需求或细纲写正文，可串联审阅和设定提炼。")
     with action_col3:
-        render_quick_action("整理资料", "资料导入", "导入原作、参考和长文本资料。")
+        render_quick_action("调提示词", "提示词选项", "新增、复制或修改可切换的写作偏好。")
     with action_col4:
+        render_quick_action("整理资料", "资料导入", "导入原作、参考和长文本资料。")
+    with action_col5:
         render_quick_action("查看资源", "资源浏览器", "集中管理章节、报告和来源文件。")
 
     st.markdown("### 项目指标")
@@ -3670,20 +3992,20 @@ def render_project_overview_page(project_name: str):
     render_resource_metric_link(col4, project_name, story_id, "分析报告", summary.get("analysis_count", 0), ["analysis"])
     render_resource_metric_link(col5, project_name, story_id, "评估报告", summary.get("evaluation_count", 0), ["evaluation"])
 
-    col6, col7, col8, col9, col12, col13, col14 = st.columns(7)
-    render_resource_metric_link(col6, project_name, story_id, "分卷数量", summary.get("volume_count", 0), ["volume_outline"])
-    render_resource_metric_link(col7, project_name, story_id, "剧情段数量", summary.get("arc_count", 0), ["arc_outline"])
-    render_resource_metric_link(col8, project_name, story_id, "流水线记录", summary.get("run_count", 0), ["run"])
-    render_resource_metric_link(col9, project_name, story_id, "外部资料", summary.get("retrieval_source_count", 0), ["source"])
-    render_resource_metric_link(col12, project_name, story_id, "结构化知识", summary.get("knowledge_item_count", 0), ["knowledge_item"])
-    render_resource_metric_link(col13, project_name, story_id, "待确认知识", summary.get("pending_knowledge_count", 0), ["pending_knowledge"])
-    render_resource_metric_link(col14, project_name, story_id, "资料批次", summary.get("long_reference_batch_count", 0), ["long_reference_batch"])
+    with st.expander("高级：更多项目指标", expanded=False):
+        col6, col7, col8, col9, col12, col13, col14 = st.columns(7)
+        render_resource_metric_link(col6, project_name, story_id, "分卷数量", summary.get("volume_count", 0), ["volume_outline"])
+        render_resource_metric_link(col7, project_name, story_id, "剧情段数量", summary.get("arc_count", 0), ["arc_outline"])
+        render_resource_metric_link(col8, project_name, story_id, "流水线记录", summary.get("run_count", 0), ["run"])
+        render_resource_metric_link(col9, project_name, story_id, "外部资料", summary.get("retrieval_source_count", 0), ["source"])
+        render_resource_metric_link(col12, project_name, story_id, "结构化知识", summary.get("knowledge_item_count", 0), ["knowledge_item"])
+        render_resource_metric_link(col13, project_name, story_id, "待确认知识", summary.get("pending_knowledge_count", 0), ["pending_knowledge"])
+        render_resource_metric_link(col14, project_name, story_id, "资料批次", summary.get("long_reference_batch_count", 0), ["long_reference_batch"])
 
-    col10, col11 = st.columns(2)
-    render_resource_metric_link(col10, project_name, story_id, "已批准分卷讨论", summary.get("approved_volume_count", 0), ["volume_discussion"])
-    render_resource_metric_link(col11, project_name, story_id, "已批准剧情段讨论", summary.get("approved_arc_count", 0), ["arc_discussion"])
-
-    st.caption(f"章节摘要={summary.get('chapter_summary_count', 0)} / 资源文件数={summary.get('resource_file_count', 0)}")
+        col10, col11 = st.columns(2)
+        render_resource_metric_link(col10, project_name, story_id, "已批准分卷讨论", summary.get("approved_volume_count", 0), ["volume_discussion"])
+        render_resource_metric_link(col11, project_name, story_id, "已批准剧情段讨论", summary.get("approved_arc_count", 0), ["arc_discussion"])
+        st.caption(f"章节摘要={summary.get('chapter_summary_count', 0)} / 资源文件数={summary.get('resource_file_count', 0)}")
 
     with st.expander("项目设置", expanded=False):
         new_name = st.text_input("重命名项目", value=project_name, key=f"rename_project_input_{project_name}")
@@ -3912,7 +4234,13 @@ def render_generation_setting_context_preview(project_name: str, story_id: str):
 def _format_creative_profile_for_preview(project_name: str, story_id: str) -> str:
     try:
         profile = load_creative_profile(project_name, story_id)
-    except Exception:
+    except Exception as exc:
+        APP_LOGGER.warning(
+            "Failed to load creative profile preview for project=%s story=%s: %s",
+            project_name,
+            story_id,
+            exc,
+        )
         profile = {}
     if not profile:
         return ""
@@ -4415,8 +4743,8 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
     clear_input_flag_key = _discussion_input_clear_flag_key("creative_profile", creative_discussion_suffix)
     _consume_discussion_input_clear("creative_profile", creative_discussion_suffix)
     discussion_step = st.session_state.get(discussion_result_key, {})
-    with st.expander("讨论辅助", expanded=not form_state.get("story_mode") or form_state["story_mode"] == "主线故事"):
-        st.caption("用自然语言描述目标，讨论结果会自动填入下方表单。")
+    with st.expander("讨论辅助", expanded=not form_state.get("is_configured", False)):
+        st.caption("用自然语言描述目标，讨论结果会自动填入创作配置。保存后就可以直接进入正文生成。")
         col_seed, col_action = st.columns([3, 1])
         with col_seed:
             user_idea = st.text_area(
@@ -4519,7 +4847,11 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                         except Exception as exc:
                             st.error(f"继续讨论失败：{exc}")
 
-    with st.form(scoped_widget_key("creative_profile_form", project_name, story_id)):
+    profile_form_host = st.expander(
+        "高级：手动调整创作配置",
+        expanded=False,
+    )
+    with profile_form_host.form(scoped_widget_key("creative_profile_form", project_name, story_id)):
         col_a, col_b = st.columns(2)
         story_mode = select_with_custom(
             col_a,
@@ -4632,7 +4964,7 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
             worldline_retrieval_mode,
             notes,
         ), story_id=story_id, mark_configured=True)
-        _set_creative_profile_form_state(project_name, story_id, saved)
+        _set_creative_profile_form_state(project_name, story_id, saved, sync_widgets=False)
         st.success("创作配置已保存。")
         profile = saved
     else:
@@ -4667,7 +4999,12 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
         "主要参考文风": "弱化剧情设定绑定，重点参考句式、节奏、对白和叙事手法。",
     }.get(strength, "按当前配置综合参考资料。")
     st.info(strategy_text)
-    render_step_json_expander("创作配置结构化数据", profile)
+    if profile.get("is_configured"):
+        if st.button("开始生成正文", type="primary", use_container_width=True, key=scoped_widget_key("start_generation_after_profile", project_name, story_id)):
+            navigate_to("正文生成")
+            st.rerun()
+    with st.expander("高级：创作配置结构化数据", expanded=False):
+        st.json(profile)
 
 
 def render_dynamic_generation_page(project_name: str):
@@ -4746,6 +5083,22 @@ def render_dynamic_generation_page(project_name: str):
                 key="quick_gen_extra",
                 placeholder="例如：减少说明性段落，多用短句。",
             )
+        tab_quick_write_prompts, tab_quick_plan_prompts = st.tabs(["正文写作提示词", "章节计划提示词"])
+        with tab_quick_write_prompts:
+            selected_quick_prompt_option_ids = _render_prompt_option_capability_tools(
+                project_name,
+                story_id,
+                "write",
+                scoped_widget_key("quick_write_prompt_options", project_name, story_id),
+                select_for_run=True,
+            )
+        with tab_quick_plan_prompts:
+            _render_prompt_option_capability_tools(
+                project_name,
+                story_id,
+                "chapter_outline",
+                scoped_widget_key("quick_plan_prompt_options", project_name, story_id),
+            )
 
     if col_run.button("生成", use_container_width=True, type="primary"):
         if not requirement.strip():
@@ -4761,6 +5114,8 @@ def render_dynamic_generation_page(project_name: str):
                     "ending_strength": ending_strength,
                     "extra_requirements": extra_requirements,
                 }
+                if selected_quick_prompt_option_ids is not None:
+                    writing_guidance["prompt_option_ids"] = selected_quick_prompt_option_ids
                 with st.spinner("正在生成..."):
                     result = run_dynamic_generation_task(
                         project_name,
@@ -8044,14 +8399,23 @@ def render_resource_management_page(project_name: str):
                     scoped_widget_key("bulk_delete_sources", project_name),
                 ):
                     deleted_count = 0
+                    failed_sources = []
                     for relative_path in bulk_sources:
                         try:
                             if delete_retrieval_source_file(project_name, str(relative_path)):
                                 deleted_count += 1
-                        except Exception:
-                            continue
+                        except Exception as exc:
+                            failed_sources.append(str(relative_path))
+                            APP_LOGGER.warning(
+                                "Failed to delete retrieval source for project=%s path=%s: %s",
+                                project_name,
+                                relative_path,
+                                exc,
+                            )
                     if deleted_count:
                         rebuild_retrieval_assets(project_name, build_vectors=True)
+                    if failed_sources:
+                        st.warning(f"有 {len(failed_sources)} 份外部资料删除失败，已保留并写入日志。")
                     st.success(f"已删除 {deleted_count} 份外部资料。")
                     st.rerun()
 
@@ -8252,6 +8616,14 @@ def render_volume_outline_page(project_name: str):
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
 
+    with st.expander("高级：分卷大纲提示词选项", expanded=False):
+        _render_prompt_option_capability_tools(
+            project_name,
+            story_id,
+            "outline",
+            scoped_widget_key("volume_outline_prompt_options", *volume_scope),
+        )
+
     if st.button("生成分卷大纲", key=scoped_widget_key("generate_volume_outline", *volume_scope)):
         try:
             result = generate_volume_outline(project_name, volume_no, title, summary, requirement, status=status, story_id=story_id)
@@ -8437,6 +8809,23 @@ def render_arc_outline_page(project_name: str):
                 except Exception as exc:
                     st.error(f"继续讨论失败：{exc}")
 
+    with st.expander("高级：剧情段提示词选项", expanded=False):
+        tab_arc_outline, tab_arc_plan = st.tabs(["剧情段大纲", "章节分配计划"])
+        with tab_arc_outline:
+            _render_prompt_option_capability_tools(
+                project_name,
+                story_id,
+                "outline",
+                scoped_widget_key("arc_outline_prompt_options", *arc_scope),
+            )
+        with tab_arc_plan:
+            _render_prompt_option_capability_tools(
+                project_name,
+                story_id,
+                "chapter_outline",
+                scoped_widget_key("arc_chapter_plan_prompt_options", *arc_scope),
+            )
+
     if st.button("生成剧情段大纲", key=scoped_widget_key("generate_arc_outline", *arc_scope)):
         try:
             result = generate_arc_outline(
@@ -8589,6 +8978,14 @@ def render_evaluation_page(project_name: str):
     report_key = scoped_session_key("evaluation_report", *evaluation_scope)
     existing_report = load_evaluation_report(project_name, chapter_no, story_id=story_id)
     existing_json = load_evaluation_json(project_name, chapter_no, story_id=story_id) or {}
+
+    with st.expander("高级：章节评价提示词选项", expanded=False):
+        _render_prompt_option_capability_tools(
+            project_name,
+            story_id,
+            "review",
+            scoped_widget_key("evaluation_prompt_options", *evaluation_scope),
+        )
 
     if st.button("生成综合章节评价", key=scoped_widget_key("generate_evaluation", *evaluation_scope)):
         try:
