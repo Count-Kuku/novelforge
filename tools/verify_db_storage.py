@@ -41,6 +41,7 @@ def main() -> int:
         _run("verify_db_first_reads.py"),
         _run("verify_db_delete_semantics.py"),
         _run("verify_db_no_json_mirrors.py"),
+        _run("verify_story_path_safety.py"),
     ]
     result = {
         "ok": all(item.get("ok") for item in checks),

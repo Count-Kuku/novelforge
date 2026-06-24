@@ -1437,12 +1437,80 @@ def _story_id_slug(name: str) -> str:
     return f"story_{digest}"
 
 
+def normalize_story_id(story_id: str) -> str:
+    normalized = str(story_id or "").strip()
+    if not normalized:
+        raise ValueError("Story ID cannot be empty.")
+    if (
+        normalized in {".", ".."}
+        or ".." in normalized
+        or "/" in normalized
+        or "\\" in normalized
+        or ":" in normalized
+    ):
+        raise ValueError("Invalid story ID: path traversal characters not allowed.")
+    return normalized
+
+
+def _default_story_meta() -> dict:
+    return StoryMeta(
+        story_id="default",
+        name="默认故事",
+        description="",
+        status="active",
+        created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    ).model_dump()
+
+
+def _normalize_stories_index_payload(index: dict | None) -> dict:
+    normalized = StoriesIndex.model_validate(index or {}).model_dump()
+    stories: list[dict] = []
+    seen_story_ids: set[str] = set()
+    for story in normalized.get("stories", []):
+        try:
+            clean_story_id = normalize_story_id(story.get("story_id", ""))
+        except ValueError as exc:
+            logging.getLogger("novelforge.storage").warning(
+                "Skipping invalid story ID in stories index: %s", exc
+            )
+            continue
+        if clean_story_id in seen_story_ids:
+            logging.getLogger("novelforge.storage").warning(
+                "Skipping duplicate story ID in stories index: %s", clean_story_id
+            )
+            continue
+        clean_story = dict(story)
+        clean_story["story_id"] = clean_story_id
+        stories.append(clean_story)
+        seen_story_ids.add(clean_story_id)
+
+    if not stories:
+        stories.append(_default_story_meta())
+        seen_story_ids.add("default")
+
+    try:
+        active_story_id = normalize_story_id(normalized.get("active_story_id", "default"))
+    except ValueError:
+        active_story_id = "default"
+    if active_story_id not in seen_story_ids:
+        active_story_id = stories[0]["story_id"]
+
+    return StoriesIndex(stories=stories, active_story_id=active_story_id).model_dump()
+
+
 def stories_index_path(project_name: str) -> Path:
     return project_path(project_name) / "stories" / "index.json"
 
 
 def story_path(project_name: str, story_id: str) -> Path:
-    return project_path(project_name) / "stories" / story_id
+    stories_root = project_path(project_name) / "stories"
+    target = stories_root / normalize_story_id(story_id)
+    resolved_root = stories_root.resolve()
+    resolved_target = target.resolve()
+    if resolved_root != resolved_target and resolved_root not in resolved_target.parents:
+        raise ValueError("Invalid story path.")
+    return target
 
 
 def _story_chapter_summaries_path(project_name: str, story_id: str) -> Path:
@@ -1476,18 +1544,18 @@ def _story_rule_conflict_resolutions_path(project_name: str, story_id: str) -> P
 def _load_stories_index_file(project_name: str) -> dict:
     path = stories_index_path(project_name)
     if not path.exists():
-        return StoriesIndex().model_dump()
+        return _normalize_stories_index_payload(None)
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return StoriesIndex.model_validate(raw).model_dump()
+        return _normalize_stories_index_payload(raw)
     except Exception:
-        return StoriesIndex().model_dump()
+        return _normalize_stories_index_payload(None)
 
 
 def load_stories_index(project_name: str) -> dict:
     db_index = _load_stories_index_from_db_best_effort(project_name)
     if db_index and db_index.get("stories"):
-        return db_index
+        return _normalize_stories_index_payload(db_index)
 
     path = stories_index_path(project_name)
     if path.exists():
@@ -1497,23 +1565,15 @@ def load_stories_index(project_name: str) -> dict:
         return normalized
 
     if not db_index or not db_index.get("stories"):
-        default_story = StoryMeta(
-            story_id="default",
-            name="默认故事",
-            description="",
-            status="active",
-            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        )
-        idx = StoriesIndex(stories=[default_story], active_story_id="default")
-        save_stories_index(project_name, idx.model_dump())
-        return idx.model_dump()
+        idx = _normalize_stories_index_payload({"stories": [_default_story_meta()], "active_story_id": "default"})
+        save_stories_index(project_name, idx)
+        return idx
 
-    return db_index
+    return _normalize_stories_index_payload(db_index)
 
 
 def save_stories_index(project_name: str, index: dict):
-    normalized = StoriesIndex.model_validate(index or {}).model_dump()
+    normalized = _normalize_stories_index_payload(index)
     path = stories_index_path(project_name)
     _write_json_mirror(path, normalized)
     _sync_stories_index_to_db_best_effort(project_name, normalized)
@@ -1525,11 +1585,12 @@ def get_active_story_id(project_name: str) -> str:
 
 
 def set_active_story(project_name: str, story_id: str):
+    clean_story_id = normalize_story_id(story_id)
     index = load_stories_index(project_name)
     story_ids = {s["story_id"] for s in index.get("stories", [])}
-    if story_id not in story_ids:
-        raise ValueError(f"故事不存在：{story_id}")
-    index["active_story_id"] = story_id
+    if clean_story_id not in story_ids:
+        raise ValueError(f"故事不存在：{clean_story_id}")
+    index["active_story_id"] = clean_story_id
     save_stories_index(project_name, index)
 
 
@@ -1565,10 +1626,8 @@ def create_story(project_name: str, name: str, description: str = "") -> dict:
 
 
 def rename_story(project_name: str, story_id: str, name: str, description: str | None = None) -> dict:
-    clean_story_id = str(story_id or "").strip()
+    clean_story_id = normalize_story_id(story_id)
     clean_name = str(name or "").strip()
-    if not clean_story_id:
-        raise ValueError("故事 ID 不能为空。")
     if not clean_name:
         raise ValueError("故事名称不能为空。")
 
