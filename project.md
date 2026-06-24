@@ -51,6 +51,8 @@ Current practical status:
 * Structured review status output
 * Safer setting-extraction validation
 * Streamlit UI
+* Modular `ui/` page/component package with `app.py` reduced to a lightweight router and compatibility shell
+* Streaming preview controls for major discussion, generation, writing, evaluation, and source-ingestion actions
 * Configurable temperature and system message for LLM calls
 * Form-based core-setting editing backed by structured knowledge
 * Configurable target word count per chapter
@@ -199,194 +201,134 @@ The project should support switching between DeepSeek, GPT, Claude, Qwen, and ot
 
 Current architecture:
 
+```text
 User
-↓
-Streamlit UI
+|
+Streamlit Entrypoint / Router
 (app.py)
-↓
+|
+UI Page and Component Layer
+(ui/*)
+|
 Creative Profile Workflow Layer
 (creative_profile_workflows.py)
-↓
+|
 Source Workflow Layer
 (source_workflows.py)
-↓
+|
 Resource Browser Data Layer
 (resource_browser.py)
-↓
+|
 Knowledge Workflow Layer
 (knowledge_workflows.py)
-↓
+|
 Knowledge Quality Layer
 (knowledge_quality.py)
-↓
+|
 Knowledge Entity Layer
 (knowledge_entities.py)
-↓
+|
 Skill Layer
 (skills.py)
-↓
+|
 Prompt Layer
 (prompts.py)
-↓
+|
 LLM Interface
 (llm.py)
-↓
+|
 OpenAI-compatible API endpoint
-↓
+|
 Memory Layer
 (memory.py)
-↓
+|
 Project Storage
-↓
+|
 Prompt Rules
 (global + project scoped)
-↓
+|
 Retrieval Layer
 (retrieval.py)
+```
 
 ---
 
 # Directory Structure
 
+```text
 novelforge/
-
-├── app.py
-
-├── llm.py
-
-├── memory.py
-
-├── retrieval.py
-
-├── merge.py
-
-├── schemas.py
-
-├── setting_knowledge.py
-
-├── prompts.py
-
-├── prompt_options.py
-
-├── discussion_assets.py
-
-├── asset_guardrails.py
-
-├── skills.py
-
-├── knowledge_workflows.py
-
-├── knowledge_quality.py
-
-├── knowledge_entities.py
-
-├── source_workflows.py
-
-├── resource_browser.py
-
-├── extraction_presets.py
-
-├── creative_profile_workflows.py
-
-
-├── retrieval_eval.py
-
-├── requirements.txt
-
-├── .env
-
-├── .env.example
-
-├── README.md
-
-├── README.en.md
-
-├── project.md
-
-├── VERSION
-
-├── launcher.py
-
-├── NovelForge.spec
-
-├── build_release.ps1
-
-```
-├── llm_profiles.json
-
-├── global_rules.json
-
-├── prompt_options.json
-
-└── projects/
-
-    └── {project_name}/
-
-        ├── memory.json          ← project metadata only (title, genre)
-
-        ├── rules.json           ← shared project rules
-
-        ├── prompt_options.json  ← shared project prompt option overrides
-
-        ├── knowledge/           ← shared structured knowledge
-        │   └── entities/         ← generated entity cards such as character profiles
-        │
-        ├── analysis/             ← project-level analysis (e.g., source_package.md)
-
-        └── stories/             ← story spaces
-
-            ├── index.json       ← story list & active ID
-
-            └── {story_id}/
-
-                ├── creative_profile.json
-
-                ├── memory_overrides.json
-
-                ├── rules_overrides.json
-
-                ├── prompt_options.json
-
-                ├── outline.md
-
-                ├── volumes/
-
-                ├── arcs/
-
-                ├── chapter_outlines/
-
-                ├── chapters/
-
-                ├── reviews/
-
-                ├── analysis/
-
-                ├── evaluation/
-
-                ├── runs/
-
-                └── retrieval/
-
-                    ├── conflict_resolutions.json
-
-            Note:
-
-            * `creative_profile.discussion.json` stores approved creative-profile discussion artifacts when available
-        * `outline.discussion.json` stores approved full-story discussion artifacts when available
-        * `volumes/volume_xxx.md` stores per-volume outline content
-        * `volumes/volume_xxx.meta.json` stores per-volume metadata such as title / summary / status
-        * `volumes/volume_xxx.discussion.json` stores approved per-volume discussion artifacts when available
-        * `arcs/arc_xxx.md` stores per-arc outline content
-        * `arcs/arc_xxx.meta.json` stores per-arc metadata such as `volume_no`, title, summary, status, and planning estimates
-        * `arcs/arc_xxx.discussion.json` stores approved per-arc discussion artifacts when available
-        * `arcs/arc_xxx.chapter_plan.json` stores arc-level chapter allocation plans when available
-        * `chapter_outlines/chapter_xxx.meta.json` stores lightweight chapter outline metadata such as `volume_no` and `arc_no`
-        * `chapter_outlines/chapter_xxx.discussion.json` stores approved chapter-planning discussion artifacts when available
-        * `evaluation/chapter_xxx.md` and `evaluation/chapter_xxx.json` store chapter-level evaluation reports and structured scores
-        * `retrieval/conflict_resolutions.json` stores user-approved retrieval conflict decisions
-        * `retrieval/eval_cases.json` stores reusable RAG recall evaluation cases
-        * `retrieval/eval_runs.json` stores RAG evaluation run history
-        * `retrieval/feedback.json` stores user feedback for retrieval reranking
+|-- app.py
+|-- ui/
+|   |-- app_shell.py
+|   |-- navigation.py
+|   |-- layout.py
+|   |-- common.py
+|   |-- labels.py
+|   |-- streaming.py
+|   |-- step_views.py
+|   |-- discussion.py
+|   |-- retrieval_views.py
+|   |-- *_page.py
+|   `-- resource_browser_state.py
+|-- llm.py
+|-- memory.py
+|-- retrieval.py
+|-- merge.py
+|-- schemas.py
+|-- setting_knowledge.py
+|-- prompts.py
+|-- prompt_options.py
+|-- discussion_assets.py
+|-- asset_guardrails.py
+|-- skills.py
+|-- knowledge_workflows.py
+|-- knowledge_quality.py
+|-- knowledge_entities.py
+|-- source_workflows.py
+|-- resource_browser.py
+|-- extraction_presets.py
+|-- creative_profile_workflows.py
+|-- retrieval_eval.py
+|-- docs/
+|   `-- app_decomposition_plan.md
+|-- requirements.txt
+|-- .env
+|-- .env.example
+|-- README.md
+|-- README.en.md
+|-- project.md
+|-- VERSION
+|-- launcher.py
+|-- NovelForge.spec
+|-- build_release.ps1
+|-- llm_profiles.json
+|-- global_rules.json
+|-- prompt_options.json
+`-- projects/
+    `-- {project_name}/
+        |-- memory.json          # project metadata only (title, genre)
+        |-- rules.json           # shared project rules
+        |-- prompt_options.json  # shared project prompt option overrides
+        |-- knowledge/           # shared structured knowledge
+        |   `-- entities/        # generated entity cards such as character profiles
+        |-- analysis/            # project-level analysis, e.g. source_package.md
+        `-- stories/
+            |-- index.json       # story list and active ID
+            `-- {story_id}/
+                |-- creative_profile.json
+                |-- memory_overrides.json
+                |-- rules_overrides.json
+                |-- prompt_options.json
+                |-- outline.md
+                |-- volumes/
+                |-- arcs/
+                |-- chapter_outlines/
+                |-- chapters/
+                |-- reviews/
+                |-- analysis/
+                |-- evaluation/
+                |-- runs/
+                `-- retrieval/
 ```
 
 ---
@@ -395,93 +337,56 @@ novelforge/
 
 ## app.py
 
-Streamlit user interface.
+Streamlit entrypoint and page router.
 
 Responsibilities:
 
-* Project selection
-* User interaction
-* Displaying outputs
-* Calling skills
-* Managing UI state
-* Consuming structured review/update results produced by the schema layer
-* Applying grouped workspace navigation, project-aware page headers, and shared app-level visual styling
-* Rendering shared workflow step status / validation / JSON / retrieval blocks through reusable UI helpers
-* Rendering source ingestion, retrieval-source, index-rebuild, and retrieval-preview controls while delegating workflow work to source/retrieval modules
-* Rendering a source ingestion ledger built by `source_workflows.py`, tying together batches, retrieval source files, knowledge-only origins, processing counts, and segment provenance
-* Rendering long-form source splitting, batch import, and batch structured-extraction controls while delegating batch mutation to `source_workflows.py`
-* Rendering long-form source batch controls for per-segment state, retry, completed-segment re-extraction, extraction-mode selection, and batch-level pending-knowledge consolidation
-* Displaying extraction coverage and re-extraction diffs so repeated passes are auditable rather than blind
-* Rendering auto-review decisions so low-risk automated confirmation remains auditable and reversible
-* Rendering automatic-review previews in the pending queue before manually running low-risk auto-confirmation
-* Rendering pending-queue batch-processing controls and handing execution to `knowledge_workflows.py`
-* Returning individual auto-confirmed knowledge items to pending review without rolling back the whole run
-* Running multi-specialist extraction plans across selected long-form segments with per-step progress and failure summaries
-* Showing repeated long-form upload hints calculated from content fingerprints, file names, total character counts, and segment counts
-* Managing a pending structured-knowledge queue for accept/discard/edit review before persistence
-* Surfacing pending extraction quality issues before confirmation, with same-name merge support
-* Rendering pending extracted-knowledge filters and passing selected values to `knowledge_workflows.py` for risk/source/category/quality sorting
-* Editing individual pending knowledge items through forms before saving or confirming them into indexed knowledge
-* Editing individual confirmed knowledge items through forms, including category moves, deletion, provenance, quality fields, and retrieval index rebuilds
-* Managing entity alias groups and saving alias candidates found during pending extraction quality review
-* Managing structured-knowledge cleanup with duplicate detection, merge preview, deletion, and raw category editing
-* Rendering source-package report controls and delegating report generation to `source_workflows.py`
-* Exposing retrieval mode and score breakdown for debugging/learning
-* Organizing pasted reference text into structured retrieval-ready entries before ingestion; URL page ingestion is retained behind an internal UI flag while it is being refined
-* Discussing outline and chapter direction in structured form before committing to formal generation steps
-* Listing and deleting imported external source files from the retrieval center, with automatic index rebuild after removal
-* Separating project resource browsing, core story state editing, source ingestion, and retrieval testing into distinct UI pages
-* Providing a project overview page with project-level statistics, resource-metric navigation, rename, and delete operations
-* Managing project resources through an IDE-style browser with unified preview/edit/save/delete behavior and read-only inspection for structured knowledge, pending knowledge, and long-form batches
-* Managing the boundary between core settings and structured knowledge: core settings stay short and high-priority, while stable settings can be converted into searchable project knowledge
-* Supporting direct CRUD for outlines, chapter files, review artifacts, analysis artifacts, run snapshots, and external sources from the UI
-* Supporting batch cleanup for chapter bundles, run snapshots, and external sources
-* Managing volume outlines, arc outlines, and assigning chapter outlines to parent volume / arc nodes
-* Managing approval / clearing of persisted planning discussion artifacts for outline, volume, arc, and chapter layers
-* Managing multiple saved LLM endpoint / API-key profiles and syncing the active profile back into `.env`
-* Managing arc-level chapter allocation plans, chapter evaluation reports, retrieval debug output, conflict resolutions, and resumable pipeline actions
+* Configure Streamlit page metadata and global styling
+* Initialize project and active story state through `ui.app_shell`
+* Build the lightweight compatibility context needed by legacy page calls
+* Route the selected sidebar page to the corresponding `ui/` page module
+* Keep only small compatibility shims such as `render_memory_page()` and `render_retrieval_page()` while page rendering lives outside the entrypoint
 
-UI features:
+Design purpose:
 
-* Core-setting editing via structured forms backed by confirmed knowledge items
-* Word count configuration per chapter
-* Content generation page supports chained pipelines (write → review → setting extraction) with per-step status and partial results, plus a full requirement-based pipeline (outline → write → review → setting extraction)
-* Pending core-setting confirmation and editing directly on the core-setting page
-* Rule center for managing global/project prompt constraints
-* Quick requirement capture with selectable target scope
-* Dedicated analysis page for consistency / character / timeline / foreshadowing checks
-* Review and analysis result refresh via Streamlit session state synchronization
-* Retrieval hit inspection in generation, review, analysis, and pipeline result pages
-* Long-form source importer for txt/md upload, pasted text, chapter/title splitting, fanfic-oriented initialization presets, guided automatic processing, batch indexing, guided batch saving, retrieval indexing, limited batch extraction, visible progress bars, and completion reruns
-* Source ledger for inspecting source status, long-form segment text, and pending/confirmed knowledge linked to a segment
-* Long-form source batch manager for progress metrics, filtered segment lists, continue extraction, completed re-extraction, and failure retries
-* Structured-knowledge organizer for cleaning duplicate entries after long-form extraction
-* Source package report panel for generating a searchable project reference report
-* Shared rendering helpers for workflow-step status, schema validation, structured payloads, and retrieval evidence
-* Shared source-usage report for retrieval-aware workflow outputs
-* Grouped sidebar navigation that separates workspace pages into workbench / sources / planning / writing areas, with source ingestion before core settings
-* Planning navigation is profile-aware: a new story initially shows only creative configuration, then expands to long-form or short-form planning pages based on target length and workflow depth
-* Project overview home screen with quick actions for quick generation, content generation, source ingestion, resource browsing, and metric-level resource focus
-* Project-aware page header that surfaces project title, genre, canon mode, and current page description
-* Save buttons in structured story-state forms stay disabled until the user actually changes form content
-* Content generation page can inspect persisted run snapshots, transition logs, and structured workflow errors from pipeline executions
-* Resource browser with left-side file navigation, right-side editor/detail panel, resource-type filtering, lightweight volume / arc filtering, and stable selection scoped to visible results
-* Dedicated volume outline page for editing per-volume title / summary / status / outline body
-* Dedicated arc outline page for editing per-arc parent volume, title, summary, status, estimated chapter count, target word count range, outline body, and linked chapter visibility
-* Chapter discussion and chapter-outline generation now both consume the currently selected volume / arc planning context so discussion and formal generation stay aligned
-* Planning pages can now approve and clear persisted discussion artifacts, and chapter-outline generation can optionally require approved chapter / volume / arc planning discussions
-* Content generation page now includes lightweight writing-guidance controls (tone, pacing, dialogue density, focus, ending strength, extra requirements) and profile-aware mode switching between chapter-based and free-form writing
-* Dedicated model configuration page for saving multiple endpoint/key/model profiles and switching the active runtime profile from the UI
-* Common provider presets (DeepSeek, OpenAI, Qwen, Ollama, etc.) for one-click endpoint/model fill
-* In-app connection testing for model profiles before saving
-* Creative profile page combines direct option selection with discussion-assisted recommended settings, one-click form backfill, and approval-based persistence of a creative-profile discussion artifact
+* Keep `app.py` small and predictable so it behaves like an application shell rather than a monolithic UI file
+* Prevent page-specific Streamlit state, form handling, and generation/retrieval display logic from accumulating in the entrypoint
+* Make new pages discoverable by adding or updating a dedicated `ui/*` module plus a route in `app.py`
 
-Business logic should remain minimal.
+Current status after the UI split:
 
-Current UI design note:
+* `app.py` is roughly a routing shell and imports page renderers from `ui/`
+* Major page families now live under `ui/`: app shell/navigation, layout, labels, common widgets, step views, discussion helpers, planning pages, creative profile, chapter/content generation, quick generation, evaluation, retrieval center, retrieval ingestion, long-reference import/batch management, knowledge review/organization, settings, resource management, rules, prompt options, and project overview
+* Streamlit widget keys were preserved where practical during extraction to avoid avoidable session-state churn
+* Non-UI workflow decisions remain in existing workflow/domain modules such as `knowledge_workflows.py`, `knowledge_quality.py`, `knowledge_entities.py`, `source_workflows.py`, `resource_browser.py`, `creative_profile_workflows.py`, `setting_knowledge.py`, and `retrieval_eval.py`
 
-* `app.py` now includes lightweight reusable render helpers so pages consume `WorkflowStepResult` objects consistently instead of hand-formatting each skill result independently
-* Pending-knowledge triage, item save/move helpers, filter/sort rules, and batch-plan execution have been split out to `knowledge_workflows.py`; quality detection, fact-conflict helpers, alias upsert, and knowledge merge helpers have been split out to `knowledge_quality.py`; character/setting entity-card aggregation has been split out to `knowledge_entities.py`; long-source import/extraction/ledger workflows and resume-state summaries have been split out to `source_workflows.py`; resource-browser item construction and save/delete actions have been split out to `resource_browser.py`; creative-profile defaults, recommendation rules, and form payload builders have been split out to `creative_profile_workflows.py`; unified core-setting knowledge migration, editing helpers, and generation-context assembly live in `setting_knowledge.py`; RAG evaluation, report data construction, and evaluation form parsing have been split out to `retrieval_eval.py`. `app.py` should keep only Streamlit rendering, UI state, and interaction glue for those flows
+---
+
+## ui/
+
+Streamlit page and component layer.
+
+Responsibilities:
+
+* Own page-level rendering and Streamlit session/widget orchestration
+* Provide shared UI helpers for labels, layout, status blocks, retrieval displays, discussion widgets, prompt-option controls, and resource-browser state
+* Keep page modules scoped by domain: planning, writing, retrieval, ingestion, settings, rules, prompt options, resources, project overview, and knowledge review
+* Delegate persistence, retrieval, extraction, quality checks, and generation workflows to non-UI modules instead of duplicating business rules in page code
+
+Design purpose:
+
+* Keep UI composition modular while preserving the existing Streamlit user flow
+* Make individual pages importable and reviewable without loading one giant `app.py`
+* Support continued incremental refactoring through the plan in `docs/app_decomposition_plan.md`
+
+Current split highlights:
+
+* `ui.app_shell` owns project initialization, project/story switching, new-project/new-story controls, grouped sidebar navigation, and project summary captions
+* `ui.layout`, `ui.common`, `ui.labels`, `ui.step_views`, and `ui.retrieval_views` provide shared display infrastructure
+* `ui.outline_page`, `ui.volume_outline_page`, `ui.arc_outline_page`, and `ui.chapter_outline_page` own planning pages
+* `ui.creative_profile_page`, `ui.dynamic_generation`, `ui.chapter_page`, and `ui.evaluation` own profile, quick-generation, content-generation, and evaluation surfaces
+* `ui.retrieval_ingestion_page`, `ui.retrieval_center_page`, `ui.long_reference_importer`, `ui.long_reference_batch`, `ui.knowledge_management`, and `ui.retrieval_eval_panel` own source/RAG/knowledge-review workspaces
+* `ui.resource_management`, `ui.settings_page`, `ui.rules_page`, `ui.prompt_options_page`, and `ui.project_overview` own operational workbench pages
 
 ---
 
@@ -745,7 +650,7 @@ Responsibilities:
 * Install `pyinstaller` into the local `.venv`
 * Build `NovelForge.exe` from `launcher.py`
 * Assemble a portable release directory
-* Copy the runtime, entrypoint, split workflow modules, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
+* Copy the runtime, entrypoint, split workflow modules, `ui/` page package, development docs, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
 * Copy optional `.streamlit` runtime configuration when present
 * Save a build transcript under `release/` for local diagnostics
 * Produce a zip archive suitable for GitHub Releases
@@ -1786,6 +1691,8 @@ Current implementation status:
 * Implemented: story-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
 * Implemented: consolidated creative profile page that maps plain Chinese discussion and direct form choices into the current story creative profile
 * Implemented: quick-generation playground for direct prose, short-form structure + prose, and chapter-plan + prose tasks
+* Implemented: modular Streamlit UI split under `ui/`, with `app.py` reduced to route setup and compatibility helpers
+* Implemented: streaming preview controls for major discussion, generation, writing, evaluation, and source-ingestion actions
 * Implemented: per-step error isolation with partial result recovery
 * Implemented: explicit `ChapterPipelineState`-style workflow object
 * Implemented: structured `WorkflowError` records with typed categories
@@ -1911,11 +1818,11 @@ Metrics:
 
 The following items are acknowledged departures from the design philosophy and are tracked for future cleanup:
 
-1. **app.py still contains UI-adjacent orchestration beyond pure rendering.** Pending-knowledge workflows, quality checks, entity-card aggregation, long-source processing, resource-browser data operations, extraction presets, creative-profile payload rules, unified setting knowledge helpers, and RAG evaluation execution have moved into dedicated modules, but `app.py` still owns Streamlit form/session state, discussion page composition, and several page-specific render helpers. These should continue moving to dedicated UI component modules as the app grows.
+1. **Some UI modules still contain repeated page-composition patterns.** `app.py` has been reduced to an application shell and router, but several `ui/` pages still repeat discussion layout, form parsing, and save/delete action patterns. These should continue moving into shared UI helpers when the abstraction is clearer than the local page code.
 
 2. **Duplicate code patterns exist across discussion/render functions.** Outline, volume, arc, and chapter discussion pages share ~70% of their structure. A shared discussion render helper would reduce maintenance cost.
 
-3. **Legacy creative-task-wizard UI remains in app.py.** The separate user-facing wizard has been superseded by the consolidated creative profile page. The payload builder now lives in `creative_profile_workflows.py`, but `render_creative_task_wizard` still exists as unused compatibility UI and should be removed or folded into the current discussion-assisted profile flow.
+3. **Legacy creative-task-wizard compatibility UI remains available from `ui.creative_profile_page`.** The separate user-facing wizard has been superseded by the consolidated creative profile page. The payload builder lives in `creative_profile_workflows.py`, but the compatibility renderer should eventually be removed or folded fully into the current discussion-assisted profile flow.
 
 4. **Entity save functions in memory.py are structurally identical** (`save_character_entities`, `save_setting_entities`, `save_entity_aliases`, `save_extraction_plan_templates`). A parametrized `_save_entity_list(path, items)` helper would eliminate the duplication.
 
@@ -1941,35 +1848,47 @@ Read files in the following order:
 
 2. app.py
 
-3. knowledge_workflows.py
+3. ui/app_shell.py
 
-4. knowledge_quality.py
+4. ui/layout.py
 
-5. knowledge_entities.py
+5. ui/common.py
 
-6. source_workflows.py
+6. ui/step_views.py
 
-7. resource_browser.py
+7. ui/discussion.py
 
-8. extraction_presets.py
+8. The specific `ui/*` page module relevant to the change
 
-9. creative_profile_workflows.py
+9. knowledge_workflows.py
 
-10. setting_knowledge.py
+10. knowledge_quality.py
 
-11. retrieval_eval.py
+11. knowledge_entities.py
 
-12. skills.py
+12. source_workflows.py
 
-13. memory.py
+13. resource_browser.py
 
-14. prompts.py
+14. extraction_presets.py
 
-15. prompt_options.py
+15. creative_profile_workflows.py
 
-16. asset_guardrails.py
+16. setting_knowledge.py
 
-17. llm.py
+17. retrieval_eval.py
+
+18. skills.py
+
+19. memory.py
+
+20. prompts.py
+
+21. prompt_options.py
+
+22. asset_guardrails.py
+
+23. llm.py
 
 
 When implementing new features:

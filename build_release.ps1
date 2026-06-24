@@ -99,6 +99,17 @@ foreach ($relativePath in $filesToCopy) {
     Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $PortableRoot $relativePath)
 }
 
+$directoriesToCopy = @(
+    "docs",
+    "ui"
+)
+
+foreach ($relativePath in $directoriesToCopy) {
+    $sourcePath = Join-Path $ProjectRoot $relativePath
+    Assert-PathExists -LiteralPath $sourcePath -Message "Missing required directory: $relativePath"
+    Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $PortableRoot $relativePath) -Recurse
+}
+
 Copy-Item -LiteralPath (Join-Path $LauncherSpecRoot "NovelForge.exe") -Destination (Join-Path $PortableRoot "NovelForge.exe")
 Copy-Item -LiteralPath $BundledVenv -Destination (Join-Path $PortableRoot ".venv") -Recurse
 
