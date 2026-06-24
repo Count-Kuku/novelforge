@@ -1,6 +1,8 @@
 import functools
 
+import logging
 import os
+from collections.abc import Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -24,6 +26,7 @@ load_dotenv()
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+LOGGER = logging.getLogger("novelforge.llm")
 
 
 def _get_api_key() -> str:
@@ -109,7 +112,19 @@ def _format_llm_error(
     return f"{action}失败（{type(exc).__name__}）：{exc}"
 
 
-def call_llm(prompt: str, system_message: str = "", temperature: float = DEFAULT_TEMPERATURE):
+def _emit_stream_delta(stream_callback: Callable[[str], None], content: str) -> None:
+    try:
+        stream_callback(content)
+    except Exception as exc:
+        LOGGER.warning("Stream callback failed; model request will continue: %s", exc, exc_info=True)
+
+
+def call_llm(
+    prompt: str,
+    system_message: str = "",
+    temperature: float = DEFAULT_TEMPERATURE,
+    stream_callback: Callable[[str], None] | None = None,
+):
     if not _get_api_key():
         raise RuntimeError("模型请求失败：接口密钥为空。请先在“模型配置”里填写 API Key。")
 
@@ -118,16 +133,45 @@ def call_llm(prompt: str, system_message: str = "", temperature: float = DEFAULT
         messages.append({"role": "system", "content": system_message})
     messages.append({"role": "user", "content": prompt})
 
+    fallback_to_non_streaming = False
     try:
+        if stream_callback:
+            try:
+                chunks = _get_client().chat.completions.create(
+                    model=_get_model_name(),
+                    messages=messages,
+                    temperature=temperature,
+                    stream=True,
+                )
+            except BadRequestError as exc:
+                LOGGER.warning("Streaming request was rejected; falling back to non-streaming mode: %s", exc)
+                _emit_stream_delta(stream_callback, "\n\n> 当前模型服务未接受流式输出，已切换为普通生成模式。\n\n")
+                fallback_to_non_streaming = True
+            else:
+                parts = []
+                for chunk in chunks:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    content = getattr(delta, "content", None) or ""
+                    if not content:
+                        continue
+                    parts.append(content)
+                    _emit_stream_delta(stream_callback, content)
+                return "".join(parts)
+
         response = _get_client().chat.completions.create(
             model=_get_model_name(),
             messages=messages,
-            temperature=temperature
+            temperature=temperature,
         )
     except Exception as exc:
         raise RuntimeError(_format_llm_error(exc)) from exc
 
-    return response.choices[0].message.content or ""
+    content = response.choices[0].message.content or ""
+    if fallback_to_non_streaming and content:
+        _emit_stream_delta(stream_callback, content)
+    return content
 
 
 def get_embedding(text: str) -> list[float]:
@@ -196,7 +240,10 @@ def test_llm_connection(base_url: str, api_key: str, model_name: str) -> str:
         test_client = OpenAI(
             api_key=api_key,
             base_url=base_url,
-            http_client=httpx.Client(trust_env=_should_trust_env_proxy()),
+            http_client=httpx.Client(
+                trust_env=_should_trust_env_proxy(),
+                timeout=httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0),
+            ),
         )
         test_client.chat.completions.create(
             model=model_name,

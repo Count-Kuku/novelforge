@@ -138,6 +138,16 @@ from setting_knowledge import build_generation_setting_context
 
 
 _LAST_RETRIEVAL_TRACES: dict[str, list[dict]] = {}
+SKILLS_LOGGER = logging.getLogger("novelforge.skills")
+
+
+def _safe_stream_emit(stream_callback, text: str) -> None:
+    if not stream_callback:
+        return
+    try:
+        stream_callback(text)
+    except Exception as exc:
+        SKILLS_LOGGER.warning("Stream callback failed while emitting step marker: %s", exc, exc_info=True)
 
 
 def _story_trace_key(prefix: str, project_name: str, story_id: str = "default", *parts: object) -> str:
@@ -874,8 +884,8 @@ def _build_discussion_retrieval_context(
     )
 
 
-def _call_json_llm(prompt: str, empty_error: str) -> dict:
-    result = call_llm(prompt)
+def _call_json_llm(prompt: str, empty_error: str, stream_callback=None) -> dict:
+    result = call_llm(prompt, stream_callback=stream_callback)
     if not result.strip():
         raise RuntimeError(empty_error)
     return _extract_json_object(result)
@@ -962,13 +972,13 @@ def save_rule_text(project_name: str, scope: str, target: str, rule_text: str, s
     }
 
 
-def organize_reference_text(project_name: str, source_title: str, raw_text: str, story_id: str = "default") -> dict:
+def organize_reference_text(project_name: str, source_title: str, raw_text: str, story_id: str = "default", stream_callback=None) -> dict:
     prompt = organize_reference_prompt(
         source_title.strip() or "未命名资料",
         raw_text,
         _build_rules_text(project_name, "all", story_id=story_id),
     )
-    payload = _call_json_llm(prompt, "模型没有返回可整理的资料结果。")
+    payload = _call_json_llm(prompt, "模型没有返回可整理的资料结果。", stream_callback=stream_callback)
     try:
         result = OrganizedReferenceResult.model_validate(payload)
     except ValidationError as exc:
@@ -1017,6 +1027,7 @@ def extract_reference_knowledge(
     extraction_mode: str = "general",
     story_id: str = "default",
     custom_instructions: str = "",
+    stream_callback=None,
 ) -> dict:
     prompt = extract_reference_knowledge_prompt(
         source_title.strip() or "未命名资料",
@@ -1027,7 +1038,7 @@ def extract_reference_knowledge(
         alias_context=_format_entity_alias_context(project_name),
         custom_instructions=custom_instructions,
     )
-    payload = _call_json_llm(prompt, "模型没有返回可提取的知识结果。")
+    payload = _call_json_llm(prompt, "模型没有返回可提取的知识结果。", stream_callback=stream_callback)
     try:
         result = KnowledgeExtractionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1057,6 +1068,7 @@ def consolidate_extracted_knowledge(
     enabled_categories: list[str] | None = None,
     consolidation_mode: str = "balanced",
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     compact_items = []
     for item in extracted_items:
@@ -1087,7 +1099,7 @@ def consolidate_extracted_knowledge(
         consolidation_mode=consolidation_mode,
         rules_text=_build_rules_text(project_name, "all", story_id=story_id),
     )
-    payload = _call_json_llm(prompt, "模型没有返回可整理的知识结果。")
+    payload = _call_json_llm(prompt, "模型没有返回可整理的知识结果。", stream_callback=stream_callback)
     try:
         result = KnowledgeExtractionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1111,24 +1123,24 @@ def consolidate_extracted_knowledge(
     ).model_dump()
 
 
-def organize_reference_html(project_name: str, source_title: str, html: str, source_url: str, story_id: str = "default") -> dict:
+def organize_reference_html(project_name: str, source_title: str, html: str, source_url: str, story_id: str = "default", stream_callback=None) -> dict:
     extracted_text = _extract_web_text_from_html(html)
     if not extracted_text.strip():
         raise RuntimeError("抓取到的页面中没有提取出可阅读文本。")
 
-    result = organize_reference_text(project_name, source_title, extracted_text, story_id=story_id)
+    result = organize_reference_text(project_name, source_title, extracted_text, story_id=story_id, stream_callback=stream_callback)
     result.setdefault("artifacts", {})
     result["artifacts"]["source_url"] = source_url
     result["artifacts"]["raw_text_excerpt"] = extracted_text[:2000]
     return result
 
 
-def organize_reference_url(project_name: str, source_title: str, source_url: str, story_id: str = "default") -> dict:
+def organize_reference_url(project_name: str, source_title: str, source_url: str, story_id: str = "default", stream_callback=None) -> dict:
     html = _fetch_web_page(source_url)
-    return organize_reference_html(project_name, source_title, html, source_url, story_id=story_id)
+    return organize_reference_html(project_name, source_title, html, source_url, story_id=story_id, stream_callback=stream_callback)
 
 
-def discuss_outline(project_name: str, user_idea: str, story_id: str = "default") -> dict:
+def discuss_outline(project_name: str, user_idea: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     trace_key = _story_trace_key("outline_discuss", project_name, story_id)
     retrieval_context = _build_discussion_retrieval_context(
@@ -1139,7 +1151,7 @@ def discuss_outline(project_name: str, user_idea: str, story_id: str = "default"
         retrieval_profile="outline_discussion",
     )
     prompt = discuss_outline_prompt(memory, user_idea, _build_rules_text(project_name, "outline", story_id=story_id), retrieval_context=retrieval_context)
-    payload = _call_json_llm(prompt, "模型没有返回全书讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回全书讨论结果。", stream_callback=stream_callback)
     try:
         result = OutlineDiscussionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1162,7 +1174,7 @@ def discuss_outline(project_name: str, user_idea: str, story_id: str = "default"
     ).model_dump()
 
 
-def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = "default") -> dict:
+def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     current_profile = load_creative_profile(project_name, story_id)
     trace_key = _story_trace_key("creative_profile_discuss", project_name, story_id)
@@ -1179,7 +1191,7 @@ def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = 
         _build_rules_text(project_name, "all", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回创作配置讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回创作配置讨论结果。", stream_callback=stream_callback)
     try:
         result = CreativeProfileDiscussionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1202,7 +1214,7 @@ def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = 
     ).model_dump()
 
 
-def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, story_id: str = "default") -> dict:
+def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
     chapter_metadata = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
@@ -1245,7 +1257,7 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, s
         _build_rules_text(project_name, "chapter_outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回章节讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回章节讨论结果。", stream_callback=stream_callback)
     try:
         result = ChapterDiscussionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1275,6 +1287,7 @@ def discuss_outline_turn(
     current_discussion: dict | None,
     latest_user_message: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     trace_key = _story_trace_key("outline_discuss_turn", project_name, story_id)
@@ -1294,7 +1307,7 @@ def discuss_outline_turn(
         _build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回本轮全书讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回本轮全书讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -1329,6 +1342,7 @@ def discuss_chapter_turn(
     current_discussion: dict | None,
     latest_user_message: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
@@ -1375,7 +1389,7 @@ def discuss_chapter_turn(
         _build_rules_text(project_name, "chapter_outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回本轮章节讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回本轮章节讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -1409,6 +1423,7 @@ def discuss_creative_profile_turn(
     current_discussion: dict | None,
     latest_user_message: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     current_profile = load_creative_profile(project_name, story_id)
@@ -1431,7 +1446,7 @@ def discuss_creative_profile_turn(
         _build_rules_text(project_name, "all", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回本轮创作配置讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回本轮创作配置讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -1465,6 +1480,7 @@ def discuss_volume(
     volume_summary: str,
     user_requirement: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
@@ -1486,7 +1502,7 @@ def discuss_volume(
         _build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回分卷讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回分卷讨论结果。", stream_callback=stream_callback)
     try:
         result = VolumeDiscussionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1519,6 +1535,7 @@ def discuss_volume_turn(
     current_discussion: dict | None,
     latest_user_message: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
@@ -1543,7 +1560,7 @@ def discuss_volume_turn(
         _build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回本轮分卷讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回本轮分卷讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -1580,6 +1597,7 @@ def discuss_arc(
     target_word_count_range: str,
     user_requirement: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
@@ -1605,7 +1623,7 @@ def discuss_arc(
         _build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回剧情段讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回剧情段讨论结果。", stream_callback=stream_callback)
     try:
         result = ArcDiscussionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1641,6 +1659,7 @@ def discuss_arc_turn(
     current_discussion: dict | None,
     latest_user_message: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
@@ -1669,7 +1688,7 @@ def discuss_arc_turn(
         _build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回本轮剧情段讨论结果。")
+    payload = _call_json_llm(prompt, "模型没有返回本轮剧情段讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -1843,7 +1862,7 @@ def _format_review_markdown(review: ReviewResult | dict) -> str:
 {review['next_action'] or '无'}
 """
 
-def generate_outline(project_name: str, user_idea: str, story_id: str = "default") -> dict:
+def generate_outline(project_name: str, user_idea: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     approved_discussion_context = _format_discussion_context(
         load_outline_discussion_artifact(project_name, story_id=story_id),
@@ -1863,7 +1882,7 @@ def generate_outline(project_name: str, user_idea: str, story_id: str = "default
         outline_prompt(memory, f"{user_idea}\n\n已批准讨论结论：\n{approved_discussion_context}".strip(), _build_rules_text(project_name, "outline", story_id=story_id)),
         retrieval_context,
     )
-    outline = call_llm(prompt)
+    outline = call_llm(prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回全书大纲。")
     save_outline(project_name, outline, story_id=story_id)
@@ -1885,6 +1904,7 @@ def generate_volume_outline(
     user_requirement: str,
     status: str = "draft",
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
@@ -1930,7 +1950,7 @@ def generate_volume_outline(
         ),
         retrieval_context,
     )
-    outline = call_llm(prompt)
+    outline = call_llm(prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回分卷大纲。")
     save_volume_outline(project_name, volume_no, outline, story_id=story_id)
@@ -1959,6 +1979,7 @@ def generate_arc_outline(
     user_requirement: str,
     status: str = "draft",
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     story_outline = load_outline(project_name, story_id=story_id)
@@ -2009,7 +2030,7 @@ def generate_arc_outline(
         ),
         retrieval_context,
     )
-    outline = call_llm(prompt)
+    outline = call_llm(prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回剧情段大纲。")
     save_arc_outline(project_name, arc_no, outline, story_id=story_id)
@@ -2057,6 +2078,7 @@ def generate_arc_chapter_plan(
     chapter_count: int,
     user_requirement: str = "",
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     arc_meta = load_arc_metadata(project_name, arc_no, story_id=story_id)
     volume_no = arc_meta.get("volume_no")
@@ -2105,7 +2127,7 @@ def generate_arc_chapter_plan(
         ),
         retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回剧情段章节分配计划。")
+    payload = _call_json_llm(prompt, "模型没有返回剧情段章节分配计划。", stream_callback=stream_callback)
     try:
         result = ArcChapterPlanResult.model_validate(payload)
     except ValidationError as exc:
@@ -2140,6 +2162,7 @@ def generate_creative_structure(
     *,
     save_as_chapter_outline: bool = True,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     profile = load_creative_profile(project_name, story_id)
@@ -2162,7 +2185,7 @@ def generate_creative_structure(
         ),
         retrieval_context,
     )
-    structure = call_llm(prompt)
+    structure = call_llm(prompt, stream_callback=stream_callback)
     if not structure.strip():
         raise RuntimeError("模型没有返回创作结构。")
 
@@ -2192,6 +2215,7 @@ def generate_chapter_outline(
     volume_no: int | None = None,
     arc_no: int | None = None,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
@@ -2255,7 +2279,7 @@ def generate_chapter_outline(
         user_requirement,
         _build_rules_text(project_name, "chapter_outline", story_id=story_id),
     ), retrieval_context)
-    outline = call_llm(prompt)
+    outline = call_llm(prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回章节细纲。")
     save_chapter_outline(project_name, chapter_no, outline, story_id=story_id)
@@ -2279,6 +2303,7 @@ def write_chapter(
     writing_guidance: dict | None = None,
     word_count: str = "2000-2500",
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     raw_guidance = writing_guidance if isinstance(writing_guidance, dict) else {}
@@ -2328,7 +2353,7 @@ def write_chapter(
         ),
         retrieval_context,
     )
-    chapter = call_llm(prompt)
+    chapter = call_llm(prompt, stream_callback=stream_callback)
     if not chapter.strip():
         raise RuntimeError("模型没有返回章节正文。")
     save_chapter(project_name, chapter_no, chapter, story_id=story_id)
@@ -2350,6 +2375,7 @@ def run_dynamic_generation_task(
     workflow_depth: str = "按创作配置",
     story_id: str = "default",
     writing_guidance: dict | None = None,
+    stream_callback=None,
 ) -> dict:
     profile = load_creative_profile(project_name, story_id)
     using_profile_depth = not workflow_depth or workflow_depth == "按创作配置"
@@ -2358,6 +2384,9 @@ def run_dynamic_generation_task(
     steps: dict[str, dict] = {}
     warnings: list[str] = []
 
+    def emit_step_heading(title: str) -> None:
+        _safe_stream_emit(stream_callback, f"\n\n## {title}\n\n")
+
     if effective_depth == "只生成正文":
         direct_outline = "\n\n".join([
             "# 直接正文生成任务",
@@ -2365,7 +2394,8 @@ def run_dynamic_generation_task(
             f"用户需求：{user_requirement}",
             "请根据创作配置和检索上下文直接写正文，不需要输出大纲。",
         ])
-        write_step = write_chapter(project_name, chapter_no, direct_outline, writing_guidance, effective_word_count, story_id=story_id)
+        emit_step_heading("正文")
+        write_step = write_chapter(project_name, chapter_no, direct_outline, writing_guidance, effective_word_count, story_id=story_id, stream_callback=stream_callback)
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
@@ -2384,7 +2414,8 @@ def run_dynamic_generation_task(
     if effective_depth in {"短篇结构+正文", "分卷/剧情段/章节"} or is_custom_depth or (
         using_profile_depth and _is_lightweight_story_profile(profile)
     ):
-        structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True, story_id=story_id)
+        emit_step_heading("创作结构")
+        structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True, story_id=story_id, stream_callback=stream_callback)
         steps["creative_structure"] = structure_step
         if not structure_step.get("success"):
             return {
@@ -2403,7 +2434,8 @@ def run_dynamic_generation_task(
             warnings.append("当前动态入口先生成可执行创作结构；完整分卷/剧情段拆分请继续使用对应长篇页面。")
         if is_custom_depth:
             warnings.append("本次使用自定义生成层级，系统会先生成适配结构，再继续生成正文。")
-        write_step = write_chapter(project_name, chapter_no, structure_text, writing_guidance, effective_word_count, story_id=story_id)
+        emit_step_heading("正文")
+        write_step = write_chapter(project_name, chapter_no, structure_text, writing_guidance, effective_word_count, story_id=story_id, stream_callback=stream_callback)
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
@@ -2418,7 +2450,8 @@ def run_dynamic_generation_task(
         }
 
     if effective_depth == "章节计划+正文":
-        outline_step = generate_chapter_outline(project_name, chapter_no, user_requirement, story_id=story_id)
+        emit_step_heading("章节计划")
+        outline_step = generate_chapter_outline(project_name, chapter_no, user_requirement, story_id=story_id, stream_callback=stream_callback)
         steps["chapter_outline"] = outline_step
         if not outline_step.get("success"):
             return {
@@ -2433,7 +2466,8 @@ def run_dynamic_generation_task(
                 "warnings": warnings,
             }
         outline_text = outline_step.get("data", {}).get("chapter_outline", "")
-        write_step = write_chapter(project_name, chapter_no, outline_text, writing_guidance, effective_word_count, story_id=story_id)
+        emit_step_heading("正文")
+        write_step = write_chapter(project_name, chapter_no, outline_text, writing_guidance, effective_word_count, story_id=story_id, stream_callback=stream_callback)
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
@@ -2448,7 +2482,8 @@ def run_dynamic_generation_task(
         }
 
     warnings.append("完整长篇流程建议继续使用全书大纲、分卷、剧情段、章节细纲和一键流水线页面分步执行。")
-    structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True, story_id=story_id)
+    emit_step_heading("创作结构")
+    structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True, story_id=story_id, stream_callback=stream_callback)
     steps["creative_structure"] = structure_step
     return {
         "success": bool(structure_step.get("success")),
@@ -2466,7 +2501,8 @@ def extract_setting_candidates_from_chapter(
     project_name: str,
     chapter_no: int,
     chapter: str,
-    story_id: str = "default"
+    story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     trace_key = _story_trace_key("setting_extraction", project_name, story_id, chapter_no)
@@ -2483,7 +2519,7 @@ def extract_setting_candidates_from_chapter(
         setting_extraction_prompt(memory, chapter, _build_rules_text(project_name, "setting_extraction", story_id=story_id)),
         retrieval_context,
     )
-    result = call_llm(prompt)
+    result = call_llm(prompt, stream_callback=stream_callback)
     if not result.strip():
         raise RuntimeError("设定提炼失败：模型返回了空响应。")
     retrieval_hits = get_retrieval_trace(trace_key)
@@ -2576,11 +2612,12 @@ def update_memory_from_chapter(
     chapter_no: int,
     chapter: str,
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
-    return extract_setting_candidates_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
+    return extract_setting_candidates_from_chapter(project_name, chapter_no, chapter, story_id=story_id, stream_callback=stream_callback)
 
 
-def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
     trace_key = _story_trace_key("review", project_name, story_id, chapter_no)
@@ -2616,7 +2653,7 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
         review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review", story_id=story_id)),
         retrieval_context,
     )
-    result = call_llm(prompt)
+    result = call_llm(prompt, stream_callback=stream_callback)
     if not result.strip():
         raise RuntimeError("审阅失败：模型返回了空响应。")
     retrieval_hits = get_retrieval_trace(trace_key)
@@ -2743,8 +2780,9 @@ def _run_analysis(
     empty_error: str,
     schema,
     renderer,
+    stream_callback=None,
 ) -> tuple[object, str]:
-    payload = _call_json_llm(prompt, empty_error)
+    payload = _call_json_llm(prompt, empty_error, stream_callback=stream_callback)
     try:
         result = schema.model_validate(payload)
     except ValidationError as exc:
@@ -2795,7 +2833,7 @@ def _finalize_analysis_step(
     ).model_dump()
 
 
-def analyze_characters(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+def analyze_characters(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     trace_key = _story_trace_key("analysis:characters", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
@@ -2814,6 +2852,7 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str, story_i
         "模型没有返回角色分析结果。",
         CharacterAnalysisResult,
         render_character_analysis_markdown,
+        stream_callback=stream_callback,
     )
     return _finalize_analysis_step(
         "analysis_characters",
@@ -2828,7 +2867,7 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str, story_i
     )
 
 
-def analyze_timeline(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+def analyze_timeline(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     trace_key = _story_trace_key("analysis:timeline", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
@@ -2847,6 +2886,7 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str, story_id:
         "模型没有返回时间线分析结果。",
         TimelineAnalysisResult,
         render_timeline_analysis_markdown,
+        stream_callback=stream_callback,
     )
     return _finalize_analysis_step(
         "analysis_timeline",
@@ -2861,7 +2901,7 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str, story_id:
     )
 
 
-def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     trace_key = _story_trace_key("analysis:foreshadowing", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
@@ -2880,6 +2920,7 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str, stor
         "模型没有返回伏笔分析结果。",
         ForeshadowingAnalysisResult,
         render_foreshadowing_analysis_markdown,
+        stream_callback=stream_callback,
     )
     return _finalize_analysis_step(
         "analysis_foreshadowing",
@@ -2894,7 +2935,7 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str, stor
     )
 
 
-def run_consistency_check(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+def run_consistency_check(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     trace_key = _story_trace_key("analysis:consistency", project_name, story_id, chapter_no)
     retrieval_context = _build_retrieval_context(
@@ -2928,6 +2969,7 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str, stor
         "模型没有返回一致性检查结果。",
         ConsistencyAnalysisResult,
         render_consistency_analysis_markdown,
+        stream_callback=stream_callback,
     )
     return _finalize_analysis_step(
         "analysis_consistency",
@@ -2942,7 +2984,7 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str, stor
     )
 
 
-def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
     trace_key = _story_trace_key("evaluation:chapter", project_name, story_id, chapter_no)
@@ -2980,7 +3022,7 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id:
         evaluate_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review", story_id=story_id)),
         retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回章节评估结果。")
+    payload = _call_json_llm(prompt, "模型没有返回章节评估结果。", stream_callback=stream_callback)
     try:
         result = ChapterEvaluationResult.model_validate(payload)
     except ValidationError as exc:
@@ -3017,7 +3059,7 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id:
     ).model_dump()
 
 
-def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: str, story_id: str = "default") -> dict:
+def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
     trace_key = _story_trace_key("evaluation:comprehensive", project_name, story_id, chapter_no)
@@ -3063,7 +3105,7 @@ def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: 
         ),
         retrieval_context,
     )
-    payload = _call_json_llm(prompt, "模型没有返回章节综合评价结果。")
+    payload = _call_json_llm(prompt, "模型没有返回章节综合评价结果。", stream_callback=stream_callback)
     try:
         result = ComprehensiveChapterEvaluationResult.model_validate(payload)
     except ValidationError as exc:
@@ -3106,6 +3148,7 @@ def pipeline_plan_write_review_update(
     user_requirement: str,
     word_count: str = "2000-2500",
     story_id: str = "default",
+    stream_callback=None,
 ) -> dict:
     started_at = datetime.now().isoformat(timespec="seconds")
     run_id = f"chapter_{chapter_no:03d}_{started_at.replace(':', '').replace('-', '').replace('T', '_')}"
@@ -3120,8 +3163,12 @@ def pipeline_plan_write_review_update(
         started_at=started_at,
     )
 
+    def emit_step_heading(title: str) -> None:
+        _safe_stream_emit(stream_callback, f"\n\n## {title}\n\n")
+
     try:
-        outline = generate_chapter_outline(project_name, chapter_no, user_requirement, story_id=story_id)
+        emit_step_heading("章节细纲")
+        outline = generate_chapter_outline(project_name, chapter_no, user_requirement, story_id=story_id, stream_callback=stream_callback)
         outline_step = WorkflowStepResult.model_validate(outline)
     except Exception as exc:
         outline_step = _make_step_result(
@@ -3142,7 +3189,8 @@ def pipeline_plan_write_review_update(
         state.next_step = "write_chapter"
         _transition_pipeline_state(state, "write_chapter", "chapter outline completed")
         try:
-            chapter = write_chapter(project_name, chapter_no, state.chapter_outline, None, word_count, story_id=story_id)
+            emit_step_heading("正文")
+            chapter = write_chapter(project_name, chapter_no, state.chapter_outline, None, word_count, story_id=story_id, stream_callback=stream_callback)
             chapter_step = WorkflowStepResult.model_validate(chapter)
         except Exception as exc:
             chapter_step = _make_step_result(
@@ -3172,7 +3220,8 @@ def pipeline_plan_write_review_update(
         state.next_step = "review_chapter"
         _transition_pipeline_state(state, "review_chapter", "chapter writing completed")
         try:
-            review_step_data = review_chapter(project_name, chapter_no, state.chapter, story_id=story_id)
+            emit_step_heading("审阅")
+            review_step_data = review_chapter(project_name, chapter_no, state.chapter, story_id=story_id, stream_callback=stream_callback)
             review_step = WorkflowStepResult.model_validate(review_step_data)
         except Exception as exc:
             review_step = _make_step_result(
@@ -3204,7 +3253,8 @@ def pipeline_plan_write_review_update(
         state.next_step = "setting_extraction"
         _transition_pipeline_state(state, "setting_extraction", "review step completed")
         try:
-            memory_step_data = extract_setting_candidates_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id)
+            emit_step_heading("设定提炼")
+            memory_step_data = extract_setting_candidates_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id, stream_callback=stream_callback)
             memory_step = WorkflowStepResult.model_validate(memory_step_data)
         except Exception as exc:
             memory_step = _make_step_result(
@@ -3257,7 +3307,7 @@ def pipeline_plan_write_review_update(
     return result
 
 
-def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "default") -> dict:
+def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "default", stream_callback=None) -> dict:
     raw = load_pipeline_run(project_name, run_id, story_id=story_id)
     if not raw.strip():
         raise RuntimeError("没有找到该流水线运行记录。")
@@ -3290,13 +3340,17 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
     )
     _transition_pipeline_state(state, "resume", f"resuming from {run_id}")
 
+    def emit_step_heading(title: str) -> None:
+        _safe_stream_emit(stream_callback, f"\n\n## {title}\n\n")
+
     last_successful_step = str(previous.get("last_successful_step", "") or "")
     if last_successful_step == "chapter_outline":
         state.next_step = "write_chapter"
         _transition_pipeline_state(state, "write_chapter", "resuming after chapter outline")
         try:
+            emit_step_heading("正文")
             chapter_step = WorkflowStepResult.model_validate(
-                write_chapter(project_name, chapter_no, state.chapter_outline, None, state.word_count, story_id=story_id)
+                write_chapter(project_name, chapter_no, state.chapter_outline, None, state.word_count, story_id=story_id, stream_callback=stream_callback)
             )
         except Exception as exc:
             chapter_step = _make_step_result(
@@ -3316,7 +3370,8 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         state.next_step = "review_chapter"
         _transition_pipeline_state(state, "review_chapter", "resuming after chapter writing")
         try:
-            review_step = WorkflowStepResult.model_validate(review_chapter(project_name, chapter_no, state.chapter, story_id=story_id))
+            emit_step_heading("审阅")
+            review_step = WorkflowStepResult.model_validate(review_chapter(project_name, chapter_no, state.chapter, story_id=story_id, stream_callback=stream_callback))
         except Exception as exc:
             review_step = _make_step_result(
                 "review_chapter", success=False, status="failed", error=str(exc),
@@ -3334,7 +3389,8 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         state.next_step = "setting_extraction"
         _transition_pipeline_state(state, "setting_extraction", "resuming after review")
         try:
-            memory_step = WorkflowStepResult.model_validate(extract_setting_candidates_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id))
+            emit_step_heading("设定提炼")
+            memory_step = WorkflowStepResult.model_validate(extract_setting_candidates_from_chapter(project_name, chapter_no, state.chapter, story_id=story_id, stream_callback=stream_callback))
         except Exception as exc:
             memory_step = _make_step_result(
                 "setting_extraction", success=False, status="failed", error=str(exc),

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 
@@ -45,6 +46,18 @@ from retrieval import (
 )
 from schemas import KNOWLEDGE_CATEGORY_LABELS, label_knowledge_category
 from skills import consolidate_extracted_knowledge, extract_reference_knowledge
+
+
+LOGGER = logging.getLogger("novelforge.source_workflows")
+
+
+def _safe_stream_emit(stream_callback, text: str) -> None:
+    if not stream_callback:
+        return
+    try:
+        stream_callback(text)
+    except Exception as exc:
+        LOGGER.warning("Stream callback failed while emitting workflow marker: %s", exc, exc_info=True)
 
 
 SCOPE_LABELS = {
@@ -462,6 +475,7 @@ def extract_pasted_reference_to_pending(
     authority: str,
     origin: str = "",
     auto_confirm_safe_items: bool = False,
+    stream_callback=None,
 ) -> dict:
     before_pending_ids = {str(item.get("pending_id") or "") for item in load_pending_knowledge_items(project_name)}
     result = extract_reference_knowledge(
@@ -471,6 +485,7 @@ def extract_pasted_reference_to_pending(
         enabled_categories,
         extraction_mode=extraction_mode,
         custom_instructions=custom_instructions,
+        stream_callback=stream_callback,
     )
     payload = result.get("data", {}).get("knowledge_extraction", {})
     items = payload.get("items", []) if isinstance(payload, dict) else []
@@ -514,6 +529,7 @@ def extract_long_reference_segments_to_queue(
     extraction_mode: str = "general",
     custom_instructions: str = "",
     progress_callback=None,
+    stream_callback=None,
 ) -> tuple[dict, int, int, list[str]]:
     queued_total = 0
     processed = 0
@@ -540,8 +556,9 @@ def extract_long_reference_segments_to_queue(
                 "current": position - 1,
                 "total": total_targets or 1,
                 "message": f"正在提取：{segment_title}",
-            })
+        })
         try:
+            _safe_stream_emit(stream_callback, f"\n\n## {segment_title}\n\n")
             existing_related = get_segment_related_knowledge_items(project_name, segment, include_confirmed=False)["pending"]
             result = extract_reference_knowledge(
                 project_name,
@@ -550,6 +567,7 @@ def extract_long_reference_segments_to_queue(
                 enabled_categories,
                 extraction_mode=extraction_mode,
                 custom_instructions=custom_instructions,
+                stream_callback=stream_callback,
             )
             payload = result.get("data", {}).get("knowledge_extraction", {})
             items = payload.get("items", []) if isinstance(payload, dict) else []
@@ -759,6 +777,7 @@ def run_long_reference_extraction_plan(
     max_segments: int = 5,
     reextract_completed: bool = False,
     progress_callback=None,
+    stream_callback=None,
 ) -> tuple[dict, dict]:
     segments = batch.get("segments", []) if isinstance(batch.get("segments", []), list) else []
     target_indices = []
@@ -805,6 +824,7 @@ def run_long_reference_extraction_plan(
     current_batch = batch
     for step_key, preset, categories in planned_steps:
         step_label = preset.get("label", step_key)
+        _safe_stream_emit(stream_callback, f"\n\n# {step_label}\n\n")
 
         def step_progress(event: dict, *, offset=completed_work, label=step_label):
             if not progress_callback or not isinstance(event, dict):
@@ -823,6 +843,7 @@ def run_long_reference_extraction_plan(
             categories,
             extraction_mode=str(preset.get("mode") or "general"),
             progress_callback=step_progress,
+            stream_callback=stream_callback,
         )
         completed_work += len(target_indices)
         step_summary = {
@@ -1285,6 +1306,7 @@ def consolidate_batch_pending_items(
     categories: list[str],
     consolidation_mode: str,
     limit: int,
+    stream_callback=None,
 ) -> dict:
     batch_pending_items = get_batch_pending_knowledge_items(project_name, batch)
     target_items = [
@@ -1306,6 +1328,7 @@ def consolidate_batch_pending_items(
         target_items,
         enabled_categories=categories,
         consolidation_mode=consolidation_mode,
+        stream_callback=stream_callback,
     )
     payload = result.get("data", {}).get("knowledge_extraction", {})
     consolidated_items = payload.get("items", []) if isinstance(payload, dict) else []
@@ -1441,6 +1464,7 @@ def run_long_reference_quick_process(
     auto_confirm_safe_items: bool,
     custom_instructions: str = "",
     progress_callback=None,
+    stream_callback=None,
 ) -> tuple[dict, dict]:
     selected_indices = list(segment_indices)
     extract_indices = selected_indices[: int(extract_limit)]
@@ -1476,6 +1500,7 @@ def run_long_reference_quick_process(
             extraction_mode=extraction_mode,
             custom_instructions=custom_instructions,
             progress_callback=progress_callback,
+            stream_callback=stream_callback,
         )
     if consolidate_after_extract and queued_total:
         if progress_callback:
@@ -1490,6 +1515,7 @@ def run_long_reference_quick_process(
             categories=enabled_categories,
             consolidation_mode="balanced",
             limit=max(20, min(120, queued_total)),
+            stream_callback=stream_callback,
         )
 
     after_pending_items = load_pending_knowledge_items(project_name)

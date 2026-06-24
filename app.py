@@ -1697,6 +1697,59 @@ def _render_discussion_summary(discussion_result: dict, empty_message: str):
     render_step_json_expander("讨论结构化数据", discussion)
 
 
+def _render_stream_preview(preview_slot, text: str, preview_language: str | None = None):
+    preview_text = text or "等待模型开始输出..."
+    if preview_language:
+        preview_slot.code(preview_text, language=preview_language)
+    else:
+        preview_slot.markdown(preview_text)
+
+
+def _make_stream_preview(label: str, preview_language: str | None = None):
+    status = st.status(label, expanded=True)
+    with status:
+        preview_slot = st.empty()
+        _render_stream_preview(preview_slot, "", preview_language)
+    state = {"text": ""}
+
+    def stream_callback(delta: str):
+        if not delta:
+            return
+        state["text"] += str(delta)
+        cursor = "\n\n▌" if preview_language else "▌"
+        _render_stream_preview(preview_slot, f"{state['text']}{cursor}", preview_language)
+
+    def complete(message: str = "生成完成。"):
+        _render_stream_preview(preview_slot, state["text"], preview_language)
+        status.update(label=message, state="complete", expanded=False)
+
+    def fail(message: str):
+        _render_stream_preview(preview_slot, state["text"], preview_language)
+        status.update(label=message, state="error", expanded=True)
+
+    return stream_callback, complete, fail
+
+
+def _safe_stream_emit(stream_callback, text: str):
+    if not stream_callback:
+        return
+    try:
+        stream_callback(text)
+    except Exception as exc:
+        APP_LOGGER.warning("Stream callback failed while emitting UI marker: %s", exc, exc_info=True)
+
+
+def _run_with_stream(label: str, func, *args, preview_language: str | None = None, **kwargs):
+    stream_callback, complete, fail = _make_stream_preview(label, preview_language=preview_language)
+    try:
+        result = func(*args, stream_callback=stream_callback, **kwargs)
+        complete()
+        return result
+    except Exception as exc:
+        fail(f"{label}失败：{exc}")
+        raise
+
+
 ASSET_GUARDRAIL_LEVEL_LABELS = {
     "duplicate": "可能重复",
     "warning": "需要确认",
@@ -3231,7 +3284,14 @@ def render_outline_page(project_name: str):
     col_action_1, col_action_2 = st.columns(2)
     if col_action_1.button("开始讨论大纲方向"):
         try:
-            result = discuss_outline(project_name, user_idea, story_id=story_id)
+            result = _run_with_stream(
+                "正在讨论大纲方向...",
+                discuss_outline,
+                project_name,
+                user_idea,
+                story_id=story_id,
+                preview_language="json",
+            )
             st.session_state[result_key] = result
             st.session_state[messages_key] = []
             assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、可选方向和待确认问题，我们可以继续往下细化。"
@@ -3290,13 +3350,16 @@ def render_outline_page(project_name: str):
                 try:
                     _append_discussion_message(messages_key, "user", follow_up)
                     messages = st.session_state.get(messages_key, [])
-                    result = discuss_outline_turn(
+                    result = _run_with_stream(
+                        "正在继续讨论大纲...",
+                        discuss_outline_turn,
                         project_name,
                         user_idea,
                         messages,
                         discussion_step.get("data", {}).get("discussion", {}),
                         follow_up,
                         story_id=story_id,
+                        preview_language="json",
                     )
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了当前讨论结论。"
@@ -3315,7 +3378,13 @@ def render_outline_page(project_name: str):
         )
 
     if st.button("生成全书大纲"):
-        result = generate_outline(project_name, user_idea, story_id=story_id)
+        result = _run_with_stream(
+            "正在生成全书大纲...",
+            generate_outline,
+            project_name,
+            user_idea,
+            story_id=story_id,
+        )
         st.session_state["outline_step"] = result
         st.session_state["outline"] = result.get("data", {}).get("outline", "")
 
@@ -3422,7 +3491,15 @@ def render_chapter_outline_page(project_name: str):
     if col_action_1.button("开始讨论本章方向", key=scoped_widget_key("start_chapter_discussion", *chapter_scope)):
         try:
             save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": volume_no or None, "arc_no": arc_no or None}, story_id=story_id)
-            result = discuss_chapter(project_name, chapter_no, requirement, story_id=story_id)
+            result = _run_with_stream(
+                "正在讨论本章方向...",
+                discuss_chapter,
+                project_name,
+                chapter_no,
+                requirement,
+                story_id=story_id,
+                preview_language="json",
+            )
             st.session_state[result_key] = result
             st.session_state[messages_key] = []
             assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本章目标、可选方向和待确认问题，我们可以继续细化。"
@@ -3487,7 +3564,9 @@ def render_chapter_outline_page(project_name: str):
                     save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": volume_no or None, "arc_no": arc_no or None}, story_id=story_id)
                     _append_discussion_message(messages_key, "user", follow_up)
                     messages = st.session_state.get(messages_key, [])
-                    result = discuss_chapter_turn(
+                    result = _run_with_stream(
+                        "正在继续讨论本章...",
+                        discuss_chapter_turn,
                         project_name,
                         chapter_no,
                         requirement,
@@ -3495,6 +3574,7 @@ def render_chapter_outline_page(project_name: str):
                         discussion_step.get("data", {}).get("discussion", {}),
                         follow_up,
                         story_id=story_id,
+                        preview_language="json",
                     )
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本章讨论结论。"
@@ -3521,14 +3601,32 @@ def render_chapter_outline_page(project_name: str):
             elif not (chapter_discussion_artifact.get("discussion", {}) or {}).get("approval_ready"):
                 st.error("当前章节还没有已批准讨论工件，已阻止章节细纲生成。")
             else:
-                result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None, story_id=story_id)
+                result = _run_with_stream(
+                    "正在生成章节细纲...",
+                    generate_chapter_outline,
+                    project_name,
+                    chapter_no,
+                    requirement,
+                    volume_no=volume_no or None,
+                    arc_no=arc_no or None,
+                    story_id=story_id,
+                )
                 step_result = result
                 outline_value = result.get("data", {}).get("chapter_outline", "")
                 st.session_state[chapter_outline_step_key] = result
                 st.session_state[chapter_outline_text_key] = outline_value
                 st.session_state[chapter_outline_editor_key] = outline_value
         else:
-            result = generate_chapter_outline(project_name, chapter_no, requirement, volume_no=volume_no or None, arc_no=arc_no or None, story_id=story_id)
+            result = _run_with_stream(
+                "正在生成章节细纲...",
+                generate_chapter_outline,
+                project_name,
+                chapter_no,
+                requirement,
+                volume_no=volume_no or None,
+                arc_no=arc_no or None,
+                story_id=story_id,
+            )
             step_result = result
             outline_value = result.get("data", {}).get("chapter_outline", "")
             st.session_state[chapter_outline_step_key] = result
@@ -3611,8 +3709,14 @@ def render_chapter_page(project_name: str):
                         st.warning("请先填写创作需求。")
                     else:
                         try:
-                            with st.spinner("正在生成细纲..."):
-                                outline_result = generate_chapter_outline(project_name, chapter_no, gen_requirement, story_id=story_id)
+                            outline_result = _run_with_stream(
+                                "正在生成细纲...",
+                                generate_chapter_outline,
+                                project_name,
+                                chapter_no,
+                                gen_requirement,
+                                story_id=story_id,
+                            )
                             outline_text = outline_result.get("data", {}).get("chapter_outline", "")
                             if outline_text:
                                 st.session_state[chapter_outline_gen_key] = outline_text
@@ -3629,10 +3733,15 @@ def render_chapter_page(project_name: str):
                         st.warning("请先填写创作需求。")
                     else:
                         try:
-                            with st.status("正在完整执行..."):
-                                pipeline_result = pipeline_plan_write_review_update(
-                                    project_name, chapter_no, gen_requirement, word_count, story_id=story_id
-                                )
+                            pipeline_result = _run_with_stream(
+                                "正在完整执行...",
+                                pipeline_plan_write_review_update,
+                                project_name,
+                                chapter_no,
+                                gen_requirement,
+                                word_count,
+                                story_id=story_id,
+                            )
                             st.session_state[pipeline_result_key] = pipeline_result
                             chapter = pipeline_result.get("chapter", "") or pipeline_result.get("steps", {}).get("write_chapter", {}).get("data", {}).get("chapter", "")
                             if chapter:
@@ -3793,7 +3902,16 @@ def render_chapter_page(project_name: str):
         )
 
     if write_clicked:
-        result = write_chapter(project_name, chapter_no, chapter_outline, writing_guidance, word_count, story_id=story_id)
+        result = _run_with_stream(
+            "正在写正文...",
+            write_chapter,
+            project_name,
+            chapter_no,
+            chapter_outline,
+            writing_guidance,
+            word_count,
+            story_id=story_id,
+        )
         chapter = result.get("data", {}).get("chapter", "")
         st.session_state[chapter_step_key] = result
         st.session_state[chapter_text_key] = chapter
@@ -3802,21 +3920,39 @@ def render_chapter_page(project_name: str):
 
     if pipeline_clicked and has_outline:
         try:
-            with st.status("正在执行流水线..."):
+            stream_callback, complete_stream, fail_stream = _make_stream_preview("正在执行流水线...")
+            try:
                 steps_result = {}
-                write_result = write_chapter(project_name, chapter_no, chapter_outline, writing_guidance, word_count, story_id=story_id)
+                _safe_stream_emit(stream_callback, "\n\n## 正文\n\n")
+                write_result = write_chapter(
+                    project_name,
+                    chapter_no,
+                    chapter_outline,
+                    writing_guidance,
+                    word_count,
+                    story_id=story_id,
+                    stream_callback=stream_callback,
+                )
                 steps_result["write_chapter"] = write_result
                 chapter = write_result.get("data", {}).get("chapter", "")
                 if not chapter:
                     raise RuntimeError(write_result.get("error", "正文生成失败"))
 
-                review_result = review_chapter(project_name, chapter_no, chapter, story_id=story_id)
+                _safe_stream_emit(stream_callback, "\n\n## 审阅\n\n")
+                review_result = review_chapter(project_name, chapter_no, chapter, story_id=story_id, stream_callback=stream_callback)
                 steps_result["review_chapter"] = review_result
                 review_markdown = review_result.get("data", {}).get("review_markdown", "")
 
                 review_success = bool(review_result.get("success")) and review_result.get("status") not in {"failed", "rejected", "blocked"}
                 if review_success:
-                    memory_result = extract_setting_candidates_from_chapter(project_name, chapter_no, chapter, story_id=story_id)
+                    _safe_stream_emit(stream_callback, "\n\n## 设定提炼\n\n")
+                    memory_result = extract_setting_candidates_from_chapter(
+                        project_name,
+                        chapter_no,
+                        chapter,
+                        story_id=story_id,
+                        stream_callback=stream_callback,
+                    )
                 else:
                     memory_result = {
                         "step_name": "setting_extraction",
@@ -3825,6 +3961,10 @@ def render_chapter_page(project_name: str):
                         "warnings": ["章节审阅未通过或未完成，已跳过设定提炼。"],
                     }
                 steps_result["setting_extraction"] = memory_result
+                complete_stream("流水线执行完成。")
+            except Exception as exc:
+                fail_stream(f"流水线执行失败：{exc}")
+                raise
 
             st.session_state[chapter_text_key] = chapter
             st.session_state[chapter_text_editor_key] = chapter
@@ -3884,7 +4024,15 @@ def render_chapter_page(project_name: str):
         )
         if do_review and has_chapter:
             try:
-                result = review_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
+                result = _run_with_stream(
+                    "正在审阅正文...",
+                    review_chapter,
+                    project_name,
+                    chapter_no,
+                    chapter_text,
+                    story_id=story_id,
+                    preview_language="json",
+                )
                 st.session_state[review_inline_step_key] = result
                 st.session_state[review_markdown_key] = result.get("data", {}).get("review_markdown", "")
                 st.rerun()
@@ -3900,7 +4048,15 @@ def render_chapter_page(project_name: str):
         )
         if do_memory and has_chapter:
             try:
-                result = extract_setting_candidates_from_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
+                result = _run_with_stream(
+                    "正在提炼待确认设定...",
+                    extract_setting_candidates_from_chapter,
+                    project_name,
+                    chapter_no,
+                    chapter_text,
+                    story_id=story_id,
+                    preview_language="json",
+                )
                 st.session_state[setting_extraction_step_key] = result
                 queued_count = result.get("data", {}).get("queued_knowledge_count", 0)
                 render_step_status_message(result, f"已提炼 {queued_count} 条候选设定，等待确认后生效", "设定提炼失败：")
@@ -4762,7 +4918,14 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                     st.warning("请先描述这次想写什么。")
                 else:
                     try:
-                        result = discuss_creative_profile(project_name, user_idea, story_id=story_id)
+                        result = _run_with_stream(
+                            "正在讨论创作配置...",
+                            discuss_creative_profile,
+                            project_name,
+                            user_idea,
+                            story_id=story_id,
+                            preview_language="json",
+                        )
                         st.session_state[discussion_result_key] = result
                         st.session_state[discussion_messages_key] = []
                         assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、推荐配置方向和待确认问题，我们可以继续细化。"
@@ -4831,10 +4994,13 @@ def render_creative_profile_page(project_name: str, embedded: bool = False):
                         try:
                             _append_discussion_message(discussion_messages_key, "user", follow_up)
                             messages = st.session_state.get(discussion_messages_key, [])
-                            result = discuss_creative_profile_turn(
+                            result = _run_with_stream(
+                                "正在继续讨论创作配置...",
+                                discuss_creative_profile_turn,
                                 project_name, user_idea, messages,
                                 discussion_step.get("data", {}).get("discussion", {}),
                                 follow_up, story_id=story_id,
+                                preview_language="json",
                             )
                             st.session_state[discussion_result_key] = result
                             assistant_message = result.get("data", {}).get("assistant_message", "") or "已更新创作配置建议。"
@@ -5116,16 +5282,17 @@ def render_dynamic_generation_page(project_name: str):
                 }
                 if selected_quick_prompt_option_ids is not None:
                     writing_guidance["prompt_option_ids"] = selected_quick_prompt_option_ids
-                with st.spinner("正在生成..."):
-                    result = run_dynamic_generation_task(
-                        project_name,
-                        effective_chapter_no,
-                        requirement,
-                        word_count,
-                        workflow_depth,
-                        story_id=story_id,
-                        writing_guidance=writing_guidance,
-                    )
+                result = _run_with_stream(
+                    "正在生成...",
+                    run_dynamic_generation_task,
+                    project_name,
+                    effective_chapter_no,
+                    requirement,
+                    word_count,
+                    workflow_depth,
+                    story_id=story_id,
+                    writing_guidance=writing_guidance,
+                )
                 st.session_state["dynamic_generation_result"] = result
                 st.rerun()
             except Exception as exc:
@@ -7242,21 +7409,22 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             elif not quick_continue_high_ok:
                 st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
-                with st.spinner("正在继续处理批次..."):
-                    progress_callback = create_batch_progress_callback("批次自动处理")
-                    batch, quick_summary = run_long_reference_quick_process(
-                        project_name,
-                        batch,
-                        selected_indices[: int(quick_continue_limit)],
-                        enabled_categories=quick_continue_categories,
-                        extraction_mode=quick_continue_mode,
-                        extract_limit=int(quick_continue_limit),
-                        import_to_index=quick_continue_import,
-                        consolidate_after_extract=False,
-                        auto_confirm_safe_items=quick_continue_auto_confirm,
-                        custom_instructions=quick_continue_custom_instructions,
-                        progress_callback=progress_callback,
-                    )
+                progress_callback = create_batch_progress_callback("批次自动处理")
+                batch, quick_summary = _run_with_stream(
+                    "正在继续处理批次...",
+                    run_long_reference_quick_process,
+                    project_name,
+                    batch,
+                    selected_indices[: int(quick_continue_limit)],
+                    enabled_categories=quick_continue_categories,
+                    extraction_mode=quick_continue_mode,
+                    extract_limit=int(quick_continue_limit),
+                    import_to_index=quick_continue_import,
+                    consolidate_after_extract=False,
+                    auto_confirm_safe_items=quick_continue_auto_confirm,
+                    custom_instructions=quick_continue_custom_instructions,
+                    progress_callback=progress_callback,
+                )
                 st.session_state[f"batch_quick_result_{selected_batch_id}"] = quick_summary
                 st.success(
                     f"已处理：导入 {quick_summary.get('imported_count', 0)} 段，"
@@ -7344,16 +7512,17 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
                 elif not enabled_categories:
                     st.error("请至少选择一个提取分类。")
                 else:
-                    with st.spinner("正在提取所选片段..."):
-                        progress_callback = create_batch_progress_callback("批量提取")
-                        _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
-                            project_name,
-                            batch,
-                            target_indices,
-                            enabled_categories,
-                            extraction_mode=extraction_mode,
-                            progress_callback=progress_callback,
-                        )
+                    progress_callback = create_batch_progress_callback("批量提取")
+                    _, processed, queued_total, failures = _run_with_stream(
+                        "正在提取所选片段...",
+                        extract_long_reference_segments_to_queue,
+                        project_name,
+                        batch,
+                        target_indices,
+                        enabled_categories,
+                        extraction_mode=extraction_mode,
+                        progress_callback=progress_callback,
+                    )
                     st.session_state[f"batch_manual_extract_result_{selected_batch_id}"] = {
                         "action": "提取所选未提取片段",
                         "processed": processed,
@@ -7372,16 +7541,17 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             elif not enabled_categories:
                 st.error("请至少选择一个提取分类。")
             else:
-                with st.spinner("正在重试失败片段..."):
-                    progress_callback = create_batch_progress_callback("重试提取")
-                    _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
-                        project_name,
-                        batch,
-                        target_indices,
-                        enabled_categories,
-                        extraction_mode=extraction_mode,
-                        progress_callback=progress_callback,
-                    )
+                progress_callback = create_batch_progress_callback("重试提取")
+                _, processed, queued_total, failures = _run_with_stream(
+                    "正在重试失败片段...",
+                    extract_long_reference_segments_to_queue,
+                    project_name,
+                    batch,
+                    target_indices,
+                    enabled_categories,
+                    extraction_mode=extraction_mode,
+                    progress_callback=progress_callback,
+                )
                 st.session_state[f"batch_manual_extract_result_{selected_batch_id}"] = {
                     "action": "重试失败片段",
                     "processed": processed,
@@ -7400,16 +7570,17 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             elif not enabled_categories:
                 st.error("请至少选择一个提取分类。")
             else:
-                with st.spinner("正在重新提取片段..."):
-                    progress_callback = create_batch_progress_callback("重新提取")
-                    _, processed, queued_total, failures = extract_long_reference_segments_to_queue(
-                        project_name,
-                        batch,
-                        target_indices,
-                        enabled_categories,
-                        extraction_mode=extraction_mode,
-                        progress_callback=progress_callback,
-                    )
+                progress_callback = create_batch_progress_callback("重新提取")
+                _, processed, queued_total, failures = _run_with_stream(
+                    "正在重新提取片段...",
+                    extract_long_reference_segments_to_queue,
+                    project_name,
+                    batch,
+                    target_indices,
+                    enabled_categories,
+                    extraction_mode=extraction_mode,
+                    progress_callback=progress_callback,
+                )
                 st.session_state[f"batch_manual_extract_result_{selected_batch_id}"] = {
                     "action": "重新提取已提取片段",
                     "processed": processed,
@@ -7576,54 +7747,58 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             elif not batch_plan_high_ok:
                 st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
-                with st.spinner("正在按专家计划提取资料..."):
-                    progress_callback = create_batch_progress_callback("多专家提取计划")
-                    updated_batch, plan_summary = run_long_reference_extraction_plan(
+                progress_callback = create_batch_progress_callback("多专家提取计划")
+                updated_batch, plan_summary = _run_with_stream(
+                    "正在按专家计划提取资料...",
+                    run_long_reference_extraction_plan,
+                    project_name,
+                    batch,
+                    selected_indices,
+                    plan_steps,
+                    max_segments=int(plan_limit),
+                    reextract_completed=plan_reextract,
+                    progress_callback=progress_callback,
+                )
+                auto_result = {}
+                if auto_consolidate and plan_summary.get("queued_total", 0):
+                    auto_result = _run_with_stream(
+                        "正在自动整理散知识...",
+                        consolidate_batch_pending_items,
                         project_name,
-                        batch,
-                        selected_indices,
-                        plan_steps,
-                        max_segments=int(plan_limit),
-                        reextract_completed=plan_reextract,
-                        progress_callback=progress_callback,
+                        updated_batch,
+                        categories=auto_consolidation_categories,
+                        consolidation_mode=auto_consolidation_mode,
+                        limit=int(auto_consolidation_limit),
+                        preview_language="json",
                     )
-                    auto_result = {}
-                    if auto_consolidate and plan_summary.get("queued_total", 0):
-                        auto_result = consolidate_batch_pending_items(
-                            project_name,
-                            updated_batch,
-                            categories=auto_consolidation_categories,
-                            consolidation_mode=auto_consolidation_mode,
-                            limit=int(auto_consolidation_limit),
-                        )
-                        plan_summary["auto_consolidation"] = {
-                            "enabled": True,
-                            "success": auto_result.get("success", False),
-                            "message": auto_result.get("message", ""),
-                            "source_count": auto_result.get("source_count", 0),
-                            "queued_count": auto_result.get("queued_count", 0),
-                            "mode": auto_consolidation_mode,
-                            "categories": auto_consolidation_categories,
-                        }
-                        if auto_result.get("result"):
-                            st.session_state[f"batch_consolidation_result_{selected_batch_id}"] = auto_result.get("result")
-                    elif auto_consolidate:
-                        plan_summary["auto_consolidation"] = {
-                            "enabled": True,
-                            "success": False,
-                            "message": "本次计划没有新增待确认知识，已跳过自动整理。",
-                            "source_count": 0,
-                            "queued_count": 0,
-                            "mode": auto_consolidation_mode,
-                            "categories": auto_consolidation_categories,
-                        }
-                    if auto_consolidate:
-                        history = updated_batch.get("extraction_plan_runs", [])
-                        if isinstance(history, list) and history:
-                            history[-1] = plan_summary
-                            updated_batch["extraction_plan_runs"] = history
-                        updated_batch["last_extraction_plan"] = plan_summary
-                        save_long_reference_batch(project_name, updated_batch)
+                    plan_summary["auto_consolidation"] = {
+                        "enabled": True,
+                        "success": auto_result.get("success", False),
+                        "message": auto_result.get("message", ""),
+                        "source_count": auto_result.get("source_count", 0),
+                        "queued_count": auto_result.get("queued_count", 0),
+                        "mode": auto_consolidation_mode,
+                        "categories": auto_consolidation_categories,
+                    }
+                    if auto_result.get("result"):
+                        st.session_state[f"batch_consolidation_result_{selected_batch_id}"] = auto_result.get("result")
+                elif auto_consolidate:
+                    plan_summary["auto_consolidation"] = {
+                        "enabled": True,
+                        "success": False,
+                        "message": "本次计划没有新增待确认知识，已跳过自动整理。",
+                        "source_count": 0,
+                        "queued_count": 0,
+                        "mode": auto_consolidation_mode,
+                        "categories": auto_consolidation_categories,
+                    }
+                if auto_consolidate:
+                    history = updated_batch.get("extraction_plan_runs", [])
+                    if isinstance(history, list) and history:
+                        history[-1] = plan_summary
+                        updated_batch["extraction_plan_runs"] = history
+                    updated_batch["last_extraction_plan"] = plan_summary
+                    save_long_reference_batch(project_name, updated_batch)
                 st.session_state[f"batch_extract_plan_result_{selected_batch_id}"] = plan_summary
                 if not plan_summary.get("segment_indices"):
                     st.warning("没有可执行的目标片段。若要重跑已提取片段，请勾选“允许重跑已提取片段”。")
@@ -7700,12 +7875,15 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
         )
         if st.button("整理当前批次待确认知识", key=f"batch_consolidate_pending_{selected_batch_id}", use_container_width=True):
             try:
-                consolidation_summary = consolidate_batch_pending_items(
+                consolidation_summary = _run_with_stream(
+                    "正在整理当前批次待确认知识...",
+                    consolidate_batch_pending_items,
                     project_name,
                     batch,
                     categories=consolidation_categories,
                     consolidation_mode=consolidation_mode,
                     limit=int(consolidation_limit),
+                    preview_language="json",
                 )
                 if consolidation_summary.get("result"):
                     st.session_state[f"batch_consolidation_result_{selected_batch_id}"] = consolidation_summary.get("result")
@@ -8027,22 +8205,23 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             elif not quick_quick_high_ok:
                 st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
-                with st.spinner("正在保存批次、导入索引、提取并自动审核低风险知识..."):
-                    progress_callback = create_batch_progress_callback("自动处理")
-                    batch = get_or_create_preview_batch()
-                    updated_batch, quick_summary = run_long_reference_quick_process(
-                        project_name,
-                        batch,
-                        selected_indices[: int(quick_extract_limit)],
-                        enabled_categories=shared_categories,
-                        extraction_mode=shared_extraction_mode,
-                        extract_limit=int(quick_extract_limit),
-                        import_to_index=quick_import_to_index,
-                        consolidate_after_extract=quick_consolidate,
-                        auto_confirm_safe_items=quick_auto_confirm,
-                        custom_instructions=shared_custom_instructions,
-                        progress_callback=progress_callback,
-                    )
+                progress_callback = create_batch_progress_callback("自动处理")
+                batch = get_or_create_preview_batch()
+                updated_batch, quick_summary = _run_with_stream(
+                    "正在保存批次、导入索引、提取并自动审核低风险知识...",
+                    run_long_reference_quick_process,
+                    project_name,
+                    batch,
+                    selected_indices[: int(quick_extract_limit)],
+                    enabled_categories=shared_categories,
+                    extraction_mode=shared_extraction_mode,
+                    extract_limit=int(quick_extract_limit),
+                    import_to_index=quick_import_to_index,
+                    consolidate_after_extract=quick_consolidate,
+                    auto_confirm_safe_items=quick_auto_confirm,
+                    custom_instructions=shared_custom_instructions,
+                    progress_callback=progress_callback,
+                )
                 st.session_state["long_reference_quick_result"] = quick_summary
                 st.success(
                     f"自动处理完成：导入 {quick_summary.get('imported_count', 0)} 段，"
@@ -8115,30 +8294,34 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
                 elif not manual_extract_high_ok:
                     st.error("处理数量超过 50 段，请先勾选确认框。")
                 else:
-                    with st.spinner("正在分批提取结构化知识..."):
-                        progress_callback = create_batch_progress_callback("手动提取结构化知识")
-                        batch = get_or_create_preview_batch()
-                        _, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
-                            project_name,
-                            batch,
-                            selected_indices[: int(batch_limit)],
-                            shared_categories,
-                            extraction_mode=shared_extraction_mode,
-                            custom_instructions=shared_custom_instructions,
-                            progress_callback=progress_callback,
-                        )
+                    progress_callback = create_batch_progress_callback("手动提取结构化知识")
+                    batch = get_or_create_preview_batch()
+                    _, processed, queued_total, failed_titles = _run_with_stream(
+                        "正在分批提取结构化知识...",
+                        extract_long_reference_segments_to_queue,
+                        project_name,
+                        batch,
+                        selected_indices[: int(batch_limit)],
+                        shared_categories,
+                        extraction_mode=shared_extraction_mode,
+                        custom_instructions=shared_custom_instructions,
+                        progress_callback=progress_callback,
+                    )
                     st.session_state["long_reference_manual_extract_result"] = {
                         "processed": processed,
                         "queued_total": queued_total,
                         "failed_titles": failed_titles,
                     }
                     if manual_consolidate and queued_total:
-                        consolidation_summary = consolidate_batch_pending_items(
+                        consolidation_summary = _run_with_stream(
+                            "正在整理散知识...",
+                            consolidate_batch_pending_items,
                             project_name,
                             batch,
                             categories=shared_categories,
                             consolidation_mode="balanced",
                             limit=max(20, min(120, queued_total)),
+                            preview_language="json",
                         )
                         st.success(
                             f"追加整理：合并 {consolidation_summary.get('source_count', 0)} 条为 "
@@ -8540,7 +8723,17 @@ def render_volume_outline_page(project_name: str):
     col_action_1, col_action_2 = st.columns(2)
     if col_action_1.button("开始讨论分卷方向", key=scoped_widget_key("start_volume_discussion", *volume_scope)):
         try:
-            result = discuss_volume(project_name, volume_no, title, summary, requirement, story_id=story_id)
+            result = _run_with_stream(
+                "正在讨论分卷方向...",
+                discuss_volume,
+                project_name,
+                volume_no,
+                title,
+                summary,
+                requirement,
+                story_id=story_id,
+                preview_language="json",
+            )
             st.session_state[result_key] = result
             st.session_state[messages_key] = []
             assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本卷的定位、可选结构和待确认问题，我们可以继续细化。"
@@ -8597,7 +8790,9 @@ def render_volume_outline_page(project_name: str):
                 try:
                     _append_discussion_message(messages_key, "user", follow_up)
                     messages = st.session_state.get(messages_key, [])
-                    result = discuss_volume_turn(
+                    result = _run_with_stream(
+                        "正在继续讨论分卷...",
+                        discuss_volume_turn,
                         project_name,
                         volume_no,
                         title,
@@ -8607,6 +8802,7 @@ def render_volume_outline_page(project_name: str):
                         discussion_step.get("data", {}).get("discussion", {}),
                         follow_up,
                         story_id=story_id,
+                        preview_language="json",
                     )
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本卷讨论结论。"
@@ -8626,7 +8822,17 @@ def render_volume_outline_page(project_name: str):
 
     if st.button("生成分卷大纲", key=scoped_widget_key("generate_volume_outline", *volume_scope)):
         try:
-            result = generate_volume_outline(project_name, volume_no, title, summary, requirement, status=status, story_id=story_id)
+            result = _run_with_stream(
+                "正在生成分卷大纲...",
+                generate_volume_outline,
+                project_name,
+                volume_no,
+                title,
+                summary,
+                requirement,
+                status=status,
+                story_id=story_id,
+            )
             outline_value = result.get("data", {}).get("volume_outline", "")
             st.session_state[volume_outline_step_key] = result
             st.session_state[volume_outline_text_key] = outline_value
@@ -8720,7 +8926,9 @@ def render_arc_outline_page(project_name: str):
     col_action_1, col_action_2 = st.columns(2)
     if col_action_1.button("开始讨论剧情段方向", key=scoped_widget_key("start_arc_discussion", *arc_scope)):
         try:
-            result = discuss_arc(
+            result = _run_with_stream(
+                "正在讨论剧情段方向...",
+                discuss_arc,
                 project_name,
                 arc_no,
                 volume_no or None,
@@ -8730,6 +8938,7 @@ def render_arc_outline_page(project_name: str):
                 target_word_count_range,
                 requirement,
                 story_id=story_id,
+                preview_language="json",
             )
             st.session_state[result_key] = result
             st.session_state[messages_key] = []
@@ -8787,7 +8996,9 @@ def render_arc_outline_page(project_name: str):
                 try:
                     _append_discussion_message(messages_key, "user", follow_up)
                     messages = st.session_state.get(messages_key, [])
-                    result = discuss_arc_turn(
+                    result = _run_with_stream(
+                        "正在继续讨论剧情段...",
+                        discuss_arc_turn,
                         project_name,
                         arc_no,
                         volume_no or None,
@@ -8800,6 +9011,7 @@ def render_arc_outline_page(project_name: str):
                         discussion_step.get("data", {}).get("discussion", {}),
                         follow_up,
                         story_id=story_id,
+                        preview_language="json",
                     )
                     st.session_state[result_key] = result
                     assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了剧情段讨论结论。"
@@ -8828,7 +9040,9 @@ def render_arc_outline_page(project_name: str):
 
     if st.button("生成剧情段大纲", key=scoped_widget_key("generate_arc_outline", *arc_scope)):
         try:
-            result = generate_arc_outline(
+            result = _run_with_stream(
+                "正在生成剧情段大纲...",
+                generate_arc_outline,
                 project_name,
                 arc_no,
                 volume_no or None,
@@ -8930,13 +9144,16 @@ def render_arc_outline_page(project_name: str):
     plan_step = st.session_state.get(arc_chapter_plan_step_key, {})
     if st.button("生成剧情段章节分配计划", key=scoped_widget_key("generate_arc_chapter_plan", *arc_scope)):
         try:
-            result = generate_arc_chapter_plan(
+            result = _run_with_stream(
+                "正在生成剧情段章节分配计划...",
+                generate_arc_chapter_plan,
                 project_name,
                 arc_no,
                 int(start_chapter_no),
                 int(plan_chapter_count),
                 plan_requirement,
                 story_id=story_id,
+                preview_language="json",
             )
             st.session_state[arc_chapter_plan_step_key] = result
             st.success("章节分配计划已生成并保存。")
@@ -8955,8 +9172,8 @@ def render_arc_outline_page(project_name: str):
     render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{story_id}:{arc_no}"))
 
 
-def run_comprehensive_chapter_evaluation(project_name: str, chapter_no: int, chapter_text: str, story_id: str = "default") -> dict:
-    return evaluate_chapter_comprehensive(project_name, chapter_no, chapter_text, story_id=story_id)
+def run_comprehensive_chapter_evaluation(project_name: str, chapter_no: int, chapter_text: str, story_id: str = "default", stream_callback=None) -> dict:
+    return evaluate_chapter_comprehensive(project_name, chapter_no, chapter_text, story_id=story_id, stream_callback=stream_callback)
 
 
 def render_evaluation_page(project_name: str):
@@ -8989,8 +9206,15 @@ def render_evaluation_page(project_name: str):
 
     if st.button("生成综合章节评价", key=scoped_widget_key("generate_evaluation", *evaluation_scope)):
         try:
-            with st.spinner("正在生成章节综合评价..."):
-                result = run_comprehensive_chapter_evaluation(project_name, chapter_no, chapter_text, story_id=story_id)
+            result = _run_with_stream(
+                "正在生成章节综合评价...",
+                run_comprehensive_chapter_evaluation,
+                project_name,
+                chapter_no,
+                chapter_text,
+                story_id=story_id,
+                preview_language="json",
+            )
             report = result.get("data", {}).get("report_markdown", "")
             st.session_state[step_key] = result
             st.session_state[report_key] = report
@@ -9414,7 +9638,14 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                         st.error("请先粘贴资料正文。")
                     else:
                         try:
-                            st.session_state["organized_reference_result"] = organize_reference_text(project_name, paste_title, paste_text)
+                            st.session_state["organized_reference_result"] = _run_with_stream(
+                                "正在整理资料...",
+                                organize_reference_text,
+                                project_name,
+                                paste_title,
+                                paste_text,
+                                preview_language="json",
+                            )
                         except Exception as exc:
                             st.error(f"整理失败：{exc}")
 
@@ -9491,7 +9722,9 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                         st.error("请至少选择一个提取分类。")
                     else:
                         try:
-                            extraction_summary = extract_pasted_reference_to_pending(
+                            extraction_summary = _run_with_stream(
+                                "正在提取结构化知识...",
+                                extract_pasted_reference_to_pending,
                                 project_name,
                                 title=knowledge_title,
                                 text=knowledge_text,
@@ -9502,6 +9735,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
                                 authority=knowledge_authority,
                                 origin=knowledge_origin,
                                 auto_confirm_safe_items=run_auto,
+                                preview_language="json",
                             )
                             result = extraction_summary.get("result", {})
                             st.session_state["knowledge_extraction_result"] = result
