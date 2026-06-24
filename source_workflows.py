@@ -57,6 +57,8 @@ def _safe_stream_emit(stream_callback, text: str) -> None:
     try:
         stream_callback(text)
     except Exception as exc:
+        if getattr(exc, "cancel_generation", False):
+            raise
         LOGGER.warning("Stream callback failed while emitting workflow marker: %s", exc, exc_info=True)
 
 

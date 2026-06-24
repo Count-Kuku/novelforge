@@ -181,6 +181,12 @@ from ui.navigation import (
     PAGE_DESCRIPTIONS,
     page_groups_for_story as navigation_page_groups_for_story,
 )
+from ui.streaming import (
+    GenerationCancelled,
+    make_stream_preview as _make_stream_preview,
+    run_with_stream as _run_with_stream,
+    safe_stream_emit as _safe_stream_emit,
+)
 from retrieval import RETRIEVAL_TASK_PROFILES, debug_retrieve_context, inspect_retrieval_health, rebuild_retrieval_assets, load_retrieval_index, retrieve_context
 from extraction_presets import (
     KNOWLEDGE_CONSOLIDATION_MODE_LABELS,
@@ -1695,59 +1701,6 @@ def _render_discussion_summary(discussion_result: dict, empty_message: str):
     st.markdown(report_markdown)
     render_step_validation(discussion_result)
     render_step_json_expander("讨论结构化数据", discussion)
-
-
-def _render_stream_preview(preview_slot, text: str, preview_language: str | None = None):
-    preview_text = text or "等待模型开始输出..."
-    if preview_language:
-        preview_slot.code(preview_text, language=preview_language)
-    else:
-        preview_slot.markdown(preview_text)
-
-
-def _make_stream_preview(label: str, preview_language: str | None = None):
-    status = st.status(label, expanded=True)
-    with status:
-        preview_slot = st.empty()
-        _render_stream_preview(preview_slot, "", preview_language)
-    state = {"text": ""}
-
-    def stream_callback(delta: str):
-        if not delta:
-            return
-        state["text"] += str(delta)
-        cursor = "\n\n▌" if preview_language else "▌"
-        _render_stream_preview(preview_slot, f"{state['text']}{cursor}", preview_language)
-
-    def complete(message: str = "生成完成。"):
-        _render_stream_preview(preview_slot, state["text"], preview_language)
-        status.update(label=message, state="complete", expanded=False)
-
-    def fail(message: str):
-        _render_stream_preview(preview_slot, state["text"], preview_language)
-        status.update(label=message, state="error", expanded=True)
-
-    return stream_callback, complete, fail
-
-
-def _safe_stream_emit(stream_callback, text: str):
-    if not stream_callback:
-        return
-    try:
-        stream_callback(text)
-    except Exception as exc:
-        APP_LOGGER.warning("Stream callback failed while emitting UI marker: %s", exc, exc_info=True)
-
-
-def _run_with_stream(label: str, func, *args, preview_language: str | None = None, **kwargs):
-    stream_callback, complete, fail = _make_stream_preview(label, preview_language=preview_language)
-    try:
-        result = func(*args, stream_callback=stream_callback, **kwargs)
-        complete()
-        return result
-    except Exception as exc:
-        fail(f"{label}失败：{exc}")
-        raise
 
 
 ASSET_GUARDRAIL_LEVEL_LABELS = {
@@ -3920,7 +3873,7 @@ def render_chapter_page(project_name: str):
 
     if pipeline_clicked and has_outline:
         try:
-            stream_callback, complete_stream, fail_stream = _make_stream_preview("正在执行流水线...")
+            stream_callback, complete_stream, cancel_stream, fail_stream = _make_stream_preview("正在执行流水线...")
             try:
                 steps_result = {}
                 _safe_stream_emit(stream_callback, "\n\n## 正文\n\n")
@@ -3962,6 +3915,9 @@ def render_chapter_page(project_name: str):
                     }
                 steps_result["setting_extraction"] = memory_result
                 complete_stream("流水线执行完成。")
+            except GenerationCancelled:
+                cancel_stream()
+                st.stop()
             except Exception as exc:
                 fail_stream(f"流水线执行失败：{exc}")
                 raise

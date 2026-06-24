@@ -116,6 +116,8 @@ def _emit_stream_delta(stream_callback: Callable[[str], None], content: str) -> 
     try:
         stream_callback(content)
     except Exception as exc:
+        if getattr(exc, "cancel_generation", False):
+            raise
         LOGGER.warning("Stream callback failed; model request will continue: %s", exc, exc_info=True)
 
 
@@ -166,6 +168,8 @@ def call_llm(
             temperature=temperature,
         )
     except Exception as exc:
+        if getattr(exc, "cancel_generation", False):
+            raise
         raise RuntimeError(_format_llm_error(exc)) from exc
 
     content = response.choices[0].message.content or ""
