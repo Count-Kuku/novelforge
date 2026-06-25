@@ -6,7 +6,7 @@ For user-facing feature introductions, setup steps, and workflow guidance, see `
 
 For the planned SQLite-first long-term storage architecture, see `storage_architecture.md`.
 
-Current release marker: `v0.5.0`
+Current release marker: `v0.5.1`
 
 ## Project Overview
 
@@ -650,7 +650,7 @@ Responsibilities:
 * Install `pyinstaller` into the local `.venv`
 * Build `NovelForge.exe` from `launcher.py`
 * Assemble a portable release directory
-* Copy the runtime, entrypoint, split workflow modules, `ui/` page package, development docs, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
+* Copy the runtime, entrypoint, split workflow modules, `ui/` page package, `storage/` package, verification/maintenance tools, development docs, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
 * Copy optional `.streamlit` runtime configuration when present
 * Save a build transcript under `release/` for local diagnostics
 * Produce a zip archive suitable for GitHub Releases

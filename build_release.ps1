@@ -101,6 +101,8 @@ foreach ($relativePath in $filesToCopy) {
 
 $directoriesToCopy = @(
     "docs",
+    "storage",
+    "tools",
     "ui"
 )
 

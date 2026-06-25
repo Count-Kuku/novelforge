@@ -2,7 +2,7 @@
 
 # NovelForge
 
-当前版本：`v0.5.0`
+当前版本：`v0.5.1`
 
 NovelForge 是一个面向长篇小说创作的 LLM 写作工作台，核心围绕持久化项目存储、检索增强、结构化工作流，以及未来的多 Agent 协作能力构建。
 
@@ -368,7 +368,7 @@ python -m venv .venv
 2. 在 PowerShell 中运行构建脚本：
 
 ```powershell
-.\build_release.ps1 -Version v0.5.0
+.\build_release.ps1 -Version v0.5.1
 ```
 
 3. 脚本会自动：
@@ -377,7 +377,7 @@ python -m venv .venv
 - 使用仓库内的 `NovelForge.spec` 作为 PyInstaller 构建配置
 - 根据 `launcher.py` 构建 `NovelForge.exe`
 - 组装 `release/NovelForge-Portable/`
-- 生成 `release/NovelForge-windows-portable-v0.5.0.zip`
+- 生成 `release/NovelForge-windows-portable-v0.5.1.zip`
 - 在 `release/` 下保存本地构建日志
 
 ### 使用说明
