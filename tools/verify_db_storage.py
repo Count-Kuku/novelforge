@@ -1,22 +1,31 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.verify_utils import isolated_workspace
 
 
 def _run(script_name: str) -> dict:
     command = [sys.executable, str(ROOT / "tools" / script_name)]
-    completed = subprocess.run(
-        command,
-        cwd=str(ROOT),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(ROOT) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    with isolated_workspace(f"novelforge_{Path(script_name).stem}_") as workspace:
+        completed = subprocess.run(
+            command,
+            cwd=str(workspace),
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
     payload: dict
     try:
         payload = json.loads(completed.stdout)

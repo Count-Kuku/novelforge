@@ -9,7 +9,7 @@ from ui.chapter_outline_page import render_chapter_outline_page
 from ui.evaluation import render_evaluation_page
 from ui.dynamic_generation import render_dynamic_generation_page
 from ui.discussion_assets_panel import render_discussion_asset_candidates
-from ui.creative_profile_page import render_creative_profile_page, render_creative_task_wizard
+from ui.creative_profile_page import render_creative_profile_page
 from ui.knowledge_management import (
     render_auto_review_policy_panel,
     render_auto_review_runs_panel,

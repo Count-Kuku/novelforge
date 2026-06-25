@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 ADVANCED_PAGE_GROUPS = {
-    "工作台": ["项目总览", "模型配置", "生成规则", "提示词选项", "资源浏览器"],
+    "工作台": ["项目总览", "资源浏览器"],
     "资料": ["资料导入", "核心设定", "检索中心"],
     "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
-    "写作": ["快速生成", "正文生成", "章节评价"],
+    "写作": ["正文生成", "快速生成", "章节评价"],
+    "配置": ["模型配置", "生成规则", "提示词选项"],
 }
 
 PAGE_DESCRIPTIONS = {
@@ -41,7 +42,7 @@ def page_groups_for_story(
     planning_pages: list[str],
 ) -> dict[str, list[str]]:
     if not project_name:
-        return {"设置": ["模型配置"]}
+        return {"配置": ["模型配置"]}
 
     groups = {group: list(pages) for group, pages in ADVANCED_PAGE_GROUPS.items()}
     groups["规划"] = list(planning_pages)

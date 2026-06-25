@@ -24,6 +24,7 @@ from ui.discussion import (
     _render_discussion_chat,
     _render_discussion_summary,
 )
+from ui.layout import render_section_heading
 from ui.prompt_option_tools import _render_prompt_option_capability_tools
 from ui.step_views import render_step_retrieval, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
@@ -159,7 +160,7 @@ def _render_outline_prompt_options(project_name: str, story_id: str) -> None:
 
 def _render_outline_generation(project_name: str, story_id: str, user_idea: str) -> dict:
     step_result = st.session_state.get("outline_step", {})
-    if st.button("生成全书大纲"):
+    if st.button("生成全书大纲", type="primary", use_container_width=True):
         result = _run_with_stream(
             "正在生成全书大纲...",
             generate_outline,
@@ -180,20 +181,23 @@ def _render_outline_editor(project_name: str, story_id: str, existing_outline: s
         height=500
     )
 
-    if st.button("保存大纲"):
+    if st.button("保存大纲", use_container_width=True):
         save_outline(project_name, outline_text, story_id=story_id)
         st.success("大纲已保存")
 
 
 def render_outline_page(project_name: str, *, render_discussion_asset_candidates):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("全书大纲")
 
     existing_outline = load_outline(project_name, story_id=story_id)
-    user_idea = st.text_area("你的小说想法", height=200)
+    render_section_heading("小说想法", "先把作品方向放在这里，后续讨论和正式大纲都会围绕这段输入。")
+    with st.container(border=True):
+        user_idea = st.text_area("你的小说想法", height=200)
     discussion_context = _prepare_outline_discussion_context(project_name, story_id)
+    render_section_heading("讨论与批准", "先把方向聊清楚，再批准可复用的讨论工件。")
     _render_outline_discussion_area(project_name, story_id, user_idea, discussion_context, render_discussion_asset_candidates)
     _render_outline_prompt_options(project_name, story_id)
+    render_section_heading("生成与编辑", "正式生成会写入下方编辑区，你仍可以手动修改后再保存。")
     step_result = _render_outline_generation(project_name, story_id, user_idea)
     _render_outline_editor(project_name, story_id, existing_outline)
     render_step_validation(step_result)

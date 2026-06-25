@@ -36,16 +36,17 @@ from ui.discussion import (
     _render_discussion_chat,
     _render_discussion_summary,
 )
+from ui.layout import render_section_heading
 from ui.prompt_option_tools import _render_prompt_option_capability_tools
 from ui.step_views import render_step_retrieval, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
 
 
-def _render_chapter_volume_selector(project_name: str, story_id: str, chapter_scope, outline_metadata):
+def _render_chapter_volume_selector(project_name: str, story_id: str, chapter_scope, outline_metadata, container=st):
     volumes = list_volumes(project_name, story_id=story_id)
     volume_options = [0] + [int(item.get("volume_no", 0)) for item in volumes]
     default_volume = int(outline_metadata.get("volume_no") or 0)
-    volume_no = st.selectbox(
+    volume_no = container.selectbox(
         "所属分卷",
         options=volume_options,
         index=volume_options.index(default_volume) if default_volume in volume_options else 0,
@@ -55,18 +56,18 @@ def _render_chapter_volume_selector(project_name: str, story_id: str, chapter_sc
     if volume_no:
         volume_meta = load_volume_metadata(project_name, volume_no, story_id=story_id)
         volume_discussion_artifact = load_volume_discussion_artifact(project_name, volume_no, story_id=story_id)
-        st.caption(f"当前分卷：第 {volume_no} 卷 / {volume_meta.get('title', '') or '未命名分卷'}")
+        container.caption(f"当前分卷：第 {volume_no} 卷 / {volume_meta.get('title', '') or '未命名分卷'}")
     else:
         volume_meta = {}
         volume_discussion_artifact = {}
     return volume_no, volume_meta, volume_discussion_artifact
 
 
-def _render_chapter_arc_selector(project_name: str, story_id: str, chapter_scope, outline_metadata, volume_no: int):
+def _render_chapter_arc_selector(project_name: str, story_id: str, chapter_scope, outline_metadata, volume_no: int, container=st):
     arcs = list_arcs(project_name, volume_no=volume_no or None, story_id=story_id)
     arc_options = [0] + [int(item.get("arc_no", 0)) for item in arcs]
     default_arc = int(outline_metadata.get("arc_no") or 0)
-    arc_no = st.selectbox(
+    arc_no = container.selectbox(
         "所属剧情段",
         options=arc_options,
         index=arc_options.index(default_arc) if default_arc in arc_options else 0,
@@ -76,7 +77,7 @@ def _render_chapter_arc_selector(project_name: str, story_id: str, chapter_scope
     if arc_no:
         arc_meta = load_arc_metadata(project_name, arc_no, story_id=story_id)
         arc_discussion_artifact = load_arc_discussion_artifact(project_name, arc_no, story_id=story_id)
-        st.caption(f"当前剧情段：剧情段 {arc_no:03d} / {arc_meta.get('title', '') or '未命名剧情段'}")
+        container.caption(f"当前剧情段：剧情段 {arc_no:03d} / {arc_meta.get('title', '') or '未命名剧情段'}")
     else:
         arc_meta = {}
         arc_discussion_artifact = {}
@@ -103,7 +104,8 @@ def _render_chapter_context_summaries(volume_meta: dict, arc_meta: dict) -> None
 
 
 def _prepare_chapter_outline_context(project_name: str, story_id: str):
-    chapter_no = st.number_input(
+    meta_col_a, meta_col_b, meta_col_c = st.columns(3)
+    chapter_no = meta_col_a.number_input(
         "章节编号",
         min_value=1,
         value=1,
@@ -113,10 +115,10 @@ def _prepare_chapter_outline_context(project_name: str, story_id: str):
     chapter_scope = (project_name, story_id, chapter_no)
     outline_metadata = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
     volume_no, volume_meta, volume_discussion_artifact = _render_chapter_volume_selector(
-        project_name, story_id, chapter_scope, outline_metadata
+        project_name, story_id, chapter_scope, outline_metadata, meta_col_b
     )
     arc_no, arc_meta, arc_discussion_artifact = _render_chapter_arc_selector(
-        project_name, story_id, chapter_scope, outline_metadata, volume_no
+        project_name, story_id, chapter_scope, outline_metadata, volume_no, meta_col_c
     )
     _render_chapter_hierarchy(volume_no, arc_no, chapter_no)
     _render_chapter_context_summaries(volume_meta, arc_meta)
@@ -364,7 +366,7 @@ def _render_chapter_outline_generation(
     discussion_context,
 ) -> dict:
     step_result = st.session_state.get(context["step_key"], {})
-    if st.button("生成章节细纲", key=scoped_widget_key("generate_chapter_outline", *context["chapter_scope"])):
+    if st.button("生成章节细纲", key=scoped_widget_key("generate_chapter_outline", *context["chapter_scope"]), type="primary", use_container_width=True):
         if not _generation_blocked_by_approval(approval_required, context, discussion_context):
             step_result = _run_chapter_outline_generation(project_name, story_id, context, requirement)
     return step_result
@@ -378,7 +380,7 @@ def _render_chapter_outline_editor(project_name: str, story_id: str, context) ->
         key=context["editor_key"],
     )
 
-    if st.button("保存章节细纲", key=scoped_widget_key("save_chapter_outline", *context["chapter_scope"])):
+    if st.button("保存章节细纲", key=scoped_widget_key("save_chapter_outline", *context["chapter_scope"]), use_container_width=True):
         save_chapter_outline(project_name, context["chapter_no"], outline_text, story_id=story_id)
         save_chapter_outline_metadata(
             project_name,
@@ -391,21 +393,24 @@ def _render_chapter_outline_editor(project_name: str, story_id: str, context) ->
 
 def render_chapter_outline_page(project_name: str, *, render_discussion_asset_candidates):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("章节细纲")
 
+    render_section_heading("章节定位", "先确定章节编号和所属层级，细纲会按这个位置读写和保存。")
     context = _prepare_chapter_outline_context(project_name, story_id)
+    render_section_heading("生成约束", "可选择必须先批准讨论，再正式生成本章细纲。")
     approval_required = st.checkbox(
         "要求已批准的章节/卷/剧情段讨论后再生成章节细纲",
         value=False,
         key=scoped_widget_key("chapter_outline_require_approval", *context["chapter_scope"]),
     )
     _render_approved_planning_artifacts(project_name, story_id, context)
-    requirement = st.text_area(
-        "本章要求",
-        height=200,
-        key=scoped_widget_key("chapter_outline_requirement", *context["chapter_scope"]),
-    )
+    with st.container(border=True):
+        requirement = st.text_area(
+            "本章要求",
+            height=200,
+            key=scoped_widget_key("chapter_outline_requirement", *context["chapter_scope"]),
+        )
     discussion_context = _prepare_chapter_discussion_context(project_name, story_id, context["chapter_no"])
+    render_section_heading("讨论与批准", "章节讨论可以先收束冲突、节奏和结尾目标，再批准为生成依据。")
     _render_chapter_discussion_area(
         project_name,
         story_id,
@@ -415,6 +420,7 @@ def render_chapter_outline_page(project_name: str, *, render_discussion_asset_ca
         render_discussion_asset_candidates,
     )
     _render_chapter_outline_prompt_options(project_name, story_id, context)
+    render_section_heading("生成与编辑", "生成结果会写入编辑区，可以手动修订后保存为正式细纲。")
     step_result = _render_chapter_outline_generation(
         project_name,
         story_id,

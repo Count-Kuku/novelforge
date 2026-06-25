@@ -7,6 +7,7 @@ from memory import load_creative_profile
 from skills import run_dynamic_generation_task
 from ui.common import scoped_widget_key
 from ui.labels import label_status, label_step_name
+from ui.layout import render_section_heading
 from ui.step_views import render_step_json_expander, render_step_retrieval, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
 
@@ -137,7 +138,12 @@ def _run_dynamic_generation(project_name: str, story_id: str, requirement: str, 
 
 
 def _render_dynamic_generation_action(project_name: str, story_id: str, requirement: str, chapter_no: int, config: dict, col_run) -> None:
-    if col_run.button("生成", use_container_width=True, type="primary"):
+    if col_run.button(
+        "生成",
+        key=scoped_widget_key("dynamic_generation_run", project_name, story_id),
+        use_container_width=True,
+        type="primary",
+    ):
         if not requirement.strip():
             st.error("请先填写创作提示词。")
         else:
@@ -163,6 +169,7 @@ def _render_dynamic_generation_result() -> None:
     result = st.session_state.get("dynamic_generation_result", {})
     if not result:
         return
+    render_section_heading("输出结果", "生成内容会保留在本页，方便继续调整提示词或复制到正式章节。")
     if result.get("success"):
         st.success("生成完成。")
     else:
@@ -187,14 +194,16 @@ def _render_dynamic_generation_result() -> None:
 
 def render_dynamic_generation_page(project_name: str, render_prompt_option_capability_tools):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("快速生成")
-    st.caption("实验性快速生成入口。只靠一段提示词就能生成，也可以展开高级配置进行精细控制。不需要预先配置创作配置。")
-
     profile = load_creative_profile(project_name, story_id=story_id) or {}
     _render_dynamic_profile_caption(profile)
-    requirement = _render_dynamic_requirement()
-    col_run, col_save = st.columns([3, 1])
-    with col_save:
+
+    render_section_heading("输入创作需求", "可以只写一句提示，也可以写完整场景要求；高级配置会在下一段统一调整。")
+    with st.container(border=True):
+        requirement = _render_dynamic_requirement()
+
+    render_section_heading("运行设置", "保存章节、目标字数、生成层级和写作偏好集中在这里，减少生成前来回寻找。")
+    control_col, action_col = st.columns([1, 2])
+    with control_col:
         chapter_no = st.number_input(
             "保存到章节",
             min_value=0,
@@ -203,6 +212,8 @@ def render_dynamic_generation_page(project_name: str, render_prompt_option_capab
             help="0 表示不保存，仅预览。",
         )
     config = _render_dynamic_advanced_config(project_name, story_id, profile, render_prompt_option_capability_tools)
-    _render_dynamic_generation_action(project_name, story_id, requirement, int(chapter_no), config, col_run)
+    action_col.write("")
+    action_col.write("")
+    _render_dynamic_generation_action(project_name, story_id, requirement, int(chapter_no), config, action_col)
     _render_dynamic_generation_result()
 

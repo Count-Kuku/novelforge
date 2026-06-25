@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 
 import streamlit as st
 
@@ -59,10 +60,18 @@ def confirmed_button(
     )
 
 def render_quick_action(label: str, page: str, help_text: str):
-    st.markdown(f"**{label}**")
-    st.caption(help_text)
-    if st.button("进入", key=f"quick_action_{stable_widget_suffix(page)}", use_container_width=True):
-        navigate_to(page)
+    with st.container(border=True):
+        st.markdown(
+            f"""
+            <div class="nf-action-card-body">
+                <div class="nf-action-title">{html.escape(str(label))}</div>
+                <div class="nf-action-copy">{html.escape(str(help_text))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("进入", key=f"quick_action_{stable_widget_suffix(page)}", use_container_width=True):
+            navigate_to(page)
 
 def _safe_int_metric_value(value) -> int:
     try:

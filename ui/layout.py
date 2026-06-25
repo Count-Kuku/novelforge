@@ -11,27 +11,31 @@ def apply_app_style():
         <style>
         :root {
             color-scheme: light;
-            --nf-bg: #f8fbff;
+            --nf-bg: #f6f7fb;
             --nf-panel: #ffffff;
-            --nf-border: #dbe6f2;
-            --nf-text: #1f2937;
-            --nf-muted: #66758a;
-            --nf-accent: #6b9edb;
-            --nf-accent-strong: #4d7fbd;
-            --nf-accent-soft: #eef6ff;
+            --nf-panel-soft: #f9fafb;
+            --nf-border: #dde3eb;
+            --nf-text: #172033;
+            --nf-muted: #667085;
+            --nf-accent: #356ac3;
+            --nf-accent-strong: #244f9e;
+            --nf-accent-soft: #edf4ff;
+            --nf-green: #3f7d68;
+            --nf-warm: #a86618;
             --nf-danger: #b42318;
-            --nf-shadow: 0 16px 42px rgba(44, 82, 130, 0.08);
+            --nf-shadow: 0 14px 36px rgba(16, 24, 40, 0.08);
+            --nf-shadow-soft: 0 8px 22px rgba(16, 24, 40, 0.05);
         }
 
         .stApp {
             background:
-                linear-gradient(180deg, rgba(255,255,255,0.9), rgba(248,251,255,0.98)),
+                linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,247,251,0.98)),
                 var(--nf-bg);
             color: var(--nf-text);
         }
 
         [data-testid="stSidebar"] {
-            background: #f3f8ff;
+            background: #f8fafc;
             border-right: 1px solid var(--nf-border);
         }
 
@@ -129,21 +133,33 @@ def apply_app_style():
         }
 
         .block-container {
-            max-width: 1320px;
-            padding-top: 1.4rem;
+            max-width: 1240px;
+            padding-top: 1rem;
             padding-bottom: 4rem;
+            padding-left: 2rem;
+            padding-right: 2rem;
         }
 
         h1, h2, h3 {
             letter-spacing: 0;
         }
 
+        h2, h3 {
+            margin-top: 0.55rem;
+            margin-bottom: 0.45rem;
+        }
+
+        hr {
+            margin: 1.2rem 0;
+            border-color: var(--nf-border);
+        }
+
         div[data-testid="stMetric"] {
             background: var(--nf-panel);
             border: 1px solid var(--nf-border);
             border-radius: 8px;
-            padding: 0.85rem 1rem;
-            box-shadow: 0 10px 28px rgba(44, 82, 130, 0.05);
+            padding: 0.95rem 1rem;
+            box-shadow: var(--nf-shadow-soft);
         }
 
         div[data-testid="stMetric"] label {
@@ -151,26 +167,26 @@ def apply_app_style():
         }
 
         .nf-hero {
-            background: transparent;
-            border: 0;
-            border-bottom: 1px solid var(--nf-border);
-            border-radius: 0;
-            padding: 0.05rem 0 0.65rem;
-            box-shadow: none;
-            margin-bottom: 0.75rem;
+            background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
+            border: 1px solid var(--nf-border);
+            border-left: 4px solid var(--nf-accent);
+            border-radius: 8px;
+            padding: 1rem 1.1rem 0.95rem;
+            box-shadow: var(--nf-shadow-soft);
+            margin-bottom: 1rem;
         }
 
         .nf-kicker {
-            color: var(--nf-accent);
+            color: var(--nf-accent-strong);
             font-size: 0.78rem;
             font-weight: 700;
             letter-spacing: 0;
-            margin-bottom: 0.3rem;
+            margin-bottom: 0.25rem;
         }
 
         .nf-title {
             color: var(--nf-text);
-            font-size: 1.12rem;
+            font-size: 1.35rem;
             line-height: 1.25;
             font-weight: 750;
             margin: 0;
@@ -180,24 +196,26 @@ def apply_app_style():
             color: var(--nf-muted);
             margin-top: 0.35rem;
             margin-bottom: 0;
+            line-height: 1.55;
         }
 
         .nf-header-meta {
-            display: flex;
-            flex-wrap: wrap;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
             gap: 0.45rem;
-            margin-top: 0.4rem;
+            margin-top: 0.75rem;
         }
 
         .nf-header-meta span {
             display: inline-flex;
             align-items: center;
+            justify-content: space-between;
             gap: 0.25rem;
-            min-height: 1.65rem;
-            padding: 0.15rem 0.55rem;
+            min-height: 2rem;
+            padding: 0.28rem 0.7rem;
             border: 1px solid var(--nf-border);
-            border-radius: 999px;
-            background: #ffffff;
+            border-radius: 8px;
+            background: var(--nf-panel-soft);
             color: var(--nf-muted);
             font-size: 0.82rem;
             line-height: 1.25;
@@ -210,7 +228,7 @@ def apply_app_style():
 
         .nf-card-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
             gap: 0.8rem;
             margin: 1rem 0;
         }
@@ -220,7 +238,7 @@ def apply_app_style():
             border: 1px solid var(--nf-border);
             border-radius: 8px;
             padding: 1rem;
-            box-shadow: 0 10px 26px rgba(44, 82, 130, 0.05);
+            box-shadow: var(--nf-shadow-soft);
         }
 
         .nf-card-title {
@@ -233,6 +251,88 @@ def apply_app_style():
             color: var(--nf-muted);
             font-size: 0.92rem;
             line-height: 1.55;
+        }
+
+        .nf-section-heading {
+            margin: 1.15rem 0 0.65rem;
+            padding-top: 0.15rem;
+        }
+
+        .nf-section-title {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            color: var(--nf-text);
+            font-size: 1rem;
+            font-weight: 750;
+            line-height: 1.35;
+            margin: 0;
+        }
+
+        .nf-section-title::before {
+            content: "";
+            width: 0.22rem;
+            height: 1rem;
+            border-radius: 8px;
+            background: var(--nf-accent);
+            display: inline-block;
+        }
+
+        .nf-section-caption {
+            color: var(--nf-muted);
+            font-size: 0.9rem;
+            line-height: 1.55;
+            margin-top: 0.25rem;
+        }
+
+        .nf-action-card-body {
+            min-height: 7.25rem;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            gap: 0.55rem;
+        }
+
+        .nf-action-title {
+            color: var(--nf-text);
+            font-size: 1rem;
+            font-weight: 750;
+            line-height: 1.35;
+        }
+
+        .nf-action-copy {
+            color: var(--nf-muted);
+            font-size: 0.9rem;
+            line-height: 1.55;
+        }
+
+        .nf-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.65rem;
+            margin-top: 0.75rem;
+        }
+
+        .nf-status-item {
+            border: 1px solid var(--nf-border);
+            border-radius: 8px;
+            background: var(--nf-panel-soft);
+            padding: 0.7rem 0.8rem;
+        }
+
+        .nf-status-label {
+            color: var(--nf-muted);
+            font-size: 0.78rem;
+            line-height: 1.25;
+            margin-bottom: 0.25rem;
+        }
+
+        .nf-status-value {
+            color: var(--nf-text);
+            font-size: 0.94rem;
+            font-weight: 700;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
         }
 
         .active-profile-card {
@@ -781,28 +881,160 @@ def apply_app_style():
             padding-left: 0.78rem !important;
             overflow: visible !important;
         }
+
+        .stApp [data-testid="stVerticalBlockBorderWrapper"] {
+            border: 1px solid var(--nf-border) !important;
+            border-radius: 8px !important;
+            background: #ffffff !important;
+            box-shadow: var(--nf-shadow-soft);
+        }
+
+        .stApp [data-testid="stVerticalBlockBorderWrapper"]:hover {
+            border-color: #c5d1e0 !important;
+        }
+
+        .stApp [data-baseweb="tab-list"] {
+            gap: 0.35rem;
+            background: #eef2f6;
+            border: 1px solid var(--nf-border);
+            border-radius: 8px;
+            padding: 0.25rem;
+        }
+
+        .stApp [data-baseweb="tab"] {
+            border-radius: 8px;
+            color: var(--nf-muted) !important;
+            font-weight: 650;
+            min-height: 2.35rem;
+        }
+
+        .stApp [aria-selected="true"][data-baseweb="tab"] {
+            background: #ffffff;
+            color: var(--nf-accent-strong) !important;
+            box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
+        }
+
+        .stApp input,
+        .stApp textarea,
+        .stApp [data-baseweb="select"] > div {
+            border-radius: 8px !important;
+            min-height: 2.45rem !important;
+            box-shadow: none !important;
+        }
+
+        .stApp textarea {
+            line-height: 1.6 !important;
+        }
+
+        .stApp input:focus,
+        .stApp textarea:focus,
+        .stApp [data-baseweb="select"] > div:focus-within {
+            border-color: var(--nf-accent) !important;
+            box-shadow: 0 0 0 2px rgba(53, 106, 195, 0.12) !important;
+        }
+
+        .stApp .stButton button,
+        .stApp [data-testid="stButton"] button,
+        .stApp [data-testid="stFormSubmitButton"] button,
+        .stApp button[data-testid^="stBaseButton"] {
+            min-height: 2.45rem;
+            font-weight: 650 !important;
+            transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
+        }
+
+        .stApp .stButton button:hover,
+        .stApp [data-testid="stButton"] button:hover,
+        .stApp [data-testid="stFormSubmitButton"] button:hover,
+        .stApp button[data-testid^="stBaseButton"]:hover {
+            transform: translateY(-1px);
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label {
+            border-radius: 8px;
+            padding: 0.32rem 0.45rem;
+        }
+
+        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
+            background: #edf4ff;
+            color: var(--nf-accent-strong) !important;
+            font-weight: 700;
+        }
+
+        [data-testid="stSidebar"] hr {
+            margin: 0.85rem 0;
+        }
+
+        div[data-testid="stExpander"] {
+            margin: 0.65rem 0;
+            box-shadow: var(--nf-shadow-soft);
+        }
+
+        div[data-testid="stExpander"] details > summary {
+            min-height: 2.55rem;
+            align-items: center;
+        }
+
+        @media (max-width: 760px) {
+            .block-container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+
+            .nf-hero {
+                padding: 0.85rem;
+            }
+
+            .nf-title {
+                font-size: 1.2rem;
+            }
+
+            .nf-header-meta {
+                grid-template-columns: 1fr;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
 def render_app_header(project_name: str | None, page: str, memory: dict | None):
+    try:
+        from ui.navigation import PAGE_DESCRIPTIONS
+    except Exception:
+        PAGE_DESCRIPTIONS = {}
+
     title = html.escape(str((memory or {}).get("title") or project_name or "未选择项目"))
     genre = html.escape(str((memory or {}).get("genre") or "未设置类型"))
     canon_mode = html.escape(str((memory or {}).get("canon_mode") or "未设置原作对齐"))
     page_label = html.escape(str(page))
+    page_description = html.escape(str(PAGE_DESCRIPTIONS.get(page, "")))
     project_label = html.escape(str(project_name or "-"))
     st.markdown(
         f"""
         <div class="nf-hero">
             <div class="nf-kicker">NovelForge</div>
             <div class="nf-title">{page_label}</div>
+            {f'<div class="nf-subtitle">{page_description}</div>' if page_description else ''}
             <div class="nf-header-meta">
                 <span>作品 <b>{title}</b></span>
                 <span>项目 <b>{project_label}</b></span>
                 <span>类型 <b>{genre}</b></span>
                 <span>原作对齐 <b>{canon_mode}</b></span>
             </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_heading(title: str, caption: str = "") -> None:
+    safe_title = html.escape(str(title))
+    safe_caption = html.escape(str(caption or ""))
+    st.markdown(
+        f"""
+        <div class="nf-section-heading">
+            <div class="nf-section-title">{safe_title}</div>
+            {f'<div class="nf-section-caption">{safe_caption}</div>' if safe_caption else ''}
         </div>
         """,
         unsafe_allow_html=True,

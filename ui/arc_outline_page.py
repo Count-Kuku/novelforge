@@ -37,6 +37,7 @@ from ui.discussion import (
     _render_discussion_summary,
 )
 from ui.labels import label_status
+from ui.layout import render_section_heading
 from ui.prompt_option_tools import _render_prompt_option_capability_tools
 from ui.step_views import render_step_json_expander, render_step_retrieval, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
@@ -44,7 +45,6 @@ from ui.streaming import run_with_stream as _run_with_stream
 
 def _prepare_arc_outline_context(project_name: str) -> dict:
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("剧情段大纲")
 
     arc_no = st.number_input("剧情段编号", min_value=1, value=1, key=scoped_widget_key("arc_outline_no", project_name, story_id))
     arc_no = int(arc_no)
@@ -59,28 +59,29 @@ def _prepare_arc_outline_context(project_name: str) -> dict:
 
     volume_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name, story_id=story_id)]
     current_volume = int(metadata.get("volume_no") or 0)
-    volume_no = st.selectbox(
+    meta_col_a, meta_col_b, meta_col_c = st.columns(3)
+    volume_no = meta_col_a.selectbox(
         "所属分卷",
         options=volume_options,
         index=volume_options.index(current_volume) if current_volume in volume_options else 0,
         format_func=lambda value: "未指定分卷" if value == 0 else f"第 {value} 卷",
         key=scoped_widget_key("arc_volume", *arc_scope),
     )
-    title = st.text_input("剧情段标题", value=metadata.get("title", ""), key=scoped_widget_key("arc_title", *arc_scope))
-    summary = st.text_area("剧情段摘要", value=metadata.get("summary", ""), height=120, key=scoped_widget_key("arc_summary", *arc_scope))
-    status = st.selectbox(
+    status = meta_col_b.selectbox(
         "剧情段状态",
         options=["draft", "approved", "archived"],
         index=["draft", "approved", "archived"].index(metadata.get("status", "draft")) if metadata.get("status", "draft") in ["draft", "approved", "archived"] else 0,
         format_func=label_status,
         key=scoped_widget_key("arc_status", *arc_scope),
     )
-    estimated_chapter_count = st.number_input("预计章节数", min_value=0, value=int(metadata.get("estimated_chapter_count") or 0), key=scoped_widget_key("arc_estimated_chapters", *arc_scope))
-    target_word_count_range = st.text_input("目标总字数范围", value=metadata.get("target_word_count_range", ""), key=scoped_widget_key("arc_word_range", *arc_scope))
-    requirement = st.text_area("本剧情段要求", height=180, key=scoped_widget_key("arc_requirement", *arc_scope))
+    estimated_chapter_count = meta_col_c.number_input("预计章节数", min_value=0, value=int(metadata.get("estimated_chapter_count") or 0), key=scoped_widget_key("arc_estimated_chapters", *arc_scope))
+    title_col, word_col = st.columns([2, 1])
+    title = title_col.text_input("剧情段标题", value=metadata.get("title", ""), key=scoped_widget_key("arc_title", *arc_scope))
+    target_word_count_range = word_col.text_input("目标总字数范围", value=metadata.get("target_word_count_range", ""), key=scoped_widget_key("arc_word_range", *arc_scope))
+    summary_col, requirement_col = st.columns(2)
+    summary = summary_col.text_area("剧情段摘要", value=metadata.get("summary", ""), height=150, key=scoped_widget_key("arc_summary", *arc_scope))
+    requirement = requirement_col.text_area("本剧情段要求", height=150, key=scoped_widget_key("arc_requirement", *arc_scope))
 
-    suffix = f"{project_name}:{story_id}:{arc_no}"
-    messages_key = _discussion_messages_key("arc", suffix)
     return {
         "story_id": story_id,
         "arc_no": arc_no,
@@ -108,7 +109,6 @@ def _render_arc_discussion(project_name: str, context: dict, render_discussion_a
     volume_no = context["volume_no"]
     title = context["title"]
     summary = context["summary"]
-    status = context["status"]
     estimated_chapter_count = context["estimated_chapter_count"]
     target_word_count_range = context["target_word_count_range"]
     requirement = context["requirement"]
@@ -287,7 +287,7 @@ def _render_arc_outline_editor(project_name: str, context: dict):
     arc_outline_text_key = context["arc_outline_text_key"]
     arc_outline_editor_key = context["arc_outline_editor_key"]
     existing_outline = context["existing_outline"]
-    if st.button("生成剧情段大纲", key=scoped_widget_key("generate_arc_outline", *arc_scope)):
+    if st.button("生成剧情段大纲", key=scoped_widget_key("generate_arc_outline", *arc_scope), type="primary", use_container_width=True):
         try:
             result = _run_with_stream(
                 "正在生成剧情段大纲...",
@@ -319,7 +319,7 @@ def _render_arc_outline_editor(project_name: str, context: dict):
     )
 
     col1, col2 = st.columns(2)
-    if col1.button("保存剧情段大纲", key=scoped_widget_key("save_arc", *arc_scope)):
+    if col1.button("保存剧情段大纲", key=scoped_widget_key("save_arc", *arc_scope), use_container_width=True):
         save_arc_outline(project_name, arc_no, outline_text, story_id=story_id)
         save_arc_metadata(project_name, arc_no, {
             "volume_no": volume_no or None,
@@ -381,17 +381,10 @@ def _render_arc_chapter_plan(project_name: str, context: dict, linked_chapters: 
     story_id = context["story_id"]
     arc_no = context["arc_no"]
     arc_scope = context["arc_scope"]
-    volume_no = context["volume_no"]
-    title = context["title"]
-    summary = context["summary"]
-    status = context["status"]
-    estimated_chapter_count = context["estimated_chapter_count"]
-    target_word_count_range = context["target_word_count_range"]
-    requirement = context["requirement"]
     arc_chapter_plan_step_key = context["arc_chapter_plan_step_key"]
     metadata = context["metadata"]
     step_result = context["step_result"]
-    st.markdown("### 剧情段章节分配计划")
+    render_section_heading("章节分配计划", "把剧情段目标拆成章节范围，方便后续细纲页逐章展开。")
     saved_plan = load_arc_chapter_plan(project_name, arc_no, story_id=story_id)
     plan_col1, plan_col2 = st.columns(2)
     start_chapter_no = plan_col1.number_input(
@@ -409,7 +402,7 @@ def _render_arc_chapter_plan(project_name: str, context: dict, linked_chapters: 
     )
     plan_requirement = st.text_area("章节分配补充要求", height=120, key=scoped_widget_key("arc_plan_requirement", *arc_scope))
     plan_step = st.session_state.get(arc_chapter_plan_step_key, {})
-    if st.button("生成剧情段章节分配计划", key=scoped_widget_key("generate_arc_chapter_plan", *arc_scope)):
+    if st.button("生成剧情段章节分配计划", key=scoped_widget_key("generate_arc_chapter_plan", *arc_scope), type="primary", use_container_width=True):
         try:
             result = _run_with_stream(
                 "正在生成剧情段章节分配计划...",
@@ -439,9 +432,13 @@ def _render_arc_chapter_plan(project_name: str, context: dict, linked_chapters: 
     render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{story_id}:{arc_no}"))
 
 def render_arc_outline_page(project_name: str, *, render_discussion_asset_candidates):
+    render_section_heading("剧情段信息", "剧情段承接分卷结构，适合定义一段冲突、转折或阶段目标。")
     context = _prepare_arc_outline_context(project_name)
+    render_section_heading("讨论与批准", "先收敛剧情段方向，再把批准版本作为后续章节规划依据。")
     _render_arc_discussion(project_name, context, render_discussion_asset_candidates)
     _render_arc_prompt_options(project_name, context)
+    render_section_heading("生成与编辑", "生成结果会进入编辑区，保存后可继续生成章节分配计划。")
     _render_arc_outline_editor(project_name, context)
+    render_section_heading("库存与归属", "检查现有剧情段和当前剧情段下的章节归属。")
     linked_chapters = _render_arc_inventory(project_name, context)
     _render_arc_chapter_plan(project_name, context, linked_chapters)

@@ -493,7 +493,6 @@ def list_evaluation_reports(project_name: str, story_id: str = "default") -> lis
         if dedupe_key in seen_paths:
             continue
         seen_paths.add(dedupe_key)
-        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
         file = root / relative_path if relative_path else evaluation_dir / f"{logical_key}.md"
         chapter_no = _chapter_no_from_asset_record(record)
         reports.append({

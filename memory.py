@@ -174,7 +174,15 @@ def _take_project_pending_mirror_deletions(project_name: str) -> list[Path]:
 def _delete_pending_mirrors(paths: list[Path]) -> None:
     for path in paths:
         if path.exists() and path.is_file():
-            path.unlink()
+            try:
+                path.unlink()
+            except OSError as exc:
+                logging.getLogger("novelforge.storage").warning(
+                    "Failed to delete JSON mirror %s; will retry later: %s",
+                    path,
+                    exc,
+                )
+                _queue_mirror_deletion(path)
 
 
 def _discard_pending_mirror_deletion(path: Path) -> None:

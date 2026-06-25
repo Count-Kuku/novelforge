@@ -33,6 +33,7 @@ from ui.discussion import (
     _render_discussion_summary,
 )
 from ui.labels import label_status
+from ui.layout import render_section_heading
 from ui.prompt_option_tools import _render_prompt_option_capability_tools
 from ui.step_views import render_step_retrieval, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
@@ -64,16 +65,18 @@ def _prepare_volume_outline_context(project_name: str, story_id: str) -> dict:
 def _render_volume_metadata_fields(context: dict) -> tuple[str, str, str, str]:
     metadata = context["metadata"]
     volume_scope = context["volume_scope"]
-    title = st.text_input("分卷标题", value=metadata.get("title", ""), key=scoped_widget_key("volume_title", *volume_scope))
-    summary = st.text_area("分卷摘要", value=metadata.get("summary", ""), height=120, key=scoped_widget_key("volume_summary", *volume_scope))
-    status = st.selectbox(
+    title_col, status_col = st.columns([2, 1])
+    title = title_col.text_input("分卷标题", value=metadata.get("title", ""), key=scoped_widget_key("volume_title", *volume_scope))
+    status = status_col.selectbox(
         "分卷状态",
         options=VOLUME_STATUS_OPTIONS,
         index=_status_index(metadata.get("status", "draft")),
         format_func=label_status,
         key=scoped_widget_key("volume_status", *volume_scope),
     )
-    requirement = st.text_area("本卷要求", height=180, key=scoped_widget_key("volume_requirement", *volume_scope))
+    summary_col, requirement_col = st.columns(2)
+    summary = summary_col.text_area("分卷摘要", value=metadata.get("summary", ""), height=150, key=scoped_widget_key("volume_summary", *volume_scope))
+    requirement = requirement_col.text_area("本卷要求", height=150, key=scoped_widget_key("volume_requirement", *volume_scope))
     return title, summary, status, requirement
 
 
@@ -264,7 +267,7 @@ def _render_volume_generation(
     status: str,
 ) -> dict:
     step_result = st.session_state.get(context["step_key"], {})
-    if st.button("生成分卷大纲", key=scoped_widget_key("generate_volume_outline", *context["volume_scope"])):
+    if st.button("生成分卷大纲", key=scoped_widget_key("generate_volume_outline", *context["volume_scope"]), type="primary", use_container_width=True):
         try:
             result = _run_with_stream(
                 "正在生成分卷大纲...",
@@ -303,7 +306,7 @@ def _render_volume_editor_and_actions(
     )
 
     col1, col2 = st.columns(2)
-    if col1.button("保存分卷大纲", key=scoped_widget_key("save_volume", *context["volume_scope"])):
+    if col1.button("保存分卷大纲", key=scoped_widget_key("save_volume", *context["volume_scope"]), use_container_width=True):
         save_volume_outline(project_name, context["volume_no"], outline_text, story_id=story_id)
         save_volume_metadata(
             project_name,
@@ -329,8 +332,8 @@ def _render_volume_editor_and_actions(
 def _render_existing_volumes(project_name: str, story_id: str) -> None:
     volumes = list_volumes(project_name, story_id=story_id)
     if not volumes:
+        st.caption("当前还没有分卷。")
         return
-    st.markdown("### 现有分卷")
     for item in volumes:
         approval_label = "已有批准讨论" if item.get("has_approved_discussion") else "暂无批准讨论"
         st.caption(f"第 {int(item.get('volume_no', 0))} 卷 / {item.get('title', '') or '未命名'} / 状态={label_status(item.get('status', 'draft'))} / {approval_label}")
@@ -338,11 +341,12 @@ def _render_existing_volumes(project_name: str, story_id: str) -> None:
 
 def render_volume_outline_page(project_name: str, *, render_discussion_asset_candidates):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("分卷大纲")
 
+    render_section_heading("分卷信息", "先确定分卷定位、摘要和要求，再进入讨论或直接生成。")
     context = _prepare_volume_outline_context(project_name, story_id)
     title, summary, status, requirement = _render_volume_metadata_fields(context)
     discussion_context = _prepare_volume_discussion_context(project_name, story_id, context["volume_no"])
+    render_section_heading("讨论与批准", "分卷讨论会沉淀为可复用工件，供后续剧情段和章节规划参考。")
     _render_volume_discussion_area(
         project_name,
         story_id,
@@ -354,8 +358,10 @@ def render_volume_outline_page(project_name: str, *, render_discussion_asset_can
         render_discussion_asset_candidates,
     )
     _render_volume_prompt_options(project_name, story_id, context)
+    render_section_heading("生成与编辑", "生成结果会写入编辑区，可人工修改后保存为正式分卷大纲。")
     step_result = _render_volume_generation(project_name, story_id, context, title, summary, requirement, status)
     _render_volume_editor_and_actions(project_name, story_id, context, title, summary, status)
+    render_section_heading("现有分卷")
     _render_existing_volumes(project_name, story_id)
     render_step_validation(step_result)
     render_step_retrieval(

@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.verify_utils import isolated_workspace, retry_unlink
+
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "1"
 
 from memory import (
@@ -73,14 +75,7 @@ def _project_name_from_args() -> str:
 
 
 def _safe_unlink(project_root: Path, file: Path) -> bool:
-    resolved_root = project_root.resolve()
-    resolved_file = file.resolve()
-    if resolved_root != resolved_file and resolved_root not in resolved_file.parents:
-        raise RuntimeError(f"Refusing to delete outside verification project: {resolved_file}")
-    if not resolved_file.exists() or not resolved_file.is_file():
-        return False
-    resolved_file.unlink()
-    return True
+    return retry_unlink(project_root, file)
 
 
 def _expect(condition: bool, label: str, failures: list[str]) -> None:
@@ -88,7 +83,7 @@ def _expect(condition: bool, label: str, failures: list[str]) -> None:
         failures.append(label)
 
 
-def main() -> int:
+def _run_verification() -> int:
     project_name = _project_name_from_args()
     create_project(project_name)
 
@@ -203,6 +198,11 @@ def main() -> int:
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 1
+
+
+def main() -> int:
+    with isolated_workspace("novelforge_db_delete_semantics_"):
+        return _run_verification()
 
 
 if __name__ == "__main__":

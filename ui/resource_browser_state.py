@@ -1,6 +1,8 @@
 """Resource-browser navigation and selection state helpers."""
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 from ui.common import _safe_int_metric_value, navigate_to, scoped_widget_key
@@ -98,14 +100,21 @@ def render_resource_metric_link(
 ):
     metric_value = _safe_int_metric_value(value)
     normalized_groups = _normalize_resource_browser_groups(groups)
-    container.metric(label, metric_value)
     button_key = scoped_widget_key("overview_resource_metric", project_name, story_id, label, ",".join(normalized_groups))
-    if metric_value > 0 and normalized_groups:
-        if container.button("查看资源", key=button_key, use_container_width=True):
-            navigate_to_resource_browser(project_name, normalized_groups)
-    else:
-        disabled_label = "暂无资源" if normalized_groups else "未纳入资源"
-        container.button(disabled_label, key=button_key, disabled=True, use_container_width=True)
+    with container.container(border=True):
+        st.markdown(
+            f"""
+            <div class="nf-status-label">{html.escape(str(label))}</div>
+            <div class="nf-status-value">{metric_value}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if metric_value > 0 and normalized_groups:
+            if st.button("查看资源", key=button_key, use_container_width=True):
+                navigate_to_resource_browser(project_name, normalized_groups)
+        else:
+            disabled_label = "暂无资源" if normalized_groups else "未纳入资源"
+            st.button(disabled_label, key=button_key, disabled=True, use_container_width=True)
 
 def _resource_browser_selection_key(project_name: str) -> str:
     return f"resource_browser_selection:{project_name}"

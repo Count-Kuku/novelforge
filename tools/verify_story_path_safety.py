@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.verify_utils import isolated_workspace
+
 from memory import (
     create_project,
     create_story,
@@ -28,7 +30,7 @@ def _expect_raises(label: str, failures: list[str], callback) -> None:
     failures.append(label)
 
 
-def main() -> int:
+def _run_verification() -> int:
     project_name = f"_story_path_verify_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     create_project(project_name)
     story = create_story(project_name, "Safe Story")
@@ -85,6 +87,11 @@ def main() -> int:
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["ok"] else 1
+
+
+def main() -> int:
+    with isolated_workspace("novelforge_story_path_safety_"):
+        return _run_verification()
 
 
 if __name__ == "__main__":

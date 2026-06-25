@@ -28,6 +28,7 @@ from ui.discussion import (
     _render_approved_discussion_artifact,
 )
 from ui.labels import label_status
+from ui.layout import render_section_heading
 from ui.prompt_option_tools import (
     _prompt_option_label,
     _render_generation_injection_preview,
@@ -527,10 +528,13 @@ def _prepare_chapter_page_context(project_name: str) -> dict:
     is_chapter_mode = workflow_depth in {"完整长篇流程", "分卷/剧情段/章节", "章节计划+正文"}
     mode_hint = "章节模式" if is_chapter_mode else "自由模式"
 
-    st.subheader("正文生成")
-    st.caption(f"根据细纲或需求生成正文，可串联审阅和设定提炼。当前：{mode_hint}")
+    render_section_heading(
+        "当前生成对象",
+        f"当前为{mode_hint}。章节模式会按编号读写细纲和正文；自由模式填 1 即可。",
+    )
 
-    chapter_no = st.number_input(
+    meta_col_a, meta_col_b = st.columns(2)
+    chapter_no = meta_col_a.number_input(
         "编号" if not is_chapter_mode else "章节编号",
         min_value=1 if is_chapter_mode else 0,
         value=1,
@@ -540,6 +544,11 @@ def _prepare_chapter_page_context(project_name: str) -> dict:
         chapter_no = 1
     chapter_no = int(chapter_no)
     chapter_scope = (project_name, story_id, chapter_no)
+    word_count = meta_col_b.text_input(
+        "目标字数（如 2000-2500）",
+        value="2000-2500",
+        key=scoped_widget_key("content_word_count", *chapter_scope),
+    )
 
     chapter_step_key = scoped_session_key("chapter_step", *chapter_scope)
     chapter_outline_gen_key = scoped_session_key("chapter_outline_gen", *chapter_scope)
@@ -557,11 +566,6 @@ def _prepare_chapter_page_context(project_name: str) -> dict:
     discussion_guidance_default = _format_discussion_artifact_as_guidance(approved_discussion_artifact) if is_chapter_mode else ""
     chapter_step = st.session_state.get(chapter_step_key, {})
 
-    word_count = st.text_input(
-        "目标字数（如 2000-2500）",
-        value="2000-2500",
-        key=scoped_widget_key("content_word_count", *chapter_scope),
-    )
     return {
         "story_id": story_id,
         "is_chapter_mode": is_chapter_mode,
@@ -700,6 +704,7 @@ def _render_chapter_generation_section(project_name: str, context: dict, chapter
         context["review_markdown_key"],
     )
     _render_current_writing_guidance(discussion_guidance, writing_guidance)
+    render_section_heading("正文编辑区", "生成结果会直接进入这里，也可以手动修改后再保存、审阅或提炼设定。")
     return _render_chapter_text_input(
         context["is_chapter_mode"],
         context["chapter_text_key"],
@@ -734,7 +739,10 @@ def _render_chapter_review_section(project_name: str, context: dict, chapter_tex
 
 def render_chapter_page(project_name: str):
     context = _prepare_chapter_page_context(project_name)
+    render_section_heading("细纲输入", "可以读取已有细纲，也可以从需求自动生成细纲或完整执行。")
     chapter_outline = _render_chapter_outline_section(project_name, context)
+    render_section_heading("写作控制", "先确认临时写作提示和高级写作设置，再启动正文或完整流水线。")
     chapter_text = _render_chapter_generation_section(project_name, context, chapter_outline)
+    render_section_heading("审阅与设定提炼", "正文稳定后可以保存、审阅，并把长期设定提炼到待确认队列。")
     _render_chapter_review_section(project_name, context, chapter_text)
 

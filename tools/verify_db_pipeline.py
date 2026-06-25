@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tools.verify_utils import isolated_workspace
+
 from memory import (
     append_auto_review_run,
     append_retrieval_eval_run,
@@ -44,7 +46,7 @@ def _project_name_from_args() -> str:
     return f"_db_verify_{stamp}"
 
 
-def main() -> int:
+def _run_verification() -> int:
     project_name = _project_name_from_args()
     create_project(project_name)
 
@@ -218,9 +220,15 @@ def main() -> int:
     health = inspect_project_database(project_name)
     print(json.dumps({
         "project_name": project_name,
+        "ok": bool(health.get("ok")),
         "health": health,
     }, ensure_ascii=False, indent=2))
     return 0 if health.get("ok") else 1
+
+
+def main() -> int:
+    with isolated_workspace("novelforge_db_pipeline_"):
+        return _run_verification()
 
 
 if __name__ == "__main__":

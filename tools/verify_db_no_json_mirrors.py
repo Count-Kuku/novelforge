@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from tools.verify_utils import make_workspace, retry_rmtree, retry_unlink
 
 
 def _expect(condition: bool, label: str, failures: list[str]) -> None:
@@ -19,8 +20,7 @@ def _expect(condition: bool, label: str, failures: list[str]) -> None:
 
 def main() -> int:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    workspace = ROOT / ".tmp_db_no_json_mirrors" / stamp
-    workspace.mkdir(parents=True, exist_ok=True)
+    workspace = make_workspace(f"novelforge_db_no_json_mirrors_{stamp}_")
     previous_cwd = Path.cwd()
     previous_flag = os.environ.get("NOVELFORGE_WRITE_JSON_MIRRORS")
     os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
@@ -408,7 +408,7 @@ def main() -> int:
         _expect(stale_project_mirror.exists(), "pending_project_mirror_not_deleted_by_global_sync", failures)
         _DB_UNAVAILABLE_PROJECTS.discard(project_name)
         if stale_project_mirror.exists():
-            stale_project_mirror.unlink()
+            retry_unlink(workspace, stale_project_mirror)
         unexpected_mirrors = [str(path) for path in mirror_paths if path.exists()]
         _expect(not unexpected_mirrors, "no_json_mirrors_written", failures)
 
@@ -431,8 +431,7 @@ def main() -> int:
             os.environ.pop("NOVELFORGE_WRITE_JSON_MIRRORS", None)
         else:
             os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = previous_flag
-        if workspace.exists():
-            shutil.rmtree(workspace, ignore_errors=True)
+        retry_rmtree(workspace)
 
 
 if __name__ == "__main__":

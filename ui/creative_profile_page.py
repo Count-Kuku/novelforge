@@ -1,6 +1,8 @@
 """Creative profile page."""
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 from creative_profile_workflows import (
@@ -27,6 +29,7 @@ from ui.discussion import (
     _render_discussion_chat,
     _render_discussion_summary,
 )
+from ui.layout import render_section_heading
 from ui.step_views import render_step_json_expander, render_step_retrieval
 from ui.streaming import run_with_stream as _run_with_stream
 
@@ -109,12 +112,14 @@ def _current_creative_story(project_name: str) -> tuple[str, str]:
 
 def _render_creative_profile_header(current_story_name: str, embedded: bool):
     if not embedded:
-        st.subheader(f"创作配置 · {current_story_name}")
+        render_section_heading(
+            f"当前故事：{current_story_name}",
+            "同一项目下的不同故事可以拥有各自的篇幅、参考强度和生成层级。",
+        )
         st.info(
             f"当前正在配置 **{current_story_name}** 的创作参数。"
             "创作配置是故事级别的——同一项目不同故事可以设置各自的篇幅、参考强度和生成层级。"
             "项目级别的资料（知识库、原材料、规则）为所有故事共享。",
-            icon="📖",
         )
 
 def _render_creative_profile_discussion(project_name: str, story_id: str, form_state: dict, render_discussion_asset_candidates):
@@ -125,7 +130,7 @@ def _render_creative_profile_discussion(project_name: str, story_id: str, form_s
     clear_input_flag_key = _discussion_input_clear_flag_key("creative_profile", creative_discussion_suffix)
     _consume_discussion_input_clear("creative_profile", creative_discussion_suffix)
     discussion_step = st.session_state.get(discussion_result_key, {})
-    with st.expander("讨论辅助", expanded=not form_state.get("is_configured", False)):
+    with st.expander("讨论工作区", expanded=not form_state.get("is_configured", False)):
         st.caption("用自然语言描述目标，讨论结果会自动填入创作配置。保存后就可以直接进入正文生成。")
         col_seed, col_action = st.columns([3, 1])
         with col_seed:
@@ -433,11 +438,19 @@ def _render_creative_profile_form(project_name: str, story_id: str, form_state: 
     return saved
 
 def _render_creative_profile_recommendation(project_name: str, story_id: str, profile: dict):
-    st.markdown("### 推荐生成路径")
+    render_section_heading("推荐生成路径", "系统会根据当前配置建议从哪个创作流程开始。")
     workflow = recommended_workflow_for_profile(profile)
-    st.markdown(" / ".join(workflow))
+    workflow_text = html.escape(" / ".join(str(item) for item in workflow))
+    st.markdown(
+        f"""
+        <div class="nf-card">
+            <div class="nf-card-copy">{workflow_text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown("### 参考策略说明")
+    render_section_heading("参考策略说明")
     strength = profile.get("reference_strength", "中参考")
     strategy_text = {
         "轻参考": "只保留角色核心气质和少量关键设定，适合穿越、平行世界、新环境故事。",
@@ -461,12 +474,14 @@ def render_creative_profile_page(project_name: str, embedded: bool = False, *, r
     profile = load_creative_profile(project_name, story_id=story_id)
     _init_creative_profile_form_state(project_name, story_id, profile)
     form_state = _get_creative_profile_form_state(project_name, story_id)
+    render_section_heading("讨论辅助", "不确定目标时先讨论；明确目标时可以直接展开手动配置。")
     _render_creative_profile_discussion(
         project_name,
         story_id,
         form_state,
         render_discussion_asset_candidates,
     )
+    render_section_heading("手动配置", "这些字段会决定后续规划、正文生成和检索资料的默认策略。")
     profile = _render_creative_profile_form(project_name, story_id, form_state)
     _render_creative_profile_recommendation(project_name, story_id, profile)
 
