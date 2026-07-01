@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import re
-import shutil
-import os
-import stat
 import hashlib
 from datetime import datetime
 from pathlib import Path
 
 from memory import (
     BASE_DIR,
+    DELETED_PROJECTS_DIR,
     list_arcs,
     list_volumes,
     load_chapter_outline_metadata,
@@ -29,6 +27,8 @@ from memory import (
     mark_asset_deleted_record,
     normalize_project_name,
     project_dir,
+    project_is_discoverable,
+    rename_registered_project,
     register_asset_file_record,
     retrieval_sources_path,
     runs_path,
@@ -41,6 +41,7 @@ from memory import (
     delete_pipeline_run_record,
     sync_retrieval_source_file_record,
     sync_project_retrieval_assets,
+    unregister_project,
 )
 
 
@@ -58,6 +59,18 @@ def _project_dir(project_name: str) -> Path:
     if base not in resolved.parents and resolved != base:
         raise ValueError("Invalid project path.")
     return target
+
+
+def _unique_deleted_project_path(project_name: str) -> Path:
+    DELETED_PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = normalize_project_name(project_name)
+    candidate = DELETED_PROJECTS_DIR / f"{safe_name}_{timestamp}"
+    counter = 1
+    while candidate.exists():
+        candidate = DELETED_PROJECTS_DIR / f"{safe_name}_{timestamp}_{counter}"
+        counter += 1
+    return candidate
 
 
 def _story_dir(project_name: str, story_id: str = "default") -> Path:
@@ -109,18 +122,16 @@ def _asset_record_exists(
 
 def delete_project(project_name: str) -> bool:
     target = _project_dir(project_name)
-    if not target.exists() or not target.is_dir():
-        return False
+    discoverable = project_is_discoverable(project_name)
+    archived = False
 
-    def _handle_remove_readonly(func, path, exc_info):
-        try:
-            os.chmod(path, stat.S_IWRITE)
-            func(path)
-        except Exception:
-            raise exc_info[1]
+    if target.exists() and target.is_dir():
+        archive_target = _unique_deleted_project_path(target.name)
+        target.rename(archive_target)
+        archived = True
 
-    shutil.rmtree(target, onerror=_handle_remove_readonly)
-    return True
+    unregistered = unregister_project(project_name)
+    return bool(archived or discoverable or unregistered)
 
 
 def rename_project(old_name: str, new_name: str) -> str:
@@ -129,9 +140,10 @@ def rename_project(old_name: str, new_name: str) -> str:
     target = _project_dir(normalized_name)
     if not source.exists() or not source.is_dir():
         raise FileNotFoundError("Source project does not exist.")
-    if target.exists():
+    if target.exists() or project_is_discoverable(normalized_name):
         raise FileExistsError("Target project already exists.")
     source.rename(target)
+    rename_registered_project(old_name, normalized_name)
     return normalized_name
 
 

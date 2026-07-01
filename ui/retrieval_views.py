@@ -9,9 +9,9 @@ from ui.labels import label_authority, label_retrieval_mode, label_scope, label_
 
 
 SEVERITY_LABELS = {
-    "low": "?",
-    "medium": "?",
-    "high": "?",
+    "low": "低",
+    "medium": "中",
+    "high": "高",
 }
 
 def render_retrieval_hits_block(hits: list[dict], title: str):
@@ -50,7 +50,7 @@ def render_retrieval_hits_block(hits: list[dict], title: str):
                         st.caption(f"查询扩展：{', '.join(expanded_terms[:12])}")
                     match_reasons = hit.get("match_reasons", [])
                     if match_reasons:
-                        st.caption("召回原因：" + "；".join(match_reasons[:5]))
+                        st.caption("匹配原因：" + "；".join(match_reasons[:5]))
                     score_breakdown = hit.get("score_breakdown", {})
                     if score_breakdown:
                         breakdown_text = " / ".join(f"{key}={value:.2f}" for key, value in score_breakdown.items())
@@ -87,7 +87,7 @@ def render_retrieval_feedback_controls(project_name: str, current_hits: list[dic
     if not current_hits:
         return
     with st.expander("记录本次检索反馈", expanded=False):
-        st.caption("反馈会保存到项目 RAG 资产中；后续检索会对有用/优先片段加权，对无用/错误片段降权。")
+        st.caption("反馈会保存到项目资料索引中；后续检索会对有用/优先片段加权，对无用/错误片段降权。")
         hit_options = [
             str(hit.get("chunk", {}).get("chunk_id") or "")
             for hit in current_hits
@@ -139,4 +139,3 @@ def render_retrieval_feedback_controls(project_name: str, current_hits: list[dic
                 st.rerun()
             except Exception as exc:
                 st.error(f"保存反馈失败：{exc}")
-

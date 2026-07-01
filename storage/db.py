@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import logging
+from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -21,6 +22,47 @@ def get_global_db_path(data_path: Path = Path("data")) -> Path:
     return Path(data_path) / "global.db"
 
 
+def _unique_backup_path(path: Path, timestamp: str) -> Path:
+    candidate = path.with_name(f"{path.name}.corrupt-{timestamp}")
+    counter = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.name}.corrupt-{timestamp}-{counter}")
+        counter += 1
+    return candidate
+
+
+def _quarantine_empty_db_artifacts(db_path: Path, exc: Exception) -> bool:
+    try:
+        if not db_path.exists() or db_path.stat().st_size != 0:
+            return False
+    except OSError:
+        return False
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    moved_paths: list[str] = []
+    for suffix in ["", "-journal", "-wal", "-shm"]:
+        artifact = Path(f"{db_path}{suffix}")
+        if not artifact.exists():
+            continue
+        backup_path = _unique_backup_path(artifact, timestamp)
+        try:
+            artifact.replace(backup_path)
+        except OSError as replace_exc:
+            raise RuntimeError(
+                "SQLite database is empty or corrupt but could not be moved. "
+                "Close the running app and restart it to allow recovery: "
+                f"{db_path}"
+            ) from replace_exc
+        moved_paths.append(str(backup_path))
+    logger.warning(
+        "Recovered empty SQLite database at %s after %s; moved artifacts to %s",
+        db_path,
+        exc,
+        moved_paths,
+    )
+    return True
+
+
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
@@ -37,24 +79,44 @@ def _connect(db_path: Path) -> sqlite3.Connection:
 
 def open_project_db(project_path: Path) -> sqlite3.Connection:
     db_path = get_project_db_path(project_path)
-    conn = _connect(db_path)
+    conn: sqlite3.Connection | None = None
     try:
+        conn = _connect(db_path)
         ensure_schema(conn)
-    except Exception:
-        conn.close()
+        return conn
+    except Exception as exc:
+        if conn is not None:
+            conn.close()
+        if _quarantine_empty_db_artifacts(db_path, exc):
+            conn = _connect(db_path)
+            try:
+                ensure_schema(conn)
+            except Exception:
+                conn.close()
+                raise
+            return conn
         raise
-    return conn
 
 
 def open_global_db(data_path: Path = Path("data")) -> sqlite3.Connection:
     db_path = get_global_db_path(data_path)
-    conn = _connect(db_path)
+    conn: sqlite3.Connection | None = None
     try:
+        conn = _connect(db_path)
         ensure_schema(conn)
-    except Exception:
-        conn.close()
+        return conn
+    except Exception as exc:
+        if conn is not None:
+            conn.close()
+        if _quarantine_empty_db_artifacts(db_path, exc):
+            conn = _connect(db_path)
+            try:
+                ensure_schema(conn)
+            except Exception:
+                conn.close()
+                raise
+            return conn
         raise
-    return conn
 
 
 @contextmanager

@@ -74,7 +74,7 @@ def _discussion_title(discussion: dict, discussion_kind: str) -> str:
 
 
 def _source_title(discussion: dict, discussion_kind: str) -> str:
-    return f"讨论提炼：{_discussion_title(discussion, discussion_kind)}"
+    return f"讨论结论：{_discussion_title(discussion, discussion_kind)}"
 
 
 def _setting_candidate(
@@ -116,14 +116,14 @@ def _setting_candidate(
         "evidence": [{
             "source_title": _source_title(discussion, discussion_kind),
             "quote": summary[:160],
-            "note": "由用户讨论结论提炼，用户确认后作为核心设定生效。",
+            "note": "由用户讨论结论整理，用户确认后作为核心设定生效。",
         }],
         "confidence": 0.85,
         "importance": importance,
         "evidence_strength": 0.75,
         "canon_status": "user_override",
         "extraction_mode": "discussion",
-        "tags": ["核心设定", "讨论提炼", discussion_kind, label],
+        "tags": ["核心设定", "讨论结论", discussion_kind, label],
         "scope": "project",
         "authority": "project",
         "source_title": _source_title(discussion, discussion_kind),
@@ -288,6 +288,8 @@ def build_discussion_asset_candidates(
     story_id: str,
     source_ref: str = "",
 ) -> dict[str, list[dict]]:
+    if str(discussion_kind or "").strip() == "creative_profile":
+        return {"settings": [], "prompt_options": [], "rules": []}
     return {
         "settings": build_discussion_setting_candidates(
             discussion_step,

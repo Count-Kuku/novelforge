@@ -14,7 +14,6 @@ from creative_profile_workflows import (
 )
 from memory import list_stories, load_creative_profile, save_creative_profile
 from skills import (
-    approve_creative_profile_discussion,
     discuss_creative_profile,
     discuss_creative_profile_turn,
 )
@@ -22,16 +21,20 @@ from ui.common import navigate_to, scoped_widget_key, select_with_custom, stable
 from ui.discussion import (
     _append_discussion_message,
     _consume_discussion_input_clear,
+    _discussion_initial_user_message,
     _discussion_input_clear_flag_key,
     _discussion_input_key,
     _discussion_messages_key,
     _discussion_result_key,
     _render_discussion_chat,
+    _render_discussion_decision_hint,
+    _render_discussion_empty_hint,
     _render_discussion_summary,
+    _render_discussion_workspace,
+    _run_discussion_chat_stream,
 )
 from ui.layout import render_section_heading
 from ui.step_views import render_step_json_expander, render_step_retrieval
-from ui.streaming import run_with_stream as _run_with_stream
 
 
 DEFAULT_WORLDLINE_ID = "main"
@@ -47,7 +50,6 @@ CREATIVE_PROFILE_FORM_KEYS = {
     "conflict_policy": "creative_conflict_policy",
     "custom_reference_focus": "creative_form_custom_reference_focus",
     "allow_canon_deviation": "creative_form_allow_canon_deviation",
-    "notes": "creative_form_notes",
     "reference_focus": "creative_form_reference_focus",
     "worldline_id": "creative_form_worldline_id",
     "worldline_label": "creative_form_worldline_label",
@@ -98,7 +100,6 @@ def _set_creative_profile_form_state(project_name: str, story_id: str, profile: 
     st.session_state[form_keys["worldline_id"]] = normalized["worldline_id"]
     st.session_state[form_keys["worldline_label"]] = normalized["worldline_label"]
     st.session_state[form_keys["worldline_retrieval_mode"]] = normalized["worldline_retrieval_mode"]
-    st.session_state[form_keys["notes"]] = normalized["notes"]
 
 def _current_creative_story(project_name: str) -> tuple[str, str]:
     story_id = st.session_state.get("active_story_id", "default")
@@ -122,151 +123,139 @@ def _render_creative_profile_header(current_story_name: str, embedded: bool):
             "项目级别的资料（知识库、原材料、规则）为所有故事共享。",
         )
 
-def _render_creative_profile_discussion(project_name: str, story_id: str, form_state: dict, render_discussion_asset_candidates):
+def _render_creative_profile_discussion(project_name: str, story_id: str, form_state: dict):
     creative_discussion_suffix = f"{project_name}:{story_id}"
     discussion_messages_key = _discussion_messages_key("creative_profile", creative_discussion_suffix)
     discussion_result_key = _discussion_result_key("creative_profile", creative_discussion_suffix)
     discussion_input_key = _discussion_input_key("creative_profile", creative_discussion_suffix)
     clear_input_flag_key = _discussion_input_clear_flag_key("creative_profile", creative_discussion_suffix)
+    legacy_seed_key = scoped_widget_key("creative_profile_discussion_seed", project_name, story_id)
     _consume_discussion_input_clear("creative_profile", creative_discussion_suffix)
+    if discussion_input_key not in st.session_state and st.session_state.get(legacy_seed_key):
+        st.session_state[discussion_input_key] = st.session_state.get(legacy_seed_key, "")
     discussion_step = st.session_state.get(discussion_result_key, {})
-    with st.expander("讨论工作区", expanded=not form_state.get("is_configured", False)):
-        st.caption("用自然语言描述目标，讨论结果会自动填入创作配置。保存后就可以直接进入正文生成。")
-        col_seed, col_action = st.columns([3, 1])
-        with col_seed:
-            user_idea = st.text_area(
-                "这次想写什么",
-                height=100,
-                key=scoped_widget_key("creative_profile_discussion_seed", project_name, story_id),
-                placeholder="例如：想写一个偏伤感的现代都市架空续写，只保留原作人物关系和说话风格，不保留原作结局。",
-                label_visibility="collapsed",
-            )
-        with col_action:
-            st.write("")
-            st.write("")
-            if st.button("开始讨论", key=scoped_widget_key("start_creative_profile_discussion", project_name, story_id), use_container_width=True):
-                if not user_idea.strip():
-                    st.warning("请先描述这次想写什么。")
-                else:
-                    try:
-                        result = _run_with_stream(
-                            "正在讨论创作配置...",
-                            discuss_creative_profile,
-                            project_name,
-                            user_idea,
-                            story_id=story_id,
-                            preview_language="json",
-                        )
-                        st.session_state[discussion_result_key] = result
-                        st.session_state[discussion_messages_key] = []
-                        assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、推荐配置方向和待确认问题，我们可以继续细化。"
-                        _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
-                        recommended = result.get("data", {}).get("discussion", {}).get("recommended_profile", {})
-                        if recommended:
-                            _set_creative_profile_form_state(project_name, story_id, recommended)
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"讨论失败：{exc}")
-            if st.button("重置", key=scoped_widget_key("reset_creative_profile_discussion", project_name, story_id), use_container_width=True):
-                st.session_state[discussion_result_key] = {}
-                st.session_state[discussion_messages_key] = []
-                st.session_state[clear_input_flag_key] = True
-                st.rerun()
-
-        _render_creative_profile_discussion_result(
-            project_name,
-            story_id,
-            user_idea,
-            discussion_step,
-            discussion_result_key,
-            discussion_messages_key,
-            discussion_input_key,
-            clear_input_flag_key,
-            render_discussion_asset_candidates,
-        )
+    messages = st.session_state.get(discussion_messages_key, [])
+    st.caption("把想写什么、写多长、参考资料强度和生成流程放在同一个对话里；系统会整理成配置草稿。")
+    _render_creative_profile_discussion_workspace(
+        project_name,
+        story_id,
+        discussion_step,
+        discussion_result_key,
+        discussion_messages_key,
+        discussion_input_key,
+        clear_input_flag_key,
+        messages,
+    )
 
 
-def _render_creative_profile_discussion_result(
+def _render_creative_profile_discussion_workspace(
     project_name: str,
     story_id: str,
-    user_idea: str,
     discussion_step: dict,
     discussion_result_key: str,
     discussion_messages_key: str,
     discussion_input_key: str,
     clear_input_flag_key: str,
-    render_discussion_asset_candidates,
+    messages: list[dict],
 ):
-    if discussion_step or st.session_state.get(discussion_messages_key, []):
-        summary_col, chat_col = st.columns([1, 1])
-        with summary_col:
-            st.markdown("##### 当前结论")
-            _render_discussion_summary(discussion_step, "")
-            render_step_retrieval(discussion_step, "讨论参考的上传资料")
-            render_discussion_asset_candidates(
-                project_name,
-                story_id,
-                discussion_step,
-                "creative_profile",
-                f"creative_profile:{project_name}:{story_id}",
-                scoped_widget_key("creative_profile_discussion_prompt_options", project_name, story_id),
-            )
-            discussion_payload = discussion_step.get("data", {}).get("discussion", {}) if discussion_step else {}
-            recommended_profile = discussion_payload.get("recommended_profile", {}) if isinstance(discussion_payload, dict) else {}
-            action_col1, action_col2 = st.columns(2)
-            if action_col1.button("应用推荐到表单", use_container_width=True, key=scoped_widget_key("apply_profile_rec", project_name, story_id)):
-                if not recommended_profile:
-                    st.warning("当前还没有可应用的推荐配置。")
-                else:
-                    _set_creative_profile_form_state(project_name, story_id, recommended_profile)
-                    st.success("已将推荐配置回填到表单。")
-                    st.rerun()
-            if action_col2.button("批准并保存", use_container_width=True, key=scoped_widget_key("approve_profile_rec", project_name, story_id)):
+    def render_input_panel(_stream_container) -> None:
+        st.markdown("##### 讨论创作配置")
+        _render_discussion_decision_hint(
+            ["故事类型", "目标篇幅", "生成流程", "参考强度"],
+            "创作配置、项目资源和后续检索",
+            note="建议可直接保存为正式配置；需要细调可在下方高级配置修改。",
+        )
+        current_messages = st.session_state.get(discussion_messages_key, [])
+        if current_messages:
+            _render_discussion_chat(current_messages, height=260)
+        else:
+            _render_discussion_empty_hint("先说想写什么，我会整理成配置建议。")
+        live_turn_container = st.empty()
+        user_input = st.text_area(
+            "讨论输入",
+            key=discussion_input_key,
+            height=96,
+            placeholder="例如：我想写一个同一时间线下女主视角的故事，篇幅和当前上传的篇幅差不多。",
+            label_visibility="collapsed",
+        )
+        has_started = bool(st.session_state.get(discussion_result_key) or current_messages)
+        send_label = "发送" if has_started else "开始讨论"
+        action_col, reset_col = st.columns([3, 1])
+        if action_col.button(send_label, key=scoped_widget_key("send_creative_profile_discussion", project_name, story_id), use_container_width=True):
+            submitted = str(user_input or "").strip()
+            if not submitted:
+                st.warning("讨论消息不能为空。")
+            else:
                 try:
-                    result = approve_creative_profile_discussion(project_name, discussion_step, story_id=story_id)
-                    _set_creative_profile_form_state(project_name, story_id, result.get("saved_profile", {}))
-                    st.success("已保存创作配置。")
+                    existing_messages = list(st.session_state.get(discussion_messages_key, []))
+                    _append_discussion_message(discussion_messages_key, "user", submitted)
+                    updated_messages = st.session_state.get(discussion_messages_key, [])
+                    if has_started:
+                        seed_idea = _discussion_initial_user_message(existing_messages, submitted)
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "继续讨论创作配置",
+                            discuss_creative_profile_turn,
+                            project_name,
+                            seed_idea,
+                            updated_messages,
+                            st.session_state.get(discussion_result_key, {}).get("data", {}).get("discussion", {}),
+                            submitted,
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("assistant_message", "") or "已更新创作配置建议。"
+                    else:
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "讨论创作配置",
+                            discuss_creative_profile,
+                            project_name,
+                            submitted,
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了当前理解、推荐配置方向和待确认问题，我们可以继续细化。"
+                    st.session_state[discussion_result_key] = result
+                    _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
+                    st.session_state[clear_input_flag_key] = True
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"批准失败：{exc}")
-        with chat_col:
-            st.markdown("##### 对话")
-            messages = st.session_state.get(discussion_messages_key, [])
-            _render_discussion_chat(messages)
-            follow_up = st.text_area(
-                "继续讨论",
-                key=discussion_input_key,
-                height=80,
-                placeholder="例如：我希望重点保留人物关系，但剧情走向可以明显偏离原作。",
-                label_visibility="collapsed",
-            )
-            if st.button("发送", key=scoped_widget_key("send_creative_profile_discussion", project_name, story_id), use_container_width=True):
-                if not follow_up.strip():
-                    st.warning("讨论消息不能为空。")
-                elif not user_idea.strip():
-                    st.warning("请先填写这次想写什么。")
-                else:
-                    try:
-                        _append_discussion_message(discussion_messages_key, "user", follow_up)
-                        messages = st.session_state.get(discussion_messages_key, [])
-                        result = _run_with_stream(
-                            "正在继续讨论创作配置...",
-                            discuss_creative_profile_turn,
-                            project_name, user_idea, messages,
-                            discussion_step.get("data", {}).get("discussion", {}),
-                            follow_up, story_id=story_id,
-                            preview_language="json",
-                        )
-                        st.session_state[discussion_result_key] = result
-                        assistant_message = result.get("data", {}).get("assistant_message", "") or "已更新创作配置建议。"
-                        _append_discussion_message(discussion_messages_key, "assistant", assistant_message)
-                        recommended = result.get("data", {}).get("discussion", {}).get("recommended_profile", {})
-                        if recommended:
-                            _set_creative_profile_form_state(project_name, story_id, recommended)
-                        st.session_state[clear_input_flag_key] = True
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"继续讨论失败：{exc}")
+                    st.error(f"讨论失败：{exc}")
+        if reset_col.button("重置", key=scoped_widget_key("reset_creative_profile_discussion", project_name, story_id), use_container_width=True):
+            st.session_state[discussion_result_key] = {}
+            st.session_state[discussion_messages_key] = []
+            st.session_state[clear_input_flag_key] = True
+            st.rerun()
+
+    def render_output_panel() -> None:
+        st.markdown("##### 配置草稿")
+        current_step = st.session_state.get(discussion_result_key, discussion_step)
+        if not current_step:
+            st.caption("开始讨论后，这里显示配置建议；确认后可直接保存为正式创作配置。")
+            return
+        discussion_payload = current_step.get("data", {}).get("discussion", {}) if current_step else {}
+        recommended_profile = discussion_payload.get("recommended_profile", {}) if isinstance(discussion_payload, dict) else {}
+        st.markdown("##### 建议详情")
+        _render_discussion_summary(current_step, "")
+        st.caption("使用建议会直接保存为正式创作配置；需要细调时，可到下方高级配置修改后再保存。")
+        if st.button("保存", use_container_width=True, type="primary", key=scoped_widget_key("apply_profile_rec", project_name, story_id)):
+            if not recommended_profile:
+                st.warning("当前还没有可保存的推荐配置。")
+            else:
+                profile_to_save = dict(recommended_profile)
+                profile_to_save.pop("notes", None)
+                saved_profile = save_creative_profile(project_name, profile_to_save, story_id=story_id, mark_configured=True)
+                _set_creative_profile_form_state(project_name, story_id, saved_profile)
+                st.success("已保存为正式创作配置。")
+                st.rerun()
+        render_step_retrieval(current_step, "讨论参考的上传资料")
+    _render_discussion_workspace(
+        f"creative-profile-{project_name}-{story_id}",
+        render_input_panel,
+        render_output_panel,
+    )
+
 
 def _creative_profile_from_form_values(form_values: dict) -> dict:
     return build_creative_profile_from_form_values(
@@ -282,7 +271,6 @@ def _creative_profile_from_form_values(form_values: dict) -> dict:
         form_values["worldline_id"],
         form_values["worldline_label"],
         form_values["worldline_retrieval_mode"],
-        form_values["notes"],
     )
 
 
@@ -293,7 +281,7 @@ def _render_creative_worldline_fields(form_state: dict, profile_keys: dict[str, 
         value=form_state.get("worldline_id", DEFAULT_WORLDLINE_ID),
         placeholder="例如：main、au_modern、branch_01",
         key=profile_keys["worldline_id"],
-        help="用于 RAG 检索过滤和加权。建议使用稳定英文/拼音/数字 ID。",
+        help="用于 资料检索过滤和加权。建议使用稳定英文/拼音/数字 ID。",
     )
     worldline_label = col_worldline_b.text_input(
         "当前世界线名称",
@@ -334,18 +322,10 @@ def _render_creative_reference_fields(form_state: dict, profile_keys: dict[str, 
         value=bool(form_state.get("allow_canon_deviation", True)),
         key=profile_keys["allow_canon_deviation"],
     )
-    notes = st.text_area(
-        "自由说明",
-        value=form_state.get("notes", ""),
-        height=140,
-        placeholder="这里可以写任何复杂规则。例如：这次是半架空续写，只保留角色关系和说话风格，不保留原作结局；世界观改成现代都市，但能力体系保留原作限制。",
-        key=profile_keys["notes"],
-    )
     return {
         "reference_focus": reference_focus,
         "custom_reference_focus": custom_reference_focus,
         "allow_canon_deviation": allow_canon_deviation,
-        "notes": notes,
     }
 
 
@@ -464,8 +444,8 @@ def _render_creative_profile_recommendation(project_name: str, story_id: str, pr
         if st.button("开始生成正文", type="primary", use_container_width=True, key=scoped_widget_key("start_generation_after_profile", project_name, story_id)):
             navigate_to("正文生成")
             st.rerun()
-    with st.expander("高级：创作配置结构化数据", expanded=False):
-        st.json(profile)
+    with st.expander("高级：创作配置详细数据", expanded=False):
+        st.json({key: value for key, value in profile.items() if key != "notes"})
 
 def render_creative_profile_page(project_name: str, embedded: bool = False, *, render_discussion_asset_candidates):
     story_id, current_story_name = _current_creative_story(project_name)
@@ -474,12 +454,11 @@ def render_creative_profile_page(project_name: str, embedded: bool = False, *, r
     profile = load_creative_profile(project_name, story_id=story_id)
     _init_creative_profile_form_state(project_name, story_id, profile)
     form_state = _get_creative_profile_form_state(project_name, story_id)
-    render_section_heading("讨论辅助", "不确定目标时先讨论；明确目标时可以直接展开手动配置。")
+    render_section_heading("讨论创作配置", "把想写的内容说清楚，系统会整理成可采用的配置建议。")
     _render_creative_profile_discussion(
         project_name,
         story_id,
         form_state,
-        render_discussion_asset_candidates,
     )
     render_section_heading("手动配置", "这些字段会决定后续规划、正文生成和检索资料的默认策略。")
     profile = _render_creative_profile_form(project_name, story_id, form_state)
@@ -510,12 +489,6 @@ def render_creative_task_wizard(project_name: str, story_id: str = "default"):
         key="task_wizard_focus",
     )
     allow_canon_deviation = st.checkbox("允许按需求改写原设", value=True, key="task_wizard_allow_deviation")
-    notes = st.text_area(
-        "补充说明",
-        height=120,
-        key="task_wizard_notes",
-        placeholder="例如：穿越到新环境，只保留角色性格和说话方式；能力体系保留原作限制，但剧情完全重写。",
-    )
 
     preview_profile = build_profile_from_task_wizard(
         task_type,
@@ -526,12 +499,11 @@ def render_creative_task_wizard(project_name: str, story_id: str = "default"):
         focus_items,
         allow_canon_deviation,
         conflict_policy,
-        notes,
     )
     st.caption(f"推荐路径：{' / '.join(recommended_workflow_for_profile(preview_profile))}")
     render_step_json_expander("向导生成的配置预览", preview_profile)
 
-    if st.button("保存向导配置"):
+    if st.button("保存向导配置", key=scoped_widget_key("save_creative_task_wizard", project_name, story_id)):
         saved = save_creative_profile(project_name, preview_profile, story_id=story_id, mark_configured=True)
         _set_creative_profile_form_state(project_name, story_id, saved)
         st.success("已根据向导保存创作配置。")

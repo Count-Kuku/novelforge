@@ -121,8 +121,8 @@ def _render_long_reference_flow_notes():
             """
 1. **预览切分**：只把文本临时拆成章节/片段，方便检查切分是否合理，还不会写入资料库。
 2. **保存为处理批次**：把这次切分结果保存下来。之后可以在“长篇批次”里继续导入、提取、重试或重新提取。
-3. **导入资料索引**：把片段作为原文资料加入检索库。后续写作、规划、审阅可以召回原文证据，但不会生成结构化角色/设定卡。
-4. **提取结构化知识**：让模型从片段中提取角色、关系、时间线、设定、文风等候选知识，结果先进入“待确认知识”，需要审核后才会成为正式知识库。
+3. **导入资料索引**：把片段作为原文资料加入检索库。后续写作、规划、审阅可以匹配原文证据，但不会生成结构化角色/设定卡。
+4. **提取知识库条目**：让模型从片段中提取角色、关系、时间线、设定、文风等候选知识，结果先进入“待确认知识”，需要审核后才会成为正式知识库。
             """.strip()
         )
 
@@ -356,7 +356,7 @@ def _render_long_reference_quick_processing(
     knowledge_category_options: list[str],
 ) -> dict:
     st.markdown("#### 4. 自动处理")
-    st.caption("会自动保存批次、导入资料索引、提取结构化知识，并保存低风险条目；有冲突或证据不足的条目会留在“待确认知识”。")
+    st.caption("会自动保存批次、导入资料索引、提取知识库条目，并保存低风险条目；有冲突或证据不足的条目会留在“待确认知识”。")
     quick_extract_limit = st.number_input(
         "本次最多处理片段数",
         min_value=1,
@@ -382,7 +382,7 @@ def _render_long_reference_quick_processing(
             "同时导入资料索引",
             value=True,
             key="long_reference_quick_import_index",
-            help="开启后，原文片段会进入检索库，后续写作可以召回原文证据。",
+            help="开启后，原文片段会进入检索库，后续写作可以匹配原文证据。",
         )
         quick_auto_confirm = st.checkbox(
             "自动审核并保存低风险知识",
@@ -481,7 +481,7 @@ def _render_long_reference_stepwise_processing(
 
         if st.button(
             "导入资料索引",
-            help="把所选片段作为可检索原文资料入库。适合让后续写作引用原文，但不会自动生成角色/设定知识。",
+            help="把所选片段作为可检索原文资料保存。适合让后续写作引用原文，但不会自动生成角色/设定知识。",
         ):
             if not selected_indices:
                 st.error("请先选择片段。")
@@ -491,7 +491,7 @@ def _render_long_reference_stepwise_processing(
                 st.success(f"已导入 {imported} 个长篇资料片段，并重建检索索引。")
                 st.rerun()
 
-        st.markdown("##### 手动提取结构化知识")
+        st.markdown("##### 手动提取知识库条目")
         batch_limit = st.number_input("本次最多提取片段数", min_value=1, value=3, key="long_reference_extract_limit")
         manual_extract_high_ok = True
         if batch_limit > 50:
@@ -506,7 +506,7 @@ def _render_long_reference_stepwise_processing(
             key="long_reference_manual_consolidate",
             help="提取完成后自动合并重复/同名的候选知识条目。提取片段数较多时建议开启。",
         )
-        if st.button("提取结构化知识", use_container_width=True):
+        if st.button("提取知识库条目", use_container_width=True):
             if not selected_indices:
                 st.error("请先选择片段。")
             elif not shared_categories:
@@ -514,10 +514,10 @@ def _render_long_reference_stepwise_processing(
             elif not manual_extract_high_ok:
                 st.error("处理数量超过 50 段，请先勾选确认框。")
             else:
-                progress_callback = create_batch_progress_callback("手动提取结构化知识")
+                progress_callback = create_batch_progress_callback("手动提取知识库条目")
                 batch = _get_or_create_long_reference_preview_batch(batch_context)
                 _, processed, queued_total, failed_titles = _run_with_stream(
-                    "正在分批提取结构化知识...",
+                    "正在分批提取知识库条目...",
                     extract_long_reference_segments_to_queue,
                     project_name,
                     batch,

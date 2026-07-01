@@ -120,7 +120,7 @@ def _render_chapter_write_settings(
 ) -> tuple[dict, list[str] | None]:
     write_settings_ui = st.expander("高级：写作设置", expanded=False)
     write_settings_ui.markdown("### 当前写作设置")
-    write_settings_ui.caption("Prompt 选项只影响本次生成会额外采用哪些写作提示。没有选项也能生成；需要时可在下方直接新增。")
+    write_settings_ui.caption("提示词选项只影响本次生成会额外采用哪些写作提示。没有选项也能生成；需要时可在下方直接新增。")
     try:
         effective_prompt_options = merge_prompt_option_layers(
             load_global_prompt_options(),
@@ -129,7 +129,7 @@ def _render_chapter_write_settings(
         )
         write_prompt_options = filter_prompt_options(effective_prompt_options, "write", enabled_only=False)
     except Exception as exc:
-        write_settings_ui.warning(f"Prompt 选项加载失败：{exc}")
+        write_settings_ui.warning(f"提示词选项加载失败：{exc}")
         write_prompt_options = []
     selected_prompt_option_ids = None
     if write_prompt_options:
@@ -137,7 +137,7 @@ def _render_chapter_write_settings(
         option_labels = {option.get("id", ""): _prompt_option_label(option) for option in write_prompt_options}
         default_option_ids = [option.get("id", "") for option in write_prompt_options if option.get("enabled", True)]
         selected_prompt_option_ids = write_settings_ui.multiselect(
-            "本次使用 Prompt 选项",
+            "本次使用提示词选项",
             options=option_ids,
             default=default_option_ids,
             format_func=lambda option_id: option_labels.get(option_id, option_id),
@@ -145,7 +145,7 @@ def _render_chapter_write_settings(
             help="默认勾选已启用选项；也可以临时选择未启用的预设，仅影响本次生成。",
         )
     else:
-        write_settings_ui.info("还没有可用于正文写作的 Prompt 选项。它不是讨论后才会出现；展开下面的管理区就能新增，或去工作台的「提示词选项」页复制内置预设。")
+        write_settings_ui.info("还没有可用于正文写作的提示词选项。它不是讨论后才会出现；展开下面的管理区就能新增，或去工作台的「提示词选项」页复制内置预设。")
     write_settings_ui.markdown("#### 提示词选项")
     with write_settings_ui.container():
         _render_prompt_option_inline_tools(
@@ -296,19 +296,19 @@ def _render_chapter_discussion_guidance(
         )
 
     st.markdown("### 本章讨论与写作提示")
-    st.caption("这里适合写临时想法、需要特别执行的写法、和已批准章节讨论的收束结论；生成正文时会并入写作补充要求。")
+    st.caption("这里适合写临时想法、需要特别执行的写法、和已保存章节结论的收束结论；生成正文时会并入写作补充要求。")
     discussion_guidance_key = scoped_widget_key("write_discussion_guidance", *chapter_scope)
     if discussion_guidance_default and discussion_guidance_key not in st.session_state:
         st.session_state[discussion_guidance_key] = discussion_guidance_default
     action_col, preview_col = st.columns([1, 1])
-    if action_col.button("用已批准章节讨论填入", key=scoped_widget_key("fill_discussion_guidance", *chapter_scope)):
+    if action_col.button("用已保存章节结论填入", key=scoped_widget_key("fill_discussion_guidance", *chapter_scope)):
         if discussion_guidance_default:
             st.session_state[discussion_guidance_key] = discussion_guidance_default
-            st.success("已填入已批准章节讨论。")
+            st.success("已填入已保存章节结论。")
         else:
-            st.warning("当前章节还没有已批准讨论工件。")
-    with preview_col.expander("查看已批准章节讨论", expanded=False):
-        _render_approved_discussion_artifact(approved_discussion_artifact, "当前章节还没有已批准讨论工件。")
+            st.warning("当前章节还没有保存讨论结论。")
+    with preview_col.expander("查看已保存章节结论", expanded=False):
+        _render_approved_discussion_artifact(approved_discussion_artifact, "当前章节还没有保存讨论结论。")
     return st.text_area(
         "讨论/指导提示",
         height=160,
@@ -334,7 +334,13 @@ def _render_chapter_generation_actions(
 ):
     col_write, col_pipeline = st.columns([1, 1])
     with col_write:
-        write_clicked = st.button("写正文", type="primary" if has_outline else "secondary", use_container_width=True, key=scoped_widget_key("write_chapter_btn", *chapter_scope))
+        write_clicked = st.button(
+            "写正文" if has_outline else "需要先填写或生成细纲",
+            type="primary" if has_outline else "secondary",
+            disabled=not has_outline,
+            use_container_width=True,
+            key=scoped_widget_key("write_chapter_btn", *chapter_scope),
+        )
     with col_pipeline:
         pipeline_clicked = st.button(
             "细纲→写作→审阅→提炼设定" if has_outline else "需要先填写或生成细纲",
@@ -467,7 +473,7 @@ def _render_chapter_review_memory_actions(
                 queued_count = result.get("data", {}).get("queued_knowledge_count", 0)
                 render_step_status_message(result, f"已提炼 {queued_count} 条候选设定，等待确认后生效", "设定提炼失败：")
                 render_step_validation(result)
-                render_step_json_expander("章节设定提炼结构化数据", result)
+                render_step_json_expander("章节设定提炼详细数据", result)
             except Exception as exc:
                 st.error(f"设定提炼失败：{exc}")
 
@@ -506,17 +512,17 @@ def _render_chapter_result_details(
     render_step_validation(chapter_step)
     render_step_retrieval(
         chapter_step,
-        "本次正文生成使用的检索上下文",
+        "本次正文生成参考的资料",
         get_retrieval_trace(f"write:{project_name}:{story_id}:{chapter_no}")
     )
     render_step_retrieval(
         st.session_state.get(review_inline_step_key, {}),
-        "本次审阅使用的检索上下文",
+        "本次审阅参考的资料",
         get_retrieval_trace(f"review:{project_name}:{story_id}:{chapter_no}")
     )
     render_step_retrieval(
         st.session_state.get(setting_extraction_step_key, {}),
-        "本次设定提炼使用的检索上下文",
+        "本次设定提炼参考的资料",
         get_retrieval_trace(f"setting_extraction:{project_name}:{story_id}:{chapter_no}")
     )
 
@@ -745,4 +751,3 @@ def render_chapter_page(project_name: str):
     chapter_text = _render_chapter_generation_section(project_name, context, chapter_outline)
     render_section_heading("审阅与设定提炼", "正文稳定后可以保存、审阅，并把长期设定提炼到待确认队列。")
     _render_chapter_review_section(project_name, context, chapter_text)
-

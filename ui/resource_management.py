@@ -29,6 +29,7 @@ from ui.resource_browser_state import (
     _get_resource_browser_selection,
     _resource_browser_selection_key,
     _set_resource_browser_selection,
+    resource_browser_filter_key,
 )
 from ui.step_views import render_step_json_expander
 
@@ -63,8 +64,8 @@ GLOBAL_FILTER_PASSTHROUGH_GROUPS = {
 ARC_FILTER_PASSTHROUGH_GROUPS = GLOBAL_FILTER_PASSTHROUGH_GROUPS | {"volume_outline", "volume_discussion"}
 
 
-def _reset_resource_browser_selection(project_name: str) -> None:
-    st.session_state[_resource_browser_selection_key(project_name)] = {}
+def _reset_resource_browser_selection(project_name: str, story_id: str) -> None:
+    st.session_state[_resource_browser_selection_key(project_name, story_id)] = {}
 
 
 def _status_index(status: str) -> int:
@@ -77,19 +78,19 @@ def _render_run_resource_detail(project_name: str, story_id: str, resource: dict
     if confirmed_button(st, "删除该运行记录", "确认删除该运行记录", delete_key):
         if _delete_browser_resource(project_name, resource, story_id=story_id):
             st.success("运行记录已删除。")
-            _reset_resource_browser_selection(project_name)
+            _reset_resource_browser_selection(project_name, story_id)
             st.rerun()
 
 
 def _render_discussion_resource_detail(project_name: str, story_id: str, resource: dict) -> None:
     if resource.get("content"):
         st.markdown(resource.get("content", ""))
-    render_step_json_expander("结构化数据", resource.get("discussion_payload", {}) or resource.get("chapter_plan_payload", {}))
+    render_step_json_expander("详细数据", resource.get("discussion_payload", {}) or resource.get("chapter_plan_payload", {}))
     delete_key = scoped_widget_key("browser_delete", project_name, story_id, resource.get("id"))
-    if confirmed_button(st, "删除该工件", "确认删除该讨论/计划工件", delete_key):
+    if confirmed_button(st, "删除这条记录", "确认删除这条讨论/计划记录", delete_key):
         if _delete_browser_resource(project_name, resource, story_id=story_id):
-            st.success("工件已删除。")
-            _reset_resource_browser_selection(project_name)
+            st.success("记录已删除。")
+            _reset_resource_browser_selection(project_name, story_id)
             st.rerun()
 
 
@@ -104,21 +105,21 @@ def _render_readonly_resource_detail(project_name: str, story_id: str, resource:
         navigate_to("资料导入")
 
 
-def _render_volume_metadata_editor(resource: dict) -> None:
+def _render_volume_metadata_editor(project_name: str, story_id: str, resource: dict) -> None:
     metadata = dict(resource.get("volume_metadata", {}) or {})
-    volume_title = st.text_input("分卷标题", value=metadata.get("title", ""), key=f"browser_volume_title_{resource.get('id')}")
+    volume_title = st.text_input("分卷标题", value=metadata.get("title", ""), key=scoped_widget_key("browser_volume_title", project_name, story_id, resource.get("id")))
     volume_summary = st.text_area(
         "分卷摘要",
         value=metadata.get("summary", ""),
         height=120,
-        key=f"browser_volume_summary_{resource.get('id')}",
+        key=scoped_widget_key("browser_volume_summary", project_name, story_id, resource.get("id")),
     )
     volume_status = st.selectbox(
         "分卷状态",
         options=STATUS_OPTIONS,
         index=_status_index(metadata.get("status", "draft")),
         format_func=label_status,
-        key=f"browser_volume_status_{resource.get('id')}",
+        key=scoped_widget_key("browser_volume_status", project_name, story_id, resource.get("id")),
     )
     resource["volume_metadata"] = {
         "volume_no": int(resource.get("volume_no", 0)),
@@ -130,12 +131,12 @@ def _render_volume_metadata_editor(resource: dict) -> None:
 
 def _render_arc_metadata_editor(project_name: str, story_id: str, resource: dict) -> None:
     metadata = dict(resource.get("arc_metadata", {}) or {})
-    arc_title = st.text_input("剧情段标题", value=metadata.get("title", ""), key=f"browser_arc_title_{resource.get('id')}")
+    arc_title = st.text_input("剧情段标题", value=metadata.get("title", ""), key=scoped_widget_key("browser_arc_title", project_name, story_id, resource.get("id")))
     arc_summary = st.text_area(
         "剧情段摘要",
         value=metadata.get("summary", ""),
         height=120,
-        key=f"browser_arc_summary_{resource.get('id')}",
+        key=scoped_widget_key("browser_arc_summary", project_name, story_id, resource.get("id")),
     )
     volume_options = [0] + [int(item.get("volume_no", 0)) for item in list_volumes(project_name, story_id=story_id)]
     current_volume = int(metadata.get("volume_no") or 0)
@@ -144,25 +145,25 @@ def _render_arc_metadata_editor(project_name: str, story_id: str, resource: dict
         options=volume_options,
         index=volume_options.index(current_volume) if current_volume in volume_options else 0,
         format_func=lambda value: "未指定分卷" if value == 0 else f"第 {value} 卷",
-        key=f"browser_arc_volume_{resource.get('id')}",
+        key=scoped_widget_key("browser_arc_volume", project_name, story_id, resource.get("id")),
     )
     arc_status = st.selectbox(
         "剧情段状态",
         options=STATUS_OPTIONS,
         index=_status_index(metadata.get("status", "draft")),
         format_func=label_status,
-        key=f"browser_arc_status_{resource.get('id')}",
+        key=scoped_widget_key("browser_arc_status", project_name, story_id, resource.get("id")),
     )
     estimated_chapter_count = st.number_input(
         "预计章节数",
         min_value=0,
         value=int(metadata.get("estimated_chapter_count") or 0),
-        key=f"browser_arc_estimated_chapters_{resource.get('id')}",
+        key=scoped_widget_key("browser_arc_estimated_chapters", project_name, story_id, resource.get("id")),
     )
     target_word_count_range = st.text_input(
         "目标总字数范围",
         value=metadata.get("target_word_count_range", ""),
-        key=f"browser_arc_word_range_{resource.get('id')}",
+        key=scoped_widget_key("browser_arc_word_range", project_name, story_id, resource.get("id")),
     )
     resource["arc_metadata"] = {
         "arc_no": int(resource.get("arc_no", 0)),
@@ -175,33 +176,33 @@ def _render_arc_metadata_editor(project_name: str, story_id: str, resource: dict
     }
 
 
-def _render_structured_payload_editor(resource: dict) -> str:
+def _render_structured_payload_editor(project_name: str, story_id: str, resource: dict) -> str:
     if resource.get("group") == "review":
         return st.text_area(
-            "审阅结构化数据",
+            "审阅详细数据",
             value=json.dumps(resource.get("review_payload", {}), ensure_ascii=False, indent=2),
             height=220,
-            key=f"browser_json_{resource.get('id')}",
+            key=scoped_widget_key("browser_json", project_name, story_id, resource.get("id")),
         )
     if resource.get("group") == "evaluation":
         return st.text_area(
-            "评估结构化数据",
+            "评估详细数据",
             value=json.dumps(resource.get("evaluation_payload", {}), ensure_ascii=False, indent=2),
             height=220,
-            key=f"browser_json_{resource.get('id')}",
+            key=scoped_widget_key("browser_json", project_name, story_id, resource.get("id")),
         )
     return ""
 
 
 def _render_editable_resource_actions(project_name: str, story_id: str, resource: dict, edited_content: str, edited_json_text: str) -> None:
     save_col, delete_col = st.columns(2)
-    if resource.get("editable") and save_col.button("保存当前资源", key=f"browser_save_{resource.get('id')}"):
+    if resource.get("editable") and save_col.button("保存当前资源", key=scoped_widget_key("browser_save", project_name, story_id, resource.get("id"))):
         try:
             _save_browser_resource(project_name, resource, edited_content, edited_json_text, story_id=story_id)
             st.success("资源已保存。")
             st.rerun()
         except json.JSONDecodeError as exc:
-            st.error(f"结构化数据格式错误：{exc}")
+            st.error(f"详细数据格式错误：{exc}")
         except Exception as exc:
             st.error(f"保存资源失败：{exc}")
 
@@ -210,7 +211,7 @@ def _render_editable_resource_actions(project_name: str, story_id: str, resource
         try:
             if _delete_browser_resource(project_name, resource, story_id=story_id):
                 st.success("资源已删除。")
-                _reset_resource_browser_selection(project_name)
+                _reset_resource_browser_selection(project_name, story_id)
                 st.rerun()
             else:
                 st.warning("目标资源不存在。")
@@ -244,19 +245,19 @@ def _render_resource_browser_detail(project_name: str, resource: dict):
         "内容",
         value=resource.get("content", ""),
         height=520,
-        key=f"browser_editor_{resource.get('id')}"
+        key=scoped_widget_key("browser_editor", project_name, story_id, resource.get("id"))
     )
 
     if group == "volume_outline":
-        _render_volume_metadata_editor(resource)
+        _render_volume_metadata_editor(project_name, story_id, resource)
     if group == "arc_outline":
         _render_arc_metadata_editor(project_name, story_id, resource)
-    edited_json_text = _render_structured_payload_editor(resource)
+    edited_json_text = _render_structured_payload_editor(project_name, story_id, resource)
     _render_editable_resource_actions(project_name, story_id, resource, edited_content, edited_json_text)
 
 def _render_resource_browser_filters(project_name: str, story_id: str) -> dict:
-    search_value = st.text_input("搜索资源", key=f"resource_browser_search_{project_name}")
-    group_filter_key = f"resource_browser_group_filter_{project_name}"
+    search_value = st.text_input("搜索资源", key=resource_browser_filter_key("resource_browser_search", project_name, story_id))
+    group_filter_key = resource_browser_filter_key("resource_browser_group_filter", project_name, story_id)
     group_filter_options = [group_key for group_key, _ in RESOURCE_BROWSER_GROUPS]
     existing_group_filter = st.session_state.get(group_filter_key)
     if not isinstance(existing_group_filter, list) or any(group not in group_filter_options for group in existing_group_filter):
@@ -272,7 +273,7 @@ def _render_resource_browser_filters(project_name: str, story_id: str) -> dict:
         "按分卷过滤",
         options=volume_filter_options,
         format_func=lambda value: "全部分卷" if value == 0 else f"第 {value} 卷",
-        key=f"resource_browser_volume_filter_{project_name}",
+        key=resource_browser_filter_key("resource_browser_volume_filter", project_name, story_id),
     )
     arc_filter_candidates = list_arcs(project_name, volume_no=browser_volume_filter or None, story_id=story_id)
     arc_filter_options = [0] + [int(item.get("arc_no", 0)) for item in arc_filter_candidates]
@@ -280,7 +281,7 @@ def _render_resource_browser_filters(project_name: str, story_id: str) -> dict:
         "按剧情段过滤",
         options=arc_filter_options,
         format_func=lambda value: "全部剧情段" if value == 0 else f"剧情段 {value:03d}",
-        key=f"resource_browser_arc_filter_{project_name}",
+        key=resource_browser_filter_key("resource_browser_arc_filter", project_name, story_id),
     )
     return {
         "search_lower": search_value.strip().lower(),
@@ -299,7 +300,7 @@ def _render_bulk_chapter_cleanup(project_name: str, story_id: str) -> None:
         "批量章节清理",
         options=chapter_numbers,
         format_func=lambda value: f"第 {int(value)} 章",
-        key=f"resource_bulk_chapters_{project_name}",
+        key=scoped_widget_key("resource_bulk_chapters", project_name, story_id),
     )
     if bulk_chapter_selection and confirmed_button(
         st,
@@ -325,7 +326,7 @@ def _render_bulk_run_cleanup(project_name: str, story_id: str) -> None:
     bulk_runs = st.multiselect(
         "批量删除运行记录",
         options=[run.get("run_id") for run in runs],
-        key=f"resource_bulk_runs_{project_name}",
+        key=scoped_widget_key("resource_bulk_runs", project_name, story_id),
     )
     if bulk_runs and confirmed_button(
         st,
@@ -433,7 +434,7 @@ def _filter_resource_group_items(browser_items: list[dict], group_key: str, filt
     return group_items
 
 
-def _render_visible_resource_groups(project_name: str, browser_items: list[dict], selected: dict, filters: dict) -> list[dict]:
+def _render_visible_resource_groups(project_name: str, story_id: str, browser_items: list[dict], selected: dict, filters: dict) -> list[dict]:
     visible_items = []
     for group_key, group_label in RESOURCE_BROWSER_GROUPS:
         if group_key not in filters["active_group_filter"]:
@@ -446,8 +447,8 @@ def _render_visible_resource_groups(project_name: str, browser_items: list[dict]
         for item in group_items:
             selected_flag = selected.get("id") == item.get("id")
             button_label = f"> {item.get('label')}" if selected_flag else item.get("label")
-            if st.button(button_label, key=f"resource_select_{item.get('id')}", use_container_width=True):
-                _set_resource_browser_selection(project_name, item)
+            if st.button(button_label, key=scoped_widget_key("resource_select", project_name, story_id, item.get("id")), use_container_width=True):
+                _set_resource_browser_selection(project_name, story_id, item)
                 st.rerun()
     if not visible_items:
         st.caption("当前筛选下没有可显示的资源。")
@@ -455,35 +456,41 @@ def _render_visible_resource_groups(project_name: str, browser_items: list[dict]
 
 
 def _render_resource_browser_sidebar(project_name: str, story_id: str, browser_items: list[dict], selected: dict) -> list[dict]:
-    st.markdown("### 资源浏览器")
+    st.markdown("### 项目资源")
     filters = _render_resource_browser_filters(project_name, story_id)
     _render_bulk_cleanup(project_name, story_id)
-    return _render_visible_resource_groups(project_name, browser_items, selected, filters)
+    return _render_visible_resource_groups(project_name, story_id, browser_items, selected, filters)
 
 
-def _resolve_browser_selection(project_name: str, selected: dict, browser_items: list[dict], visible_items: list[dict]) -> dict:
-    if selected and not any(item.get("id") == selected.get("id") for item in browser_items):
-        selected = {}
-        _reset_resource_browser_selection(project_name)
+def _resolve_browser_selection(project_name: str, story_id: str, selected: dict, browser_items: list[dict], visible_items: list[dict]) -> dict:
+    if selected:
+        current_selected = next((item for item in browser_items if item.get("id") == selected.get("id")), None)
+        if current_selected:
+            selected = current_selected
+            _set_resource_browser_selection(project_name, story_id, selected)
+        else:
+            selected = {}
+            _reset_resource_browser_selection(project_name, story_id)
+
     visible_ids = {item.get("id") for item in visible_items}
     if selected and not visible_ids:
         selected = {}
-        _reset_resource_browser_selection(project_name)
+        _reset_resource_browser_selection(project_name, story_id)
     if selected and visible_ids and selected.get("id") not in visible_ids:
         selected = {}
-        _reset_resource_browser_selection(project_name)
+        _reset_resource_browser_selection(project_name, story_id)
     if not selected and visible_items:
         selected = visible_items[0]
-        _set_resource_browser_selection(project_name, selected)
+        _set_resource_browser_selection(project_name, story_id, selected)
     return selected
 
 
 def render_resource_management_page(project_name: str):
-    st.subheader("资源浏览器")
+    st.subheader("项目资源")
     story_id = st.session_state.get("active_story_id", "default")
     browser_items = _build_resource_browser_items(project_name, story_id=story_id)
-    selected = _get_resource_browser_selection(project_name)
-    focused_selected, focus_warning = _consume_resource_browser_focus(project_name, browser_items)
+    selected = _get_resource_browser_selection(project_name, story_id)
+    focused_selected, focus_warning = _consume_resource_browser_focus(project_name, story_id, browser_items)
     if focused_selected:
         selected = focused_selected
     if focus_warning:
@@ -494,6 +501,5 @@ def render_resource_management_page(project_name: str):
         visible_items = _render_resource_browser_sidebar(project_name, story_id, browser_items, selected)
     with right_col:
         st.markdown("### 资源详情")
-        selected = _resolve_browser_selection(project_name, selected, browser_items, visible_items)
+        selected = _resolve_browser_selection(project_name, story_id, selected, browser_items, visible_items)
         _render_resource_browser_detail(project_name, selected)
-

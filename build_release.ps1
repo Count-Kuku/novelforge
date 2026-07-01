@@ -112,6 +112,12 @@ foreach ($relativePath in $directoriesToCopy) {
     Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $PortableRoot $relativePath) -Recurse
 }
 
+Get-ChildItem -LiteralPath $PortableRoot -Recurse -Force -File |
+    Where-Object { $_.Name -like "*~*" -or $_.Name -like "*.bak" -or $_.Name -like "*.tmp" } |
+    Remove-Item -Force
+Get-ChildItem -LiteralPath $PortableRoot -Recurse -Force -Directory -Filter "__pycache__" |
+    Remove-Item -Recurse -Force
+
 Copy-Item -LiteralPath (Join-Path $LauncherSpecRoot "NovelForge.exe") -Destination (Join-Path $PortableRoot "NovelForge.exe")
 Copy-Item -LiteralPath $BundledVenv -Destination (Join-Path $PortableRoot ".venv") -Recurse
 

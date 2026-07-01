@@ -1077,10 +1077,9 @@ def render_discussion_markdown(
             f"- 资料冲突处理：{recommended_profile.conflict_policy or '-'}",
             f"- 当前世界线：{recommended_profile.worldline_label or recommended_profile.worldline_id or '未设置'}",
             f"- 世界线检索模式：{recommended_profile.worldline_retrieval_mode or 'prefer'}",
-            f"- 自由说明：{recommended_profile.notes or '无'}",
         ])
 
-    lines.extend(["", f"是否可批准：`{result.approval_ready}`"])
+    lines.extend(["", f"是否已收敛：`{result.approval_ready}`"])
     return "\n".join(lines)
 
 

@@ -16,7 +16,6 @@ from memory import (
     load_pending_knowledge_items,
     rename_story,
     save_memory,
-    set_active_story,
 )
 from retrieval import rebuild_retrieval_assets
 from setting_knowledge import (
@@ -36,7 +35,7 @@ from knowledge_workflows import (
     summarize_item_evidence,
     update_pending_knowledge_item,
 )
-from ui.app_shell import copy_story_workspace_settings
+from ui.app_shell import activate_story_after_creation, copy_story_workspace_settings, switch_to_story
 from ui.common import navigate_to, scoped_widget_key
 from ui.labels import label_knowledge_category
 from ui.llm_settings import render_llm_settings_page
@@ -426,7 +425,7 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
     scope_label = _setting_scope_label(setting_scope)
     key_prefix = scoped_widget_key("pending_core_settings", project_name, story_id, setting_scope)
     with st.expander(f"待确认{scope_label}设定（{len(pending_items)}）", expanded=True):
-        st.caption("这些条目来自章节设定提炼或讨论提炼。确认后会成为正式知识条目，并按注入方式影响后续生成。")
+        st.caption("这些条目来自章节设定提炼或讨论生成依据。确认后会成为正式知识条目，并按注入方式影响后续生成。")
         pending_ids = [str(item.get("pending_id") or "") for item in pending_items if item.get("pending_id")]
         selected_ids = st.multiselect(
             "选择要处理的候选设定",
@@ -544,16 +543,16 @@ def _render_project_settings_tab(project_name: str):
     changed = False
     new_memory = dict(base_memory)
 
-    new_title = st.text_input("书名", value=base_memory.get("title", ""), key="project_title")
+    new_title = st.text_input("书名", value=base_memory.get("title", ""), key=scoped_widget_key("project_title", project_name))
     if new_title != base_memory.get("title"):
         new_memory["title"] = new_title
         changed = True
-    new_genre = st.text_input("类型", value=base_memory.get("genre", ""), key="project_genre")
+    new_genre = st.text_input("类型", value=base_memory.get("genre", ""), key=scoped_widget_key("project_genre", project_name))
     if new_genre != base_memory.get("genre"):
         new_memory["genre"] = new_genre
         changed = True
 
-    if st.button("保存项目元信息", disabled=not changed):
+    if st.button("保存项目元信息", key=scoped_widget_key("save_project_meta", project_name), disabled=not changed):
         save_memory(project_name, new_memory)
         st.success("项目元信息已保存。")
         st.rerun()
@@ -593,8 +592,7 @@ def _render_story_management_tab(project_name: str):
 
         is_active = story_id == st.session_state.get("active_story_id", "default")
         if cols[3].button("切换", key=f"switch_{story_id}", disabled=is_active, use_container_width=True):
-            set_active_story(project_name, story_id)
-            st.session_state["active_story_id"] = story_id
+            switch_to_story(project_name, story_id)
             st.rerun()
 
         with cols[4].popover("编辑", use_container_width=True):
@@ -623,7 +621,7 @@ def _render_story_management_tab(project_name: str):
                 new_story_name = f"{s.get('name') or story_id} 副本"
                 meta = create_story(project_name, new_story_name, str(s.get("description") or ""))
                 copy_story_workspace_settings(project_name, story_id, meta["story_id"])
-                st.success(f"已复制设定到新故事：{meta.get('name') or meta['story_id']}")
+                activate_story_after_creation(project_name, meta, notice_action="copied")
                 st.rerun()
             except Exception as exc:
                 st.error(f"复制失败：{exc}")
@@ -634,15 +632,13 @@ def _render_story_management_tab(project_name: str):
         new_story_name = st.text_input("故事名称", key="settings_new_story_name")
         new_story_desc = st.text_area("故事描述", height=80, key="settings_new_story_desc",
                                        placeholder="例如：原作线续写、平行世界、角色穿越...")
-        copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True)
-        if st.button("创建故事"):
+        copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True, key="settings_copy_story_workspace")
+        if st.button("创建故事", key="settings_create_story", use_container_width=True):
             if new_story_name.strip():
                 meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
                 if copy_from:
                     copy_story_workspace_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
-                set_active_story(project_name, meta["story_id"])
-                st.session_state["active_story_id"] = meta["story_id"]
-                st.success(f"已创建故事：{new_story_name.strip()}")
+                activate_story_after_creation(project_name, meta)
                 st.rerun()
             else:
                 st.error("故事名称不能为空。")

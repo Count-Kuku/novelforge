@@ -28,13 +28,18 @@ from ui.common import confirmed_button, scoped_session_key, scoped_widget_key
 from ui.discussion import (
     _append_discussion_message,
     _consume_discussion_input_clear,
+    _discussion_context_text,
     _discussion_input_clear_flag_key,
     _discussion_input_key,
     _discussion_messages_key,
     _discussion_result_key,
     _render_approved_discussion_artifact,
     _render_discussion_chat,
+    _render_discussion_decision_hint,
+    _render_discussion_empty_hint,
     _render_discussion_summary,
+    _render_discussion_workspace,
+    _run_discussion_chat_stream,
 )
 from ui.labels import label_status
 from ui.layout import render_section_heading
@@ -121,136 +126,121 @@ def _render_arc_discussion(project_name: str, context: dict, render_discussion_a
     discussion_step = st.session_state.get(result_key, {})
     approved_artifact = load_arc_discussion_artifact(project_name, arc_no, story_id=story_id)
 
-    col_action_1, col_action_2 = st.columns(2)
-    if col_action_1.button("开始讨论剧情段方向", key=scoped_widget_key("start_arc_discussion", *arc_scope)):
-        try:
-            result = _run_with_stream(
-                "正在讨论剧情段方向...",
-                discuss_arc,
-                project_name,
-                arc_no,
-                volume_no or None,
-                title,
-                summary,
-                estimated_chapter_count or None,
-                target_word_count_range,
-                requirement,
-                story_id=story_id,
-                preview_language="json",
-            )
-            st.session_state[result_key] = result
-            st.session_state[messages_key] = []
-            assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了这个剧情段的目标、可选推进结构和待确认问题，我们可以继续细化。"
-            _append_discussion_message(messages_key, "assistant", assistant_message)
-            st.rerun()
-        except Exception as exc:
-            st.error(f"讨论失败：{exc}")
-
-    if col_action_2.button("重置剧情段讨论", key=scoped_widget_key("reset_arc_discussion", *arc_scope)):
-        st.session_state[result_key] = {}
-        st.session_state[messages_key] = []
-        st.session_state[clear_input_flag_key] = True
-        st.rerun()
-
-    _render_arc_discussion_result(
-        project_name,
-        context,
-        discussion_step,
-        approved_artifact,
-        messages_key,
-        result_key,
-        input_key,
-        clear_input_flag_key,
-        render_discussion_asset_candidates,
-    )
-
-
-def _render_arc_discussion_result(
-    project_name: str,
-    context: dict,
-    discussion_step: dict,
-    approved_artifact: dict,
-    messages_key: str,
-    result_key: str,
-    input_key: str,
-    clear_input_flag_key: str,
-    render_discussion_asset_candidates,
-):
-    story_id = context["story_id"]
-    arc_no = context["arc_no"]
-    arc_scope = context["arc_scope"]
-    volume_no = context["volume_no"]
-    title = context["title"]
-    summary = context["summary"]
-    estimated_chapter_count = context["estimated_chapter_count"]
-    target_word_count_range = context["target_word_count_range"]
-    requirement = context["requirement"]
-    summary_col, chat_col = st.columns([1, 1])
-    with summary_col:
-        st.markdown("### 当前讨论结论")
-        _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前剧情段方向的结论。")
-        render_step_retrieval(discussion_step, "本次剧情段讨论参考的检索上下文")
+    def render_output_panel() -> None:
+        current_step = st.session_state.get(result_key, discussion_step)
+        st.markdown("##### 剧情段推进结论")
+        _render_discussion_summary(current_step, "开始讨论后，这里显示剧情段起伏、转折和关键约束。")
+        render_step_retrieval(current_step, "本次剧情段讨论参考的资料")
         render_discussion_asset_candidates(
             project_name,
             story_id,
-            discussion_step,
+            current_step,
             "arc",
             f"arc:{project_name}:{story_id}:{arc_no}",
             scoped_widget_key("arc_discussion_prompt_options", *arc_scope),
         )
         approve_col, clear_col = st.columns(2)
-        if approve_col.button("批准当前讨论", key=scoped_widget_key("approve_arc_discussion", *arc_scope)):
+        if approve_col.button("保存剧情段结论", key=scoped_widget_key("approve_arc_discussion", *arc_scope), use_container_width=True):
             try:
-                result = approve_arc_discussion(project_name, arc_no, discussion_step, story_id=story_id)
-                st.success(f"已保存剧情段讨论工件：{result.get('saved_path', '')}")
+                result = approve_arc_discussion(project_name, arc_no, current_step, story_id=story_id)
+                st.success("已保存剧情段讨论结论。")
                 st.rerun()
             except Exception as exc:
-                st.error(f"批准失败：{exc}")
-        if clear_col.button("清除已批准版本", key=scoped_widget_key("clear_arc_discussion", *arc_scope)):
+                st.error(f"保存失败：{exc}")
+        if clear_col.button("清除剧情段结论", key=scoped_widget_key("clear_arc_discussion", *arc_scope), use_container_width=True):
             if clear_arc_discussion_approval(project_name, arc_no, story_id=story_id):
-                st.success("已清除剧情段已批准讨论工件。")
+                st.success("已清除剧情段讨论结论。")
                 st.rerun()
             else:
-                st.warning("当前没有可清除的已批准讨论工件。")
-        st.markdown("### 已批准讨论版本")
-        _render_approved_discussion_artifact(approved_artifact, "当前剧情段还没有已批准讨论工件。")
+                st.warning("当前没有可清除的剧情段结论。")
+        st.markdown("##### 已保存剧情段结论")
+        _render_approved_discussion_artifact(approved_artifact, "当前剧情段还没有保存讨论结论。")
 
-    with chat_col:
-        st.markdown("### 讨论对话")
-        messages = st.session_state.get(messages_key, [])
-        _render_discussion_chat(messages)
-        follow_up = st.text_area("继续讨论剧情段", key=input_key, height=120, placeholder="例如：这一段我想让冲突递进更快，但高潮不要提早透支。")
-        if st.button("发送剧情段讨论消息", key=scoped_widget_key("send_arc_discussion", *arc_scope)):
-            if not follow_up.strip():
+    def render_input_panel(_stream_container) -> None:
+        current_messages = st.session_state.get(messages_key, [])
+        st.markdown("##### 讨论剧情段推进")
+        _render_discussion_decision_hint(
+            ["阶段冲突", "转折", "章节分配", "高潮边界"],
+            "剧情段大纲、章节分配和章节细纲",
+            note="标题、摘要、篇幅和要求会自动带入。",
+        )
+        if current_messages:
+            _render_discussion_chat(current_messages, height=260)
+        else:
+            _render_discussion_empty_hint("说说这一段要怎样推进，也可以补充冲突、转折或高潮。")
+        live_turn_container = st.empty()
+        user_input = st.text_area(
+            "剧情段讨论输入",
+            key=input_key,
+            height=120,
+            placeholder="例如：这一段我想让冲突递进更快，但高潮不要提早透支。",
+            label_visibility="collapsed",
+        )
+        has_started = bool(st.session_state.get(result_key) or current_messages)
+        send_label = "发送" if has_started else "开始讨论"
+        send_col, reset_col = st.columns([3, 1])
+        if send_col.button(send_label, key=scoped_widget_key("send_arc_discussion", *arc_scope), use_container_width=True):
+            submitted = str(user_input or "").strip()
+            if not submitted:
                 st.warning("讨论消息不能为空。")
             else:
                 try:
-                    _append_discussion_message(messages_key, "user", follow_up)
-                    messages = st.session_state.get(messages_key, [])
-                    result = _run_with_stream(
-                        "正在继续讨论剧情段...",
-                        discuss_arc_turn,
-                        project_name,
-                        arc_no,
-                        volume_no or None,
-                        title,
-                        summary,
-                        estimated_chapter_count or None,
-                        target_word_count_range,
-                        requirement,
-                        messages,
-                        discussion_step.get("data", {}).get("discussion", {}),
-                        follow_up,
-                        story_id=story_id,
-                        preview_language="json",
-                    )
+                    _append_discussion_message(messages_key, "user", submitted)
+                    updated_messages = st.session_state.get(messages_key, [])
+                    if has_started:
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "继续讨论剧情段",
+                            discuss_arc_turn,
+                            project_name,
+                            arc_no,
+                            volume_no or None,
+                            title,
+                            summary,
+                            estimated_chapter_count or None,
+                            target_word_count_range,
+                            requirement,
+                            updated_messages,
+                            st.session_state.get(result_key, {}).get("data", {}).get("discussion", {}),
+                            submitted,
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了剧情段讨论结论。"
+                    else:
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "讨论剧情段方向",
+                            discuss_arc,
+                            project_name,
+                            arc_no,
+                            volume_no or None,
+                            title,
+                            summary,
+                            estimated_chapter_count or None,
+                            target_word_count_range,
+                            _discussion_context_text(requirement, submitted),
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了这个剧情段的目标、可选推进结构和待确认问题，我们可以继续细化。"
                     st.session_state[result_key] = result
-                    assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了剧情段讨论结论。"
                     _append_discussion_message(messages_key, "assistant", assistant_message)
                     st.session_state[clear_input_flag_key] = True
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"继续讨论失败：{exc}")
+                    st.error(f"讨论失败：{exc}")
+        if reset_col.button("重置", key=scoped_widget_key("reset_arc_discussion", *arc_scope), use_container_width=True):
+            st.session_state[result_key] = {}
+            st.session_state[messages_key] = []
+            st.session_state[clear_input_flag_key] = True
+            st.rerun()
+
+    _render_discussion_workspace(
+        f"arc-{project_name}-{story_id}-{arc_no}",
+        render_input_panel,
+        render_output_panel,
+    )
 
 def _render_arc_prompt_options(project_name: str, context: dict):
     story_id = context["story_id"]
@@ -352,7 +342,7 @@ def _render_arc_inventory(project_name: str, context: dict) -> list[dict]:
         for item in arcs:
             volume_label = f" / 第 {int(item.get('volume_no'))} 卷" if item.get("volume_no") else ""
             status_label = label_status(item.get("status", "draft"))
-            approval_label = "已有批准讨论" if item.get("has_approved_discussion") else "暂无批准讨论"
+            approval_label = "已有剧情段结论" if item.get("has_approved_discussion") else "暂无剧情段结论"
             st.caption(f"剧情段 {int(item.get('arc_no', 0)):03d}{volume_label} / {item.get('title', '') or '未命名'} / 状态={status_label} / {approval_label}")
 
     chapter_inventory = list_chapter_inventory(project_name, story_id=story_id)
@@ -424,17 +414,17 @@ def _render_arc_chapter_plan(project_name: str, context: dict, linked_chapters: 
     if latest_plan:
         with st.expander("当前剧情段章节分配计划", expanded=False):
             st.markdown(latest_plan)
-            render_step_json_expander("章节分配结构化数据", saved_plan.get("plan", {}))
+            render_step_json_expander("章节分配详细数据", saved_plan.get("plan", {}))
     render_step_validation(plan_step)
-    render_step_retrieval(plan_step, "本次章节分配使用的检索上下文", get_retrieval_trace(f"arc_chapter_plan:{project_name}:{story_id}:{arc_no}"))
+    render_step_retrieval(plan_step, "本次章节分配参考的资料", get_retrieval_trace(f"arc_chapter_plan:{project_name}:{story_id}:{arc_no}"))
 
     render_step_validation(step_result)
-    render_step_retrieval(step_result, "本次剧情段大纲生成使用的检索上下文", get_retrieval_trace(f"arc_outline:{project_name}:{story_id}:{arc_no}"))
+    render_step_retrieval(step_result, "本次剧情段大纲生成参考的资料", get_retrieval_trace(f"arc_outline:{project_name}:{story_id}:{arc_no}"))
 
 def render_arc_outline_page(project_name: str, *, render_discussion_asset_candidates):
     render_section_heading("剧情段信息", "剧情段承接分卷结构，适合定义一段冲突、转折或阶段目标。")
     context = _prepare_arc_outline_context(project_name)
-    render_section_heading("讨论与批准", "先收敛剧情段方向，再把批准版本作为后续章节规划依据。")
+    render_section_heading("讨论剧情段推进", "明确这一段怎样起伏、在哪里转折，再保存为章节规划依据。")
     _render_arc_discussion(project_name, context, render_discussion_asset_candidates)
     _render_arc_prompt_options(project_name, context)
     render_section_heading("生成与编辑", "生成结果会进入编辑区，保存后可继续生成章节分配计划。")

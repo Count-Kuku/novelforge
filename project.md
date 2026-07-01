@@ -81,7 +81,7 @@ Current practical status:
 * Batch processing progress bars for long-form extraction, retry, re-extraction, multi-specialist extraction plans, and source auto-processing
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
-* Consolidated creative profile page for direct profile editing, discussion-assisted recommendations, one-click form backfill, and approval-based persistence
+* Consolidated creative profile page for direct profile editing, discussion-assisted recommendations, one-click apply-to-form, and saved-conclusion persistence
 * Lightweight quick-generation playground supporting prompt-only or fully-configured execution for testing and experimentation
 * Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and setting-extraction chaining
 * Content generation chained pipeline: write → review → setting extraction, plus reset-based full pipeline from requirement
@@ -112,14 +112,14 @@ Current practical status:
 * Structured-knowledge organizer for duplicate detection, manual merge, deletion, and raw category editing
 * Source package report generated from confirmed structured knowledge and indexed for retrieval
 * Discussion-first planning support for full-story outline and chapter direction before formal generation
-* Approval-based planning artifacts for outline / volume / arc / chapter discussions
+* Persisted planning conclusions for outline / volume / arc / chapter discussions
 * Persisted chapter pipeline state snapshots, transition logs, and resumable workflow hints
 * Story-state oriented memory fields for canon mode, AU rules, relationships, and active constraints
 * Core setting to structured-knowledge conversion: stable story/project settings can be queued as pending knowledge before becoming project-level reusable knowledge
 * Multi-turn planning discussion UI with continuously updated discussion conclusions
 * Project management workspace with project overview, rename/delete, and resource CRUD
-* IDE-style resource browser for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
-* Project overview metrics can focus the resource browser on matching resource groups, including chapters, outlines, reports, sources, structured knowledge, pending knowledge, and long-form batches
+* Project resources workspace for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
+* Project overview metrics can focus the project resources workspace on matching resource groups, including chapters, outlines, reports, sources, structured knowledge, pending knowledge, and long-form batches
 * Hierarchical outline support with project outline + volume outlines + arc outlines + chapter assignment to volume / arc
 * Lightweight chapter-writing guidance controls for tone, pacing, dialogue density, focus, ending strength, and extra requirements
 * In-app LLM configuration with multi-profile endpoint / key management and active-profile switching
@@ -128,7 +128,7 @@ Current practical status:
 * Local launcher and portable-build scripts for desktop-style localhost packaging
 * Grouped workspace navigation in the sidebar: 工作台 (overview/config/resources), 资料 (ingestion/settings/retrieval center), 规划 (profile-aware planning), 写作 (quick gen, content generation, evaluation)
 * Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
-* Project overview page upgraded into a quick-action home screen for quick generation, content generation, ingestion, and resource browsing
+* Project overview page upgraded into a quick-action home screen for quick generation, content generation, ingestion, and project resources
 * Story spaces support：one project can hold multiple independent stories, each with its own creative profile, memory overrides, outlines, chapters, reviews, evaluations, analysis reports, pipeline runs, and chapter summaries, while sharing project-level base memory, structured knowledge, source materials, rules, and retrieval index
 * Automatic migration of existing single-story projects into the default story space on first access, with the active story persisted in `stories/index.json`
 * Story management supports editing story display name/description and copying one story's settings into a newly registered story space
@@ -301,11 +301,15 @@ novelforge/
 |-- launcher.py
 |-- NovelForge.spec
 |-- build_release.ps1
-|-- llm_profiles.json
-|-- global_rules.json
-|-- prompt_options.json
-`-- projects/
-    `-- {project_name}/
+|-- data/
+|   |-- global.db
+|   |-- llm_profiles.json
+|   |-- global_rules.json
+|   |-- prompt_options.json
+|   |-- deleted_projects/      # soft-deleted project archives
+|   `-- projects/
+|       |-- index.json          # UI state / active project metadata; not the project source of truth
+|       `-- {project_name}/
         |-- memory.json          # project metadata only (title, genre)
         |-- rules.json           # shared project rules
         |-- prompt_options.json  # shared project prompt option overrides
@@ -1201,7 +1205,7 @@ When the user explicitly approves a planning discussion from the UI, the discuss
 
 # Project Storage Structure
 
-Each novel project owns its own directory.
+Each novel project owns its own directory. The project directory is the source of truth: the application lists directories under `data/projects/` that contain recognizable project markers such as `stories/`, `memory.json`, `rules.json`, `prompt_options.json`, `retrieval/`, or a non-empty `project.db`. Project names are not filtered by local test or verification naming conventions; if a directory is placed under `data/projects/` and looks like project data, it is shown as a project. `data/projects/index.json` is auxiliary UI state for the active project and compatibility metadata; it must not decide whether a project exists. User-facing project deletion moves the project directory under `data/deleted_projects/` for manual recovery.
 
 Example:
 
@@ -1552,7 +1556,7 @@ Current implementation status:
 * Implemented: lightweight chapter-writing guidance controls for tone / pacing / dialogue density / focus / ending strength / extra requirements
 * Implemented: project overview page and project rename/delete controls
 * Implemented: project resource CRUD for outlines, chapters, reviews, analysis reports, run snapshots, and external sources
-* Implemented: IDE-style resource browser with unified edit/save/delete flows and batch cleanup controls
+* Implemented: IDE-style project resources workspace with unified edit/save/delete flows and batch cleanup controls
 * Implemented: project-level volume outline storage, editing UI, and chapter-to-volume assignment metadata
 * Implemented: project-level arc outline storage, editing UI, and chapter-to-arc assignment metadata
 * Implemented: in-app LLM endpoint / API-key profile management with active-profile switching and `.env` sync
@@ -1811,6 +1815,10 @@ Metrics:
 16. Retrieval index assets (manifest + vectors) must stay consistent: every save/delete that modifies retrieval-relevant data must call `sync_project_retrieval_assets` (or document why it shouldn't)
 
 17. On Windows, project Python commands should use the local virtual environment interpreter `.\.venv\Scripts\python.exe` instead of bare `python`, because bare `python` may resolve to Anaconda or another global interpreter without the project dependencies.
+
+18. Quick generation chapter number `0` is preview-only. Preview-mode structure, outline, and chapter outputs must not be persisted as chapter files, chapter outlines, discussion artifacts, or retrieval-indexed assets.
+
+19. Project- or story-specific Streamlit state must use scoped widget/session keys, such as `scoped_widget_key` or `scoped_session_key`, so switching projects or stories cannot leak prompts, discussion messages, generation results, or editor state across contexts.
 
 ---
 

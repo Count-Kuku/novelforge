@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import functools
 
 import logging
@@ -6,17 +8,6 @@ from collections.abc import Callable
 from urllib.parse import urlparse
 
 import httpx
-from openai import (
-    APIConnectionError,
-    APIStatusError,
-    APITimeoutError,
-    AuthenticationError,
-    BadRequestError,
-    NotFoundError,
-    OpenAI,
-    PermissionDeniedError,
-    RateLimitError,
-)
 from dotenv import load_dotenv
 
 from memory import load_llm_settings
@@ -27,6 +18,60 @@ DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 LOGGER = logging.getLogger("novelforge.llm")
+
+APIConnectionError = None
+APIStatusError = None
+APITimeoutError = None
+AuthenticationError = None
+BadRequestError = None
+NotFoundError = None
+OpenAI = None
+PermissionDeniedError = None
+RateLimitError = None
+
+
+def _require_openai():
+    global APIConnectionError
+    global APIStatusError
+    global APITimeoutError
+    global AuthenticationError
+    global BadRequestError
+    global NotFoundError
+    global OpenAI
+    global PermissionDeniedError
+    global RateLimitError
+
+    if OpenAI is not None:
+        return OpenAI
+    try:
+        from openai import (  # type: ignore[import-not-found]
+            APIConnectionError as ImportedAPIConnectionError,
+            APIStatusError as ImportedAPIStatusError,
+            APITimeoutError as ImportedAPITimeoutError,
+            AuthenticationError as ImportedAuthenticationError,
+            BadRequestError as ImportedBadRequestError,
+            NotFoundError as ImportedNotFoundError,
+            OpenAI as ImportedOpenAI,
+            PermissionDeniedError as ImportedPermissionDeniedError,
+            RateLimitError as ImportedRateLimitError,
+        )
+    except ModuleNotFoundError as exc:
+        raise RuntimeError("模型功能不可用：缺少 openai 依赖。请先安装 requirements.txt 中的依赖。") from exc
+
+    APIConnectionError = ImportedAPIConnectionError
+    APIStatusError = ImportedAPIStatusError
+    APITimeoutError = ImportedAPITimeoutError
+    AuthenticationError = ImportedAuthenticationError
+    BadRequestError = ImportedBadRequestError
+    NotFoundError = ImportedNotFoundError
+    OpenAI = ImportedOpenAI
+    PermissionDeniedError = ImportedPermissionDeniedError
+    RateLimitError = ImportedRateLimitError
+    return OpenAI
+
+
+def _is_openai_error(exc: Exception, error_type) -> bool:
+    return error_type is not None and isinstance(exc, error_type)
 
 
 def _get_api_key() -> str:
@@ -59,8 +104,9 @@ def _should_trust_env_proxy() -> bool:
 
 
 @functools.lru_cache(maxsize=8)
-def _get_client_for_config(api_key: str, base_url: str, trust_env_proxy: bool) -> OpenAI:
-    return OpenAI(
+def _get_client_for_config(api_key: str, base_url: str, trust_env_proxy: bool):
+    openai_client_class = _require_openai()
+    return openai_client_class(
         api_key=api_key,
         base_url=base_url,
         http_client=httpx.Client(trust_env=trust_env_proxy),
@@ -71,7 +117,7 @@ def clear_llm_client_cache():
     _get_client_for_config.cache_clear()
 
 
-def _get_client() -> OpenAI:
+def _get_client():
     return _get_client_for_config(
         _get_api_key(),
         _get_base_url(),
@@ -90,24 +136,24 @@ def _format_llm_error(
 ) -> str:
     base_url = base_url or _get_base_url()
     model_name = model_name or _get_model_name()
-    if isinstance(exc, APIConnectionError):
+    if _is_openai_error(exc, APIConnectionError):
         return (
             f"{action}失败：无法连接到模型服务。"
             f"请检查服务地址 `{base_url}` 是否可访问、网络/代理是否正常，或服务商当前是否可用。"
         )
-    if isinstance(exc, APITimeoutError):
+    if _is_openai_error(exc, APITimeoutError):
         return f"{action}失败：模型服务响应超时。可以稍后重试，或减少单次处理片段数量。"
-    if isinstance(exc, AuthenticationError):
+    if _is_openai_error(exc, AuthenticationError):
         return f"{action}失败：接口密钥无效或已过期。请在模型配置里重新填写 API Key。"
-    if isinstance(exc, PermissionDeniedError):
+    if _is_openai_error(exc, PermissionDeniedError):
         return f"{action}失败：当前密钥没有访问该模型或接口的权限。"
-    if isinstance(exc, NotFoundError):
+    if _is_openai_error(exc, NotFoundError):
         return f"{action}失败：模型或接口不存在。请检查模型名 `{model_name}` 和服务地址 `{base_url}`。"
-    if isinstance(exc, BadRequestError):
+    if _is_openai_error(exc, BadRequestError):
         return f"{action}失败：请求参数不被模型服务接受。请检查模型名 `{model_name}`、上下文长度和服务地址。"
-    if isinstance(exc, RateLimitError):
+    if _is_openai_error(exc, RateLimitError):
         return f"{action}失败：请求过于频繁或额度不足。请稍后重试，或降低批量提取数量。"
-    if isinstance(exc, APIStatusError):
+    if _is_openai_error(exc, APIStatusError):
         return f"{action}失败：模型服务返回 HTTP {exc.status_code}。请检查服务商状态、模型名和账号额度。"
     return f"{action}失败（{type(exc).__name__}）：{exc}"
 
@@ -129,6 +175,7 @@ def call_llm(
 ):
     if not _get_api_key():
         raise RuntimeError("模型请求失败：接口密钥为空。请先在“模型配置”里填写 API Key。")
+    _require_openai()
 
     messages = []
     if system_message:
@@ -181,6 +228,7 @@ def call_llm(
 def get_embedding(text: str) -> list[float]:
     if not _get_api_key():
         raise RuntimeError("向量生成失败：接口密钥为空。请先在“模型配置”里填写 API Key。")
+    _require_openai()
 
     cleaned = text.strip()
     if not cleaned:
@@ -241,7 +289,8 @@ def test_llm_connection(base_url: str, api_key: str, model_name: str) -> str:
     if not base_url:
         raise RuntimeError("模型服务网址不能为空。")
     try:
-        test_client = OpenAI(
+        openai_client_class = _require_openai()
+        test_client = openai_client_class(
             api_key=api_key,
             base_url=base_url,
             http_client=httpx.Client(

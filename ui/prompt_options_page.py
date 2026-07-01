@@ -1,4 +1,4 @@
-"""Prompt option workbench page."""
+"""提示词选项页面。"""
 from __future__ import annotations
 
 import streamlit as st
@@ -153,7 +153,7 @@ def _render_prompt_options_preview(effective_options: list[dict]) -> None:
     if preview:
         st.code(preview, language="markdown")
     else:
-        st.info("当前能力没有启用的 Prompt 选项。")
+        st.info("当前能力没有启用的提示词选项。")
 
 
 def render_prompt_options_page(project_name: str):
@@ -183,4 +183,3 @@ def render_prompt_options_page(project_name: str):
         _render_builtin_prompt_options(project_name, story_id)
     with tab_preview:
         _render_prompt_options_preview(context["effective_options"])
-

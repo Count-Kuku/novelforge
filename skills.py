@@ -810,9 +810,6 @@ def _build_rules_text(
         f"- 当前世界线：{profile.get('worldline_label') or profile.get('worldline_id') or '未设置'}",
         f"- 世界线检索模式：{profile.get('worldline_retrieval_mode', 'prefer')}",
     ]
-    notes = str(profile.get("notes", "") or "").strip()
-    if notes:
-        profile_lines.append(f"- 补充说明：{notes}")
     return _append_prompt_options_to_rules(f"{rules_text}\n\n" + "\n".join(profile_lines), project_name, scope, story_id, prompt_option_ids)
 
 
@@ -1776,22 +1773,31 @@ def clear_outline_discussion_approval(project_name: str, story_id: str = "defaul
     return delete_outline_discussion_artifact(project_name, story_id)
 
 
-def approve_creative_profile_discussion(project_name: str, discussion_step: dict, story_id: str = "default") -> dict:
+def save_creative_profile_discussion_result(project_name: str, discussion_step: dict, story_id: str = "default") -> dict:
     discussion = discussion_step.get("data", {}).get("discussion", {}) if isinstance(discussion_step, dict) else {}
     report_markdown = discussion_step.get("data", {}).get("report_markdown", "") if isinstance(discussion_step, dict) else ""
     if not isinstance(discussion, dict) or not discussion:
-        raise RuntimeError("没有可批准的创作配置讨论结果。")
+        raise RuntimeError("没有可保存的创作配置讨论结果。")
     if not discussion.get("approval_ready"):
-        raise RuntimeError("创作配置讨论结果尚未达到可批准状态。")
+        raise RuntimeError("创作配置讨论尚未收敛，继续补充后再保存讨论结论。")
     discussion_result = CreativeProfileDiscussionResult.model_validate(discussion)
-    recommended_profile = discussion_result.recommended_profile.model_dump()
-    save_creative_profile(project_name, recommended_profile, story_id, mark_configured=True)
-    save_creative_profile_discussion_artifact(project_name, discussion_result.model_dump(), report_markdown, story_id)
+    discussion_payload = discussion_result.model_dump()
+    save_creative_profile_discussion_artifact(project_name, discussion_payload, report_markdown, story_id)
     return {
-        "discussion": discussion_result.model_dump(),
+        "discussion": discussion_payload,
         "report_markdown": report_markdown,
-        "saved_profile": recommended_profile,
         "saved_path": f"data/projects/{project_name}/stories/{story_id}/creative_profile.discussion.json",
+    }
+
+
+def approve_creative_profile_discussion(project_name: str, discussion_step: dict, story_id: str = "default") -> dict:
+    saved_discussion = save_creative_profile_discussion_result(project_name, discussion_step, story_id)
+    recommended_profile = CreativeProfileDiscussionResult.model_validate(saved_discussion["discussion"]).recommended_profile.model_dump()
+    recommended_profile.pop("notes", None)
+    save_creative_profile(project_name, recommended_profile, story_id, mark_configured=True)
+    return {
+        **saved_discussion,
+        "saved_profile": recommended_profile,
     }
 
 
@@ -2218,6 +2224,7 @@ def generate_chapter_outline(
     arc_no: int | None = None,
     story_id: str = "default",
     stream_callback=None,
+    save_output: bool = True,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
@@ -2284,18 +2291,22 @@ def generate_chapter_outline(
     outline = call_llm(prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回章节细纲。")
-    save_chapter_outline(project_name, chapter_no, outline, story_id=story_id)
-    save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": effective_volume_no, "arc_no": effective_arc_no}, story_id=story_id)
+    artifacts = {"saved": False}
+    if save_output:
+        save_chapter_outline(project_name, chapter_no, outline, story_id=story_id)
+        save_chapter_outline_metadata(project_name, chapter_no, {"volume_no": effective_volume_no, "arc_no": effective_arc_no}, story_id=story_id)
+        artifacts = {
+            "saved": True,
+            "saved_path": f"data/projects/{project_name}/stories/{story_id}/chapter_outlines/chapter_{chapter_no:03d}.md",
+            "metadata_path": f"data/projects/{project_name}/stories/{story_id}/chapter_outlines/chapter_{chapter_no:03d}.meta.json",
+        }
     return _make_step_result(
         "chapter_outline",
         success=True,
         status="completed",
         data={"chapter_outline": outline, "chapter_outline_metadata": {"chapter_no": chapter_no, "volume_no": effective_volume_no, "arc_no": effective_arc_no}},
         retrieval_hits=get_retrieval_trace(trace_key),
-        artifacts={
-            "saved_path": f"data/projects/{project_name}/stories/{story_id}/chapter_outlines/chapter_{chapter_no:03d}.md",
-            "metadata_path": f"data/projects/{project_name}/stories/{story_id}/chapter_outlines/chapter_{chapter_no:03d}.meta.json",
-        },
+        artifacts=artifacts,
     ).model_dump()
 
 def write_chapter(
@@ -2306,6 +2317,7 @@ def write_chapter(
     word_count: str = "2000-2500",
     story_id: str = "default",
     stream_callback=None,
+    save_output: bool = True,
 ) -> dict:
     memory = build_generation_setting_context(project_name, story_id)
     raw_guidance = writing_guidance if isinstance(writing_guidance, dict) else {}
@@ -2358,14 +2370,20 @@ def write_chapter(
     chapter = call_llm(prompt, stream_callback=stream_callback)
     if not chapter.strip():
         raise RuntimeError("模型没有返回章节正文。")
-    save_chapter(project_name, chapter_no, chapter, story_id=story_id)
+    artifacts = {"saved": False}
+    if save_output:
+        save_chapter(project_name, chapter_no, chapter, story_id=story_id)
+        artifacts = {
+            "saved": True,
+            "saved_path": f"data/projects/{project_name}/stories/{story_id}/chapters/chapter_{chapter_no:03d}.md",
+        }
     return _make_step_result(
         "write_chapter",
         success=True,
         status="completed",
         data={"chapter": chapter, "writing_guidance": normalized_guidance},
         retrieval_hits=get_retrieval_trace(trace_key),
-        artifacts={"saved_path": f"data/projects/{project_name}/stories/{story_id}/chapters/chapter_{chapter_no:03d}.md"},
+        artifacts=artifacts,
     ).model_dump()
 
 
@@ -2378,13 +2396,19 @@ def run_dynamic_generation_task(
     story_id: str = "default",
     writing_guidance: dict | None = None,
     stream_callback=None,
+    save_outputs: bool = True,
 ) -> dict:
     profile = load_creative_profile(project_name, story_id)
     using_profile_depth = not workflow_depth or workflow_depth == "按创作配置"
     effective_depth = workflow_depth if not using_profile_depth else profile.get("workflow_depth", "短篇结构+正文")
     effective_word_count = word_count.strip() or profile.get("target_word_count", "") or "2000-2500"
+    requested_chapter_no = int(chapter_no or 0)
+    save_outputs = bool(save_outputs and requested_chapter_no > 0)
+    effective_chapter_no = requested_chapter_no if requested_chapter_no > 0 else 1
     steps: dict[str, dict] = {}
     warnings: list[str] = []
+    if not save_outputs:
+        warnings.append("本次为仅预览模式，生成结果不会写入章节、章节细纲或创作结构文件。")
 
     def emit_step_heading(title: str) -> None:
         _safe_stream_emit(stream_callback, f"\n\n## {title}\n\n")
@@ -2397,14 +2421,25 @@ def run_dynamic_generation_task(
             "请根据创作配置和检索上下文直接写正文，不需要输出大纲。",
         ])
         emit_step_heading("正文")
-        write_step = write_chapter(project_name, chapter_no, direct_outline, writing_guidance, effective_word_count, story_id=story_id, stream_callback=stream_callback)
+        write_step = write_chapter(
+            project_name,
+            effective_chapter_no,
+            direct_outline,
+            writing_guidance,
+            effective_word_count,
+            story_id=story_id,
+            stream_callback=stream_callback,
+            save_output=save_outputs,
+        )
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
             "status": write_step.get("status", "completed"),
             "workflow_depth": effective_depth,
-            "chapter_no": chapter_no,
+            "chapter_no": requested_chapter_no,
+            "effective_chapter_no": effective_chapter_no,
             "word_count": effective_word_count,
+            "save_outputs": save_outputs,
             "steps": steps,
             "creative_structure": "",
             "chapter": write_step.get("data", {}).get("chapter", ""),
@@ -2417,15 +2452,24 @@ def run_dynamic_generation_task(
         using_profile_depth and _is_lightweight_story_profile(profile)
     ):
         emit_step_heading("创作结构")
-        structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True, story_id=story_id, stream_callback=stream_callback)
+        structure_step = generate_creative_structure(
+            project_name,
+            effective_chapter_no,
+            user_requirement,
+            save_as_chapter_outline=save_outputs,
+            story_id=story_id,
+            stream_callback=stream_callback,
+        )
         steps["creative_structure"] = structure_step
         if not structure_step.get("success"):
             return {
                 "success": False,
                 "status": structure_step.get("status", "failed"),
                 "workflow_depth": effective_depth,
-                "chapter_no": chapter_no,
+                "chapter_no": requested_chapter_no,
+                "effective_chapter_no": effective_chapter_no,
                 "word_count": effective_word_count,
+                "save_outputs": save_outputs,
                 "steps": steps,
                 "creative_structure": "",
                 "chapter": "",
@@ -2437,14 +2481,25 @@ def run_dynamic_generation_task(
         if is_custom_depth:
             warnings.append("本次使用自定义生成层级，系统会先生成适配结构，再继续生成正文。")
         emit_step_heading("正文")
-        write_step = write_chapter(project_name, chapter_no, structure_text, writing_guidance, effective_word_count, story_id=story_id, stream_callback=stream_callback)
+        write_step = write_chapter(
+            project_name,
+            effective_chapter_no,
+            structure_text,
+            writing_guidance,
+            effective_word_count,
+            story_id=story_id,
+            stream_callback=stream_callback,
+            save_output=save_outputs,
+        )
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
             "status": write_step.get("status", "completed"),
             "workflow_depth": effective_depth,
-            "chapter_no": chapter_no,
+            "chapter_no": requested_chapter_no,
+            "effective_chapter_no": effective_chapter_no,
             "word_count": effective_word_count,
+            "save_outputs": save_outputs,
             "steps": steps,
             "creative_structure": structure_text,
             "chapter": write_step.get("data", {}).get("chapter", ""),
@@ -2453,15 +2508,24 @@ def run_dynamic_generation_task(
 
     if effective_depth == "章节计划+正文":
         emit_step_heading("章节计划")
-        outline_step = generate_chapter_outline(project_name, chapter_no, user_requirement, story_id=story_id, stream_callback=stream_callback)
+        outline_step = generate_chapter_outline(
+            project_name,
+            effective_chapter_no,
+            user_requirement,
+            story_id=story_id,
+            stream_callback=stream_callback,
+            save_output=save_outputs,
+        )
         steps["chapter_outline"] = outline_step
         if not outline_step.get("success"):
             return {
                 "success": False,
                 "status": outline_step.get("status", "failed"),
                 "workflow_depth": effective_depth,
-                "chapter_no": chapter_no,
+                "chapter_no": requested_chapter_no,
+                "effective_chapter_no": effective_chapter_no,
                 "word_count": effective_word_count,
+                "save_outputs": save_outputs,
                 "steps": steps,
                 "creative_structure": "",
                 "chapter": "",
@@ -2469,14 +2533,25 @@ def run_dynamic_generation_task(
             }
         outline_text = outline_step.get("data", {}).get("chapter_outline", "")
         emit_step_heading("正文")
-        write_step = write_chapter(project_name, chapter_no, outline_text, writing_guidance, effective_word_count, story_id=story_id, stream_callback=stream_callback)
+        write_step = write_chapter(
+            project_name,
+            effective_chapter_no,
+            outline_text,
+            writing_guidance,
+            effective_word_count,
+            story_id=story_id,
+            stream_callback=stream_callback,
+            save_output=save_outputs,
+        )
         steps["write_chapter"] = write_step
         return {
             "success": bool(write_step.get("success")),
             "status": write_step.get("status", "completed"),
             "workflow_depth": effective_depth,
-            "chapter_no": chapter_no,
+            "chapter_no": requested_chapter_no,
+            "effective_chapter_no": effective_chapter_no,
             "word_count": effective_word_count,
+            "save_outputs": save_outputs,
             "steps": steps,
             "creative_structure": outline_text,
             "chapter": write_step.get("data", {}).get("chapter", ""),
@@ -2485,14 +2560,23 @@ def run_dynamic_generation_task(
 
     warnings.append("完整长篇流程建议继续使用全书大纲、分卷、剧情段、章节细纲和一键流水线页面分步执行。")
     emit_step_heading("创作结构")
-    structure_step = generate_creative_structure(project_name, chapter_no, user_requirement, save_as_chapter_outline=True, story_id=story_id, stream_callback=stream_callback)
+    structure_step = generate_creative_structure(
+        project_name,
+        effective_chapter_no,
+        user_requirement,
+        save_as_chapter_outline=save_outputs,
+        story_id=story_id,
+        stream_callback=stream_callback,
+    )
     steps["creative_structure"] = structure_step
     return {
         "success": bool(structure_step.get("success")),
         "status": "completed" if structure_step.get("success") else structure_step.get("status", "failed"),
         "workflow_depth": effective_depth,
-        "chapter_no": chapter_no,
+        "chapter_no": requested_chapter_no,
+        "effective_chapter_no": effective_chapter_no,
         "word_count": effective_word_count,
+        "save_outputs": save_outputs,
         "steps": steps,
         "creative_structure": structure_step.get("data", {}).get("creative_structure", ""),
         "chapter": "",

@@ -101,4 +101,3 @@ def select_with_custom(container, label: str, options: list[str], current_value:
         placeholder=f"输入自己的{label}",
     )
     return custom_value.strip() or cleaned_value or options[0]
-

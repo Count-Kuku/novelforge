@@ -77,11 +77,10 @@ def render_evaluation_page(project_name: str, render_prompt_option_capability_to
         cols[2].metric("剧情推进", evaluation_payload.get("plot_progression_score", 0))
         cols[3].metric("角色一致性", evaluation_payload.get("character_consistency_score", 0))
         cols[4].metric("文字完成度", evaluation_payload.get("prose_quality_score", 0))
-        render_step_json_expander("评价结构化数据", evaluation_payload)
+        render_step_json_expander("评价详细数据", evaluation_payload)
     render_step_validation(evaluation_step)
     render_step_retrieval(
         evaluation_step,
-        "本次评价使用的检索上下文",
+        "本次评价参考的资料",
         get_retrieval_trace(f"evaluation:comprehensive:{project_name}:{story_id}:{chapter_no}") or get_retrieval_trace(f"evaluation:chapter:{project_name}:{story_id}:{chapter_no}")
     )
-

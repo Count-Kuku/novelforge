@@ -113,6 +113,14 @@ KNOWLEDGE_SOURCE_TYPES = [
     "knowledge_constraints",
 ]
 
+
+def _active_embedding_model_name() -> str:
+    try:
+        model_name = str(load_llm_settings().get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL).strip()
+    except Exception:
+        model_name = DEFAULT_EMBEDDING_MODEL
+    return model_name or DEFAULT_EMBEDDING_MODEL
+
 STORY_SCOPED_SOURCE_TYPES = {
     "outline",
     "chapter_summary",
@@ -1567,7 +1575,7 @@ def build_vector_store(project_name: str, manifest: RetrievalIndexManifest | Non
     store = RetrievalVectorStore(
         project_name=project_name,
         built_at=datetime.now().isoformat(timespec="seconds"),
-        embedding_model=DEFAULT_EMBEDDING_MODEL,
+        embedding_model=_active_embedding_model_name(),
         vectors=vectors,
     )
     save_retrieval_vectors(project_name, store.model_dump_json(indent=2))
@@ -1623,10 +1631,7 @@ def inspect_retrieval_health(project_name: str) -> dict:
         })
 
     store = load_vector_store(project_name)
-    try:
-        active_embedding_model = str(load_llm_settings().get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL)
-    except Exception:
-        active_embedding_model = DEFAULT_EMBEDDING_MODEL
+    active_embedding_model = _active_embedding_model_name()
     vector_ids = set(store.vectors.keys()) if store else set()
     missing_vector_count = len(manifest_chunk_ids - vector_ids)
     stale_vector_count = len(vector_ids - manifest_chunk_ids)
@@ -1713,7 +1718,7 @@ def build_retrieval_index(project_name: str) -> RetrievalIndexManifest:
         built_at=datetime.now().isoformat(timespec="seconds"),
         document_count=len(documents),
         chunk_count=len(chunks),
-        embedding_model=DEFAULT_EMBEDDING_MODEL,
+        embedding_model=_active_embedding_model_name(),
         embedding_enabled=False,
         documents=documents,
         chunks=chunks,

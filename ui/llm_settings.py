@@ -311,4 +311,3 @@ def render_llm_settings_page():
     _render_llm_profile_form(selected_profile, active_profile)
     _render_saved_llm_profiles(profiles, active_profile)
     _render_active_llm_settings(settings)
-

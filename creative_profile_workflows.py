@@ -67,7 +67,6 @@ def normalize_creative_form_state(profile: dict | None) -> dict:
         "worldline_id": payload.get("worldline_id", DEFAULT_WORLDLINE_ID),
         "worldline_label": payload.get("worldline_label", DEFAULT_WORLDLINE_LABEL),
         "worldline_retrieval_mode": payload.get("worldline_retrieval_mode", "prefer") if payload.get("worldline_retrieval_mode", "prefer") in {"prefer", "strict"} else "prefer",
-        "notes": payload.get("notes", ""),
         "reference_focus": preset_focus or ["角色", "世界观", "剧情事件"],
         "custom_reference_focus": "，".join(custom_focus),
     }
@@ -86,7 +85,6 @@ def build_creative_profile_from_form_values(
     worldline_id: str,
     worldline_label: str,
     worldline_retrieval_mode: str,
-    notes: str,
 ) -> dict:
     custom_focus_items = [
         item.strip()
@@ -112,7 +110,6 @@ def build_creative_profile_from_form_values(
         "worldline_id": str(worldline_id or "").strip() or DEFAULT_WORLDLINE_ID,
         "worldline_label": str(worldline_label or "").strip() or DEFAULT_WORLDLINE_LABEL,
         "worldline_retrieval_mode": worldline_retrieval_mode if worldline_retrieval_mode in {"prefer", "strict"} else "prefer",
-        "notes": notes,
     }
 
 
@@ -125,7 +122,6 @@ def build_profile_from_task_wizard(
     focus_items: list[str],
     allow_canon_deviation: bool,
     conflict_policy: str,
-    notes: str,
 ) -> dict:
     workflow_depth = "按创作配置"
     if output_goal == "只要正文":
@@ -154,5 +150,4 @@ def build_profile_from_task_wizard(
         "reference_focus": focus_items,
         "allow_canon_deviation": allow_canon_deviation,
         "conflict_policy": conflict_policy,
-        "notes": notes,
     }

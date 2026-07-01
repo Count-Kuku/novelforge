@@ -1,4 +1,4 @@
-"""Shared Prompt option UI helpers."""
+"""Shared prompt option UI helpers."""
 from __future__ import annotations
 
 import json
@@ -201,11 +201,11 @@ def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str
         upsert_prompt_option(project_name, layer, payload, story_id=story_id)
         if original_option_id and new_option_id != original_option_id:
             delete_prompt_option(project_name, layer, original_option_id, story_id=story_id)
-        st.success("Prompt 选项已保存。")
+        st.success("提示词选项已保存。")
         st.rerun()
     if delete_clicked:
         if delete_prompt_option(project_name, layer, option.get("id", ""), story_id=story_id):
-            st.success("Prompt 选项已删除。")
+            st.success("提示词选项已删除。")
             st.rerun()
         else:
             st.warning("没有找到要删除的选项。")
@@ -330,7 +330,7 @@ def _render_prompt_option_capability_tools(
     else:
         st.caption("这里管理该能力默认生效的提示词。保存并启用后，会影响后续同类生成。")
     if error:
-        st.warning(f"Prompt 选项加载失败：{error}")
+        st.warning(f"提示词选项加载失败：{error}")
 
     selected_prompt_option_ids = None
     if select_for_run and prompt_options:
@@ -338,7 +338,7 @@ def _render_prompt_option_capability_tools(
         option_labels = {option.get("id", ""): _prompt_option_label(option) for option in prompt_options}
         default_option_ids = [option.get("id", "") for option in prompt_options if option.get("enabled", True)]
         selected_prompt_option_ids = st.multiselect(
-            f"本次使用{capability_label} Prompt 选项",
+            f"本次使用{capability_label}提示词选项",
             options=option_ids,
             default=default_option_ids,
             format_func=lambda option_id: option_labels.get(option_id, option_id),
@@ -349,7 +349,7 @@ def _render_prompt_option_capability_tools(
         enabled_count = len([option for option in prompt_options if option.get("enabled", True)])
         st.caption(f"当前可用 {len(prompt_options)} 个，其中已启用 {enabled_count} 个。")
     else:
-        st.info(f"还没有{capability_label} Prompt 选项。可以在下面新增，或复制内置预设后修改。")
+        st.info(f"还没有{capability_label}提示词选项。可以在下面新增，或复制内置预设后修改。")
 
     _render_prompt_option_inline_tools(
         project_name,
@@ -364,7 +364,7 @@ def _render_prompt_option_capability_tools(
 def _render_prompt_option_layer(project_name: str, story_id: str, layer: str):
     options = _load_prompt_option_layer(project_name, layer, story_id)
     if not options:
-        st.caption("当前层级还没有自定义 Prompt 选项。")
+        st.caption("当前层级还没有自定义提示词选项。")
         return
     for option in options:
         with st.expander(_prompt_option_label(option), expanded=False):
@@ -450,9 +450,9 @@ def _build_generation_injection_preview(
         )
         option_text = format_prompt_options_for_prompt(options, scope, selected_ids=prompt_option_ids)
     except Exception as exc:
-        option_text = f"Prompt 选项预览失败：{exc}"
+        option_text = f"提示词选项预览失败：{exc}"
     if option_text:
-        sections["Prompt 选项"] = option_text
+        sections["提示词选项"] = option_text
 
     cleaned_guidance = {
         key: value
@@ -472,7 +472,7 @@ def _render_generation_injection_preview(
     generation_guidance: dict,
 ):
     with st.expander("本次生成注入预览", expanded=False):
-        st.caption("这是点击生成前的只读检查。它不会保存新内容，只展示本次会影响模型的设定、规则、Prompt 选项和临时参数。")
+        st.caption("这是点击生成前的只读检查。它不会保存新内容，只展示本次会影响模型的设定、规则、提示词选项和临时参数。")
         sections = _build_generation_injection_preview(
             project_name,
             story_id,

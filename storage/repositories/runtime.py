@@ -82,6 +82,14 @@ def sync_auto_review_runs(conn: sqlite3.Connection, runs: list[dict]) -> list[di
                 str(item.get("created_at") or ""),
             ),
         )
+    if active_ids:
+        placeholders = ",".join("?" for _ in active_ids)
+        conn.execute(
+            f"DELETE FROM auto_review_runs WHERE run_id NOT IN ({placeholders})",
+            tuple(active_ids),
+        )
+    else:
+        conn.execute("DELETE FROM auto_review_runs")
     return normalized
 
 

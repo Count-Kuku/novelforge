@@ -10,11 +10,14 @@ from memory import (
     create_project,
     create_story,
     creative_profile_path,
+    get_active_project_name,
     get_active_story_id,
     list_projects,
+    project_data_exists,
     list_stories,
     load_creative_profile,
     migrate_project_to_stories,
+    set_active_project_name,
     set_active_story,
 )
 from project_manager import get_project_summary
@@ -34,6 +37,83 @@ PAGE_GROUPS = ADVANCED_PAGE_GROUPS
 NEW_PROJECT_INPUT_KEY = "new_project_name_input"
 
 NEW_PROJECT_DIALOG_FLAG = "show_new_project_dialog"
+PROJECT_CREATION_NOTICE_KEY = "project_creation_notice"
+PENDING_PROJECT_SWITCH_KEY = "pending_project_switch"
+PROJECT_LOAD_ERROR_KEY = "project_load_error"
+STORY_CREATION_NOTICE_KEY = "story_creation_notice"
+PENDING_STORY_SWITCH_KEY = "pending_story_switch"
+
+
+def _open_new_project_dialog() -> None:
+    st.session_state[NEW_PROJECT_DIALOG_FLAG] = True
+    st.session_state[NEW_PROJECT_INPUT_KEY] = ""
+
+
+def _close_new_project_dialog() -> None:
+    st.session_state.pop(NEW_PROJECT_DIALOG_FLAG, None)
+    st.session_state.pop(NEW_PROJECT_INPUT_KEY, None)
+
+
+def consume_project_creation_notice() -> str:
+    notice = st.session_state.pop(PROJECT_CREATION_NOTICE_KEY, "")
+    if isinstance(notice, dict):
+        return str(notice.get("project_name") or "").strip()
+    return str(notice or "").strip()
+
+
+def consume_story_creation_notice() -> str:
+    notice = st.session_state.pop(STORY_CREATION_NOTICE_KEY, "")
+    if not isinstance(notice, dict):
+        return str(notice or "").strip()
+    story_name = str(notice.get("story_name") or notice.get("story_id") or "").strip()
+    action = str(notice.get("action") or "created")
+    if not story_name:
+        return ""
+    if action == "copied":
+        return f"已复制并进入故事：{story_name}"
+    return f"已创建并进入故事：{story_name}"
+
+
+def _set_project_load_error(project_name: str, message: str) -> None:
+    st.session_state[PROJECT_LOAD_ERROR_KEY] = {
+        "project_name": str(project_name or ""),
+        "message": str(message or ""),
+    }
+
+
+def _clear_project_load_error() -> None:
+    st.session_state.pop(PROJECT_LOAD_ERROR_KEY, None)
+
+
+def get_project_load_error() -> dict:
+    error = st.session_state.get(PROJECT_LOAD_ERROR_KEY)
+    return error if isinstance(error, dict) else {}
+
+
+def switch_to_story(project_name: str, story_id: str, *, target_page: str | None = None) -> None:
+    set_active_story(project_name, story_id)
+    st.session_state["active_story_id"] = story_id
+    st.session_state[PENDING_STORY_SWITCH_KEY] = story_id
+    if target_page:
+        st.session_state["pending_nav_page"] = target_page
+
+
+def activate_story_after_creation(
+    project_name: str,
+    story_meta: dict,
+    *,
+    target_page: str = "创作配置",
+    notice_action: str = "created",
+) -> None:
+    story_id = str(story_meta.get("story_id") or "default")
+    story_name = str(story_meta.get("name") or story_id)
+    switch_to_story(project_name, story_id, target_page=target_page)
+    st.session_state[STORY_CREATION_NOTICE_KEY] = {
+        "story_id": story_id,
+        "story_name": story_name,
+        "action": notice_action,
+    }
+
 
 def is_story_creative_profile_configured(project_name: str | None, story_id: str = "default") -> bool:
     if not project_name:
@@ -61,45 +141,91 @@ def page_groups_for_story(project_name: str | None, story_id: str = "default") -
         planning_pages=planning_pages_for_story(project_name, story_id),
     )
 
+def _project_creation_error_message(exc: Exception) -> str:
+    message = str(exc)
+    if isinstance(exc, FileExistsError):
+        if "not recognized as a project" in message:
+            return "\u540c\u540d\u6570\u636e\u76ee\u5f55\u5df2\u5b58\u5728\uff0c\u4f46\u7f3a\u5c11\u53ef\u8bc6\u522b\u7684\u9879\u76ee\u6570\u636e\u6807\u8bb0\u3002\u8bf7\u5148\u91cd\u547d\u540d\u6216\u79fb\u8d70\u8be5\u76ee\u5f55\uff0c\u6216\u8865\u5168 stories/memory/rules/retrieval \u7b49\u9879\u76ee\u6570\u636e\u3002"
+        if "already exists" in message:
+            return "\u8be5\u9879\u76ee\u5df2\u5b58\u5728\uff0c\u8bf7\u4f7f\u7528\u9879\u76ee\u5207\u6362\u3002"
+    return f"\u9879\u76ee\u521b\u5efa\u5931\u8d25\uff1a{message}"
+
+
 @st.dialog("新建项目")
 def render_new_project_dialog(existing_projects: list[str]):
-    candidate_name = st.text_input("项目名", key=NEW_PROJECT_INPUT_KEY).strip()
+    candidate_name = st.text_input("\u9879\u76ee\u540d", key=NEW_PROJECT_INPUT_KEY).strip()
     col1, col2 = st.columns(2)
 
-    if col1.button("确认创建", use_container_width=True):
+    if col1.button("\u786e\u8ba4\u521b\u5efa", use_container_width=True):
         if not candidate_name:
-            st.error("项目名不能为空。")
+            st.error("\u9879\u76ee\u540d\u4e0d\u80fd\u4e3a\u7a7a\u3002")
             return
         if candidate_name in existing_projects:
-            st.error("该项目已存在，请使用项目切换。")
+            st.error("\u8be5\u9879\u76ee\u5df2\u5b58\u5728\uff0c\u8bf7\u4f7f\u7528\u9879\u76ee\u5207\u6362\u3002")
             return
 
-        created_project = create_project(candidate_name)
-        st.session_state["project_name"] = created_project
-        st.session_state[NEW_PROJECT_DIALOG_FLAG] = False
+        try:
+            created_project = create_project(candidate_name)
+            st.session_state["project_name"] = created_project
+            set_active_project_name(created_project)
+            st.session_state["active_story_id"] = get_active_story_id(created_project)
+        except Exception as exc:
+            st.error(_project_creation_error_message(exc))
+            return
+
+        _clear_project_load_error()
+        st.session_state[PENDING_PROJECT_SWITCH_KEY] = created_project
+        st.session_state[PROJECT_CREATION_NOTICE_KEY] = {"project_name": created_project}
+        st.session_state["pending_nav_page"] = DEFAULT_PAGE
+        _close_new_project_dialog()
         st.rerun()
 
-    if col2.button("取消", use_container_width=True):
-        st.session_state[NEW_PROJECT_DIALOG_FLAG] = False
+    if col2.button("\u53d6\u6d88", use_container_width=True):
+        _close_new_project_dialog()
         st.rerun()
 
 def init_project_state() -> str | None:
     projects = list_projects()
+    project_name = str(st.session_state.get("project_name") or "").strip()
+    if not project_name:
+        project_name = get_active_project_name()
 
-    project_name = st.session_state.get("project_name")
-    if project_name:
-        if project_name not in projects:
-            create_project(project_name)
+    if not project_name:
+        st.session_state.pop("active_story_id", None)
+        return None
+
+    if project_name not in projects:
+        if project_data_exists(project_name):
+            _set_project_load_error(project_name, "\u9879\u76ee\u76ee\u5f55\u4e0d\u662f\u53ef\u6253\u5f00\u9879\u76ee\uff08\u53ef\u80fd\u662f\u5185\u90e8\u9a8c\u8bc1\u76ee\u5f55\uff0c\u6216\u7f3a\u5c11 stories/memory/rules/retrieval \u7b49\u9879\u76ee\u6570\u636e\u6807\u8bb0\uff09\u3002")
+        else:
+            _set_project_load_error(project_name, "\u9879\u76ee\u6570\u636e\u76ee\u5f55\u4e0d\u5b58\u5728\uff0c\u53ef\u80fd\u5df2\u88ab\u5220\u9664\u6216\u79fb\u52a8\u3002")
+        st.session_state.pop("project_name", None)
+        st.session_state.pop("active_story_id", None)
+        st.session_state["project_switcher"] = ""
+        return None
+
+    if not project_data_exists(project_name):
+        _set_project_load_error(project_name, "\u9879\u76ee\u6570\u636e\u76ee\u5f55\u4e0d\u5b58\u5728\uff0c\u53ef\u80fd\u5df2\u88ab\u5220\u9664\u6216\u79fb\u52a8\u3002")
+        st.session_state["project_name"] = project_name
+        st.session_state.pop("active_story_id", None)
+        st.session_state["project_switcher"] = ""
+        return None
+
+    try:
         migrate_project_to_stories(project_name)
         if "active_story_id" not in st.session_state:
             st.session_state["active_story_id"] = get_active_story_id(project_name)
-        return project_name
+    except Exception as exc:
+        _set_project_load_error(project_name, str(exc))
+        st.session_state["project_name"] = project_name
+        st.session_state.pop("active_story_id", None)
+        st.session_state["project_switcher"] = ""
+        return None
 
-    if projects:
-        st.session_state["project_name"] = projects[0]
-        return projects[0]
-
-    return None
+    _clear_project_load_error()
+    st.session_state["project_name"] = project_name
+    set_active_project_name(project_name)
+    return project_name
 
 def copy_story_workspace_settings(project_name: str, source_story_id: str, target_story_id: str) -> dict:
     result = copy_story_settings(project_name, source_story_id, target_story_id)
@@ -118,26 +244,46 @@ def _render_sidebar_brand() -> None:
 
 def _render_project_switcher(project_name: str | None, projects: list[str]) -> None:
     if projects:
-        st.sidebar.caption("已有项目")
+        pending_project = st.session_state.pop(PENDING_PROJECT_SWITCH_KEY, "")
+        if pending_project in projects:
+            st.session_state["project_switcher"] = pending_project
+        elif project_name in projects:
+            st.session_state.setdefault("project_switcher", project_name)
+        else:
+            st.session_state.setdefault("project_switcher", "")
+
+        options = [""] + projects
+        current_value = st.session_state.get("project_switcher", "")
+        if current_value not in options:
+            current_value = project_name if project_name in projects else ""
+            st.session_state["project_switcher"] = current_value
+
+        st.sidebar.caption("\u5df2\u6709\u9879\u76ee")
         selected_project = st.sidebar.selectbox(
-            "快速切换",
-            options=projects,
-            index=projects.index(project_name) if project_name in projects else 0,
-            key="project_switcher"
+            "\u5feb\u901f\u5207\u6362",
+            options=options,
+            index=options.index(current_value),
+            format_func=lambda value: "\u8bf7\u9009\u62e9\u9879\u76ee" if not value else value,
+            key="project_switcher",
         )
-        if selected_project != project_name:
+        if selected_project and selected_project != project_name:
+            _close_new_project_dialog()
             st.session_state["project_name"] = selected_project
-            st.session_state["active_story_id"] = get_active_story_id(selected_project)
+            set_active_project_name(selected_project)
+            try:
+                st.session_state["active_story_id"] = get_active_story_id(selected_project)
+                _clear_project_load_error()
+            except Exception as exc:
+                st.session_state.pop("active_story_id", None)
+                _set_project_load_error(selected_project, str(exc))
             st.rerun()
     else:
-        st.sidebar.info("还没有项目。可以先配置模型，也可以直接新建项目。")
+        st.sidebar.info("\u8fd8\u6ca1\u6709\u9879\u76ee\u3002\u53ef\u4ee5\u5148\u914d\u7f6e\u6a21\u578b\uff0c\u4e5f\u53ef\u4ee5\u76f4\u63a5\u65b0\u5efa\u9879\u76ee\u3002")
 
 
 def _render_new_project_entry(projects: list[str]) -> None:
     if st.sidebar.button("新建项目", use_container_width=True):
-        st.session_state[NEW_PROJECT_INPUT_KEY] = ""
-        st.session_state[NEW_PROJECT_DIALOG_FLAG] = True
-
+        _open_new_project_dialog()
     if st.session_state.get(NEW_PROJECT_DIALOG_FLAG):
         render_new_project_dialog(projects)
 
@@ -148,6 +294,10 @@ def _render_story_switcher(project_name: str, stories: list[dict]) -> None:
         st.sidebar.caption("当前故事")
         active_id = st.session_state.get("active_story_id", "default")
         story_options = [s["story_id"] for s in stories]
+        pending_story = st.session_state.pop(PENDING_STORY_SWITCH_KEY, "")
+        if pending_story in story_options:
+            st.session_state["story_switcher"] = pending_story
+            active_id = pending_story
         story_labels = {s["story_id"]: f'{s.get("name", s["story_id"])}' for s in stories}
         selected_story = st.sidebar.selectbox(
             "切换故事",
@@ -157,8 +307,7 @@ def _render_story_switcher(project_name: str, stories: list[dict]) -> None:
             key="story_switcher",
         )
         if selected_story != active_id:
-            set_active_story(project_name, selected_story)
-            st.session_state["active_story_id"] = selected_story
+            switch_to_story(project_name, selected_story)
             st.rerun()
     else:
         only_story_id = stories[0]["story_id"] if stories else "default"
@@ -170,18 +319,15 @@ def _render_new_story_popover(project_name: str) -> None:
         new_story_name = st.text_input("故事名称", key="new_story_name_input")
         new_story_desc = st.text_area("故事描述", key="new_story_desc_input", height=80, placeholder="例如：原作线续写、平行世界、角色穿越...")
         copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True, key="sidebar_copy_from")
-        if st.button("创建故事"):
+        if st.button("创建故事", key="sidebar_create_story", use_container_width=True):
             if new_story_name.strip():
                 meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
                 if copy_from:
                     copy_story_workspace_settings(project_name, st.session_state.get("active_story_id", "default"), meta["story_id"])
-                set_active_story(project_name, meta["story_id"])
-                st.session_state["active_story_id"] = meta["story_id"]
-                st.success(f"已创建故事：{new_story_name.strip()}")
+                activate_story_after_creation(project_name, meta)
                 st.rerun()
             else:
                 st.error("故事名称不能为空。")
-
 
 def _render_story_controls(project_name: str | None) -> None:
     if project_name:
@@ -298,4 +444,3 @@ def render_sidebar(project_name: str | None, projects: list[str]) -> str:
     selected_page = _render_sidebar_navigation(project_name)
     _render_sidebar_project_summary(project_name)
     return selected_page
-

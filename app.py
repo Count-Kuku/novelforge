@@ -1,15 +1,17 @@
+import importlib
+
 import streamlit as st
 
-from memory import list_projects
+import memory as memory_module
+memory_module = importlib.reload(memory_module)
+list_projects = memory_module.list_projects
+import project_manager as project_manager_module
+project_manager_module = importlib.reload(project_manager_module)
+import skills as skills_module
 from setting_knowledge import build_generation_setting_context
-from ui.app_shell import init_project_state, render_sidebar
-from ui.arc_outline_page import render_arc_outline_page
-from ui.chapter_page import render_chapter_page
-from ui.chapter_outline_page import render_chapter_outline_page
 from ui.evaluation import render_evaluation_page
 from ui.dynamic_generation import render_dynamic_generation_page
 from ui.discussion_assets_panel import render_discussion_asset_candidates
-from ui.creative_profile_page import render_creative_profile_page
 from ui.knowledge_management import (
     render_auto_review_policy_panel,
     render_auto_review_runs_panel,
@@ -22,38 +24,69 @@ from ui.knowledge_management import (
 from ui.labels import (
     KNOWLEDGE_CATEGORY_LABELS,
 )
-from ui.layout import apply_app_style, render_app_header
+from ui import (
+    app_shell as ui_app_shell,
+    arc_outline_page as ui_arc_outline_page,
+    chapter_outline_page as ui_chapter_outline_page,
+    chapter_page as ui_chapter_page,
+    creative_profile_page as ui_creative_profile_page,
+    discussion as ui_discussion,
+    layout as ui_layout,
+    outline_page as ui_outline_page,
+    project_overview as ui_project_overview,
+    resource_browser_state as ui_resource_browser_state,
+    resource_management as ui_resource_management,
+    settings_page as ui_settings_page,
+    streaming as ui_streaming,
+    volume_outline_page as ui_volume_outline_page,
+)
 from ui.llm_settings import render_llm_settings_page
 from ui.long_reference_batch import render_long_reference_batch_manager
 from ui.long_reference_importer import render_long_reference_importer
-from ui.project_overview import render_project_overview_page
-from ui.outline_page import render_outline_page
 from ui.prompt_options_page import render_prompt_options_page
 from ui.prompt_option_tools import _render_prompt_option_capability_tools
 from ui.retrieval_center_page import render_retrieval_center_page
 from ui.retrieval_ingestion_page import render_retrieval_ingestion_page
 from ui.rules_page import render_rules_page
-from ui.resource_management import render_resource_management_page
-from ui.settings_page import render_setting_items_editor, render_settings_page
-from ui.volume_outline_page import render_volume_outline_page
 
-
-WEB_REFERENCE_INGESTION_ENABLED = False
+def _reload_live_ui_modules() -> dict[str, object]:
+    global list_projects
+    memory_helpers = importlib.reload(memory_module)
+    list_projects = memory_helpers.list_projects
+    importlib.reload(project_manager_module)
+    importlib.reload(skills_module)
+    importlib.reload(ui_streaming)
+    importlib.reload(ui_resource_browser_state)
+    layout_helpers = importlib.reload(ui_layout)
+    importlib.reload(ui_discussion)
+    return {
+        "app_shell": importlib.reload(ui_app_shell),
+        "layout": layout_helpers,
+        "resource_management": importlib.reload(ui_resource_management),
+        "settings": importlib.reload(ui_settings_page),
+        "chapter": importlib.reload(ui_chapter_page),
+        "creative_profile": importlib.reload(ui_creative_profile_page),
+        "outline": importlib.reload(ui_outline_page),
+        "project_overview": importlib.reload(ui_project_overview),
+        "volume_outline": importlib.reload(ui_volume_outline_page),
+        "arc_outline": importlib.reload(ui_arc_outline_page),
+        "chapter_outline": importlib.reload(ui_chapter_outline_page),
+    }
 
 
 def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
     current_story_id = st.session_state.get("active_story_id", "default")
-    render_setting_items_editor(project_name, current_story_id, "story")
+    ui_settings_page.render_setting_items_editor(project_name, current_story_id, "story")
 
 
 def render_retrieval_page(project_name: str, mode: str = "center"):
     current_story_id = st.session_state.get("active_story_id", "default")
     if mode == "ingestion":
         st.subheader("资料导入")
-        st.caption("导入原作资料、参考资料和样本文本，并把资料整理为检索条目或结构化知识。")
+        st.caption("导入原作资料、参考资料和样本文本，并把资料整理为检索条目或知识库条目。")
     else:
         st.subheader("检索中心")
-        st.caption("管理检索索引、测试资料召回，并处理项目资料与原作/参考资料之间的潜在冲突。")
+        st.caption("管理检索索引、测试资料匹配，并处理项目资料与原作/参考资料之间的潜在冲突。")
 
     source_type_options = {
         "external_source": "通用资料",
@@ -89,11 +122,14 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
 
 def main():
     st.set_page_config(page_title="NovelForge", layout="wide")
-    apply_app_style()
+    ui_modules = _reload_live_ui_modules()
+    layout_helpers = ui_modules["layout"]
+    layout_helpers.apply_app_style()
 
-    project_name = init_project_state()
+    app_shell = ui_modules["app_shell"]
+    project_name = app_shell.init_project_state()
     projects = list_projects()
-    page = render_sidebar(project_name, projects)
+    page = app_shell.render_sidebar(project_name, projects)
 
     if project_name:
         story_id = st.session_state.get("active_story_id", "default")
@@ -102,22 +138,34 @@ def main():
         memory = None
         st.info("当前还没有项目。可先进入“模型配置”填写服务地址与密钥，或点击侧边栏“新建项目”开始创建。")
 
-    render_app_header(project_name, page, memory)
+    layout_helpers.render_app_header(project_name, page, memory)
+    project_load_error = app_shell.get_project_load_error()
+    if project_load_error and not project_name:
+        error_project = str(project_load_error.get("project_name") or "")
+        error_message = str(project_load_error.get("message") or "")
+        st.error(f"\u9879\u76ee {error_project} \u6682\u65f6\u4e0d\u53ef\u7528\uff1a{error_message}")
+        st.caption("\u53ef\u4ee5\u5728\u4fa7\u8fb9\u680f\u5207\u6362\u5230\u5176\u5b83\u9879\u76ee\uff0c\u6216\u5728\u9879\u76ee\u6587\u4ef6\u6062\u590d\u540e\u5237\u65b0\u91cd\u8bd5\u3002")
+    created_project_notice = app_shell.consume_project_creation_notice()
+    if created_project_notice:
+        st.success(f"已创建并进入项目：{created_project_notice}")
+    created_story_notice = app_shell.consume_story_creation_notice()
+    if created_story_notice:
+        st.success(created_story_notice)
 
     if not project_name and page != "模型配置":
         st.stop()
     elif page == "模型配置":
         render_llm_settings_page()
     elif page == "项目总览":
-        render_project_overview_page(project_name)
+        ui_modules["project_overview"].render_project_overview_page(project_name)
     elif page == "创作配置":
-        render_creative_profile_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["creative_profile"].render_creative_profile_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
     elif page == "核心设定":
-        render_settings_page(project_name, render_memory_page=render_memory_page)
+        ui_modules["settings"].render_settings_page(project_name, render_memory_page=render_memory_page)
     elif page == "快速生成":
         render_dynamic_generation_page(project_name, _render_prompt_option_capability_tools)
-    elif page == "资源浏览器":
-        render_resource_management_page(project_name)
+    elif page == "项目资源":
+        ui_modules["resource_management"].render_resource_management_page(project_name)
     elif page == "资料导入":
         render_retrieval_page(project_name, mode="ingestion")
     elif page == "检索中心":
@@ -127,19 +175,18 @@ def main():
     elif page == "提示词选项":
         render_prompt_options_page(project_name)
     elif page == "生成大纲":
-        render_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["outline"].render_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
     elif page == "分卷大纲":
-        render_volume_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["volume_outline"].render_volume_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
     elif page == "剧情段大纲":
-        render_arc_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["arc_outline"].render_arc_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
     elif page == "生成细纲":
-        render_chapter_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["chapter_outline"].render_chapter_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
     elif page == "正文生成":
-        render_chapter_page(project_name)
+        ui_modules["chapter"].render_chapter_page(project_name)
     elif page == "章节评价":
         render_evaluation_page(project_name, _render_prompt_option_capability_tools)
 
 
 if __name__ == "__main__":
     main()
-

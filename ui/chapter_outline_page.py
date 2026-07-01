@@ -28,13 +28,19 @@ from ui.common import scoped_session_key, scoped_widget_key
 from ui.discussion import (
     _append_discussion_message,
     _consume_discussion_input_clear,
+    _discussion_context_text,
+    _discussion_initial_user_message,
     _discussion_input_clear_flag_key,
     _discussion_input_key,
     _discussion_messages_key,
     _discussion_result_key,
     _render_approved_discussion_artifact,
     _render_discussion_chat,
+    _render_discussion_decision_hint,
+    _render_discussion_empty_hint,
     _render_discussion_summary,
+    _render_discussion_workspace,
+    _run_discussion_chat_stream,
 )
 from ui.layout import render_section_heading
 from ui.prompt_option_tools import _render_prompt_option_capability_tools
@@ -137,16 +143,16 @@ def _prepare_chapter_outline_context(project_name: str, story_id: str):
 
 
 def _render_approved_planning_artifacts(project_name: str, story_id: str, context) -> None:
-    with st.expander("当前使用的已批准规划工件", expanded=False):
-        st.markdown("### 章节已批准讨论")
+    with st.expander("当前使用的规划结论", expanded=False):
+        st.markdown("### 章节已保存结论")
         _render_approved_discussion_artifact(
             load_chapter_discussion_artifact(project_name, context["chapter_no"], story_id=story_id),
-            "当前章节没有已批准讨论工件。",
+            "当前章节没有保存讨论结论。",
         )
-        st.markdown("### 分卷已批准讨论")
-        _render_approved_discussion_artifact(context["volume_discussion_artifact"], "当前分卷没有已批准讨论工件。")
-        st.markdown("### 剧情段已批准讨论")
-        _render_approved_discussion_artifact(context["arc_discussion_artifact"], "当前剧情段没有已批准讨论工件。")
+        st.markdown("### 分卷已保存结论")
+        _render_approved_discussion_artifact(context["volume_discussion_artifact"], "当前分卷没有保存讨论结论。")
+        st.markdown("### 剧情段已保存结论")
+        _render_approved_discussion_artifact(context["arc_discussion_artifact"], "当前剧情段没有保存讨论结论。")
 
 
 def _prepare_chapter_discussion_context(project_name: str, story_id: str, chapter_no: int):
@@ -166,42 +172,6 @@ def _prepare_chapter_discussion_context(project_name: str, story_id: str, chapte
     }
 
 
-def _render_chapter_discussion_actions(project_name: str, story_id: str, context, requirement: str, discussion_context) -> None:
-    chapter_no = context["chapter_no"]
-    chapter_scope = context["chapter_scope"]
-    col_action_1, col_action_2 = st.columns(2)
-    if col_action_1.button("开始讨论本章方向", key=scoped_widget_key("start_chapter_discussion", *chapter_scope)):
-        try:
-            save_chapter_outline_metadata(
-                project_name,
-                chapter_no,
-                {"volume_no": context["volume_no"] or None, "arc_no": context["arc_no"] or None},
-                story_id=story_id,
-            )
-            result = _run_with_stream(
-                "正在讨论本章方向...",
-                discuss_chapter,
-                project_name,
-                chapter_no,
-                requirement,
-                story_id=story_id,
-                preview_language="json",
-            )
-            st.session_state[discussion_context["result_key"]] = result
-            st.session_state[discussion_context["messages_key"]] = []
-            assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本章目标、可选方向和待确认问题，我们可以继续细化。"
-            _append_discussion_message(discussion_context["messages_key"], "assistant", assistant_message)
-            st.rerun()
-        except Exception as exc:
-            st.error(f"讨论失败：{exc}")
-
-    if col_action_2.button("重置本章讨论", key=scoped_widget_key("reset_chapter_discussion", *chapter_scope)):
-        st.session_state[discussion_context["result_key"]] = {}
-        st.session_state[discussion_context["messages_key"]] = []
-        st.session_state[discussion_context["clear_input_flag_key"]] = True
-        st.rerun()
-
-
 def _render_chapter_discussion_summary_panel(
     project_name: str,
     story_id: str,
@@ -212,9 +182,9 @@ def _render_chapter_discussion_summary_panel(
     chapter_no = context["chapter_no"]
     chapter_scope = context["chapter_scope"]
     discussion_step = discussion_context["discussion_step"]
-    st.markdown("### 当前讨论结论")
-    _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示本章方向的当前结论。")
-    render_step_retrieval(discussion_step, "本次章节讨论参考的检索上下文")
+    st.markdown("##### 本章方向结论")
+    _render_discussion_summary(discussion_step, "开始讨论后，这里显示本章目标、冲突推进和收尾安排。")
+    render_step_retrieval(discussion_step, "本次章节讨论参考的资料")
     render_discussion_asset_candidates(
         project_name,
         story_id,
@@ -224,76 +194,21 @@ def _render_chapter_discussion_summary_panel(
         scoped_widget_key("chapter_discussion_prompt_options", *chapter_scope),
     )
     approve_col, clear_col = st.columns(2)
-    if approve_col.button("批准当前章节讨论", key=scoped_widget_key("approve_chapter_discussion", *chapter_scope)):
+    if approve_col.button("保存本章结论", key=scoped_widget_key("approve_chapter_discussion", *chapter_scope), use_container_width=True):
         try:
             result = approve_chapter_discussion(project_name, chapter_no, discussion_step, story_id=story_id)
-            st.success(f"已保存章节讨论工件：{result.get('saved_path', '')}")
+            st.success("已保存章节讨论结论。")
             st.rerun()
         except Exception as exc:
-            st.error(f"批准失败：{exc}")
-    if clear_col.button("清除已批准章节讨论", key=scoped_widget_key("clear_chapter_discussion", *chapter_scope)):
+            st.error(f"保存失败：{exc}")
+    if clear_col.button("清除本章结论", key=scoped_widget_key("clear_chapter_discussion", *chapter_scope), use_container_width=True):
         if clear_chapter_discussion_approval(project_name, chapter_no, story_id=story_id):
-            st.success("已清除章节已批准讨论工件。")
+            st.success("已清除章节讨论结论。")
             st.rerun()
         else:
-            st.warning("当前没有可清除的已批准章节讨论工件。")
-    st.markdown("### 已批准章节讨论")
-    _render_approved_discussion_artifact(discussion_context["chapter_discussion_artifact"], "当前章节还没有已批准讨论工件。")
-
-
-def _render_chapter_discussion_chat_panel(
-    project_name: str,
-    story_id: str,
-    context,
-    requirement: str,
-    discussion_context,
-) -> None:
-    chapter_no = context["chapter_no"]
-    chapter_scope = context["chapter_scope"]
-    messages_key = discussion_context["messages_key"]
-    st.markdown("### 讨论对话")
-    messages = st.session_state.get(messages_key, [])
-    _render_discussion_chat(messages)
-    follow_up = st.text_area(
-        "继续讨论本章",
-        key=discussion_context["input_key"],
-        height=120,
-        placeholder="例如：我希望这章更偏日常拉扯，不要太快进入正面冲突。",
-    )
-    if st.button("发送本章讨论消息", key=scoped_widget_key("send_chapter_discussion", *chapter_scope)):
-        if not follow_up.strip():
-            st.warning("讨论消息不能为空。")
-        elif not requirement.strip():
-            st.warning("请先填写本章要求。")
-        else:
-            try:
-                save_chapter_outline_metadata(
-                    project_name,
-                    chapter_no,
-                    {"volume_no": context["volume_no"] or None, "arc_no": context["arc_no"] or None},
-                    story_id=story_id,
-                )
-                _append_discussion_message(messages_key, "user", follow_up)
-                messages = st.session_state.get(messages_key, [])
-                result = _run_with_stream(
-                    "正在继续讨论本章...",
-                    discuss_chapter_turn,
-                    project_name,
-                    chapter_no,
-                    requirement,
-                    messages,
-                    discussion_context["discussion_step"].get("data", {}).get("discussion", {}),
-                    follow_up,
-                    story_id=story_id,
-                    preview_language="json",
-                )
-                st.session_state[discussion_context["result_key"]] = result
-                assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本章讨论结论。"
-                _append_discussion_message(messages_key, "assistant", assistant_message)
-                st.session_state[discussion_context["clear_input_flag_key"]] = True
-                st.rerun()
-            except Exception as exc:
-                st.error(f"继续讨论失败：{exc}")
+            st.warning("当前没有可清除的章节结论。")
+    st.markdown("##### 已保存本章结论")
+    _render_approved_discussion_artifact(discussion_context["chapter_discussion_artifact"], "当前章节还没有保存讨论结论。")
 
 
 def _render_chapter_discussion_area(
@@ -304,15 +219,98 @@ def _render_chapter_discussion_area(
     discussion_context,
     render_discussion_asset_candidates,
 ) -> None:
-    _render_chapter_discussion_actions(project_name, story_id, context, requirement, discussion_context)
-    summary_col, chat_col = st.columns([1, 1])
-    with summary_col:
+    chapter_no = context["chapter_no"]
+    chapter_scope = context["chapter_scope"]
+
+    def render_input_panel(_stream_container) -> None:
+        messages_key = discussion_context["messages_key"]
+        current_messages = st.session_state.get(messages_key, [])
+        st.markdown("##### 讨论本章方向")
+        _render_discussion_decision_hint(
+            ["本章目标", "场景重点", "冲突节奏", "结尾钩子"],
+            "章节细纲和正文写作",
+            note="本章要求和所属层级会自动带入。",
+        )
+        if current_messages:
+            _render_discussion_chat(current_messages, height=260)
+        else:
+            _render_discussion_empty_hint("说说本章要写什么，也可以补充场景、冲突或结尾。")
+        live_turn_container = st.empty()
+        user_input = st.text_area(
+            "章节讨论输入",
+            key=discussion_context["input_key"],
+            height=120,
+            placeholder="例如：我希望这章更偏日常拉扯，不要太快进入正面冲突。",
+            label_visibility="collapsed",
+        )
+        has_started = bool(st.session_state.get(discussion_context["result_key"]) or current_messages)
+        send_label = "发送" if has_started else "开始讨论"
+        send_col, reset_col = st.columns([3, 1])
+        if send_col.button(send_label, key=scoped_widget_key("send_chapter_discussion", *chapter_scope), use_container_width=True):
+            submitted = str(user_input or "").strip()
+            if not submitted:
+                st.warning("讨论消息不能为空。")
+            else:
+                try:
+                    save_chapter_outline_metadata(
+                        project_name,
+                        chapter_no,
+                        {"volume_no": context["volume_no"] or None, "arc_no": context["arc_no"] or None},
+                        story_id=story_id,
+                    )
+                    existing_messages = list(st.session_state.get(messages_key, []))
+                    _append_discussion_message(messages_key, "user", submitted)
+                    updated_messages = st.session_state.get(messages_key, [])
+                    if has_started:
+                        base_requirement = requirement or _discussion_initial_user_message(existing_messages, submitted)
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "继续讨论本章",
+                            discuss_chapter_turn,
+                            project_name,
+                            chapter_no,
+                            base_requirement,
+                            updated_messages,
+                            st.session_state.get(discussion_context["result_key"], {}).get("data", {}).get("discussion", {}),
+                            submitted,
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本章讨论结论。"
+                    else:
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "讨论本章方向",
+                            discuss_chapter,
+                            project_name,
+                            chapter_no,
+                            _discussion_context_text(requirement, submitted, "本轮讨论"),
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本章目标、可选方向和待确认问题，我们可以继续细化。"
+                    st.session_state[discussion_context["result_key"]] = result
+                    _append_discussion_message(messages_key, "assistant", assistant_message)
+                    st.session_state[discussion_context["clear_input_flag_key"]] = True
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"讨论失败：{exc}")
+        if reset_col.button("重置", key=scoped_widget_key("reset_chapter_discussion", *chapter_scope), use_container_width=True):
+            st.session_state[discussion_context["result_key"]] = {}
+            st.session_state[messages_key] = []
+            st.session_state[discussion_context["clear_input_flag_key"]] = True
+            st.rerun()
+
+    def render_output_panel() -> None:
         _render_chapter_discussion_summary_panel(
             project_name, story_id, context, discussion_context, render_discussion_asset_candidates
         )
-    with chat_col:
-        _render_chapter_discussion_chat_panel(project_name, story_id, context, requirement, discussion_context)
 
+    _render_discussion_workspace(
+        f"chapter-{project_name}-{story_id}-{context['chapter_no']}",
+        render_input_panel,
+        render_output_panel,
+    )
 
 def _render_chapter_outline_prompt_options(project_name: str, story_id: str, context) -> None:
     with st.expander("高级：章节细纲提示词选项", expanded=False):
@@ -328,13 +326,13 @@ def _generation_blocked_by_approval(approval_required: bool, context, discussion
     if not approval_required:
         return False
     if context["volume_no"] and not (context["volume_discussion_artifact"].get("discussion", {}) or {}).get("approval_ready"):
-        st.error("当前分卷还没有已批准讨论工件，已阻止章节细纲生成。")
+        st.error("当前分卷还没有保存讨论结论，已暂缓生成章节细纲。")
         return True
     if context["arc_no"] and not (context["arc_discussion_artifact"].get("discussion", {}) or {}).get("approval_ready"):
-        st.error("当前剧情段还没有已批准讨论工件，已阻止章节细纲生成。")
+        st.error("当前剧情段还没有保存讨论结论，已暂缓生成章节细纲。")
         return True
     if not (discussion_context["chapter_discussion_artifact"].get("discussion", {}) or {}).get("approval_ready"):
-        st.error("当前章节还没有已批准讨论工件，已阻止章节细纲生成。")
+        st.error("当前章节还没有保存讨论结论，已暂缓生成章节细纲。")
         return True
     return False
 
@@ -396,9 +394,9 @@ def render_chapter_outline_page(project_name: str, *, render_discussion_asset_ca
 
     render_section_heading("章节定位", "先确定章节编号和所属层级，细纲会按这个位置读写和保存。")
     context = _prepare_chapter_outline_context(project_name, story_id)
-    render_section_heading("生成约束", "可选择必须先批准讨论，再正式生成本章细纲。")
+    render_section_heading("生成约束", "可要求先保存讨论结论，再生成本章细纲。")
     approval_required = st.checkbox(
-        "要求已批准的章节/卷/剧情段讨论后再生成章节细纲",
+        "生成前要求先保存章节、分卷和剧情段讨论结论",
         value=False,
         key=scoped_widget_key("chapter_outline_require_approval", *context["chapter_scope"]),
     )
@@ -410,7 +408,7 @@ def render_chapter_outline_page(project_name: str, *, render_discussion_asset_ca
             key=scoped_widget_key("chapter_outline_requirement", *context["chapter_scope"]),
         )
     discussion_context = _prepare_chapter_discussion_context(project_name, story_id, context["chapter_no"])
-    render_section_heading("讨论与批准", "章节讨论可以先收束冲突、节奏和结尾目标，再批准为生成依据。")
+    render_section_heading("讨论本章方向", "明确本章写什么、怎么收尾，再保存为细纲和正文依据。")
     _render_chapter_discussion_area(
         project_name,
         story_id,
@@ -433,7 +431,6 @@ def render_chapter_outline_page(project_name: str, *, render_discussion_asset_ca
     render_step_validation(step_result)
     render_step_retrieval(
         step_result,
-        "本次细纲生成使用的检索上下文",
+        "本次细纲生成参考的资料",
         get_retrieval_trace(f"chapter_outline:{project_name}:{story_id}:{context['chapter_no']}")
     )
-

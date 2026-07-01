@@ -474,7 +474,6 @@ def build_discussion_prompt_option_candidates(
                 ("生成层级", "workflow_depth"),
                 ("参考强度", "reference_strength"),
                 ("冲突策略", "conflict_policy"),
-                ("自由说明", "notes"),
             ]:
                 value = profile.get(key)
                 if isinstance(value, list):

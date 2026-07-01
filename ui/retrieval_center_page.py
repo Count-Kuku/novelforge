@@ -79,7 +79,7 @@ def _render_retrieval_index_controls(project_name: str):
 
 
 def _render_retrieval_health_panel(project_name: str):
-    with st.expander("RAG 健康检查", expanded=True):
+    with st.expander("资料检索健康检查", expanded=True):
         try:
             health = inspect_retrieval_health(project_name)
             status_label = {
@@ -103,7 +103,7 @@ def _render_retrieval_health_panel(project_name: str):
             if health.get("embedding_enabled"):
                 st.success(f"语义向量已启用：{health.get('vector_model') or health.get('embedding_model') or '-'} / 维度 {health.get('vector_dimension') or '-'}")
             else:
-                st.warning("语义向量未启用。混合检索会自动退回关键词检索；如需语义召回，请配置可用的 Embedding 模型后重建完整索引。")
+                st.warning("语义向量未启用。混合检索会自动退回关键词检索；如需语义匹配，请配置可用的 Embedding 模型后重建完整索引。")
 
             for issue in health.get("issues", []):
                 severity = issue.get("severity")
@@ -139,7 +139,7 @@ def _render_retrieval_health_panel(project_name: str):
                 else:
                     st.caption("暂无范围统计。")
         except Exception as exc:
-            st.error(f"RAG 健康检查失败：{exc}")
+            st.error(f"资料检索健康检查失败：{exc}")
 
 
 def _render_retrieval_source_management(project_name: str, manifest):
@@ -196,7 +196,7 @@ def _render_retrieval_hits(project_name: str, query: str):
             st.caption(f"查询扩展：{', '.join(expanded_terms[:12])}")
         match_reasons = hit.get("match_reasons", [])
         if match_reasons:
-            st.caption("召回原因：" + "；".join(match_reasons[:5]))
+            st.caption("匹配原因：" + "；".join(match_reasons[:5]))
         score_breakdown = hit.get("score_breakdown", {})
         if score_breakdown:
             breakdown_text = " / ".join(f"{key}={value:.2f}" for key, value in score_breakdown.items())
@@ -244,7 +244,7 @@ def _render_retrieval_debug_payload():
         for index, hit in enumerate(debug_payload.get("reranked_hits", []), start=1):
             chunk = hit.get("chunk", {})
             st.caption(f"{index}. {label_source_type(chunk.get('source_type', 'unknown'))} / {chunk.get('title', '')} / 相关度={hit.get('score', 0):.2f}")
-        render_step_json_expander("完整调试结构化数据", debug_payload)
+        render_step_json_expander("完整调试详细数据", debug_payload)
 
 
 def _render_retrieval_conflicts(project_name: str, current_hits: list[dict]):
@@ -300,7 +300,7 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             index=0,
             format_func=retrieval_profile_label,
             key="retrieval_task_profile",
-            help="选择后会使用对应任务的来源偏好和默认召回数量；手动来源过滤会优先于任务策略。",
+            help="选择后会使用对应任务的来源偏好和默认匹配数量；手动来源过滤会优先于任务策略。",
         )
         scope_options = st.multiselect(
             "范围过滤",
@@ -327,7 +327,7 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             options=[""] + worldline_options,
             format_func=lambda value: "不限定" if not value else value,
             key="retrieval_worldline_filter",
-            help="选择后会优先召回同世界线资料；通用资料仍会保留。",
+            help="选择后会优先匹配同世界线资料；通用资料仍会保留。",
         )
         worldline_mode = st.selectbox(
             "世界线模式",
@@ -379,4 +379,3 @@ def render_retrieval_center_page(project_name: str, current_story_id: str):
     render_retrieval_eval_workbench(project_name, manifest)
     _render_retrieval_source_management(project_name, manifest)
     _render_retrieval_preview(project_name, current_story_id, manifest)
-

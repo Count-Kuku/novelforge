@@ -159,6 +159,8 @@ def _launch_streamlit(root: Path, python_executable: Path, port: int):
         "true",
         "--browser.gatherUsageStats",
         "false",
+        "--client.toolbarMode",
+        "minimal",
         "--theme.base",
         "light",
         "--theme.primaryColor",

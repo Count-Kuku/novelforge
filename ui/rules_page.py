@@ -236,4 +236,3 @@ def render_rules_page(project_name: str):
         if st.button("保存全局规则"):
             save_global_rules(updated_global_rules)
             st.success("全局规则已保存")
-

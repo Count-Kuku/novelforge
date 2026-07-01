@@ -38,7 +38,7 @@ def render_step_json_expander(title: str, payload: dict):
     with st.expander(title, expanded=False):
         st.code(json.dumps(payload, ensure_ascii=False, indent=2), language="json")
 
-def render_retrieval_usage_report(hits: list[dict], title: str = "资料使用报告"):
+def render_retrieval_usage_report(hits: list[dict], title: str = "参考资料报告"):
     report = build_retrieval_usage_report_from_payload(
         hits,
         label_source_type_func=label_source_type,
@@ -47,7 +47,7 @@ def render_retrieval_usage_report(hits: list[dict], title: str = "资料使用�
     )
     with st.expander(title, expanded=bool(hits)):
         metric_cols = st.columns(4)
-        metric_cols[0].metric("召回片段", report.get("hit_count", 0))
+        metric_cols[0].metric("匹配片段", report.get("hit_count", 0))
         metric_cols[1].metric("来源类型", len(report.get("source_type_counts", {})))
         metric_cols[2].metric("硬约束/设定", len(report.get("constraints", [])))
         metric_cols[3].metric("冲突裁决", len(report.get("conflicts", [])))
@@ -81,6 +81,5 @@ def render_step_retrieval(step_result: dict, title: str, fallback_hits: list[dic
     active_hits = hits or (fallback_hits or [])
     if not active_hits:
         return
-    render_retrieval_usage_report(active_hits, "本次生成资料使用报告")
+    render_retrieval_usage_report(active_hits, "本次参考资料报告")
     render_retrieval_hits_block(active_hits, title)
-

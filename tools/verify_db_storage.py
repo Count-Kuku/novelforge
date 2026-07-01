@@ -49,6 +49,7 @@ def main() -> int:
         _run("verify_global_db_first_reads.py"),
         _run("verify_db_first_reads.py"),
         _run("verify_db_delete_semantics.py"),
+        _run("verify_db_authority_and_copy.py"),
         _run("verify_db_no_json_mirrors.py"),
         _run("verify_story_path_safety.py"),
     ]

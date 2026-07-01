@@ -24,13 +24,18 @@ from ui.common import confirmed_button, scoped_session_key, scoped_widget_key
 from ui.discussion import (
     _append_discussion_message,
     _consume_discussion_input_clear,
+    _discussion_context_text,
     _discussion_input_clear_flag_key,
     _discussion_input_key,
     _discussion_messages_key,
     _discussion_result_key,
     _render_approved_discussion_artifact,
     _render_discussion_chat,
+    _render_discussion_decision_hint,
+    _render_discussion_empty_hint,
     _render_discussion_summary,
+    _render_discussion_workspace,
+    _run_discussion_chat_stream,
 )
 from ui.labels import label_status
 from ui.layout import render_section_heading
@@ -97,46 +102,6 @@ def _prepare_volume_discussion_context(project_name: str, story_id: str, volume_
     }
 
 
-def _render_volume_discussion_actions(
-    project_name: str,
-    story_id: str,
-    context: dict,
-    discussion_context: dict,
-    title: str,
-    summary: str,
-    requirement: str,
-) -> None:
-    volume_no = context["volume_no"]
-    volume_scope = context["volume_scope"]
-    col_action_1, col_action_2 = st.columns(2)
-    if col_action_1.button("开始讨论分卷方向", key=scoped_widget_key("start_volume_discussion", *volume_scope)):
-        try:
-            result = _run_with_stream(
-                "正在讨论分卷方向...",
-                discuss_volume,
-                project_name,
-                volume_no,
-                title,
-                summary,
-                requirement,
-                story_id=story_id,
-                preview_language="json",
-            )
-            st.session_state[discussion_context["result_key"]] = result
-            st.session_state[discussion_context["messages_key"]] = []
-            assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本卷的定位、可选结构和待确认问题，我们可以继续细化。"
-            _append_discussion_message(discussion_context["messages_key"], "assistant", assistant_message)
-            st.rerun()
-        except Exception as exc:
-            st.error(f"讨论失败：{exc}")
-
-    if col_action_2.button("重置分卷讨论", key=scoped_widget_key("reset_volume_discussion", *volume_scope)):
-        st.session_state[discussion_context["result_key"]] = {}
-        st.session_state[discussion_context["messages_key"]] = []
-        st.session_state[discussion_context["clear_input_flag_key"]] = True
-        st.rerun()
-
-
 def _render_volume_discussion_summary_panel(
     project_name: str,
     story_id: str,
@@ -147,9 +112,9 @@ def _render_volume_discussion_summary_panel(
     volume_no = context["volume_no"]
     volume_scope = context["volume_scope"]
     discussion_step = discussion_context["discussion_step"]
-    st.markdown("### 当前讨论结论")
-    _render_discussion_summary(discussion_step, "开始讨论后，这里会持续显示当前分卷方向的结论。")
-    render_step_retrieval(discussion_step, "本次分卷讨论参考的检索上下文")
+    st.markdown("##### 分卷方向结论")
+    _render_discussion_summary(discussion_step, "开始讨论后，这里显示本卷定位、推进目标和关键约束。")
+    render_step_retrieval(discussion_step, "本次分卷讨论参考的资料")
     render_discussion_asset_candidates(
         project_name,
         story_id,
@@ -159,72 +124,21 @@ def _render_volume_discussion_summary_panel(
         scoped_widget_key("volume_discussion_prompt_options", *volume_scope),
     )
     approve_col, clear_col = st.columns(2)
-    if approve_col.button("批准当前讨论", key=scoped_widget_key("approve_volume_discussion", *volume_scope)):
+    if approve_col.button("保存分卷结论", key=scoped_widget_key("approve_volume_discussion", *volume_scope), use_container_width=True):
         try:
             result = approve_volume_discussion(project_name, volume_no, discussion_step, story_id=story_id)
-            st.success(f"已保存分卷讨论工件：{result.get('saved_path', '')}")
+            st.success("已保存分卷讨论结论。")
             st.rerun()
         except Exception as exc:
-            st.error(f"批准失败：{exc}")
-    if clear_col.button("清除已批准版本", key=scoped_widget_key("clear_volume_discussion", *volume_scope)):
+            st.error(f"保存失败：{exc}")
+    if clear_col.button("清除分卷结论", key=scoped_widget_key("clear_volume_discussion", *volume_scope), use_container_width=True):
         if clear_volume_discussion_approval(project_name, volume_no, story_id=story_id):
-            st.success("已清除分卷已批准讨论工件。")
+            st.success("已清除分卷讨论结论。")
             st.rerun()
         else:
-            st.warning("当前没有可清除的已批准讨论工件。")
-    st.markdown("### 已批准讨论版本")
-    _render_approved_discussion_artifact(discussion_context["approved_artifact"], "当前分卷还没有已批准讨论工件。")
-
-
-def _render_volume_discussion_chat_panel(
-    project_name: str,
-    story_id: str,
-    context: dict,
-    discussion_context: dict,
-    title: str,
-    summary: str,
-    requirement: str,
-) -> None:
-    volume_no = context["volume_no"]
-    volume_scope = context["volume_scope"]
-    messages_key = discussion_context["messages_key"]
-    st.markdown("### 讨论对话")
-    messages = st.session_state.get(messages_key, [])
-    _render_discussion_chat(messages)
-    follow_up = st.text_area(
-        "继续讨论分卷",
-        key=discussion_context["input_key"],
-        height=120,
-        placeholder="例如：这一卷我想更偏升级与站稳脚跟，不要太早引爆终局矛盾。",
-    )
-    if st.button("发送分卷讨论消息", key=scoped_widget_key("send_volume_discussion", *volume_scope)):
-        if not follow_up.strip():
-            st.warning("讨论消息不能为空。")
-        else:
-            try:
-                _append_discussion_message(messages_key, "user", follow_up)
-                messages = st.session_state.get(messages_key, [])
-                result = _run_with_stream(
-                    "正在继续讨论分卷...",
-                    discuss_volume_turn,
-                    project_name,
-                    volume_no,
-                    title,
-                    summary,
-                    requirement,
-                    messages,
-                    discussion_context["discussion_step"].get("data", {}).get("discussion", {}),
-                    follow_up,
-                    story_id=story_id,
-                    preview_language="json",
-                )
-                st.session_state[discussion_context["result_key"]] = result
-                assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本卷讨论结论。"
-                _append_discussion_message(messages_key, "assistant", assistant_message)
-                st.session_state[discussion_context["clear_input_flag_key"]] = True
-                st.rerun()
-            except Exception as exc:
-                st.error(f"继续讨论失败：{exc}")
+            st.warning("当前没有可清除的分卷结论。")
+    st.markdown("##### 已保存分卷结论")
+    _render_approved_discussion_artifact(discussion_context["approved_artifact"], "当前分卷还没有保存讨论结论。")
 
 
 def _render_volume_discussion_area(
@@ -237,15 +151,94 @@ def _render_volume_discussion_area(
     requirement: str,
     render_discussion_asset_candidates,
 ) -> None:
-    _render_volume_discussion_actions(project_name, story_id, context, discussion_context, title, summary, requirement)
-    summary_col, chat_col = st.columns([1, 1])
-    with summary_col:
+    volume_no = context["volume_no"]
+    volume_scope = context["volume_scope"]
+
+    def render_input_panel(_stream_container) -> None:
+        messages_key = discussion_context["messages_key"]
+        current_messages = st.session_state.get(messages_key, [])
+        st.markdown("##### 讨论分卷方向")
+        _render_discussion_decision_hint(
+            ["本卷目标", "节奏", "承接", "边界"],
+            "分卷大纲、剧情段规划和章节细纲",
+            note="标题、摘要和本卷要求会自动带入。",
+        )
+        if current_messages:
+            _render_discussion_chat(current_messages, height=260)
+        else:
+            _render_discussion_empty_hint("说说本卷要推进什么，也可以补充标题、摘要和要求。")
+        live_turn_container = st.empty()
+        user_input = st.text_area(
+            "分卷讨论输入",
+            key=discussion_context["input_key"],
+            height=120,
+            placeholder="例如：这一卷我想更偏升级与站稳脚跟，不要太早引爆终局矛盾。",
+            label_visibility="collapsed",
+        )
+        has_started = bool(st.session_state.get(discussion_context["result_key"]) or current_messages)
+        send_label = "发送" if has_started else "开始讨论"
+        send_col, reset_col = st.columns([3, 1])
+        if send_col.button(send_label, key=scoped_widget_key("send_volume_discussion", *volume_scope), use_container_width=True):
+            submitted = str(user_input or "").strip()
+            if not submitted:
+                st.warning("讨论消息不能为空。")
+            else:
+                try:
+                    _append_discussion_message(messages_key, "user", submitted)
+                    updated_messages = st.session_state.get(messages_key, [])
+                    if has_started:
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "继续讨论分卷",
+                            discuss_volume_turn,
+                            project_name,
+                            volume_no,
+                            title,
+                            summary,
+                            requirement,
+                            updated_messages,
+                            st.session_state.get(discussion_context["result_key"], {}).get("data", {}).get("discussion", {}),
+                            submitted,
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("assistant_message", "") or "我已经根据你的补充更新了本卷讨论结论。"
+                    else:
+                        result = _run_discussion_chat_stream(
+                            live_turn_container,
+                            submitted,
+                            "讨论分卷方向",
+                            discuss_volume,
+                            project_name,
+                            volume_no,
+                            title,
+                            summary,
+                            _discussion_context_text(requirement, submitted),
+                            story_id=story_id,
+                        )
+                        assistant_message = result.get("data", {}).get("discussion", {}).get("current_understanding", "") or "我先整理了本卷的定位、可选结构和待确认问题，我们可以继续细化。"
+                    st.session_state[discussion_context["result_key"]] = result
+                    _append_discussion_message(messages_key, "assistant", assistant_message)
+                    st.session_state[discussion_context["clear_input_flag_key"]] = True
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"讨论失败：{exc}")
+        if reset_col.button("重置", key=scoped_widget_key("reset_volume_discussion", *volume_scope), use_container_width=True):
+            st.session_state[discussion_context["result_key"]] = {}
+            st.session_state[messages_key] = []
+            st.session_state[discussion_context["clear_input_flag_key"]] = True
+            st.rerun()
+
+    def render_output_panel() -> None:
         _render_volume_discussion_summary_panel(
             project_name, story_id, context, discussion_context, render_discussion_asset_candidates
         )
-    with chat_col:
-        _render_volume_discussion_chat_panel(project_name, story_id, context, discussion_context, title, summary, requirement)
 
+    _render_discussion_workspace(
+        f"volume-{project_name}-{story_id}-{context['volume_no']}",
+        render_input_panel,
+        render_output_panel,
+    )
 
 def _render_volume_prompt_options(project_name: str, story_id: str, context: dict) -> None:
     with st.expander("高级：分卷大纲提示词选项", expanded=False):
@@ -335,7 +328,7 @@ def _render_existing_volumes(project_name: str, story_id: str) -> None:
         st.caption("当前还没有分卷。")
         return
     for item in volumes:
-        approval_label = "已有批准讨论" if item.get("has_approved_discussion") else "暂无批准讨论"
+        approval_label = "已有分卷结论" if item.get("has_approved_discussion") else "暂无分卷结论"
         st.caption(f"第 {int(item.get('volume_no', 0))} 卷 / {item.get('title', '') or '未命名'} / 状态={label_status(item.get('status', 'draft'))} / {approval_label}")
 
 
@@ -346,7 +339,7 @@ def render_volume_outline_page(project_name: str, *, render_discussion_asset_can
     context = _prepare_volume_outline_context(project_name, story_id)
     title, summary, status, requirement = _render_volume_metadata_fields(context)
     discussion_context = _prepare_volume_discussion_context(project_name, story_id, context["volume_no"])
-    render_section_heading("讨论与批准", "分卷讨论会沉淀为可复用工件，供后续剧情段和章节规划参考。")
+    render_section_heading("讨论分卷方向", "明确本卷负责什么、推进到哪里，再保存为后续规划依据。")
     _render_volume_discussion_area(
         project_name,
         story_id,
@@ -366,7 +359,6 @@ def render_volume_outline_page(project_name: str, *, render_discussion_asset_can
     render_step_validation(step_result)
     render_step_retrieval(
         step_result,
-        "本次分卷大纲生成使用的检索上下文",
+        "本次分卷大纲生成参考的资料",
         get_retrieval_trace(f"volume_outline:{project_name}:{story_id}:{context['volume_no']}"),
     )
-

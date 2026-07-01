@@ -219,7 +219,7 @@ def _render_setting_asset_candidate(project_name: str, story_id: str, key_prefix
     elif issues:
         st.caption("相近设定属于项目级或其他故事，不会被当前故事候选覆盖；如需调整，请到对应层级的核心设定页编辑。")
     if st.button(
-        "确认/更新核心设定并生效",
+        "保存为核心设定",
         key=scoped_widget_key("apply_discussion_setting", key_prefix, item.get("id", "")),
         use_container_width=True,
     ):
@@ -242,7 +242,7 @@ def _apply_prompt_option_candidate(project_name: str, story_id: str, option: dic
     payload["enabled"] = option_enabled
     payload["source"] = "discussion"
     upsert_prompt_option(project_name, "story", payload, story_id=story_id)
-    st.success("已保存为当前故事的 Prompt 选项。")
+    st.success("已保存为当前故事的提示词要求。")
     st.rerun()
 
 
@@ -265,7 +265,7 @@ def _render_prompt_option_asset_candidate(project_name: str, story_id: str, key_
             key=scoped_widget_key("replace_discussion_prompt_option", key_prefix, option.get("id", "")),
         )
     if st.button(
-        "保存到当前故事",
+        "保存为提示词要求",
         key=scoped_widget_key("apply_discussion_prompt_option", key_prefix, option.get("id", "")),
         use_container_width=True,
     ):
@@ -275,7 +275,7 @@ def _render_prompt_option_asset_candidate(project_name: str, story_id: str, key_
 def _render_prompt_option_asset_candidates(project_name: str, story_id: str, key_prefix: str, prompt_option_candidates: list[dict], existing_prompt_options: list[dict]) -> None:
     if not prompt_option_candidates:
         return
-    st.markdown("#### Prompt 选项候选")
+    st.markdown("#### 提示词要求候选")
     for option in prompt_option_candidates:
         _render_prompt_option_asset_candidate(project_name, story_id, key_prefix, option, existing_prompt_options)
 
@@ -302,7 +302,7 @@ def _render_rule_asset_candidate(project_name: str, story_id: str, key_prefix: s
     st.code(rule.get("content", ""), language="markdown")
     _render_asset_guardrail_issues(issues)
     if st.button(
-        "保存为当前故事规则",
+        "保存为故事规则",
         key=scoped_widget_key("apply_discussion_rule", key_prefix, rule.get("id", "")),
         use_container_width=True,
     ):
@@ -312,7 +312,7 @@ def _render_rule_asset_candidate(project_name: str, story_id: str, key_prefix: s
 def _render_rule_asset_candidates(project_name: str, story_id: str, key_prefix: str, rule_candidates: list[dict], rule_layers: list[tuple[str, dict]]) -> None:
     if not rule_candidates:
         return
-    st.markdown("#### 生成规则候选")
+    st.markdown("#### 故事规则候选")
     for rule in rule_candidates:
         _render_rule_asset_candidate(project_name, story_id, key_prefix, rule, rule_layers)
 
@@ -331,8 +331,8 @@ def render_discussion_asset_candidates(
     if not (setting_candidates or prompt_option_candidates or rule_candidates):
         return
     existing_settings, existing_prompt_options, rule_layers = _discussion_guardrail_inputs(project_name, story_id)
-    with st.expander("从讨论提炼可复用资产", expanded=False):
-        st.caption("这些候选不会自动生效；确认后才会写入核心设定、Prompt 选项或故事规则。")
+    with st.expander("讨论产生的生成依据", expanded=False):
+        st.caption("把本次讨论中明确下来的设定、提示词要求或故事规则保存下来，后续生成会使用。")
         _render_setting_asset_candidates(project_name, story_id, key_prefix, setting_candidates, existing_settings)
         _render_prompt_option_asset_candidates(project_name, story_id, key_prefix, prompt_option_candidates, existing_prompt_options)
         _render_rule_asset_candidates(project_name, story_id, key_prefix, rule_candidates, rule_layers)

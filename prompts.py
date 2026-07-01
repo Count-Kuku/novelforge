@@ -217,8 +217,7 @@ def discuss_creative_profile_prompt(memory: dict, current_profile: dict, user_id
     "conflict_policy": "",
     "worldline_id": "main",
     "worldline_label": "本项目主线",
-    "worldline_retrieval_mode": "prefer",
-    "notes": ""
+    "worldline_retrieval_mode": "prefer"
   }},
   "approval_ready": false
 }}
@@ -267,8 +266,8 @@ def volume_outline_prompt(
 分卷摘要：
 {volume_summary or '暂无分卷摘要。'}
 
-已批准讨论结论：
-{approved_discussion_context or '当前分卷暂无已批准讨论结论。'}
+已保存讨论结论：
+{approved_discussion_context or '当前分卷暂无已保存讨论结论。'}
 
 用户要求：
 {user_requirement or '用户未提供额外要求，请优先补全该分卷在全书中的功能与推进。'}
@@ -287,7 +286,7 @@ def volume_outline_prompt(
 1. 必须与全书大纲保持一致
 2. 明确说明本卷承接上卷和通向下卷的作用
 3. 如果用户要求与现有全书方向冲突，给出折中处理方式
-4. 如果存在已批准讨论结论，优先遵守其中明确的本卷目标、结构重心与约束条件
+4. 如果存在已保存讨论结论，优先遵守其中明确的本卷目标、结构重心与约束条件
 5. 尽量让结果可直接作为后续剧情段规划和章节规划的上游依据
 """
 
@@ -404,14 +403,14 @@ def chapter_outline_prompt(
 所属剧情段大纲：
 {arc_outline or '当前章节未指定剧情段，或该剧情段尚无大纲。'}
 
-所属分卷已批准讨论结论：
-{volume_discussion_context or '当前分卷暂无已批准讨论结论。'}
+所属分卷已保存讨论结论：
+{volume_discussion_context or '当前分卷暂无已保存讨论结论。'}
 
-所属剧情段已批准讨论结论：
-{arc_discussion_context or '当前剧情段暂无已批准讨论结论。'}
+所属剧情段已保存讨论结论：
+{arc_discussion_context or '当前剧情段暂无已保存讨论结论。'}
 
-当前章节已批准讨论结论：
-{chapter_discussion_context or '当前章节暂无已批准讨论结论。'}
+当前章节已保存讨论结论：
+{chapter_discussion_context or '当前章节暂无已保存讨论结论。'}
 
 最近章节摘要：
 {recent_summary_text}
@@ -433,9 +432,9 @@ def chapter_outline_prompt(
 要求补充：
 1. 尽量与全书大纲保持一致
 2. 如果存在分卷大纲，优先保持与当前分卷目标、冲突、阶段推进一致
-3. 如果存在分卷已批准讨论结论，优先遵守其中明确的本卷目标、结构重心和限制条件
-4. 如果存在剧情段大纲或已批准讨论结论，优先保证本章服务于当前剧情段的关键事件与推进目标
-5. 如果存在当前章节已批准讨论结论，优先遵守其中明确的本章目标、场景重心和风险提醒
+3. 如果存在分卷已保存讨论结论，优先遵守其中明确的本卷目标、结构重心和限制条件
+4. 如果存在剧情段大纲或已保存讨论结论，优先保证本章服务于当前剧情段的关键事件与推进目标
+5. 如果存在当前章节已保存讨论结论，优先遵守其中明确的本章目标、场景重心和风险提醒
 6. 尽量承接最近章节摘要中的剧情状态
 7. 如果用户要求与上游规划冲突，明确给出折中处理方式
 8. 所有场景按字数分配规划，不要按时间（分钟/秒）划分
@@ -481,14 +480,14 @@ def discuss_chapter_prompt(
 所属剧情段大纲：
 {arc_outline or '当前章节未指定剧情段，或该剧情段尚无大纲。'}
 
-所属分卷已批准讨论结论：
-{volume_discussion_context or '当前分卷暂无已批准讨论结论。'}
+所属分卷已保存讨论结论：
+{volume_discussion_context or '当前分卷暂无已保存讨论结论。'}
 
-所属剧情段已批准讨论结论：
-{arc_discussion_context or '当前剧情段暂无已批准讨论结论。'}
+所属剧情段已保存讨论结论：
+{arc_discussion_context or '当前剧情段暂无已保存讨论结论。'}
 
-当前章节已批准讨论结论：
-{chapter_discussion_context or '当前章节暂无已批准讨论结论。'}
+当前章节已保存讨论结论：
+{chapter_discussion_context or '当前章节暂无已保存讨论结论。'}
 
 最近章节摘要：
 {recent_summary_text}
@@ -520,7 +519,7 @@ def discuss_chapter_prompt(
 
 要求：
 1. 明确本章目标、冲突和叙事功能
-2. 如果存在分卷大纲、剧情段大纲或已批准讨论结论，讨论结论必须与这些上游规划节点保持一致或明确说明偏离原因
+2. 如果存在分卷大纲、剧情段大纲或已保存讨论结论，讨论结论必须与这些上游规划节点保持一致或明确说明偏离原因
 3. 提出 2-3 个可执行的章节方向或场景组织方案
 4. 说明每个方案的节奏、风险和适配条件
 5. 列出需要用户确认的关键问题
@@ -574,8 +573,8 @@ def arc_outline_prompt(
 目标总字数范围：
 {target_word_count_range or '未设置'}
 
-已批准讨论结论：
-{approved_discussion_context or '当前剧情段暂无已批准讨论结论。'}
+已保存讨论结论：
+{approved_discussion_context or '当前剧情段暂无已保存讨论结论。'}
 
 用户要求：
 {user_requirement or '用户未提供额外要求，请优先补全该剧情段的关键事件链与推进作用。'}
@@ -594,7 +593,7 @@ def arc_outline_prompt(
 1. 必须与全书大纲和所属分卷大纲保持一致
 2. 结果应适合作为后续章节讨论和章节细纲生成的直接上游依据
 3. 如果存在估算章节数或目标字数范围，尽量在结构中体现分配思路
-4. 如果存在已批准讨论结论，优先遵守其中明确的目标、推进结构与约束条件
+4. 如果存在已保存讨论结论，优先遵守其中明确的目标、推进结构与约束条件
 5. 如果用户要求与上游规划冲突，明确说明折中方案
 """
 
@@ -894,8 +893,7 @@ def discuss_creative_profile_turn_prompt(
       "conflict_policy": "",
       "worldline_id": "main",
       "worldline_label": "本项目主线",
-      "worldline_retrieval_mode": "prefer",
-      "notes": ""
+      "worldline_retrieval_mode": "prefer"
     }},
     "approval_ready": false
   }}
@@ -956,14 +954,14 @@ def discuss_chapter_turn_prompt(
 所属剧情段大纲：
 {arc_outline or '当前章节未指定剧情段，或该剧情段尚无大纲。'}
 
-所属分卷已批准讨论结论：
-{volume_discussion_context or '当前分卷暂无已批准讨论结论。'}
+所属分卷已保存讨论结论：
+{volume_discussion_context or '当前分卷暂无已保存讨论结论。'}
 
-所属剧情段已批准讨论结论：
-{arc_discussion_context or '当前剧情段暂无已批准讨论结论。'}
+所属剧情段已保存讨论结论：
+{arc_discussion_context or '当前剧情段暂无已保存讨论结论。'}
 
-当前章节已批准讨论结论：
-{chapter_discussion_context or '当前章节暂无已批准讨论结论。'}
+当前章节已保存讨论结论：
+{chapter_discussion_context or '当前章节暂无已保存讨论结论。'}
 
 最近章节摘要：
 {recent_summary_text}
@@ -1008,7 +1006,7 @@ def discuss_chapter_turn_prompt(
 要求：
 1. `assistant_message` 必须是自然对话式回复，而不是报告体
 2. 如果当前信息不足，优先追问会影响章节方向的关键问题
-3. 如果存在分卷大纲、剧情段大纲或已批准讨论结论，更新后的 `discussion` 必须与这些上游规划节点保持一致或明确说明偏离原因
+3. 如果存在分卷大纲、剧情段大纲或已保存讨论结论，更新后的 `discussion` 必须与这些上游规划节点保持一致或明确说明偏离原因
 4. `discussion` 必须随着本轮对话更新
 5. `open_questions` 只保留当前还未解决的问题
 6. 如果本章方向已经足够明确，给出收束性结论，并将 `approval_ready` 设为 true

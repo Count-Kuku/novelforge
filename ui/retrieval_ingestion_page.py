@@ -57,7 +57,7 @@ def _render_organized_reference_result(
     st.markdown("#### 整理预览")
     st.markdown(organized_result.get("data", {}).get("report_markdown", ""))
     render_step_validation(organized_result)
-    render_step_json_expander("整理结果结构化数据", organized_payload)
+    render_step_json_expander("整理结果详细数据", organized_payload)
     if st.button("保存到检索资料库", use_container_width=True, type="primary"):
         imported = import_organized_reference_entries(
             project_name,
@@ -156,7 +156,7 @@ def _run_pasted_knowledge_extraction(
     run_auto: bool,
 ) -> None:
     extraction_summary = _run_with_stream(
-        "正在提取结构化知识...",
+        "正在提取知识库条目...",
         extract_pasted_reference_to_pending,
         project_name,
         title=knowledge_title,
@@ -196,11 +196,11 @@ def _render_knowledge_extraction_result() -> None:
     st.markdown("#### 最近一次提取预览")
     st.markdown(extraction_result.get("data", {}).get("report_markdown", ""))
     render_step_validation(extraction_result)
-    render_step_json_expander("知识提取结构化数据", extraction_payload)
+    render_step_json_expander("知识提取详细数据", extraction_payload)
 
 
 def _render_knowledge_extraction_ingestion(project_name: str, knowledge_category_options: list[str]) -> None:
-    st.markdown("#### 粘贴资料 / 提取为结构化知识")
+    st.markdown("#### 粘贴资料 / 提取为知识库条目")
     st.caption("提取结果默认先进入待确认队列；也可以自动保存低风险条目。")
     knowledge_title = st.text_input("资料标题", key="knowledge_extract_title")
     col_scope, col_auth = st.columns(2)
@@ -255,7 +255,7 @@ def _render_knowledge_extraction_ingestion(project_name: str, knowledge_category
 def _render_pasted_ingestion(project_name: str, knowledge_category_options: list[str]) -> None:
     target_choice = st.radio(
         "处理方式",
-        options=["整理为检索资料", "提取为结构化知识"],
+        options=["整理为检索资料", "提取为知识库条目"],
         horizontal=True,
         key="paste_ingestion_target",
     )
@@ -394,4 +394,3 @@ def render_retrieval_ingestion_page(
         render_source_package_report_page=render_source_package_report_page,
     )
     return
-

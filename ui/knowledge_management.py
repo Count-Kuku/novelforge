@@ -126,7 +126,7 @@ def _render_pending_item_preview(index: int, item: dict, issue_map: dict) -> Non
     st.caption(
         f"{pending_quality_label(issue_info)} / 范围={label_scope(item.get('scope', 'reference'))} / "
         f"可信度={safe_confidence(item.get('confidence', 0.7)):.2f} / 证据={safe_confidence(item.get('evidence_strength', 0.5)):.2f} / "
-        f"权威={label_authority(item.get('authority', 'curated'))} / 来源={item.get('source_title', '-') or '-'}"
+        f"可信度={label_authority(item.get('authority', 'curated'))} / 来源={item.get('source_title', '-') or '-'}"
     )
     if item.get("source_segment_title") or item.get("source_segment_index") is not None:
         st.caption(f"片段：{item.get('source_segment_index', '-')}. {item.get('source_segment_title', '-')}")
@@ -226,14 +226,14 @@ def _render_pending_auto_review_panel(
 
 def _render_pending_bulk_actions(project_name: str, selected_ids: list[str]) -> None:
     col_a, col_b = st.columns(2)
-    if col_a.button("确认所选并写入结构化知识"):
+    if col_a.button("确认所选并写入知识库条目"):
         if not selected_ids:
             st.error("请先选择条目。")
         else:
             saved_count = confirm_pending_knowledge_items(project_name, selected_ids)
             if saved_count:
                 rebuild_retrieval_assets(project_name, build_vectors=True)
-            st.success(f"已确认 {saved_count} 条结构化知识。")
+            st.success(f"已确认 {saved_count} 条知识库条目。")
             st.rerun()
     if confirmed_button(col_b, "丢弃所选待确认条目", "确认丢弃所选条目", "discard_selected_pending_knowledge"):
         if not selected_ids:
@@ -262,14 +262,14 @@ def _render_pending_raw_json_editor(project_name: str, pending_items: list[dict]
                     st.success("待确认队列已保存。")
                     st.rerun()
             except json.JSONDecodeError as exc:
-                st.error(f"结构化数据格式错误：{exc}")
+                st.error(f"详细数据格式错误：{exc}")
 
 
 def render_pending_knowledge_queue(project_name: str):
     pending_items = load_pending_knowledge_items(project_name)
     pending_count = len(pending_items)
-    with st.expander(f"待确认结构化知识（{pending_count}）", expanded=bool(pending_count)):
-        st.caption("提取结果先进入这里。确认后才写入结构化知识并重建检索索引；不合适的条目可以丢弃。")
+    with st.expander(f"待确认知识库条目（{pending_count}）", expanded=bool(pending_count)):
+        st.caption("提取结果先进入这里。确认后才写入知识库条目并重建检索索引；不合适的条目可以丢弃。")
         if not pending_items:
             st.caption("当前没有待确认的知识条目。")
             return
@@ -370,7 +370,7 @@ def _render_auto_review_run_metrics(runs: list[dict]) -> None:
     metric_cols = st.columns(4)
     metric_cols[0].metric("记录数", len(runs))
     metric_cols[1].metric("可回退", len(active_runs))
-    metric_cols[2].metric("入库", sum(len(run.get("confirmed_ids", []) or []) for run in runs))
+    metric_cols[2].metric("保存", sum(len(run.get("confirmed_ids", []) or []) for run in runs))
     metric_cols[3].metric("归档/复核", sum(len(run.get("archived_ids", []) or []) + len(run.get("manual_review_ids", []) or []) for run in runs))
 
 
@@ -378,7 +378,7 @@ def _auto_review_run_label(runs: list[dict], run_id: str) -> str:
     return next(
         (
             f"{run.get('created_at', '-')[:19]} / {run.get('source_title') or run.get('source_type') or '自动审核'}"
-            f" / 入库 {len(run.get('confirmed_ids', []) or [])}"
+            f" / 保存 {len(run.get('confirmed_ids', []) or [])}"
             f" / 归档 {len(run.get('archived_ids', []) or [])}"
             f" / 复核 {len(run.get('manual_review_ids', []) or [])}"
             f" / {'已回退' if run.get('status') == 'rolled_back' else '可回退'}"
@@ -415,7 +415,7 @@ def _render_auto_review_batch_summary(selected_run: dict) -> None:
         return
     batch_cols = st.columns(4)
     batch_cols[0].metric("本批次", batch_summary.get("total", 0))
-    batch_cols[1].metric("入库", batch_summary.get("confirmed", len(selected_run.get("confirmed_ids", []) or [])))
+    batch_cols[1].metric("保存", batch_summary.get("confirmed", len(selected_run.get("confirmed_ids", []) or [])))
     batch_cols[2].metric("归档", batch_summary.get("archived", len(selected_run.get("archived_ids", []) or [])))
     batch_cols[3].metric("复核箱", batch_summary.get("manual_review", len(selected_run.get("manual_review_ids", []) or [])))
 
@@ -436,7 +436,7 @@ def _auto_review_decision_rows(selected_run: dict) -> list[dict]:
         action = str(decision.get("action") or "")
         decision_value = str(decision.get("decision") or "")
         decision_label = {
-            "confirm": "自动入库",
+            "confirm": "自动保存",
             "archive": "归档丢弃",
             "manual_review": "人工复核箱",
         }.get(action) or ("自动确认" if decision_value == "confirm" else "保留待确认")
@@ -630,7 +630,7 @@ def _render_pending_item_scope_fields(item: dict) -> dict:
             format_func=label_scope,
         ),
         "authority": col_authority.selectbox(
-            "可信度/权威",
+            "资料可信度",
             options=authority_options,
             index=authority_options.index(item.get("authority")) if item.get("authority") in authority_options else 2,
             format_func=label_authority,
@@ -697,7 +697,7 @@ def _render_pending_item_form(item: dict, pending_id: str) -> tuple[dict, bool, 
         values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_confirm = st.columns(2)
         save_clicked = col_save.form_submit_button("保存修改到待确认队列", use_container_width=True)
-        confirm_clicked = col_confirm.form_submit_button("保存修改并确认入库", use_container_width=True)
+        confirm_clicked = col_confirm.form_submit_button("保存并确认", use_container_width=True)
     return values, save_clicked, confirm_clicked
 
 
@@ -757,7 +757,7 @@ def _save_pending_item_editor_result(project_name: str, pending_id: str, updated
         saved_count = confirm_pending_knowledge_items(project_name, [pending_id])
         if saved_count:
             rebuild_retrieval_assets(project_name, build_vectors=True)
-        st.success(f"已保存修改并确认 {saved_count} 条结构化知识。")
+        st.success(f"已保存修改并确认 {saved_count} 条知识库条目。")
     else:
         st.success("已保存修改到待确认队列。")
     st.rerun()
@@ -950,7 +950,7 @@ def _render_pending_triage_metrics(summary: dict) -> None:
     if summary["auto_confirm_count"]:
         st.success(
             f"建议先自动确认 {summary['auto_confirm_count']} 条低风险内容。"
-            "自动审核会留下记录，后续发现误入库可以在自动审核记录里回退。"
+            "自动审核会留下记录，后续发现误保存可以在自动审核记录里回退。"
         )
     else:
         st.info("当前策略下没有可自动确认的低风险条目。可以调宽自动审核策略，或先处理冲突/低证据条目。")
@@ -1015,7 +1015,7 @@ def _pending_clear_plan_preview_rows(clear_plan: dict) -> list[dict]:
     return [
         {
             "动作": {
-                "confirm": "自动入库",
+                "confirm": "自动保存",
                 "archive": "归档丢弃",
                 "manual_review": "人工复核箱",
             }.get(decision.get("action", ""), decision.get("action", "")),
@@ -1052,10 +1052,10 @@ def _render_pending_clear_plan(project_name: str, pending_items: list[dict], iss
     plan_counts = clear_plan.get("counts", {})
     plan_cols = st.columns(4)
     plan_cols[0].metric("本次覆盖", clear_plan.get("total", 0))
-    plan_cols[1].metric("自动入库", plan_counts.get("confirm", 0))
+    plan_cols[1].metric("自动保存", plan_counts.get("confirm", 0))
     plan_cols[2].metric("归档丢弃", plan_counts.get("archive", 0))
     plan_cols[3].metric("人工复核箱", plan_counts.get("manual_review", 0))
-    st.caption("执行后，本次覆盖的条目会离开普通待确认队列；入库、归档和复核箱都会写进一条可回退的处理记录。")
+    st.caption("执行后，本次覆盖的条目会离开普通待确认队列；保存、归档和复核箱都会写进一条可回退的处理记录。")
     _render_pending_clear_plan_preview(clear_plan)
     if confirmed_button(st, "执行批量处理方案", "确认执行本次批量处理方案", "pending_clear_execute_plan", type="primary"):
         result = execute_pending_clear_plan(project_name, clear_plan, note="用户在待确认处理台执行批量处理方案")
@@ -1286,7 +1286,7 @@ def _render_pending_quality_actions(project_name: str, issue: dict, selected_ite
 def render_pending_knowledge_quality_panel(project_name: str, pending_items: list[dict]):
     issues = build_pending_knowledge_quality_issues(project_name, pending_items)
     with st.expander(f"提取质检：重复 / 冲突 / 别名线索（{len(issues)}）", expanded=bool(issues)):
-        st.caption("用于在确认入库前发现同名重复、字段冲突、疑似别名和已存在正式知识。这里只给出线索，正式入库仍由你确认。")
+        st.caption("用于在确认保存前发现同名重复、字段冲突、疑似别名和已存在正式知识。这里只给出线索，正式保存仍由你确认。")
         if not issues:
             st.caption("当前没有发现明显的重复、冲突或别名线索。")
             return
@@ -1609,7 +1609,7 @@ def _render_knowledge_merge_editor(project_name: str, category: str, selected_in
         return
     merged_item = build_merged_knowledge_item(category, selected_items)
     raw_merged_json = st.text_area(
-        "合并后结构化数据，可在保存前修改",
+        "合并后详细数据，可在保存前修改",
         value=json.dumps(merged_item, ensure_ascii=False, indent=2),
         height=340,
         key=f"knowledge_organizer_merged_json_{category}",
@@ -1622,11 +1622,11 @@ def _render_knowledge_merge_editor(project_name: str, category: str, selected_in
             else:
                 if merge_confirmed_knowledge_items(project_name, category, selected_indices, parsed):
                     rebuild_retrieval_assets(project_name, build_vectors=True)
-                    st.success(f"已合并 {len(selected_items)} 条结构化知识，并重建检索索引。")
+                    st.success(f"已合并 {len(selected_items)} 条知识库条目，并重建检索索引。")
                     st.rerun()
                 st.error("合并失败：条目不存在或分类无效。")
         except json.JSONDecodeError as exc:
-            st.error(f"结构化数据格式错误：{exc}")
+            st.error(f"详细数据格式错误：{exc}")
 
 
 def _render_knowledge_delete_action(project_name: str, category: str, selected_indices: list[int], selected_items: list[dict]) -> None:
@@ -1634,14 +1634,14 @@ def _render_knowledge_delete_action(project_name: str, category: str, selected_i
         return
     if confirmed_button(
         st,
-        "删除所选结构化知识",
-        "确认删除所选结构化知识",
+        "删除所选知识库条目",
+        "确认删除所选知识库条目",
         scoped_widget_key("knowledge_organizer_delete", project_name, category),
     ):
         removed_count = delete_confirmed_knowledge_items(project_name, category, selected_indices)
         if removed_count:
             rebuild_retrieval_assets(project_name, build_vectors=True)
-            st.success(f"已删除 {removed_count} 条结构化知识，并重建检索索引。")
+            st.success(f"已删除 {removed_count} 条知识库条目，并重建检索索引。")
             st.rerun()
         st.error("删除失败：条目不存在或分类无效。")
 
@@ -1662,20 +1662,20 @@ def _render_knowledge_raw_editor(project_name: str, category: str, items: list[d
                 else:
                     saved_count = replace_knowledge_category_items(project_name, category, parsed)
                     rebuild_retrieval_assets(project_name, build_vectors=True)
-                    st.success(f"当前分类结构化知识已保存 {saved_count} 条，并重建检索索引。")
+                    st.success(f"当前分类知识库条目已保存 {saved_count} 条，并重建检索索引。")
                     st.rerun()
             except json.JSONDecodeError as exc:
-                st.error(f"结构化数据格式错误：{exc}")
+                st.error(f"详细数据格式错误：{exc}")
 
 
 def render_knowledge_organizer(project_name: str, knowledge_category_options: list[str]):
-    with st.expander("结构化知识整理", expanded=False):
+    with st.expander("知识库条目整理", expanded=False):
         st.caption("用于处理长篇资料导入后的重复条目。可以按分类查看、合并同名知识，或删除明显错误的条目。")
         _render_knowledge_organizer_entity_sections(project_name)
         category = _select_knowledge_organizer_category(knowledge_category_options)
         items = load_knowledge_category(project_name, category)
         if not items:
-            st.caption("当前分类还没有结构化知识。")
+            st.caption("当前分类还没有知识库条目。")
             return
 
         duplicate_groups = find_duplicate_knowledge_groups(items)
@@ -1691,10 +1691,10 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
 
 def render_source_package_report_page(project_name: str):
     with st.expander("资料包报告", expanded=False):
-        st.caption("基于已确认结构化知识生成项目资料总览，可保存为分析报告并进入检索索引。")
+        st.caption("基于已确认知识库条目生成项目资料总览，可保存为分析报告并进入检索索引。")
         knowledge_base = load_knowledge_base(project_name)
         total_items = sum(len(items) for items in knowledge_base.values())
-        st.caption(f"当前已确认结构化知识：{total_items} 条")
+        st.caption(f"当前已确认知识库条目：{total_items} 条")
         max_items = st.slider("每类最多写入条目数", min_value=5, max_value=100, value=30, step=5, key="source_package_max_items")
         if st.button("生成资料包报告"):
             report = build_source_package_report(project_name, max_items_per_category=max_items)

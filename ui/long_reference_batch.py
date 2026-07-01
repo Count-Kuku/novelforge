@@ -370,7 +370,7 @@ def _render_batch_quick_continue(
     unfinished_indices = resume_state["unfinished_indices"]
     pending_import_indices = resume_state["pending_import_indices"]
     st.markdown("#### 推荐操作")
-    st.caption("想继续推进这个批次时，优先用自动处理：未导入片段会进入资料索引，片段会被提取成候选知识，低风险条目会自动入库，风险条目保留待确认。")
+    st.caption("想继续推进这个批次时，优先用自动处理：未导入片段会进入资料索引，片段会被提取成候选知识，低风险条目会自动保存，风险条目保留待确认。")
     quick_continue_limit = st.number_input(
         "本次最多自动处理片段数",
         min_value=1,
@@ -1015,7 +1015,7 @@ def _render_batch_consolidation(
             st.markdown(consolidation_result.get("data", {}).get("report_markdown", ""))
             render_step_validation(consolidation_result)
             render_step_json_expander(
-                "批次整理结构化数据",
+                "批次整理详细数据",
                 consolidation_result.get("data", {}).get("knowledge_extraction", {}),
             )
 
@@ -1029,7 +1029,7 @@ def _render_batch_advanced_actions(project_name: str, batch: dict, selected_batc
             scoped_widget_key("batch_delete", project_name, selected_batch_id),
         ):
             delete_long_reference_batch(project_name, selected_batch_id)
-            st.success("已删除批次记录。已导入的资料文件和结构化知识不会被删除。")
+            st.success("已删除批次记录。已导入的资料文件和知识库条目不会被删除。")
             st.rerun()
         raw_batch_json = st.text_area(
             "批次原始数据",
@@ -1047,7 +1047,7 @@ def _render_batch_advanced_actions(project_name: str, batch: dict, selected_batc
                     st.success("批次数据已保存。")
                     st.rerun()
             except json.JSONDecodeError as exc:
-                st.error(f"结构化数据格式错误：{exc}")
+                st.error(f"详细数据格式错误：{exc}")
 
 
 def render_long_reference_batch_manager(project_name: str, knowledge_category_options: list[str]):

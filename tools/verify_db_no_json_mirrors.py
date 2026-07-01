@@ -26,6 +26,7 @@ def main() -> int:
     os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
     try:
         os.chdir(workspace)
+        import memory as memory_module
         from memory import (
             GLOBAL_PROMPT_OPTIONS_PATH,
             GLOBAL_RULE_CONFLICT_RESOLUTIONS_PATH,
@@ -398,15 +399,22 @@ def main() -> int:
             failures.append(f"workflow_uses_actual_asset_id:{exc}")
         stale_project_mirror = root / "memory.json"
         stale_project_mirror.write_text(json.dumps({"title": "stale queued mirror"}, ensure_ascii=False), encoding="utf-8")
+        original_initialize_project_db = memory_module.initialize_project_db
+        def _force_project_db_unavailable(*args, **kwargs):
+            raise RuntimeError("forced project database unavailable")
+        memory_module.initialize_project_db = _force_project_db_unavailable
         _DB_UNAVAILABLE_PROJECTS.add(project_name)
         try:
-            save_memory(project_name, {"title": "Should Fail Before Deleting Mirror"})
-            failures.append("project_db_unavailable_raises_before_mirror_delete")
-        except RuntimeError:
-            pass
-        save_global_rules({"write": ["global rule after project failure"]})
-        _expect(stale_project_mirror.exists(), "pending_project_mirror_not_deleted_by_global_sync", failures)
-        _DB_UNAVAILABLE_PROJECTS.discard(project_name)
+            try:
+                save_memory(project_name, {"title": "Should Fail Before Deleting Mirror"})
+                failures.append("project_db_unavailable_raises_before_mirror_delete")
+            except RuntimeError:
+                pass
+            save_global_rules({"write": ["global rule after project failure"]})
+            _expect(stale_project_mirror.exists(), "pending_project_mirror_not_deleted_by_global_sync", failures)
+        finally:
+            memory_module.initialize_project_db = original_initialize_project_db
+            _DB_UNAVAILABLE_PROJECTS.discard(project_name)
         if stale_project_mirror.exists():
             retry_unlink(workspace, stale_project_mirror)
         unexpected_mirrors = [str(path) for path in mirror_paths if path.exists()]

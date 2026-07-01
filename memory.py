@@ -69,6 +69,16 @@ from storage.repositories import (
 )
 
 BASE_DIR = Path("data/projects")
+PROJECT_REGISTRY_PATH = BASE_DIR / "index.json"
+DELETED_PROJECTS_DIR = Path("data/deleted_projects")
+PROJECT_DATA_MARKERS = (
+    "stories",
+    "memory.json",
+    "creative_profile.json",
+    "rules.json",
+    "prompt_options.json",
+    "retrieval",
+)
 GLOBAL_RULES_PATH = Path("data/global_rules.json")
 GLOBAL_PROMPT_OPTIONS_PATH = Path("data/prompt_options.json")
 GLOBAL_RULE_CONFLICT_RESOLUTIONS_PATH = Path("data/global_rule_conflict_resolutions.json")
@@ -503,13 +513,250 @@ def project_dir(project_name: str) -> Path:
 
 
 def project_path(project_name: str) -> Path:
+    return project_dir(project_name)
+
+
+def ensure_project_path(project_name: str) -> Path:
     path = project_dir(project_name)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
+def project_data_exists(project_name: str) -> bool:
+    return project_dir(project_name).is_dir()
+
+
+def _project_registry_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _normalize_project_registry(payload: dict | None) -> dict:
+    raw_payload = payload if isinstance(payload, dict) else {}
+    raw_projects = raw_payload.get("projects", [])
+    projects: list[dict] = []
+    seen: set[str] = set()
+    if isinstance(raw_projects, list):
+        for item in raw_projects:
+            raw = item if isinstance(item, dict) else {"name": item}
+            try:
+                name = normalize_project_name(str(raw.get("name") or ""))
+            except ValueError:
+                continue
+            if name in seen:
+                continue
+            seen.add(name)
+            now = _project_registry_now()
+            projects.append({
+                "name": name,
+                "status": str(raw.get("status") or "active"),
+                "created_at": str(raw.get("created_at") or now),
+                "updated_at": str(raw.get("updated_at") or now),
+            })
+
+    try:
+        active_project = normalize_project_name(str(raw_payload.get("active_project") or ""))
+    except ValueError:
+        active_project = ""
+
+    return {
+        "version": 1,
+        "active_project": active_project,
+        "projects": projects,
+    }
+
+
+def _project_db_marker_is_valid(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _project_dir_looks_like_project(path: Path) -> bool:
+    if not path.is_dir():
+        return False
+    if path.name.startswith("."):
+        return False
+    if any((path / marker).exists() for marker in PROJECT_DATA_MARKERS):
+        return True
+    return _project_db_marker_is_valid(path / "project.db")
+
+
+def _discover_legacy_project_names() -> list[str]:
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    names: list[str] = []
+    for path in BASE_DIR.iterdir():
+        if not _project_dir_looks_like_project(path):
+            continue
+        try:
+            names.append(normalize_project_name(path.name))
+        except ValueError:
+            continue
+    return sorted(set(names), key=str.lower)
+
+
+def _save_project_registry(registry: dict) -> dict:
+    normalized = _normalize_project_registry(registry)
+    PROJECT_REGISTRY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROJECT_REGISTRY_PATH.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    return normalized
+
+
+def _backup_corrupt_project_registry(exc: Exception) -> None:
+    if not PROJECT_REGISTRY_PATH.exists():
+        return
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = PROJECT_REGISTRY_PATH.with_name(f"{PROJECT_REGISTRY_PATH.name}.corrupt-{timestamp}")
+    counter = 1
+    while backup_path.exists():
+        backup_path = PROJECT_REGISTRY_PATH.with_name(f"{PROJECT_REGISTRY_PATH.name}.corrupt-{timestamp}-{counter}")
+        counter += 1
+    try:
+        PROJECT_REGISTRY_PATH.replace(backup_path)
+    except OSError:
+        logging.getLogger("novelforge.storage").warning(
+            "Failed to back up corrupt project registry %s after %s",
+            PROJECT_REGISTRY_PATH,
+            exc,
+        )
+    else:
+        logging.getLogger("novelforge.storage").warning(
+            "Backed up corrupt project registry %s to %s after %s",
+            PROJECT_REGISTRY_PATH,
+            backup_path,
+            exc,
+        )
+
+
+def _build_project_registry_from_directories() -> dict:
+    project_names = _discover_legacy_project_names()
+    now = _project_registry_now()
+    return {
+        "version": 1,
+        "active_project": "",
+        "projects": [
+            {"name": name, "status": "active", "created_at": now, "updated_at": now}
+            for name in project_names
+        ],
+    }
+
+
+def load_project_registry() -> dict:
+    if PROJECT_REGISTRY_PATH.exists():
+        try:
+            raw = json.loads(PROJECT_REGISTRY_PATH.read_text(encoding="utf-8"))
+        except Exception as exc:
+            _backup_corrupt_project_registry(exc)
+            return _save_project_registry(_build_project_registry_from_directories())
+        registry = _normalize_project_registry(raw)
+        if raw != registry:
+            registry = _save_project_registry(registry)
+        return registry
+
+    return _save_project_registry(_build_project_registry_from_directories())
+
+
+def list_projects() -> list[str]:
+    return _discover_legacy_project_names()
+
+
+def project_is_discoverable(project_name: str) -> bool:
+    try:
+        normalized_name = normalize_project_name(project_name)
+    except ValueError:
+        return False
+    return _project_dir_looks_like_project(project_dir(normalized_name))
+
+
+def project_is_registered(project_name: str) -> bool:
+    return project_is_discoverable(project_name)
+
+
+def register_project(project_name: str, *, make_active: bool = False) -> str:
+    normalized_name = normalize_project_name(project_name)
+    registry = load_project_registry()
+    now = _project_registry_now()
+    updated = False
+    for item in registry.get("projects", []):
+        if item.get("name") == normalized_name:
+            item["status"] = "active"
+            item["updated_at"] = now
+            updated = True
+            break
+    if not updated:
+        registry.setdefault("projects", []).append({
+            "name": normalized_name,
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        })
+    if make_active:
+        registry["active_project"] = normalized_name
+    _save_project_registry(registry)
+    return normalized_name
+
+
+def unregister_project(project_name: str) -> bool:
+    normalized_name = normalize_project_name(project_name)
+    registry = load_project_registry()
+    original_projects = list(registry.get("projects", []))
+    registry["projects"] = [item for item in original_projects if item.get("name") != normalized_name]
+    removed = len(registry["projects"]) != len(original_projects)
+    if registry.get("active_project") == normalized_name:
+        registry["active_project"] = ""
+    _save_project_registry(registry)
+    return removed
+
+
+def rename_registered_project(old_name: str, new_name: str) -> str:
+    old_normalized = normalize_project_name(old_name)
+    new_normalized = normalize_project_name(new_name)
+    registry = load_project_registry()
+    if old_normalized != new_normalized:
+        registry["projects"] = [
+            item for item in registry.get("projects", []) if item.get("name") != new_normalized
+        ]
+    now = _project_registry_now()
+    renamed = False
+    for item in registry.get("projects", []):
+        if item.get("name") == old_normalized:
+            item["name"] = new_normalized
+            item["updated_at"] = now
+            renamed = True
+            break
+    if registry.get("active_project") == old_normalized:
+        registry["active_project"] = new_normalized
+    if not renamed:
+        registry.setdefault("projects", []).append({
+            "name": new_normalized,
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        })
+    _save_project_registry(registry)
+    return new_normalized
+
+
+def get_active_project_name() -> str:
+    registry = load_project_registry()
+    active_project = str(registry.get("active_project") or "").strip()
+    return active_project if active_project in set(list_projects()) else ""
+
+
+def set_active_project_name(project_name: str | None) -> None:
+    registry = load_project_registry()
+    if project_name:
+        normalized_name = normalize_project_name(project_name)
+        if normalized_name not in set(list_projects()):
+            return
+        registry["active_project"] = normalized_name
+    else:
+        registry["active_project"] = ""
+    _save_project_registry(registry)
+
+
 def inspect_project_database(project_name: str) -> dict:
-    return inspect_project_db(project_path(project_name))
+    return inspect_project_db(project_dir(project_name))
 
 
 def inspect_global_database() -> dict:
@@ -531,11 +778,17 @@ def _raise_if_db_only(message: str, exc: Exception | None = None) -> None:
 def _project_db_marked_unavailable(project_name: str) -> bool:
     if project_name not in _DB_UNAVAILABLE_PROJECTS:
         return False
+    _initialize_project_db_best_effort(project_name)
+    if project_name not in _DB_UNAVAILABLE_PROJECTS:
+        return False
     _raise_if_db_only(f"Project database is unavailable for {project_name}.")
     return True
 
 
 def _global_db_marked_unavailable() -> bool:
+    if not _GLOBAL_DB_UNAVAILABLE:
+        return False
+    _initialize_global_db_best_effort()
     if not _GLOBAL_DB_UNAVAILABLE:
         return False
     _raise_if_db_only("Global database is unavailable.")
@@ -558,7 +811,6 @@ def _initialize_global_db_best_effort() -> None:
 
 def _sync_global_to_db_best_effort(callback) -> None:
     global _GLOBAL_DB_UNAVAILABLE
-    pending_mirrors = _take_global_pending_mirror_deletions()
     if _global_db_marked_unavailable():
         return
     try:
@@ -573,7 +825,7 @@ def _sync_global_to_db_best_effort(callback) -> None:
         )
         _raise_if_db_only("Failed to sync global record to database.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_global_pending_mirror_deletions())
 
 
 def _load_global_from_db_best_effort(loader, description: str):
@@ -596,7 +848,7 @@ def _load_global_from_db_best_effort(loader, description: str):
 
 def _initialize_project_db_best_effort(project_name: str) -> None:
     try:
-        initialize_project_db(project_path(project_name), project_name)
+        initialize_project_db(ensure_project_path(project_name), project_name)
         _DB_UNAVAILABLE_PROJECTS.discard(project_name)
     except Exception as exc:
         _DB_UNAVAILABLE_PROJECTS.add(project_name)
@@ -609,7 +861,6 @@ def _initialize_project_db_best_effort(project_name: str) -> None:
 
 
 def _sync_stories_index_to_db_best_effort(project_name: str, index: dict) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -625,7 +876,7 @@ def _sync_stories_index_to_db_best_effort(project_name: str, index: dict) -> Non
         )
         _raise_if_db_only(f"Failed to sync stories index to project database for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _load_stories_index_from_db_best_effort(project_name: str) -> dict | None:
@@ -680,7 +931,6 @@ def _register_asset_file_best_effort(
     source_ref: str | None = None,
     metadata: dict | None = None,
 ) -> str | None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -717,7 +967,7 @@ def _register_asset_file_best_effort(
         )
         _raise_if_db_only(f"Failed to register asset file for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def register_asset_file_record(
@@ -761,7 +1011,6 @@ def _sync_asset_payload_to_db_best_effort(
     source_ref: str | None = None,
     metadata: dict | None = None,
 ) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -807,7 +1056,7 @@ def _sync_asset_payload_to_db_best_effort(
         _raise_if_db_only(f"Failed to sync asset payload to project database for {project_name}.", exc)
         return None
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
         return actual_asset_id
 
 
@@ -978,7 +1227,6 @@ def mark_asset_deleted_record(
 
 
 def _sync_knowledge_category_to_db_best_effort(project_name: str, category: str, items: list[dict]) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -995,11 +1243,10 @@ def _sync_knowledge_category_to_db_best_effort(project_name: str, category: str,
         )
         _raise_if_db_only(f"Failed to sync knowledge category to project database for {project_name}/{category}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _sync_pending_knowledge_to_db_best_effort(project_name: str, items: list[dict]) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -1015,11 +1262,10 @@ def _sync_pending_knowledge_to_db_best_effort(project_name: str, items: list[dic
         )
         _raise_if_db_only(f"Failed to sync pending knowledge to project database for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _sync_entity_aliases_to_db_best_effort(project_name: str, items: list[dict]) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -1035,7 +1281,7 @@ def _sync_entity_aliases_to_db_best_effort(project_name: str, items: list[dict])
         )
         _raise_if_db_only(f"Failed to sync entity aliases to project database for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _load_knowledge_category_from_db_best_effort(project_name: str, category: str) -> list[dict] | None:
@@ -1109,7 +1355,6 @@ def _load_runtime_from_db_best_effort(project_name: str, loader, description: st
 
 
 def _sync_runtime_to_db_best_effort(project_name: str, callback) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -1125,11 +1370,10 @@ def _sync_runtime_to_db_best_effort(project_name: str, callback) -> None:
         )
         _raise_if_db_only(f"Failed to sync runtime record to project database for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _sync_source_to_db_best_effort(project_name: str, callback) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -1145,11 +1389,10 @@ def _sync_source_to_db_best_effort(project_name: str, callback) -> None:
         )
         _raise_if_db_only(f"Failed to sync source record to project database for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _sync_retrieval_to_db_best_effort(project_name: str, callback) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -1165,11 +1408,10 @@ def _sync_retrieval_to_db_best_effort(project_name: str, callback) -> None:
         )
         _raise_if_db_only(f"Failed to sync retrieval index to project database for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _sync_workflow_to_db_best_effort(project_name: str, callback) -> None:
-    pending_mirrors = _take_project_pending_mirror_deletions(project_name)
     if _project_db_marked_unavailable(project_name):
         return
     try:
@@ -1185,15 +1427,17 @@ def _sync_workflow_to_db_best_effort(project_name: str, callback) -> None:
         )
         _raise_if_db_only(f"Failed to sync workflow run to project database for {project_name}.", exc)
     else:
-        _delete_pending_mirrors(pending_mirrors)
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def create_project(project_name: str) -> str:
-    normalized_name = project_name.strip()
-    if not normalized_name:
-        raise ValueError("Project name cannot be empty.")
+    normalized_name = normalize_project_name(project_name)
+    if project_is_discoverable(normalized_name):
+        raise FileExistsError("Project already exists.")
+    if project_data_exists(normalized_name):
+        raise FileExistsError("Project data directory already exists but is not recognized as a project.")
 
-    project_path(normalized_name)
+    ensure_project_path(normalized_name)
     _initialize_project_db_best_effort(normalized_name)
     load_stories_index(normalized_name)
     load_memory(normalized_name)
@@ -1203,15 +1447,8 @@ def create_project(project_name: str) -> str:
     save_pending_knowledge_items(normalized_name, load_pending_knowledge_items(normalized_name))
     long_reference_batches_path(normalized_name)
     retrieval_sources_path(normalized_name)
+    register_project(normalized_name, make_active=True)
     return normalized_name
-
-
-def list_projects() -> list[str]:
-    BASE_DIR.mkdir(parents=True, exist_ok=True)
-    return sorted(
-        [path.name for path in BASE_DIR.iterdir() if path.is_dir()],
-        key=str.lower
-    )
 
 
 def normalize_memory(project_name: str, memory: dict | None) -> dict:
@@ -1260,7 +1497,7 @@ def load_memory(project_name: str) -> dict:
         lambda conn: get_project_meta(conn, project_name) or {},
         "project metadata",
     )
-    if db_meta:
+    if db_meta is not None:
         return normalize_memory(project_name, {
             "title": db_meta.get("title") or project_name,
             "genre": db_meta.get("genre") or "",
@@ -1307,7 +1544,7 @@ def load_creative_profile(project_name: str, story_id: str = "default") -> dict:
         lambda conn: load_story_profile_row(conn, story_id),
         "creative profile",
     )
-    if db_profile:
+    if db_profile is not None:
         return CreativeProfile.model_validate(db_profile).model_dump()
     path = creative_profile_path(project_name, story_id)
     if not path.exists():
@@ -1654,43 +1891,36 @@ def rename_story(project_name: str, story_id: str, name: str, description: str |
 
 def copy_story_settings(project_name: str, source_story_id: str, target_story_id: str):
     """复制故事级创作配置、讨论工件、Prompt 选项、规则、旧 memory 覆盖层和正式核心设定。"""
-    from shutil import copy2
+    profile = load_creative_profile(project_name, source_story_id)
+    save_creative_profile(
+        project_name,
+        profile,
+        target_story_id,
+        mark_configured=bool(profile.get("is_configured")),
+    )
 
-    src_profile = creative_profile_path(project_name, source_story_id)
-    if src_profile.exists():
-        dst_profile = creative_profile_path(project_name, target_story_id)
-        dst_profile.parent.mkdir(parents=True, exist_ok=True)
-        copy2(str(src_profile), str(dst_profile))
+    discussion_artifact = load_creative_profile_discussion_artifact(project_name, source_story_id)
+    if discussion_artifact:
+        save_creative_profile_discussion_artifact(
+            project_name,
+            discussion_artifact.get("discussion", {}),
+            discussion_artifact.get("report_markdown", ""),
+            target_story_id,
+        )
 
-    src_discussion = _creative_profile_discussion_path(project_name, source_story_id)
-    if src_discussion.exists():
-        dst_discussion = _creative_profile_discussion_path(project_name, target_story_id)
-        dst_discussion.parent.mkdir(parents=True, exist_ok=True)
-        copy2(str(src_discussion), str(dst_discussion))
-
-    src_overrides = _story_memory_overrides_path(project_name, source_story_id)
-    if src_overrides.exists():
-        dst_overrides = _story_memory_overrides_path(project_name, target_story_id)
-        dst_overrides.parent.mkdir(parents=True, exist_ok=True)
-        copy2(str(src_overrides), str(dst_overrides))
-
-    src_rules = _story_rules_overrides_path(project_name, source_story_id)
-    if src_rules.exists():
-        dst_rules = _story_rules_overrides_path(project_name, target_story_id)
-        dst_rules.parent.mkdir(parents=True, exist_ok=True)
-        copy2(str(src_rules), str(dst_rules))
-
-    src_prompt_options = _story_prompt_options_path(project_name, source_story_id)
-    if src_prompt_options.exists():
-        dst_prompt_options = _story_prompt_options_path(project_name, target_story_id)
-        dst_prompt_options.parent.mkdir(parents=True, exist_ok=True)
-        copy2(str(src_prompt_options), str(dst_prompt_options))
-
-    src_rule_conflicts = _story_rule_conflict_resolutions_path(project_name, source_story_id)
-    if src_rule_conflicts.exists():
-        dst_rule_conflicts = _story_rule_conflict_resolutions_path(project_name, target_story_id)
-        dst_rule_conflicts.parent.mkdir(parents=True, exist_ok=True)
-        copy2(str(src_rule_conflicts), str(dst_rule_conflicts))
+    save_story_memory(project_name, target_story_id, load_story_memory(project_name, source_story_id))
+    save_story_rules(project_name, target_story_id, load_story_rules(project_name, source_story_id))
+    save_story_prompt_options(
+        project_name,
+        target_story_id,
+        load_story_prompt_options(project_name, source_story_id),
+    )
+    save_rule_conflict_resolutions(
+        project_name,
+        "story",
+        load_rule_conflict_resolutions(project_name, "story", source_story_id),
+        target_story_id,
+    )
 
     core_result = {"copied": 0, "updated": 0, "skipped": 0}
     try:
@@ -2214,6 +2444,7 @@ def save_story_chapter_summaries(project_name: str, story_id: str, summaries: li
         title="Chapter Summaries",
         payload=normalized,
     )
+    sync_project_retrieval_assets(project_name)
 
 
 def migrate_project_to_stories(project_name: str) -> bool:
@@ -2355,7 +2586,7 @@ def _load_json_list(path: Path) -> list[dict]:
 
 def load_knowledge_category(project_name: str, category: str) -> list[dict]:
     db_items = _load_knowledge_category_from_db_best_effort(project_name, category)
-    if db_items:
+    if db_items is not None:
         return db_items
     json_items = _load_json_list(knowledge_category_path(project_name, category))
     if db_items == [] and json_items:
@@ -2432,7 +2663,7 @@ def save_setting_entities(project_name: str, items: list[dict]):
 
 def load_entity_aliases(project_name: str) -> list[dict]:
     db_items = _load_entity_aliases_from_db_best_effort(project_name)
-    if db_items:
+    if db_items is not None:
         return db_items
     json_items = _load_json_list(entity_aliases_path(project_name))
     if db_items == [] and json_items:
@@ -2476,7 +2707,7 @@ def save_extraction_plan_templates(project_name: str, items: list[dict]):
 
 def load_pending_knowledge_items(project_name: str) -> list[dict]:
     db_items = _load_pending_knowledge_from_db_best_effort(project_name)
-    if db_items:
+    if db_items is not None:
         return db_items
     json_items = _load_json_list(pending_knowledge_path(project_name))
     if db_items == [] and json_items:
@@ -2493,7 +2724,7 @@ def save_pending_knowledge_items(project_name: str, items: list[dict]):
 
 def load_auto_review_runs(project_name: str) -> list[dict]:
     db_items = _load_runtime_from_db_best_effort(project_name, load_auto_review_run_rows, "auto review runs")
-    if db_items:
+    if db_items is not None:
         return db_items
     json_items = _load_json_list(auto_review_runs_path(project_name))
     if db_items == [] and json_items:
@@ -2538,7 +2769,7 @@ def normalize_auto_review_policy(policy: dict | None) -> dict:
 
 def load_auto_review_policy(project_name: str) -> dict:
     db_policy = _load_runtime_from_db_best_effort(project_name, load_auto_review_policy_row, "auto review policy")
-    if db_policy:
+    if db_policy is not None:
         return normalize_auto_review_policy(db_policy)
     path = auto_review_policy_path(project_name)
     if not path.exists():
@@ -3019,7 +3250,7 @@ def load_story_rules(project_name: str, story_id: str) -> dict:
         lambda conn: load_rules_payload(conn, "story", story_id),
         "story rules",
     )
-    if db_rules:
+    if db_rules is not None:
         return normalize_rules(db_rules)
     path = _story_rules_overrides_path(project_name, story_id)
     if not path.exists():
@@ -3060,7 +3291,7 @@ def load_global_rules() -> dict:
         lambda conn: load_rules_payload(conn, "global"),
         "global rules",
     )
-    if db_rules:
+    if db_rules is not None:
         return normalize_rules(db_rules)
     GLOBAL_RULES_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not GLOBAL_RULES_PATH.exists():
@@ -3098,7 +3329,7 @@ def load_project_rules(project_name: str) -> dict:
         lambda conn: load_rules_payload(conn, "project"),
         "project rules",
     )
-    if db_rules:
+    if db_rules is not None:
         return normalize_rules(db_rules)
     path = project_path(project_name) / "rules.json"
     if not path.exists():
@@ -3155,7 +3386,7 @@ def load_global_prompt_options() -> list[dict]:
         lambda conn: load_prompt_options_payload(conn, "global"),
         "global prompt options",
     )
-    if db_items:
+    if db_items is not None:
         return normalize_prompt_options_payload(db_items, scope="global")
     items = _load_prompt_options_file(GLOBAL_PROMPT_OPTIONS_PATH, "global")
     if db_items == [] and items:
@@ -3179,7 +3410,7 @@ def load_project_prompt_options(project_name: str) -> list[dict]:
         lambda conn: load_prompt_options_payload(conn, "project"),
         "project prompt options",
     )
-    if db_items:
+    if db_items is not None:
         return normalize_prompt_options_payload(db_items, scope="project")
     items = _load_prompt_options_file(_project_prompt_options_path(project_name), "project")
     if db_items == [] and items:
@@ -3205,7 +3436,7 @@ def load_story_prompt_options(project_name: str, story_id: str = "default") -> l
         lambda conn: load_prompt_options_payload(conn, "story", story_id),
         "story prompt options",
     )
-    if db_items:
+    if db_items is not None:
         return normalize_prompt_options_payload(db_items, scope="story")
     items = _load_prompt_options_file(_story_prompt_options_path(project_name, story_id), "story")
     if db_items == [] and items:
@@ -4339,6 +4570,7 @@ def save_review_json(project_name: str, chapter_no: int, data: dict, story_id: s
         payload=payload,
         metadata={"chapter_no": chapter_no},
     )
+    sync_project_retrieval_assets(project_name)
 
 
 def load_review_json(project_name: str, chapter_no: int, story_id: str = "default") -> dict | None:
@@ -4548,31 +4780,14 @@ def load_pipeline_run(project_name: str, run_id: str, story_id: str = "default")
         lambda conn: load_workflow_run_snapshot(conn, run_id, story_id),
         "workflow run snapshot",
     )
-    if db_payload:
+    if db_payload is not None:
+        if not db_payload:
+            return ""
         return json.dumps(db_payload, ensure_ascii=False, indent=2)
     file = runs_path(project_name, story_id) / f"{run_id}.json"
     if not file.exists():
         return ""
-    content = file.read_text(encoding="utf-8")
-    if db_payload == {}:
-        try:
-            payload = json.loads(content)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            asset_id_source = f"{story_id or 'project'}:workflow_run_snapshot:{run_id}"
-            artifact_asset_id = "asset_" + hashlib.sha256(asset_id_source.encode("utf-8")).hexdigest()[:24]
-            _sync_workflow_to_db_best_effort(
-                project_name,
-                lambda conn: sync_workflow_run_snapshot(
-                    conn,
-                    run_id=str(run_id),
-                    payload=payload,
-                    story_id=story_id,
-                    artifact_asset_id=artifact_asset_id,
-                ),
-            )
-    return content
+    return file.read_text(encoding="utf-8")
 
 
 def _list_pipeline_runs_from_files(project_name: str, chapter_no: int | None = None, story_id: str = "default") -> list[str]:
@@ -4590,7 +4805,7 @@ def list_pipeline_runs(project_name: str, chapter_no: int | None = None, story_i
         lambda conn: list_workflow_run_ids(conn, story_id=story_id, chapter_no=chapter_no),
         "workflow run list",
     )
-    if db_run_ids:
+    if db_run_ids is not None:
         return db_run_ids
     run_ids = _list_pipeline_runs_from_files(project_name, chapter_no=chapter_no, story_id=story_id)
     if db_run_ids == [] and run_ids:
@@ -4623,7 +4838,7 @@ def list_pipeline_run_summaries(project_name: str, chapter_no: int | None = None
         lambda conn: list_workflow_run_summaries(conn, story_id=story_id, chapter_no=chapter_no),
         "workflow run summary list",
     )
-    if db_runs:
+    if db_runs is not None:
         return db_runs
     summaries: list[dict] = []
     for run_id in _list_pipeline_runs_from_files(project_name, chapter_no=chapter_no, story_id=story_id):
@@ -4804,7 +5019,9 @@ def load_long_reference_batch(project_name: str, batch_id: str) -> dict:
         lambda conn: load_long_reference_batch_row(conn, batch_id),
         "long reference batch",
     )
-    if db_item:
+    if db_item is not None:
+        if not db_item:
+            return {}
         return normalize_long_reference_batch(db_item)
     path = long_reference_batch_path(project_name, batch_id)
     if not path.exists():
@@ -4813,13 +5030,7 @@ def load_long_reference_batch(project_name: str, batch_id: str) -> dict:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
-    normalized = normalize_long_reference_batch(raw)
-    if db_item == {}:
-        _sync_source_to_db_best_effort(
-            project_name,
-            lambda conn: sync_long_reference_batch(conn, normalized),
-        )
-    return normalized
+    return normalize_long_reference_batch(raw)
 
 
 def _list_long_reference_batches_from_files(project_name: str) -> list[dict]:
@@ -4842,7 +5053,7 @@ def list_long_reference_batches(project_name: str) -> list[dict]:
         load_long_reference_batch_rows,
         "long reference batches",
     )
-    if db_items:
+    if db_items is not None:
         batches = []
         for item in db_items:
             batch = normalize_long_reference_batch(item)
@@ -4906,15 +5117,14 @@ def retrieval_feedback_path(project_name: str) -> Path:
 
 def load_conflict_resolutions(project_name: str) -> list[dict]:
     db_items = _load_runtime_from_db_best_effort(project_name, load_conflict_resolution_rows, "conflict resolutions")
-    if db_items:
+    if db_items is not None:
         results = []
         for item in db_items:
             try:
                 results.append(ConflictResolution.model_validate(item).model_dump())
             except Exception:
                 continue
-        if results:
-            return results
+        return results
     file = conflict_resolutions_path(project_name)
     if not file.exists():
         return []
@@ -4930,12 +5140,6 @@ def load_conflict_resolutions(project_name: str) -> list[dict]:
             results.append(ConflictResolution.model_validate(item).model_dump())
         except Exception:
             continue
-    if db_items == [] and results:
-        for item in results:
-            _sync_runtime_to_db_best_effort(
-                project_name,
-                lambda conn, payload=item: sync_conflict_resolution(conn, payload),
-            )
     return results
 
 
@@ -5011,7 +5215,7 @@ def normalize_retrieval_eval_case(case: dict) -> dict:
 
 def load_retrieval_eval_cases(project_name: str) -> list[dict]:
     db_items = _load_runtime_from_db_best_effort(project_name, load_retrieval_eval_case_rows, "retrieval eval cases")
-    if db_items:
+    if db_items is not None:
         return db_items
     json_items = _load_json_list(retrieval_eval_cases_path(project_name))
     if db_items == [] and json_items:
@@ -5069,7 +5273,7 @@ def delete_retrieval_eval_case(project_name: str, case_id: str) -> bool:
 
 def load_retrieval_eval_runs(project_name: str) -> list[dict]:
     db_items = _load_runtime_from_db_best_effort(project_name, load_retrieval_eval_run_rows, "retrieval eval runs")
-    if db_items:
+    if db_items is not None:
         return db_items
     json_items = _load_json_list(retrieval_eval_runs_path(project_name))
     if db_items == [] and json_items:
@@ -5097,7 +5301,7 @@ def append_retrieval_eval_run(project_name: str, run: dict) -> dict:
 
 def load_retrieval_feedback(project_name: str) -> list[dict]:
     db_items = _load_runtime_from_db_best_effort(project_name, load_retrieval_feedback_rows, "retrieval feedback")
-    if db_items:
+    if db_items is not None:
         return db_items
     json_items = _load_json_list(retrieval_feedback_path(project_name))
     if db_items == [] and json_items:
@@ -5147,7 +5351,7 @@ def list_retrieval_source_files(project_name: str) -> list[str]:
         list_retrieval_source_file_rows,
         "retrieval source files",
     )
-    if db_paths:
+    if db_paths is not None:
         return db_paths
     path = retrieval_sources_path(project_name)
     files = [file.relative_to(path).as_posix() for file in path.rglob("*") if file.is_file()]
@@ -5226,23 +5430,14 @@ def load_retrieval_manifest(project_name: str) -> str:
         lambda conn: load_retrieval_manifest_payload(conn, project_name),
         "retrieval manifest",
     )
-    if db_payload:
+    if db_payload is not None:
+        if not db_payload:
+            return ""
         return json.dumps(db_payload, ensure_ascii=False, indent=2)
     file = retrieval_path(project_name) / "manifest.json"
     if not file.exists():
         return ""
-    content = file.read_text(encoding="utf-8")
-    if db_payload == {}:
-        try:
-            payload = json.loads(content)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            _sync_retrieval_to_db_best_effort(
-                project_name,
-                lambda conn: sync_retrieval_manifest_payload(conn, payload),
-            )
-    return content
+    return file.read_text(encoding="utf-8")
 
 
 def save_retrieval_vectors(project_name: str, content: str):
@@ -5277,23 +5472,14 @@ def load_retrieval_vectors(project_name: str) -> str:
         lambda conn: load_retrieval_vector_store_payload(conn, project_name),
         "retrieval vectors",
     )
-    if db_payload:
+    if db_payload is not None:
+        if not db_payload:
+            return ""
         return json.dumps(db_payload, ensure_ascii=False, indent=2)
     file = retrieval_path(project_name) / "vectors.json"
     if not file.exists():
         return ""
-    content = file.read_text(encoding="utf-8")
-    if db_payload == {}:
-        try:
-            payload = json.loads(content)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            _sync_retrieval_to_db_best_effort(
-                project_name,
-                lambda conn: sync_retrieval_vector_store_payload(conn, payload),
-            )
-    return content
+    return file.read_text(encoding="utf-8")
 
 
 def chapter_count(project_name: str, story_id: str = "default") -> int:
@@ -5315,7 +5501,7 @@ def sync_project_database_from_files(project_name: str) -> dict:
         "error": "",
     }
     try:
-        initialize_project_db(project_path(normalized_name), normalized_name)
+        initialize_project_db(ensure_project_path(normalized_name), normalized_name)
         with open_project_db(project_path(normalized_name).resolve()) as conn:
             project_root = project_path(normalized_name).resolve()
 
