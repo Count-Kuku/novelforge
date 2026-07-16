@@ -5,6 +5,7 @@ import streamlit as st
 
 from memory import append_retrieval_feedback
 from skills import detect_potential_conflicts
+from ui.common import scoped_widget_key
 from ui.labels import label_authority, label_retrieval_mode, label_scope, label_source_type
 
 
@@ -83,7 +84,13 @@ def render_retrieval_hits_block(hits: list[dict], title: str):
                     st.caption(f"判断理由：{rationale}")
 
 
-def render_retrieval_feedback_controls(project_name: str, current_hits: list[dict], query: str):
+def render_retrieval_feedback_controls(
+    project_name: str,
+    current_hits: list[dict],
+    query: str,
+    *,
+    story_id: str = "default",
+):
     if not current_hits:
         return
     with st.expander("记录本次检索反馈", expanded=False):
@@ -105,7 +112,7 @@ def render_retrieval_feedback_controls(project_name: str, current_hits: list[dic
                 ),
                 value,
             ),
-            key="retrieval_feedback_chunk",
+            key=scoped_widget_key("retrieval_feedback_chunk", project_name, story_id),
         )
         rating = st.radio(
             "反馈类型",
@@ -117,15 +124,24 @@ def render_retrieval_feedback_controls(project_name: str, current_hits: list[dic
                 "irrelevant": "无关",
                 "wrong": "错误",
             }.get(value, value),
-            key="retrieval_feedback_rating",
+            key=scoped_widget_key("retrieval_feedback_rating", project_name, story_id),
         )
-        note = st.text_area("反馈备注（可选）", height=70, key="retrieval_feedback_note")
-        if st.button("保存检索反馈", key="save_retrieval_feedback", use_container_width=True):
+        note = st.text_area(
+            "反馈备注（可选）",
+            height=70,
+            key=scoped_widget_key("retrieval_feedback_note", project_name, story_id),
+        )
+        if st.button(
+            "保存检索反馈",
+            key=scoped_widget_key("save_retrieval_feedback", project_name, story_id),
+            use_container_width=True,
+        ):
             selected_hit = next((hit for hit in current_hits if hit.get("chunk", {}).get("chunk_id") == selected_chunk_id), {})
             chunk = selected_hit.get("chunk", {})
             try:
                 saved = append_retrieval_feedback(project_name, {
                     "query": query,
+                    "story_id": story_id,
                     "rating": rating,
                     "note": note,
                     "chunk_id": chunk.get("chunk_id", ""),

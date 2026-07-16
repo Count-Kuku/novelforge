@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -234,6 +235,9 @@ def main() -> int:
             "project_name": project_name,
             "embedding_model": "verify-embedding",
             "vectors": {"doc_no_mirror#chunk001": [0.1, 0.2, 0.3]},
+            "content_hashes": {
+                "doc_no_mirror#chunk001": sha256("No Mirror Document\nretrieval chunk".encode("utf-8")).hexdigest()
+            },
         }, ensure_ascii=False, indent=2))
 
         root = project_path(project_name)

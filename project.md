@@ -629,7 +629,7 @@ Local desktop-style launcher.
 
 Responsibilities:
 
-* Resolve the bundled Python runtime from `.venv`
+* Resolve `.venv` for local development and a self-contained `.runtime` distribution for frozen portable releases
 * Start the Streamlit app on local host
 * Wait for the local server to become reachable
 * Open the browser automatically for local packaged usage
@@ -654,7 +654,7 @@ Responsibilities:
 * Install `pyinstaller` into the local `.venv`
 * Build `NovelForge.exe` from `launcher.py`
 * Assemble a portable release directory
-* Copy the runtime, entrypoint, split workflow modules, `ui/` page package, `storage/` package, verification/maintenance tools, development docs, `VERSION`, Chinese/English README files, and baseline data structure into the release bundle
+* Require and validate a self-contained Python distribution (a copied virtual environment is rejected), then copy it as `.runtime` together with the entrypoint, split workflow modules, `ui/` page package, `storage/` package, verification/maintenance tools, development docs, `VERSION`, Chinese/English README files, and baseline data structure
 * Copy optional `.streamlit` runtime configuration when present
 * Save a build transcript under `release/` for local diagnostics
 * Produce a zip archive suitable for GitHub Releases
@@ -782,7 +782,7 @@ Current storage note:
 
 * `memory.json` is no longer the primary storage layer for stable settings. It is intentionally slimmed to project metadata such as title and genre.
 * Stable settings are managed as structured knowledge through `setting_knowledge.py`, with legacy memory-shaped dictionaries assembled only as compatibility views for prompt builders.
-* Structured data is SQLite-first as of schema version 5: project-local data is read from `project.db` first, including stories, story profiles, project/story rules, prompt options, structured knowledge, pending knowledge, aliases, source batches, retrieval source registry, retrieval manifest/chunks/vectors, retrieval feedback/evals, conflict resolutions, workflow run snapshots, project-manager run/inventory listings, RAG rebuild inputs for review/evaluation/discussion payloads, volume/arc/chapter metadata discovery, DB-only deletion for small JSON artifacts, and small JSON artifacts in `asset_payloads`; global data is read from `global.db` first, including LLM profiles, global rules, global prompt options, and global rule conflict resolutions. Schema version 5 adds active asset uniqueness indexes for both project-level and story-level assets. Legacy JSON files are compatibility mirrors and backfill sources.
+* Structured data is SQLite-first as of schema version 6: project-local data is read from `project.db` first, including stories, story profiles, project/story rules, prompt options, structured knowledge, pending knowledge, aliases, source batches, retrieval source registry, retrieval manifest/chunks/vectors, retrieval feedback/evals, conflict resolutions, workflow run snapshots, project-manager run/inventory listings, RAG rebuild inputs for review/evaluation/discussion payloads, volume/arc/chapter metadata discovery, DB-only deletion for small JSON artifacts, and small JSON artifacts in `asset_payloads`; global data is read from `global.db` first, including LLM profiles, global rules, global prompt options, and global rule conflict resolutions. Schema version 5 adds active asset uniqueness indexes for both project-level and story-level assets; schema version 6 separates a prompt option's user-facing logical ID from its scope/story-specific storage ID so intentional overrides cannot move rows across stories. Legacy JSON files are compatibility mirrors and backfill sources.
 * Structured JSON compatibility mirrors are disabled by default. Set `NOVELFORGE_WRITE_JSON_MIRRORS=1` before launching the app or tools only when temporary legacy JSON mirror output is needed. SQLite remains authoritative; old JSON can still be read as fallback/backfill until the corresponding structured resource is saved again, at which point that stale mirror is removed. Markdown/TXT long-text assets remain file-backed.
 * In the default no-JSON-mirror mode, SQLite is required rather than best-effort: database read/write/delete failures raise errors so structured data is not silently lost.
 

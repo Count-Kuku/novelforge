@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 MIGRATION_NAME_PATTERN = re.compile(r"^(\d+)_.*\.sql$")
 
@@ -30,6 +30,22 @@ def _migration_files() -> list[tuple[int, Path]]:
     return sorted(files, key=lambda item: item[0])
 
 
+def _execute_migration_script(conn: sqlite3.Connection, script: str) -> None:
+    """Execute a SQL script without ``executescript``'s implicit commit."""
+
+    buffer = ""
+    for line in script.splitlines(keepends=True):
+        buffer += line
+        if not sqlite3.complete_statement(buffer):
+            continue
+        statement = buffer.strip()
+        buffer = ""
+        if statement:
+            conn.execute(statement)
+    if buffer.strip():
+        raise sqlite3.OperationalError("Incomplete SQL statement in migration script.")
+
+
 def ensure_schema(conn: sqlite3.Connection) -> int:
     conn.execute(
         """
@@ -39,16 +55,47 @@ def ensure_schema(conn: sqlite3.Connection) -> int:
         )
         """
     )
+    conn.commit()
+
+    migrations = _migration_files()
+    versions = [version for version, _ in migrations]
+    expected_versions = list(range(1, CURRENT_SCHEMA_VERSION + 1))
+    if versions != expected_versions:
+        raise RuntimeError(
+            f"Migration files must be continuous through version {CURRENT_SCHEMA_VERSION}; found {versions}."
+        )
+
     current_version = get_schema_version(conn)
-    for version, path in _migration_files():
+    if current_version > CURRENT_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Database schema version {current_version} is newer than supported version {CURRENT_SCHEMA_VERSION}."
+        )
+
+    for version, path in migrations:
         if version <= current_version:
             continue
-        script = path.read_text(encoding="utf-8")
-        conn.executescript(script)
-        conn.execute(
-            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
-            (version,),
-        )
-        current_version = version
-    conn.commit()
+        try:
+            # Serialize fresh-database initialization and re-check the version
+            # after acquiring the write lock so concurrent launchers cannot
+            # both attempt the same non-idempotent ALTER migration.
+            conn.execute("BEGIN IMMEDIATE")
+            locked_version = get_schema_version(conn)
+            if locked_version >= version:
+                conn.commit()
+                current_version = locked_version
+                continue
+            if version != locked_version + 1:
+                raise RuntimeError(
+                    f"Cannot apply migration {version} after database version {locked_version}."
+                )
+            _execute_migration_script(conn, path.read_text(encoding="utf-8"))
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+                (version,),
+            )
+            conn.commit()
+            current_version = version
+        except Exception:
+            conn.rollback()
+            raise
     return current_version

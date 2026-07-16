@@ -88,3 +88,87 @@ def list_story_rows(conn: sqlite3.Connection, *, include_deleted: bool = False) 
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
+    """Remove every database record owned by one story.
+
+    Story rows themselves are soft-deleted by ``sync_stories_index``.  The
+    dependent records therefore do not receive foreign-key cascade handling;
+    without this cleanup, reusing the same story ID can revive the deleted
+    story's profile, rules, prompt options, JSON assets, and run history.
+    """
+
+    clean_story_id = str(story_id or "").strip()
+    if not clean_story_id:
+        raise ValueError("Story ID cannot be empty.")
+
+    # Evidence can be linked indirectly through knowledge or source rows and
+    # has no story_id of its own, so remove it before deleting those parents.
+    conn.execute(
+        """
+        DELETE FROM knowledge_evidence
+        WHERE knowledge_id IN (SELECT knowledge_id FROM knowledge_items WHERE story_id = ?)
+           OR pending_id IN (SELECT pending_id FROM pending_knowledge_items WHERE story_id = ?)
+           OR source_id IN (SELECT source_id FROM source_documents WHERE story_id = ?)
+           OR segment_id IN (
+               SELECT segment.segment_id
+               FROM source_segments AS segment
+               JOIN source_documents AS source ON source.source_id = segment.source_id
+               WHERE source.story_id = ?
+           )
+           OR chunk_id IN (
+               SELECT chunk.chunk_id
+               FROM retrieval_chunks AS chunk
+               JOIN retrieval_documents AS document ON document.document_id = chunk.document_id
+               WHERE document.story_id = ?
+           )
+        """,
+        (
+            clean_story_id,
+            clean_story_id,
+            clean_story_id,
+            clean_story_id,
+            clean_story_id,
+        ),
+    )
+
+    # Older feedback rows may predate explicit story ownership and only point
+    # at a story-owned retrieval chunk.  Delete them before chunk removal turns
+    # that association into NULL via ON DELETE SET NULL.
+    conn.execute(
+        """
+        DELETE FROM retrieval_feedback
+        WHERE story_id = ?
+           OR chunk_id IN (
+               SELECT chunk.chunk_id
+               FROM retrieval_chunks AS chunk
+               JOIN retrieval_documents AS document ON document.document_id = chunk.document_id
+               WHERE document.story_id = ?
+           )
+        """,
+        (clean_story_id, clean_story_id),
+    )
+
+    # Delete leaf/history tables first. Foreign keys then cascade through
+    # workflow steps, retrieval chunks/vectors, source segments, and payloads.
+    for table in (
+        "retrieval_eval_runs",
+        "retrieval_feedback",
+        "retrieval_conflict_resolutions",
+        "workflow_runs",
+        "graph_edges",
+        "graph_nodes",
+        "retrieval_documents",
+        "retrieval_eval_cases",
+        "knowledge_items",
+        "pending_knowledge_items",
+        "entity_alias_groups",
+        "source_documents",
+        "rules",
+        "prompt_options",
+        "asset_files",
+    ):
+        conn.execute(f"DELETE FROM {table} WHERE story_id = ?", (clean_story_id,))
+
+    conn.execute("DELETE FROM story_profiles WHERE story_id = ?", (clean_story_id,))

@@ -21,6 +21,7 @@ from memory import (
     set_active_story,
 )
 from project_manager import get_project_summary
+from ui.common import scoped_widget_key
 from ui.navigation import (
     ADVANCED_PAGE_GROUPS,
     DEFAULT_PAGE,
@@ -268,10 +269,15 @@ def _render_project_switcher(project_name: str | None, projects: list[str]) -> N
         )
         if selected_project and selected_project != project_name:
             _close_new_project_dialog()
+            if project_name:
+                st.session_state.pop(scoped_widget_key("story_switcher", project_name), None)
+            st.session_state.pop("story_switcher", None)
             st.session_state["project_name"] = selected_project
             set_active_project_name(selected_project)
             try:
-                st.session_state["active_story_id"] = get_active_story_id(selected_project)
+                active_story_id = get_active_story_id(selected_project)
+                st.session_state["active_story_id"] = active_story_id
+                st.session_state[scoped_widget_key("story_switcher", selected_project)] = active_story_id
                 _clear_project_load_error()
             except Exception as exc:
                 st.session_state.pop("active_story_id", None)
@@ -294,17 +300,23 @@ def _render_story_switcher(project_name: str, stories: list[dict]) -> None:
         st.sidebar.caption("当前故事")
         active_id = st.session_state.get("active_story_id", "default")
         story_options = [s["story_id"] for s in stories]
+        switcher_key = scoped_widget_key("story_switcher", project_name)
         pending_story = st.session_state.pop(PENDING_STORY_SWITCH_KEY, "")
         if pending_story in story_options:
-            st.session_state["story_switcher"] = pending_story
+            st.session_state[switcher_key] = pending_story
             active_id = pending_story
+        elif switcher_key not in st.session_state:
+            st.session_state[switcher_key] = active_id if active_id in story_options else story_options[0]
+        elif st.session_state.get(switcher_key) not in story_options:
+            st.session_state[switcher_key] = active_id if active_id in story_options else story_options[0]
+        st.session_state.pop("story_switcher", None)
         story_labels = {s["story_id"]: f'{s.get("name", s["story_id"])}' for s in stories}
         selected_story = st.sidebar.selectbox(
             "切换故事",
             options=story_options,
             index=story_options.index(active_id) if active_id in story_options else 0,
             format_func=lambda sid: story_labels.get(sid, sid),
-            key="story_switcher",
+            key=switcher_key,
         )
         if selected_story != active_id:
             switch_to_story(project_name, selected_story)

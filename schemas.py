@@ -646,6 +646,10 @@ class RetrievalVectorStore(NovelForgeSchema):
     built_at: str
     embedding_model: str
     vectors: dict[str, list[float]] = Field(default_factory=dict)
+    # Hash of the exact title/content text used to produce each vector.  A
+    # stable chunk id alone is not sufficient because users can edit a chunk
+    # without changing its position in the document.
+    content_hashes: dict[str, str] = Field(default_factory=dict)
 
 
 class RetrievalConflict(NovelForgeSchema):
@@ -660,6 +664,7 @@ class RetrievalConflict(NovelForgeSchema):
 
 class ConflictResolution(NovelForgeSchema):
     conflict_id: str
+    story_id: str = ""
     shared_terms: list[str] = Field(default_factory=list)
     decision: Literal["use_project", "use_external", "merge", "ignore"] = "merge"
     note: str = ""

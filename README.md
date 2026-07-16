@@ -267,7 +267,7 @@ NovelForge 支持在同一项目内创建多个独立故事。项目级资源（
 
 侧边栏会保存当前激活故事；项目总览、项目资源、快速生成、规划、写作、审阅、分析、评估和流水线都会跟随当前故事读写。故事目录使用平台友好的 ASCII `story_id`，中文故事名保留为显示名称。
 
-复制故事会同步创作配置、规则、提示词选项、讨论结论和故事级核心设定。删除故事时会同时清理该故事的故事级核心设定，避免项目知识库留下孤儿设定。首次使用已有项目时，系统会自动将现有内容迁移为默认故事，不会丢失任何数据。
+复制故事会同步创作配置、规则、提示词选项、讨论结论、章节资产、运行记录和故事级核心设定；任一步失败会回滚未完成的副本。删除故事时会清理该故事的数据库记录和文件资产，避免重用故事 ID 时恢复旧数据。首次使用没有数据库的旧项目时，系统会先导入现有内容；若发现零字节数据库，则会停止并提示关闭运行中的应用后处理，避免与后台进程争锁。
 
 ## 创作配置
 
@@ -346,7 +346,7 @@ NovelForge 也可以打包成一个本地 Windows 便携版，双击后自动启
 目标分发形式为：
 
 - `NovelForge.exe` 作为小型启动器
-- 随包附带 `.venv` 运行时
+- 随包附带 `.runtime` 自包含 Python 运行时（不复制绑定构建机器的 `.venv`）
 - 保留项目源码文件
 - 使用本地 `data/` 目录存放项目数据
 
@@ -365,16 +365,19 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-2. 在 PowerShell 中运行构建脚本：
+2. 准备一个已安装 `requirements.txt` 依赖的 Windows 自包含 Python 发行版。该目录根部必须包含 `python.exe`，且不能包含 `pyvenv.cfg`。
+
+3. 在 PowerShell 中运行构建脚本，并通过 `RuntimeRoot` 指定该发行版：
 
 ```powershell
-.\build_release.ps1 -Version v0.5.1
+.\build_release.ps1 -Version v0.5.1 -RuntimeRoot D:\Runtimes\python-standalone
 ```
 
-3. 脚本会自动：
+4. 脚本会自动：
 
 - 在 `.venv` 中安装 `pyinstaller`
 - 使用仓库内的 `NovelForge.spec` 作为 PyInstaller 构建配置
+- 校验自包含运行时及 NovelForge 运行依赖，并复制为 `.runtime`
 - 根据 `launcher.py` 构建 `NovelForge.exe`
 - 组装 `release/NovelForge-Portable/`
 - 生成 `release/NovelForge-windows-portable-v0.5.1.zip`

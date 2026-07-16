@@ -16,7 +16,7 @@ from memory import (
     set_active_llm_profile,
     upsert_llm_profile,
 )
-from ui.common import confirmed_button
+from ui.common import confirmed_button, scoped_widget_key
 
 
 def _load_llm_profile_state() -> tuple[list[dict], dict, dict, list[str], dict[str, str]]:
@@ -59,14 +59,22 @@ def _render_llm_profile_actions(selected_profile_id: str, selected_profile: dict
 
     st.caption("")
     action_col1, action_col2, action_col3 = st.columns(3)
-    if action_col1.button("切换生效", key="switch_llm_profile", use_container_width=True):
+    if action_col1.button(
+        "切换生效",
+        key=scoped_widget_key("switch_llm_profile", selected_profile_id),
+        use_container_width=True,
+    ):
         try:
             set_active_llm_profile(selected_profile_id)
             st.success("已切换当前模型档案。")
             st.rerun()
         except Exception as exc:
             st.error(f"切换失败：{exc}")
-    if action_col2.button("测试连接", key="test_llm_connection", use_container_width=True):
+    if action_col2.button(
+        "测试连接",
+        key=scoped_widget_key("test_llm_connection", selected_profile_id),
+        use_container_width=True,
+    ):
         if not selected_profile.get("api_key"):
             st.error("当前档案没有填写接口密钥，无法测试。")
         else:
@@ -84,7 +92,7 @@ def _render_llm_profile_actions(selected_profile_id: str, selected_profile: dict
         action_col3,
         "删除档案",
         "确认删除该模型档案",
-        "delete_llm_profile",
+        scoped_widget_key("delete_llm_profile", selected_profile_id),
         help_text="删除前请确认该档案不再需要。",
     ):
         try:
@@ -112,7 +120,11 @@ def _render_llm_profile_management(profiles: list[dict], active_profile: dict) -
     return selected_profile
 
 
-def _render_provider_quick_fill() -> None:
+def _profile_widget_key(base: str, profile_id: str) -> str:
+    return scoped_widget_key(base, profile_id or "__new__")
+
+
+def _render_provider_quick_fill(profile_id: str) -> None:
     st.markdown("### 快速填充")
     st.caption("点击下方服务商按钮，自动填写常见服务地址和模型名，然后按需微调。")
     provider_keys = list(PROVIDER_PRESETS.keys())
@@ -123,14 +135,14 @@ def _render_provider_quick_fill() -> None:
             if provider_name != "自定义":
                 st.button(
                     provider_name,
-                    key=f"fill_provider_{idx}",
+                    key=_profile_widget_key(f"fill_provider_{idx}", profile_id),
                     use_container_width=True,
                     help=f"{provider['base_url']} / {provider['model_name']}",
-                    on_click=lambda p=provider: (
+                    on_click=lambda p=provider, pid=profile_id: (
                         st.session_state.update({
-                            "llm_base_url": p["base_url"],
-                            "llm_model_name": p["model_name"],
-                            "llm_embedding_model_name": p["embedding_model_name"],
+                            _profile_widget_key("llm_base_url", pid): p["base_url"],
+                            _profile_widget_key("llm_model_name", pid): p["model_name"],
+                            _profile_widget_key("llm_embedding_model_name", pid): p["embedding_model_name"],
                         })
                     ) or None,
                 )
@@ -212,33 +224,53 @@ def _handle_direct_save_profile(payload: dict[str, str], *, auto_activate: bool)
 
 
 def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> None:
-    with st.form("llm_profile_form"):
+    selected_profile_id = str(selected_profile.get("id") or "")
+    with st.form(_profile_widget_key("llm_profile_form", selected_profile_id)):
         st.markdown("### 编辑或新增档案")
         col_a, col_b = st.columns(2)
         profile_id_value = col_a.text_input(
             "档案标识",
             value=selected_profile.get("id", ""),
-            key="llm_profile_id",
+            key=_profile_widget_key("llm_profile_id", selected_profile_id),
             help="用于内部识别这套配置。建议使用英文、数字、短横线，例如 deepseek-main。",
         )
-        profile_name = col_b.text_input("档案名称", value=selected_profile.get("name", ""), placeholder="例如：DeepSeek 主账号", key="llm_profile_name")
+        profile_name = col_b.text_input(
+            "档案名称",
+            value=selected_profile.get("name", ""),
+            placeholder="例如：DeepSeek 主账号",
+            key=_profile_widget_key("llm_profile_name", selected_profile_id),
+        )
         base_url = st.text_input(
             "模型服务网址",
             value=selected_profile.get("base_url", ""),
             placeholder="https://api.deepseek.com",
-            key="llm_base_url",
+            key=_profile_widget_key("llm_base_url", selected_profile_id),
             help="选择一个服务商快速填充常见的服务地址和模型名。",
         )
         col_ak, col_mn = st.columns(2)
-        api_key = col_ak.text_input("接口密钥", value=selected_profile.get("api_key", ""), type="password", key="llm_api_key")
-        model_name = col_mn.text_input("聊天模型名", value=selected_profile.get("model_name", ""), placeholder="deepseek-v4-flash", key="llm_model_name")
+        api_key = col_ak.text_input(
+            "接口密钥",
+            value=selected_profile.get("api_key", ""),
+            type="password",
+            key=_profile_widget_key("llm_api_key", selected_profile_id),
+        )
+        model_name = col_mn.text_input(
+            "聊天模型名",
+            value=selected_profile.get("model_name", ""),
+            placeholder="deepseek-v4-flash",
+            key=_profile_widget_key("llm_model_name", selected_profile_id),
+        )
         embedding_model_name = st.text_input(
             "语义向量模型名",
             value=selected_profile.get("embedding_model_name", ""),
             placeholder="text-embedding-3-small",
-            key="llm_embedding_model_name",
+            key=_profile_widget_key("llm_embedding_model_name", selected_profile_id),
         )
-        auto_activate = st.checkbox("保存后立即切换为当前档案", value=selected_profile.get("id") == active_profile.get("id"), key="llm_auto_activate")
+        auto_activate = st.checkbox(
+            "保存后立即切换为当前档案",
+            value=selected_profile.get("id") == active_profile.get("id"),
+            key=_profile_widget_key("llm_auto_activate", selected_profile_id),
+        )
 
         test_col, save_col = st.columns([1, 1])
         payload = _clean_llm_profile_form_values(
@@ -307,7 +339,7 @@ def render_llm_settings_page():
 
     profiles, active_profile, settings, _, _ = _load_llm_profile_state()
     selected_profile = _render_llm_profile_management(profiles, active_profile)
-    _render_provider_quick_fill()
+    _render_provider_quick_fill(str(selected_profile.get("id") or ""))
     _render_llm_profile_form(selected_profile, active_profile)
     _render_saved_llm_profiles(profiles, active_profile)
     _render_active_llm_settings(settings)

@@ -114,6 +114,7 @@ def evaluate_retrieval_case(project_name: str, case: dict) -> dict:
         retrieval_profile=str(case.get("retrieval_profile") or "") or None,
         worldline_id=str(case.get("worldline_id") or "") or None,
         worldline_mode=str(case.get("worldline_mode") or "prefer"),
+        story_id=str(case.get("story_id") or "default"),
     )
     hit_payloads = [hit.model_dump() for hit in hits]
     matched_terms = []
@@ -139,6 +140,7 @@ def evaluate_retrieval_case(project_name: str, case: dict) -> dict:
         "case_id": case.get("case_id", ""),
         "name": case.get("name", ""),
         "query": case.get("query", ""),
+        "story_id": str(case.get("story_id") or ""),
         "passed": passed,
         "matched_count": matched_count,
         "expectation_count": expectation_count,
@@ -174,7 +176,13 @@ def run_retrieval_eval_cases(project_name: str, cases: list[dict], note: str = "
                 "hits": [],
             })
     passed_count = sum(1 for item in results if item.get("passed"))
+    story_ids = {
+        str(case.get("story_id") or "").strip()
+        for case in active_cases
+        if str(case.get("story_id") or "").strip()
+    }
     return append_retrieval_eval_run(project_name, {
+        "story_id": next(iter(story_ids)) if len(story_ids) == 1 else "",
         "note": note,
         "case_count": len(active_cases),
         "passed_count": passed_count,

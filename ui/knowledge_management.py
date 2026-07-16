@@ -104,7 +104,12 @@ def _render_pending_queue_metrics(pending_items: list[dict], filtered_indices: l
     metric_cols[3].metric("正式库重叠", sum(1 for index in filtered_indices if "confirmed_overlap" in issue_map.get(str(pending_items[index].get("pending_id", "")), {}).get("types", set())))
 
 
-def _render_pending_selection(pending_items: list[dict], filtered_indices: list[int], issue_map: dict) -> list[int]:
+def _render_pending_selection(
+    project_name: str,
+    pending_items: list[dict],
+    filtered_indices: list[int],
+    issue_map: dict,
+) -> list[int]:
     return st.multiselect(
         "选择要处理的条目",
         options=filtered_indices,
@@ -115,7 +120,7 @@ def _render_pending_selection(pending_items: list[dict], filtered_indices: list[
             f" / {pending_quality_label(issue_map.get(str(pending_items[index].get('pending_id', '')), {}))}"
             f" / {label_scope(pending_items[index].get('scope', 'reference'))}"
         ),
-        key="pending_knowledge_selected_indices",
+        key=scoped_widget_key("pending_knowledge_selected_indices", project_name),
     )
 
 
@@ -198,13 +203,26 @@ def _render_pending_auto_review_panel(
 ) -> None:
     with st.expander("自动审核预检与批量处理", expanded=False):
         st.caption("这里不会重新调用模型，只按当前自动审核策略和质检结果判断哪些条目可以自动保存，哪些仍保留给人工审核。")
-        auto_scope = st.radio("预检范围", options=["当前筛选结果", "已选择条目"], horizontal=True, key="pending_auto_review_scope")
+        auto_scope = st.radio(
+            "预检范围",
+            options=["当前筛选结果", "已选择条目"],
+            horizontal=True,
+            key=scoped_widget_key("pending_auto_review_scope", project_name),
+        )
         auto_candidate_indices = filtered_indices if auto_scope == "当前筛选结果" else selected_indices
         auto_candidate_items = [pending_items[index] for index in auto_candidate_indices if 0 <= index < len(pending_items)]
         auto_preview = build_pending_auto_review_preview(auto_candidate_items, issue_map, policy)
         _render_pending_auto_review_preview(auto_preview)
         auto_candidate_ids = [str(item.get("pending_id") or "") for item in auto_candidate_items if item.get("pending_id")]
-        if st.button("按当前策略自动确认低风险条目", key="pending_run_auto_review", use_container_width=True):
+        if st.button(
+            "按当前策略自动确认低风险条目",
+            key=scoped_widget_key(
+                "pending_run_auto_review",
+                project_name,
+                "|".join(sorted(auto_candidate_ids)) or "__empty__",
+            ),
+            use_container_width=True,
+        ):
             if not auto_candidate_ids:
                 st.error("当前范围内没有可审核条目。")
             else:
@@ -226,7 +244,11 @@ def _render_pending_auto_review_panel(
 
 def _render_pending_bulk_actions(project_name: str, selected_ids: list[str]) -> None:
     col_a, col_b = st.columns(2)
-    if col_a.button("确认所选并写入知识库条目"):
+    selection_scope = "|".join(sorted(selected_ids)) or "__empty__"
+    if col_a.button(
+        "确认所选并写入知识库条目",
+        key=scoped_widget_key("confirm_selected_pending_knowledge", project_name, selection_scope),
+    ):
         if not selected_ids:
             st.error("请先选择条目。")
         else:
@@ -235,7 +257,12 @@ def _render_pending_bulk_actions(project_name: str, selected_ids: list[str]) -> 
                 rebuild_retrieval_assets(project_name, build_vectors=True)
             st.success(f"已确认 {saved_count} 条知识库条目。")
             st.rerun()
-    if confirmed_button(col_b, "丢弃所选待确认条目", "确认丢弃所选条目", "discard_selected_pending_knowledge"):
+    if confirmed_button(
+        col_b,
+        "丢弃所选待确认条目",
+        "确认丢弃所选条目",
+        scoped_widget_key("discard_selected_pending_knowledge", project_name, selection_scope),
+    ):
         if not selected_ids:
             st.error("请先选择条目。")
         else:
@@ -246,13 +273,17 @@ def _render_pending_bulk_actions(project_name: str, selected_ids: list[str]) -> 
 
 def _render_pending_raw_json_editor(project_name: str, pending_items: list[dict]) -> None:
     with st.expander("高级：待确认队列原始数据", expanded=False):
+        serialized_pending = json.dumps(pending_items, ensure_ascii=False, indent=2)
         pending_json = st.text_area(
             "pending.json",
-            value=json.dumps(pending_items, ensure_ascii=False, indent=2),
+            value=serialized_pending,
             height=360,
-            key="pending_knowledge_raw_json",
+            key=scoped_widget_key("pending_knowledge_raw_json", project_name, serialized_pending),
         )
-        if st.button("保存待确认队列修改"):
+        if st.button(
+            "保存待确认队列修改",
+            key=scoped_widget_key("save_pending_knowledge_raw_json", project_name),
+        ):
             try:
                 parsed = json.loads(pending_json)
                 if not isinstance(parsed, list):
@@ -281,7 +312,7 @@ def render_pending_knowledge_queue(project_name: str):
         render_pending_knowledge_quality_panel(project_name, pending_items)
         filtered_indices = filter_pending_knowledge_indices(pending_items, issue_map)
         _render_pending_queue_metrics(pending_items, filtered_indices, issue_map)
-        selected_indices = _render_pending_selection(pending_items, filtered_indices, issue_map)
+        selected_indices = _render_pending_selection(project_name, pending_items, filtered_indices, issue_map)
         _render_pending_preview_list(pending_items, filtered_indices, issue_map)
         render_pending_knowledge_item_editor(project_name, pending_items, filtered_indices)
         selected_ids = _pending_selected_ids(pending_items, selected_indices)
@@ -581,7 +612,11 @@ def render_auto_review_runs_panel(project_name: str):
         _render_auto_review_rollback(project_name, selected_run_id, selected_run)
 
 
-def _select_pending_knowledge_item(pending_items: list[dict], filtered_indices: list[int]) -> tuple[dict, str]:
+def _select_pending_knowledge_item(
+    project_name: str,
+    pending_items: list[dict],
+    filtered_indices: list[int],
+) -> tuple[dict, str]:
     selected_index = st.selectbox(
         "选择要编辑的条目",
         options=filtered_indices,
@@ -590,7 +625,7 @@ def _select_pending_knowledge_item(pending_items: list[dict], filtered_indices: 
             f" / {pending_items[index].get('name', '未命名')}"
             f" / {pending_items[index].get('source_title', '-') or '-'}"
         ),
-        key="pending_item_editor_select",
+        key=scoped_widget_key("pending_item_editor_select", project_name),
     )
     item = dict(pending_items[selected_index])
     return item, str(item.get("pending_id") or "")
@@ -685,9 +720,9 @@ def _render_pending_item_json_fields(details_value: str, evidence_value: str, ev
     }
 
 
-def _render_pending_item_form(item: dict, pending_id: str) -> tuple[dict, bool, bool]:
+def _render_pending_item_form(project_name: str, item: dict, pending_id: str) -> tuple[dict, bool, bool]:
     details_value, evidence_value, evidence_contexts_value, tags_value = _pending_item_json_defaults(item)
-    with st.form(key=f"pending_item_editor_form_{pending_id}"):
+    with st.form(key=scoped_widget_key("pending_item_editor_form", project_name, pending_id)):
         values = {}
         values.update(_render_pending_item_basic_fields(item))
         values.update(_render_pending_item_scope_fields(item))
@@ -769,11 +804,11 @@ def render_pending_knowledge_item_editor(project_name: str, pending_items: list[
             st.caption("当前筛选结果为空，没有可编辑条目。")
             return
 
-        item, pending_id = _select_pending_knowledge_item(pending_items, filtered_indices)
+        item, pending_id = _select_pending_knowledge_item(project_name, pending_items, filtered_indices)
         if not pending_id:
             st.warning("该条目缺少内部 ID，无法通过表单保存。")
             return
-        values, save_clicked, confirm_clicked = _render_pending_item_form(item, pending_id)
+        values, save_clicked, confirm_clicked = _render_pending_item_form(project_name, item, pending_id)
         if not (save_clicked or confirm_clicked):
             return
         if not values["name"].strip():
@@ -786,7 +821,12 @@ def render_pending_knowledge_item_editor(project_name: str, pending_items: list[
         _save_pending_item_editor_result(project_name, pending_id, updated_item, confirm_clicked)
 
 
-def _select_confirmed_knowledge_item(category: str, items: list[dict], candidate_indices: list[int]) -> tuple[int, dict]:
+def _select_confirmed_knowledge_item(
+    project_name: str,
+    category: str,
+    items: list[dict],
+    candidate_indices: list[int],
+) -> tuple[int, dict]:
     selected_index = st.selectbox(
         "选择要编辑的正式知识",
         options=candidate_indices,
@@ -795,7 +835,7 @@ def _select_confirmed_knowledge_item(category: str, items: list[dict], candidate
             f" / {items[index].get('name', '未命名')}"
             f" / {items[index].get('source_title', '-') or '-'}"
         ),
-        key=f"confirmed_item_editor_select_{category}",
+        key=scoped_widget_key("confirmed_item_editor_select", project_name, category),
     )
     return selected_index, dict(items[selected_index])
 
@@ -816,7 +856,8 @@ def _render_confirmed_item_basic_fields(item: dict, category: str) -> dict:
 
 def _render_confirmed_item_form(project_name: str, category: str, selected_index: int, item: dict) -> tuple[dict, bool, bool]:
     details_value, evidence_value, evidence_contexts_value, tags_value = _pending_item_json_defaults(item)
-    with st.form(key=f"confirmed_item_editor_form_{category}_{selected_index}"):
+    item_id = str(item.get("id") or item.get("knowledge_id") or selected_index)
+    with st.form(key=scoped_widget_key("confirmed_item_editor_form", project_name, category, item_id)):
         values = {}
         values.update(_render_confirmed_item_basic_fields(item, category))
         values.update(_render_pending_item_scope_fields(item))
@@ -828,7 +869,7 @@ def _render_confirmed_item_form(project_name: str, category: str, selected_index
         save_clicked = col_save.form_submit_button("保存正式知识并重建索引", use_container_width=True)
         delete_confirmed = col_delete.checkbox(
             "确认删除该条正式知识",
-            key=scoped_widget_key("delete_confirmed_knowledge_confirm", project_name, category, selected_index),
+            key=scoped_widget_key("delete_confirmed_knowledge_confirm", project_name, category, item_id),
         )
         delete_clicked = col_delete.form_submit_button("删除该条正式知识", use_container_width=True, disabled=not delete_confirmed)
     return values, save_clicked, delete_clicked
@@ -841,16 +882,17 @@ def _render_return_confirmed_to_pending(project_name: str, category: str, select
         f"自动审核记录：{item.get('auto_review_run_id', '-') or '-'} / "
         f"原待确认条目：{item.get('source_pending_id', '-') or '-'}"
     )
+    item_id = str(item.get("id") or item.get("knowledge_id") or selected_index)
     with st.expander("退回待确认", expanded=False):
         st.caption("只退回这一条正式知识，不影响同一次自动审核的其他条目。退回后可在待确认队列重新编辑、确认或丢弃。")
         return_reason = st.text_input(
             "退回原因（可选）",
-            key=f"return_confirmed_reason_{category}_{selected_index}",
+            key=scoped_widget_key("return_confirmed_reason", project_name, category, item_id),
             placeholder="例如：自动审核误判、证据需要复核、世界线不对",
         )
         return_clicked = st.button(
             "将该条正式知识退回待确认",
-            key=f"return_confirmed_to_pending_{category}_{selected_index}",
+            key=scoped_widget_key("return_confirmed_to_pending", project_name, category, item_id),
             use_container_width=True,
         )
     if not return_clicked:
@@ -921,7 +963,7 @@ def render_confirmed_knowledge_item_editor(
             st.caption("当前分类没有可编辑条目。")
             return
 
-        selected_index, item = _select_confirmed_knowledge_item(category, items, candidate_indices)
+        selected_index, item = _select_confirmed_knowledge_item(project_name, category, items, candidate_indices)
         values, save_clicked, delete_clicked = _render_confirmed_item_form(project_name, category, selected_index, item)
         if _render_return_confirmed_to_pending(project_name, category, selected_index, item):
             return
@@ -1045,7 +1087,7 @@ def _render_pending_clear_plan(project_name: str, pending_items: list[dict], iss
     archive_low_quality = st.checkbox(
         "低证据、低置信、无证据条目直接归档丢弃",
         value=True,
-        key="pending_clear_archive_low_quality",
+        key=scoped_widget_key("pending_clear_archive_low_quality", project_name),
         help="归档不会写入正式知识，但会保存在本次处理批次记录里；整批回退时会恢复到待确认队列。",
     )
     clear_plan = build_pending_clear_plan(pending_items, issue_map, policy, archive_low_quality=archive_low_quality)
@@ -1057,7 +1099,16 @@ def _render_pending_clear_plan(project_name: str, pending_items: list[dict], iss
     plan_cols[3].metric("人工复核箱", plan_counts.get("manual_review", 0))
     st.caption("执行后，本次覆盖的条目会离开普通待确认队列；保存、归档和复核箱都会写进一条可回退的处理记录。")
     _render_pending_clear_plan_preview(clear_plan)
-    if confirmed_button(st, "执行批量处理方案", "确认执行本次批量处理方案", "pending_clear_execute_plan", type="primary"):
+    plan_scope = "|".join(
+        sorted(str(item.get("pending_id") or "") for item in pending_items if item.get("pending_id"))
+    ) or "__empty__"
+    if confirmed_button(
+        st,
+        "执行批量处理方案",
+        "确认执行本次批量处理方案",
+        scoped_widget_key("pending_clear_execute_plan", project_name, plan_scope, archive_low_quality),
+        type="primary",
+    ):
         result = execute_pending_clear_plan(project_name, clear_plan, note="用户在待确认处理台执行批量处理方案")
         if result.get("success"):
             st.success(f"{result.get('message')} 批次记录：{result.get('run_id')}")
@@ -1261,7 +1312,6 @@ def _merge_pending_quality_issue(project_name: str, selected_items: list[dict]) 
     merged_item["tags"] = merge_list_values([merged_item.get("tags", []), ["质检合并"]])
     merged_item["merged_from_pending_ids"] = [str(item.get("pending_id") or "") for item in selected_items if item.get("pending_id")]
     target_ids = [str(item.get("pending_id") or "") for item in selected_items if item.get("pending_id")]
-    discard_pending_knowledge_items(project_name, target_ids)
     queued_count = queue_pending_knowledge_items(
         project_name,
         [merged_item],
@@ -1269,7 +1319,11 @@ def _merge_pending_quality_issue(project_name: str, selected_items: list[dict]) 
         authority=merged_item.get("authority", selected_items[0].get("authority", "curated")),
         source_title=merged_item.get("source_title", ""),
         source_origin=merged_item.get("source_origin", ""),
+        replace_pending_ids=target_ids,
     )
+    if queued_count <= 0:
+        st.error("合并结果未能写入待确认队列，原条目已保留。")
+        return
     st.success(f"已合并 {len(target_ids)} 条，生成 {queued_count} 条新的待确认知识。")
     st.rerun()
 
@@ -1302,6 +1356,8 @@ def render_pending_knowledge_quality_panel(project_name: str, pending_items: lis
 
 def render_character_entity_card_panel(project_name: str):
     existing_cards = load_character_entities(project_name)
+    preview_key = scoped_widget_key("character_entity_preview", project_name)
+    preview_revision_key = scoped_widget_key("character_entity_preview_revision", project_name)
     st.markdown("#### 角色实体卡")
     st.caption("从已确认的角色、关系、能力、对白风格、时间线和约束知识中聚合角色资料卡。角色卡保存后会进入检索索引。")
     col_limit, col_action = st.columns([1, 1])
@@ -1311,14 +1367,19 @@ def render_character_entity_card_panel(project_name: str):
         max_value=200,
         value=80,
         step=5,
-        key="character_entity_max_count",
+        key=scoped_widget_key("character_entity_max_count", project_name),
     )
-    if col_action.button("生成角色实体卡预览", key="generate_character_entities", use_container_width=True):
+    if col_action.button(
+        "生成角色实体卡预览",
+        key=scoped_widget_key("generate_character_entities", project_name),
+        use_container_width=True,
+    ):
         cards = build_character_entity_cards(project_name, max_characters=int(max_characters))
-        st.session_state["character_entity_preview"] = cards
+        st.session_state[preview_key] = cards
+        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
         st.success(f"已生成 {len(cards)} 张角色实体卡预览。")
 
-    preview_cards = st.session_state.get("character_entity_preview", existing_cards)
+    preview_cards = st.session_state.get(preview_key, existing_cards)
     st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
     if preview_cards:
         for card in preview_cards[:5]:
@@ -1335,14 +1396,24 @@ def render_character_entity_card_panel(project_name: str):
                     st.markdown("**约束**")
                     st.write("\n".join(f"- {item}" for item in card.get("constraints", [])[:5]))
 
+    serialized_preview = json.dumps(preview_cards, ensure_ascii=False, indent=2)
     raw_cards_json = st.text_area(
         "角色实体卡 JSON",
-        value=json.dumps(preview_cards, ensure_ascii=False, indent=2),
+        value=serialized_preview,
         height=320,
-        key="character_entity_cards_json",
+        key=scoped_widget_key(
+            "character_entity_cards_json",
+            project_name,
+            st.session_state.get(preview_revision_key, 0),
+            serialized_preview,
+        ),
     )
     col_save, col_clear = st.columns(2)
-    if col_save.button("保存角色实体卡并重建索引", key="save_character_entities", use_container_width=True):
+    if col_save.button(
+        "保存角色实体卡并重建索引",
+        key=scoped_widget_key("save_character_entities", project_name),
+        use_container_width=True,
+    ):
         try:
             parsed = json.loads(raw_cards_json)
             if not isinstance(parsed, list):
@@ -1350,18 +1421,25 @@ def render_character_entity_card_panel(project_name: str):
             else:
                 save_character_entities(project_name, parsed)
                 rebuild_retrieval_assets(project_name, build_vectors=True)
-                st.session_state["character_entity_preview"] = parsed
+                st.session_state[preview_key] = parsed
                 st.success(f"已保存 {len(parsed)} 张角色实体卡。")
                 st.rerun()
         except json.JSONDecodeError as exc:
             st.error(f"角色实体卡 JSON 格式错误：{exc}")
-    if col_clear.button("清空预览", key="clear_character_entity_preview", use_container_width=True):
-        st.session_state.pop("character_entity_preview", None)
+    if col_clear.button(
+        "清空预览",
+        key=scoped_widget_key("clear_character_entity_preview", project_name),
+        use_container_width=True,
+    ):
+        st.session_state.pop(preview_key, None)
+        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
         st.rerun()
 
 
 def render_setting_entity_card_panel(project_name: str):
     existing_cards = load_setting_entities(project_name)
+    preview_key = scoped_widget_key("setting_entity_preview", project_name)
+    preview_revision_key = scoped_widget_key("setting_entity_preview_revision", project_name)
     st.markdown("#### 设定实体卡")
     st.caption("从已确认的世界规则、地点、组织、能力、物品和硬性约束中聚合设定资料卡。保存后会进入检索索引。")
     col_limit, col_action = st.columns([1, 1])
@@ -1371,14 +1449,19 @@ def render_setting_entity_card_panel(project_name: str):
         max_value=300,
         value=120,
         step=5,
-        key="setting_entity_max_count",
+        key=scoped_widget_key("setting_entity_max_count", project_name),
     )
-    if col_action.button("生成设定实体卡预览", key="generate_setting_entities", use_container_width=True):
+    if col_action.button(
+        "生成设定实体卡预览",
+        key=scoped_widget_key("generate_setting_entities", project_name),
+        use_container_width=True,
+    ):
         cards = build_setting_entity_cards(project_name, max_cards=int(max_cards))
-        st.session_state["setting_entity_preview"] = cards
+        st.session_state[preview_key] = cards
+        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
         st.success(f"已生成 {len(cards)} 张设定实体卡预览。")
 
-    preview_cards = st.session_state.get("setting_entity_preview", existing_cards)
+    preview_cards = st.session_state.get(preview_key, existing_cards)
     st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
     if preview_cards:
         rows = [
@@ -1404,14 +1487,24 @@ def render_setting_entity_card_panel(project_name: str):
                     st.caption("profile")
                     st.json(card.get("profile"))
 
+    serialized_preview = json.dumps(preview_cards, ensure_ascii=False, indent=2)
     raw_cards_json = st.text_area(
         "设定实体卡 JSON",
-        value=json.dumps(preview_cards, ensure_ascii=False, indent=2),
+        value=serialized_preview,
         height=320,
-        key="setting_entity_cards_json",
+        key=scoped_widget_key(
+            "setting_entity_cards_json",
+            project_name,
+            st.session_state.get(preview_revision_key, 0),
+            serialized_preview,
+        ),
     )
     col_save, col_clear = st.columns(2)
-    if col_save.button("保存设定实体卡并重建索引", key="save_setting_entities", use_container_width=True):
+    if col_save.button(
+        "保存设定实体卡并重建索引",
+        key=scoped_widget_key("save_setting_entities", project_name),
+        use_container_width=True,
+    ):
         try:
             parsed = json.loads(raw_cards_json)
             if not isinstance(parsed, list):
@@ -1419,13 +1512,18 @@ def render_setting_entity_card_panel(project_name: str):
             else:
                 save_setting_entities(project_name, parsed)
                 rebuild_retrieval_assets(project_name, build_vectors=True)
-                st.session_state["setting_entity_preview"] = parsed
+                st.session_state[preview_key] = parsed
                 st.success(f"已保存 {len(parsed)} 张设定实体卡。")
                 st.rerun()
         except json.JSONDecodeError as exc:
             st.error(f"设定实体卡 JSON 格式错误：{exc}")
-    if col_clear.button("清空设定卡预览", key="clear_setting_entity_preview", use_container_width=True):
-        st.session_state.pop("setting_entity_preview", None)
+    if col_clear.button(
+        "清空设定卡预览",
+        key=scoped_widget_key("clear_setting_entity_preview", project_name),
+        use_container_width=True,
+    ):
+        st.session_state.pop(preview_key, None)
+        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
         st.rerun()
 
 
@@ -1451,7 +1549,7 @@ def render_entity_alias_panel(project_name: str):
                 ),
                 value,
             ),
-            key="entity_alias_edit_select",
+            key=scoped_widget_key("entity_alias_edit_select", project_name),
         )
         selected_group = {}
         if selected_alias_id != "__new__":
@@ -1465,18 +1563,31 @@ def render_entity_alias_panel(project_name: str):
             options=list(KNOWLEDGE_CATEGORY_LABELS.keys()),
             index=list(KNOWLEDGE_CATEGORY_LABELS.keys()).index(selected_group.get("category")) if selected_group.get("category") in KNOWLEDGE_CATEGORY_LABELS else 0,
             format_func=label_knowledge_category,
-            key="entity_alias_category",
+            key=scoped_widget_key("entity_alias_category", project_name, selected_alias_id),
         )
-        canonical_name = col_b.text_input("主名称", value=str(selected_group.get("canonical_name") or ""), key="entity_alias_canonical")
+        canonical_name = col_b.text_input(
+            "主名称",
+            value=str(selected_group.get("canonical_name") or ""),
+            key=scoped_widget_key("entity_alias_canonical", project_name, selected_alias_id),
+        )
         aliases_text = st.text_area(
             "别名（每行一个）",
             value="\n".join(str(item) for item in selected_group.get("aliases", []) if str(item).strip()) if isinstance(selected_group.get("aliases", []), list) else "",
             height=120,
-            key="entity_alias_aliases",
+            key=scoped_widget_key("entity_alias_aliases", project_name, selected_alias_id),
         )
-        notes = st.text_area("备注", value=str(selected_group.get("notes") or ""), height=80, key="entity_alias_notes")
+        notes = st.text_area(
+            "备注",
+            value=str(selected_group.get("notes") or ""),
+            height=80,
+            key=scoped_widget_key("entity_alias_notes", project_name, selected_alias_id),
+        )
         col_save, col_delete = st.columns(2)
-        if col_save.button("保存别名组", key="save_entity_alias_group", use_container_width=True):
+        if col_save.button(
+            "保存别名组",
+            key=scoped_widget_key("save_entity_alias_group", project_name, selected_alias_id),
+            use_container_width=True,
+        ):
             try:
                 alias_group = upsert_entity_alias_group(
                     project_name,
@@ -1490,7 +1601,12 @@ def render_entity_alias_panel(project_name: str):
                 st.rerun()
             except Exception as exc:
                 st.error(f"保存失败：{exc}")
-        if selected_alias_id != "__new__" and col_delete.button("删除别名组", key="delete_entity_alias_group", use_container_width=True):
+        if selected_alias_id != "__new__" and confirmed_button(
+            col_delete,
+            "删除别名组",
+            "确认删除该别名组",
+            scoped_widget_key("delete_entity_alias_group", project_name, selected_alias_id),
+        ):
             kept = [
                 item for index, item in enumerate(alias_groups)
                 if str(item.get("id") or index) != selected_alias_id
@@ -1523,12 +1639,12 @@ def _render_knowledge_organizer_entity_sections(project_name: str) -> None:
     st.divider()
 
 
-def _select_knowledge_organizer_category(knowledge_category_options: list[str]) -> str:
+def _select_knowledge_organizer_category(project_name: str, knowledge_category_options: list[str]) -> str:
     return st.selectbox(
         "知识分类",
         options=knowledge_category_options,
         format_func=label_knowledge_category,
-        key="knowledge_organizer_category",
+        key=scoped_widget_key("knowledge_organizer_category", project_name),
     )
 
 
@@ -1554,8 +1670,12 @@ def _knowledge_item_matches_keyword(item: dict, keyword_value: str) -> bool:
     return keyword_value in search_text
 
 
-def _filter_knowledge_organizer_indices(category: str, items: list[dict]) -> list[int]:
-    keyword = st.text_input("搜索正式知识", key=f"knowledge_organizer_keyword_{category}", placeholder="名称、摘要、来源、标签")
+def _filter_knowledge_organizer_indices(project_name: str, category: str, items: list[dict]) -> list[int]:
+    keyword = st.text_input(
+        "搜索正式知识",
+        key=scoped_widget_key("knowledge_organizer_keyword", project_name, category),
+        placeholder="名称、摘要、来源、标签",
+    )
     worldline_options = sorted({
         str(item.get("worldline_label") or item.get("worldline_id") or "")
         for item in items
@@ -1565,7 +1685,7 @@ def _filter_knowledge_organizer_indices(category: str, items: list[dict]) -> lis
         "筛选正式知识世界线",
         options=worldline_options,
         default=[],
-        key=f"knowledge_organizer_worldlines_{category}",
+        key=scoped_widget_key("knowledge_organizer_worldlines", project_name, category),
     )
     candidate_indices = []
     keyword_value = keyword.strip().lower()
@@ -1580,7 +1700,13 @@ def _filter_knowledge_organizer_indices(category: str, items: list[dict]) -> lis
     return candidate_indices
 
 
-def _select_knowledge_organizer_items(category: str, items: list[dict], candidate_indices: list[int], duplicate_groups: list[list[int]]) -> tuple[list[int], list[dict]]:
+def _select_knowledge_organizer_items(
+    project_name: str,
+    category: str,
+    items: list[dict],
+    candidate_indices: list[int],
+    duplicate_groups: list[list[int]],
+) -> tuple[list[int], list[dict]]:
     default_indices = duplicate_groups[0] if duplicate_groups else []
     default_indices = [index for index in default_indices if index in candidate_indices]
     selected_indices = st.multiselect(
@@ -1588,7 +1714,7 @@ def _select_knowledge_organizer_items(category: str, items: list[dict], candidat
         options=candidate_indices,
         default=default_indices,
         format_func=lambda index: f"{index + 1}. {items[index].get('name', '未命名')} / {items[index].get('summary', '')[:50]}",
-        key=f"knowledge_organizer_selected_{category}",
+        key=scoped_widget_key("knowledge_organizer_selected", project_name, category),
     )
     selected_items = [items[index] for index in selected_indices if 0 <= index < len(items)]
     return selected_indices, selected_items
@@ -1608,19 +1734,33 @@ def _render_knowledge_merge_editor(project_name: str, category: str, selected_in
     if len(selected_items) < 2:
         return
     merged_item = build_merged_knowledge_item(category, selected_items)
+    selected_item_ids = [
+        str(item.get("id") or item.get("knowledge_id") or index)
+        for index, item in zip(selected_indices, selected_items)
+    ]
+    selection_scope = "|".join(sorted(selected_item_ids))
     raw_merged_json = st.text_area(
         "合并后详细数据，可在保存前修改",
         value=json.dumps(merged_item, ensure_ascii=False, indent=2),
         height=340,
-        key=f"knowledge_organizer_merged_json_{category}",
+        key=scoped_widget_key("knowledge_organizer_merged_json", project_name, category, selection_scope),
     )
-    if st.button("保存合并结果并移除原条目", key=f"knowledge_organizer_save_merge_{category}"):
+    if st.button(
+        "保存合并结果并移除原条目",
+        key=scoped_widget_key("knowledge_organizer_save_merge", project_name, category, selection_scope),
+    ):
         try:
             parsed = json.loads(raw_merged_json)
             if not isinstance(parsed, dict):
                 st.error("合并结果必须是对象结构。")
             else:
-                if merge_confirmed_knowledge_items(project_name, category, selected_indices, parsed):
+                if merge_confirmed_knowledge_items(
+                    project_name,
+                    category,
+                    selected_indices,
+                    parsed,
+                    selected_item_ids=selected_item_ids,
+                ):
                     rebuild_retrieval_assets(project_name, build_vectors=True)
                     st.success(f"已合并 {len(selected_items)} 条知识库条目，并重建检索索引。")
                     st.rerun()
@@ -1632,13 +1772,23 @@ def _render_knowledge_merge_editor(project_name: str, category: str, selected_in
 def _render_knowledge_delete_action(project_name: str, category: str, selected_indices: list[int], selected_items: list[dict]) -> None:
     if not selected_items:
         return
+    selected_item_ids = [
+        str(item.get("id") or item.get("knowledge_id") or index)
+        for index, item in zip(selected_indices, selected_items)
+    ]
+    selection_scope = "|".join(sorted(selected_item_ids))
     if confirmed_button(
         st,
         "删除所选知识库条目",
         "确认删除所选知识库条目",
-        scoped_widget_key("knowledge_organizer_delete", project_name, category),
+        scoped_widget_key("knowledge_organizer_delete", project_name, category, selection_scope),
     ):
-        removed_count = delete_confirmed_knowledge_items(project_name, category, selected_indices)
+        removed_count = delete_confirmed_knowledge_items(
+            project_name,
+            category,
+            selected_indices,
+            selected_item_ids=selected_item_ids,
+        )
         if removed_count:
             rebuild_retrieval_assets(project_name, build_vectors=True)
             st.success(f"已删除 {removed_count} 条知识库条目，并重建检索索引。")
@@ -1648,13 +1798,17 @@ def _render_knowledge_delete_action(project_name: str, category: str, selected_i
 
 def _render_knowledge_raw_editor(project_name: str, category: str, items: list[dict]) -> None:
     with st.expander("高级编辑：当前分类原始数据", expanded=False):
+        serialized_items = json.dumps(items, ensure_ascii=False, indent=2)
         raw_category_json = st.text_area(
             f"{category}.json",
-            value=json.dumps(items, ensure_ascii=False, indent=2),
+            value=serialized_items,
             height=360,
-            key=f"knowledge_organizer_raw_json_{category}",
+            key=scoped_widget_key("knowledge_organizer_raw_json", project_name, category, serialized_items),
         )
-        if st.button("保存当前分类原始数据", key=f"knowledge_organizer_save_raw_{category}"):
+        if st.button(
+            "保存当前分类原始数据",
+            key=scoped_widget_key("knowledge_organizer_save_raw", project_name, category),
+        ):
             try:
                 parsed = json.loads(raw_category_json)
                 if not isinstance(parsed, list):
@@ -1672,7 +1826,7 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
     with st.expander("知识库条目整理", expanded=False):
         st.caption("用于处理长篇资料导入后的重复条目。可以按分类查看、合并同名知识，或删除明显错误的条目。")
         _render_knowledge_organizer_entity_sections(project_name)
-        category = _select_knowledge_organizer_category(knowledge_category_options)
+        category = _select_knowledge_organizer_category(project_name, knowledge_category_options)
         items = load_knowledge_category(project_name, category)
         if not items:
             st.caption("当前分类还没有知识库条目。")
@@ -1680,9 +1834,15 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
 
         duplicate_groups = find_duplicate_knowledge_groups(items)
         _render_duplicate_group_summary(items, duplicate_groups)
-        candidate_indices = _filter_knowledge_organizer_indices(category, items)
+        candidate_indices = _filter_knowledge_organizer_indices(project_name, category, items)
         render_confirmed_knowledge_item_editor(project_name, category, items, candidate_indices)
-        selected_indices, selected_items = _select_knowledge_organizer_items(category, items, candidate_indices, duplicate_groups)
+        selected_indices, selected_items = _select_knowledge_organizer_items(
+            project_name,
+            category,
+            items,
+            candidate_indices,
+            duplicate_groups,
+        )
         _render_selected_knowledge_items(selected_indices, selected_items)
         _render_knowledge_merge_editor(project_name, category, selected_indices, selected_items)
         _render_knowledge_delete_action(project_name, category, selected_indices, selected_items)
@@ -1691,36 +1851,58 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
 
 def render_source_package_report_page(project_name: str):
     with st.expander("资料包报告", expanded=False):
+        preview_key = scoped_widget_key("source_package_report_preview", project_name)
+        preview_revision_key = scoped_widget_key("source_package_report_preview_revision", project_name)
         st.caption("基于已确认知识库条目生成项目资料总览，可保存为分析报告并进入检索索引。")
         knowledge_base = load_knowledge_base(project_name)
         total_items = sum(len(items) for items in knowledge_base.values())
         st.caption(f"当前已确认知识库条目：{total_items} 条")
-        max_items = st.slider("每类最多写入条目数", min_value=5, max_value=100, value=30, step=5, key="source_package_max_items")
-        if st.button("生成资料包报告"):
+        max_items = st.slider(
+            "每类最多写入条目数",
+            min_value=5,
+            max_value=100,
+            value=30,
+            step=5,
+            key=scoped_widget_key("source_package_max_items", project_name),
+        )
+        if st.button("生成资料包报告", key=scoped_widget_key("generate_source_package_report", project_name)):
             report = build_source_package_report(project_name, max_items_per_category=max_items)
-            st.session_state["source_package_report_preview"] = report
+            st.session_state[preview_key] = report
+            st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
 
         existing_report = load_source_package_report(project_name)
+        preview_report = st.session_state.get(preview_key, existing_report)
         report_text = st.text_area(
             "资料包报告",
-            value=st.session_state.get("source_package_report_preview", existing_report),
+            value=preview_report,
             height=520,
-            key="source_package_report_text",
+            key=scoped_widget_key(
+                "source_package_report_text",
+                project_name,
+                st.session_state.get(preview_revision_key, 0),
+                preview_report,
+            ),
         )
         col_save, col_refresh = st.columns(2)
-        if col_save.button("保存资料包报告"):
+        if col_save.button("保存资料包报告", key=scoped_widget_key("save_source_package_report", project_name)):
             if not report_text.strip():
                 st.error("报告内容不能为空。")
             else:
                 save_source_package_report(project_name, report_text)
                 rebuild_retrieval_assets(project_name, build_vectors=True)
+                st.session_state[preview_key] = report_text
+                st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
                 st.success("资料包报告已保存，并重建检索索引。")
                 st.rerun()
-        if col_refresh.button("用当前知识重新生成并覆盖预览"):
-            st.session_state["source_package_report_preview"] = build_source_package_report(
+        if col_refresh.button(
+            "用当前知识重新生成并覆盖预览",
+            key=scoped_widget_key("refresh_source_package_report", project_name),
+        ):
+            st.session_state[preview_key] = build_source_package_report(
                 project_name,
                 max_items_per_category=max_items,
             )
+            st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
             st.rerun()
 
 

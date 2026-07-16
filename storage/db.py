@@ -14,6 +14,23 @@ from .repositories.projects import upsert_project_meta
 logger = logging.getLogger("novelforge.storage")
 
 
+class ClosingConnection(sqlite3.Connection):
+    """SQLite connection that closes after a ``with`` block.
+
+    ``sqlite3.Connection.__exit__`` only commits or rolls back; it does not
+    close the underlying file handle.  Most of NovelForge's callers use
+    ``with open_*_db(...)`` and reasonably expect the handle to be released at
+    the end of that block.  On Windows, leaving it open can prevent a project
+    directory from being renamed or archived until garbage collection runs.
+    """
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def get_project_db_path(project_path: Path) -> Path:
     return Path(project_path) / "project.db"
 
@@ -65,7 +82,7 @@ def _quarantine_empty_db_artifacts(db_path: Path, exc: Exception) -> bool:
 
 def _connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:

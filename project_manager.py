@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
 import hashlib
+import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from memory import (
     list_long_reference_batches,
     load_outline,
     load_pending_knowledge_items,
+    load_project_registry,
     list_pipeline_run_summaries,
     list_retrieval_source_files,
     load_review,
@@ -26,9 +28,12 @@ from memory import (
     load_source_package_report,
     mark_asset_deleted_record,
     normalize_project_name,
+    normalize_storage_component,
     project_dir,
     project_is_discoverable,
+    rename_project_database_record,
     rename_registered_project,
+    restore_project_registry,
     register_asset_file_record,
     retrieval_sources_path,
     runs_path,
@@ -46,6 +51,7 @@ from memory import (
 
 
 CHAPTER_FILE_PATTERN = re.compile(r"chapter_(\d+)\.md$")
+LOGGER = logging.getLogger("novelforge.project_manager")
 REVIEW_JSON_PATTERN = re.compile(r"chapter_(\d+)\.json$")
 ANALYSIS_PATTERN = re.compile(r"(.+)_chapter_(\d+)\.md$")
 SOURCE_PACKAGE_REPORT_NAME = "source_package.md"
@@ -142,8 +148,48 @@ def rename_project(old_name: str, new_name: str) -> str:
         raise FileNotFoundError("Source project does not exist.")
     if target.exists() or project_is_discoverable(normalized_name):
         raise FileExistsError("Target project already exists.")
+    registry_snapshot = load_project_registry()
     source.rename(target)
-    rename_registered_project(old_name, normalized_name)
+    database_renamed = False
+    try:
+        rename_project_database_record(normalized_name, old_name, normalized_name)
+        database_renamed = True
+        rename_registered_project(old_name, normalized_name)
+    except Exception:
+        if database_renamed:
+            try:
+                rename_project_database_record(normalized_name, normalized_name, old_name)
+            except Exception as rollback_exc:
+                LOGGER.error(
+                    "Failed to roll back project metadata rename %s -> %s: %s",
+                    normalized_name,
+                    old_name,
+                    rollback_exc,
+                )
+        if target.exists() and not source.exists():
+            target.rename(source)
+        try:
+            restore_project_registry(registry_snapshot)
+        except Exception as rollback_exc:
+            LOGGER.error(
+                "Failed to restore project registry after rename %s -> %s: %s",
+                old_name,
+                normalized_name,
+                rollback_exc,
+            )
+        raise
+    try:
+        sync_project_retrieval_assets(normalized_name)
+    except Exception as exc:
+        # Retrieval is derived state.  Keep the completed core rename and let a
+        # later rebuild repair it instead of rolling metadata back around a
+        # potentially partial index refresh.
+        LOGGER.warning(
+            "Project %s was renamed to %s, but retrieval rebuild failed: %s",
+            old_name,
+            normalized_name,
+            exc,
+        )
     return normalized_name
 
 
@@ -214,6 +260,7 @@ def delete_chapter_review(project_name: str, chapter_no: int, story_id: str = "d
 
 
 def delete_analysis_report(project_name: str, analysis_type: str, chapter_no: int, story_id: str = "default") -> bool:
+    analysis_type = normalize_storage_component(analysis_type, "Analysis type")
     file_name = SOURCE_PACKAGE_REPORT_NAME if analysis_type == "source_package" and chapter_no <= 0 else f"{analysis_type}_chapter_{chapter_no:03d}.md"
     base = _project_dir(project_name) if analysis_type == "source_package" and chapter_no <= 0 else _story_dir(project_name, story_id)
     if analysis_type == "source_package" and chapter_no <= 0:
@@ -312,6 +359,7 @@ def delete_chapter_analysis_bundle(project_name: str, chapter_no: int, story_id:
 
 
 def delete_pipeline_run(project_name: str, run_id: str, story_id: str = "default") -> bool:
+    run_id = normalize_storage_component(run_id, "Workflow run ID")
     deleted = _safe_unlink(runs_path(project_name, story_id) / f"{run_id}.json")
     deleted_db = delete_pipeline_run_record(project_name, run_id, story_id=story_id)
     if deleted or deleted_db:

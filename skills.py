@@ -4,6 +4,7 @@ import logging
 import re
 from datetime import datetime
 from urllib.request import Request, urlopen
+from uuid import uuid4
 from llm import call_llm
 from pydantic import ValidationError
 from prompts import (
@@ -542,11 +543,13 @@ def save_retrieval_conflict_resolution(
     conflict: dict,
     decision: str,
     note: str = "",
+    story_id: str = "",
 ) -> dict:
     project_chunk = conflict.get("project_hit", {}).get("chunk", {})
     external_chunk = conflict.get("external_hit", {}).get("chunk", {})
     return save_conflict_resolution(project_name, {
         "conflict_id": _conflict_id(conflict),
+        "story_id": str(story_id or ""),
         "shared_terms": conflict.get("shared_terms", []),
         "decision": decision,
         "note": note,
@@ -633,13 +636,40 @@ def _format_potential_conflicts_markdown(hits: list[dict], title: str = "潜在�
 
 
 def _extract_json_object(text: str) -> dict:
+    if not isinstance(text, str):
+        raise TypeError("模型响应必须是字符串。")
+
+    stripped = text.strip()
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{[\s\S]*\}", text)
-        if not match:
-            raise
-        return json.loads(match.group(0))
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as direct_error:
+        decoder = json.JSONDecoder()
+
+        def decode_candidates(fragment: str) -> list[tuple[dict, int]]:
+            candidates = []
+            for match in re.finditer(r"\{", fragment):
+                try:
+                    value, end = decoder.raw_decode(fragment, match.start())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(value, dict):
+                    candidates.append((value, end - match.start()))
+            return candidates
+
+        fenced_candidates = []
+        for fenced_match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", stripped, flags=re.IGNORECASE):
+            fenced_candidates.extend(decode_candidates(fenced_match.group(1)))
+        if fenced_candidates:
+            return max(fenced_candidates, key=lambda item: item[1])[0]
+
+        candidates = decode_candidates(stripped)
+        if candidates:
+            return max(candidates, key=lambda item: item[1])[0]
+        raise json.JSONDecodeError("模型响应中未找到合法 JSON 对象", stripped, 0) from direct_error
+
+    if not isinstance(parsed, dict):
+        raise ValueError("模型响应必须是 JSON 对象。")
+    return parsed
 
 
 def _dedupe_list_items(items: list) -> list:
@@ -696,7 +726,52 @@ def _stable_pending_knowledge_id(story_id: str, chapter_no: int, field_name: str
     return f"pending_chapter_update_{story_id}_{chapter_no:04d}_{field_name}_{index:03d}_{digest}"
 
 
-def build_pending_knowledge_from_setting_extraction(update_data: dict, story_id: str, chapter_no: int) -> list[dict]:
+def _resolve_pending_knowledge_version_context(
+    project_name: str | None,
+    story_id: str,
+    creative_profile: dict | None = None,
+) -> dict[str, str]:
+    profile = dict(creative_profile) if isinstance(creative_profile, dict) else {}
+    if not profile and project_name:
+        profile = load_creative_profile(project_name, story_id)
+
+    worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer").strip().lower()
+    if worldline_mode not in {"prefer", "strict"}:
+        worldline_mode = "prefer"
+    worldline_id = str(profile.get("worldline_id") or "").strip()
+    if not worldline_id:
+        if worldline_mode == "strict":
+            raise RuntimeError("当前故事启用了严格世界线隔离，但创作配置未设置世界线 ID。")
+        worldline_id = "main"
+
+    version_scope = str(profile.get("version_scope") or "").strip()
+    if not version_scope:
+        version_scope = "project_main" if worldline_id.lower() == "main" else "au"
+    worldline_label = str(profile.get("worldline_label") or "").strip()
+    if not worldline_label:
+        worldline_label = "本项目主线" if worldline_id.lower() == "main" else worldline_id
+
+    return {
+        "story_id": str(story_id or "default").strip() or "default",
+        "version_scope": version_scope,
+        "worldline_id": worldline_id,
+        "worldline_label": worldline_label,
+        "worldline_retrieval_mode": worldline_mode,
+    }
+
+
+def build_pending_knowledge_from_setting_extraction(
+    update_data: dict,
+    story_id: str,
+    chapter_no: int,
+    project_name: str | None = None,
+    creative_profile: dict | None = None,
+) -> list[dict]:
+    version_context = _resolve_pending_knowledge_version_context(
+        project_name,
+        story_id,
+        creative_profile,
+    )
     items: list[dict] = []
     for field_name, (category, setting_field, label) in SETTING_EXTRACTION_KNOWLEDGE_FIELDS.items():
         values = update_data.get(field_name, [])
@@ -737,15 +812,27 @@ def build_pending_knowledge_from_setting_extraction(update_data: dict, story_id:
                 "setting_role": "core",
                 "setting_scope": "story",
                 "setting_field": setting_field,
-                "story_id": story_id,
+                **version_context,
                 "injection_policy": "always",
                 "source_chapter_no": chapter_no,
             })
     return items
 
 
-def build_pending_knowledge_from_memory_update(update_data: dict, story_id: str, chapter_no: int) -> list[dict]:
-    return build_pending_knowledge_from_setting_extraction(update_data, story_id, chapter_no)
+def build_pending_knowledge_from_memory_update(
+    update_data: dict,
+    story_id: str,
+    chapter_no: int,
+    project_name: str | None = None,
+    creative_profile: dict | None = None,
+) -> list[dict]:
+    return build_pending_knowledge_from_setting_extraction(
+        update_data,
+        story_id,
+        chapter_no,
+        project_name=project_name,
+        creative_profile=creative_profile,
+    )
 
 
 def _append_prompt_options_to_rules(
@@ -2645,7 +2732,12 @@ def extract_setting_candidates_from_chapter(
         ).model_dump()
 
     update_data = updates.model_dump()
-    pending_items = build_pending_knowledge_from_setting_extraction(update_data, story_id, chapter_no)
+    pending_items = build_pending_knowledge_from_setting_extraction(
+        update_data,
+        story_id,
+        chapter_no,
+        project_name=project_name,
+    )
     queued_count = queue_pending_knowledge_items(
         project_name,
         pending_items,
@@ -2654,6 +2746,8 @@ def extract_setting_candidates_from_chapter(
         source_title=f"第 {chapter_no} 章正文",
         source_origin="chapter_update",
     )
+    chapter_summary_saved = False
+    chapter_summary_error = ""
     try:
         summaries = [
             item for item in load_story_chapter_summaries(project_name, story_id)
@@ -2664,31 +2758,44 @@ def extract_setting_candidates_from_chapter(
             "summary": update_data["chapter_summary"]
         })
         save_story_chapter_summaries(project_name, story_id, summaries)
+        chapter_summary_saved = True
     except Exception as exc:
+        chapter_summary_error = f"章节摘要保存失败：{exc}"
         logging.getLogger("novelforge").warning(
             "Failed to save story chapter summaries: project=%s story=%s chapter=%s error=%s",
             project_name, story_id, chapter_no, exc,
         )
     return _make_step_result(
         "setting_extraction",
-        success=True,
-        status="completed",
+        success=chapter_summary_saved,
+        status="completed" if chapter_summary_saved else "failed",
         data={
             "applied_updates": update_data,
             "pending_knowledge_items": pending_items,
             "queued_knowledge_count": queued_count,
-            "chapter_summary_saved": True,
+            "chapter_summary_saved": chapter_summary_saved,
         },
+        error=chapter_summary_error,
+        warnings=(
+            []
+            if chapter_summary_saved
+            else ["候选设定已加入待确认知识队列，但章节摘要未保存；可重试设定提炼步骤。"]
+        ),
         retrieval_hits=retrieval_hits,
         validation=_make_validation_status(
             status="passed",
             schema_name="MemoryUpdateResult",
-            message="章节设定提炼已通过结构校验，候选设定已加入待确认知识队列。",
+            message=(
+                "章节设定提炼已通过结构校验，候选设定已加入待确认知识队列。"
+                if chapter_summary_saved
+                else "章节设定提炼已通过结构校验，但章节摘要保存失败。"
+            ),
         ),
         artifacts={
             "memory_saved": False,
             "pending_knowledge_count": len(pending_items),
             "queued_knowledge_count": queued_count,
+            "chapter_summary_saved": chapter_summary_saved,
         },
     ).model_dump()
 
@@ -3228,6 +3335,24 @@ def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: 
     ).model_dump()
 
 
+def _build_pipeline_run_id(
+    chapter_no: int,
+    story_id: str,
+    *,
+    started_at: str,
+    resumed: bool = False,
+) -> str:
+    raw_story_id = str(story_id or "default").strip() or "default"
+    safe_story_id = re.sub(r"[^0-9A-Za-z_-]+", "_", raw_story_id).strip("_")[:48] or "story"
+    story_digest = hashlib.sha256(raw_story_id.encode("utf-8")).hexdigest()[:12]
+    timestamp = re.sub(r"[^0-9]", "", started_at)
+    resume_marker = "_resume" if resumed else ""
+    return (
+        f"chapter_{chapter_no:03d}_{safe_story_id}_{story_digest}{resume_marker}_"
+        f"{timestamp}_{uuid4().hex}"
+    )
+
+
 def pipeline_plan_write_review_update(
     project_name: str,
     chapter_no: int,
@@ -3236,8 +3361,8 @@ def pipeline_plan_write_review_update(
     story_id: str = "default",
     stream_callback=None,
 ) -> dict:
-    started_at = datetime.now().isoformat(timespec="seconds")
-    run_id = f"chapter_{chapter_no:03d}_{started_at.replace(':', '').replace('-', '').replace('T', '_')}"
+    started_at = datetime.now().isoformat(timespec="microseconds")
+    run_id = _build_pipeline_run_id(chapter_no, story_id, started_at=started_at)
     state = ChapterPipelineState(
         run_id=run_id,
         project_name=project_name,
@@ -3388,6 +3513,7 @@ def pipeline_plan_write_review_update(
         warnings=state.warnings,
     )
     result = state.model_dump()
+    result["story_id"] = story_id
     result["pipeline"] = pipeline_result.model_dump()
     save_pipeline_run(project_name, state.run_id, json.dumps(result, ensure_ascii=False, indent=2), story_id=story_id)
     return result
@@ -3400,13 +3526,21 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
     previous = json.loads(raw)
     if not previous.get("resumable"):
         raise RuntimeError("选中的流水线运行记录没有标记为可恢复。")
+    previous_story_id = str(previous.get("story_id") or "").strip()
+    if previous_story_id and previous_story_id != story_id:
+        raise RuntimeError("选中的流水线运行记录属于其他故事，无法在当前故事下恢复。")
 
     chapter_no = int(previous.get("chapter_no", 0))
     if chapter_no <= 0:
         raise RuntimeError("上一条运行记录缺少有效章节编号。")
 
-    started_at = datetime.now().isoformat(timespec="seconds")
-    resumed_run_id = f"chapter_{chapter_no:03d}_resume_{started_at.replace(':', '').replace('-', '').replace('T', '_')}"
+    started_at = datetime.now().isoformat(timespec="microseconds")
+    resumed_run_id = _build_pipeline_run_id(
+        chapter_no,
+        story_id,
+        started_at=started_at,
+        resumed=True,
+    )
     state = ChapterPipelineState(
         run_id=resumed_run_id,
         parent_run_id=run_id,
@@ -3503,6 +3637,7 @@ def resume_chapter_pipeline(project_name: str, run_id: str, story_id: str = "def
         warnings=state.warnings,
     )
     result = state.model_dump()
+    result["story_id"] = story_id
     result["pipeline"] = pipeline_result.model_dump()
     save_pipeline_run(project_name, state.run_id, json.dumps(result, ensure_ascii=False, indent=2), story_id=story_id)
     return result

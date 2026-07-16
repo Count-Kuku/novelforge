@@ -21,7 +21,7 @@ from retrieval import (
 )
 from retrieval_eval import retrieval_profile_label
 from skills import detect_potential_conflicts, save_retrieval_conflict_resolution
-from ui.common import confirmed_button, scoped_widget_key
+from ui.common import confirmed_button, scoped_session_key, scoped_widget_key
 from ui.labels import (
     label_knowledge_category,
     label_retrieval_mode,
@@ -151,14 +151,14 @@ def _render_retrieval_source_management(project_name: str, manifest):
             selected_source_file = st.selectbox(
                 "选择要删除的资料文件",
                 options=existing_source_files,
-                key="retrieval_source_delete_target"
+                key=scoped_widget_key("retrieval_source_delete_target", project_name),
             )
             st.caption("删除后会自动重建检索索引。")
             if confirmed_button(
                 st,
                 "删除所选资料",
                 "确认删除所选资料并重建索引",
-                scoped_widget_key("delete_selected_retrieval_source", project_name),
+                scoped_widget_key("delete_selected_retrieval_source", project_name, selected_source_file),
             ):
                 try:
                     deleted = delete_retrieval_source_file(project_name, selected_source_file)
@@ -178,8 +178,10 @@ def _render_retrieval_source_management(project_name: str, manifest):
                     st.caption(f"仅显示前 30 项，共 {len(manifest.documents)} 项。")
 
 
-def _render_retrieval_hits(project_name: str, query: str):
-    current_hits = st.session_state.get("retrieval_hits", [])
+def _render_retrieval_hits(project_name: str, current_story_id: str, query: str):
+    hits_key = scoped_session_key("retrieval_hits", project_name, current_story_id)
+    query_key = scoped_session_key("retrieval_last_query", project_name, current_story_id)
+    current_hits = st.session_state.get(hits_key, [])
     for hit in current_hits:
         chunk = hit.get("chunk", {})
         st.markdown(
@@ -205,12 +207,18 @@ def _render_retrieval_hits(project_name: str, query: str):
             f"关键词分={hit.get('lexical_score', 0):.2f} / 语义分={hit.get('semantic_score', 0):.2f} / 来源={chunk.get('path', '-') }"
         )
 
-    render_retrieval_feedback_controls(project_name, current_hits, st.session_state.get("retrieval_last_query", query))
+    render_retrieval_feedback_controls(
+        project_name,
+        current_hits,
+        st.session_state.get(query_key, query),
+        story_id=current_story_id,
+    )
     return current_hits
 
 
-def _render_retrieval_debug_payload():
-    debug_payload = st.session_state.get("retrieval_debug", {})
+def _render_retrieval_debug_payload(project_name: str, current_story_id: str):
+    debug_key = scoped_session_key("retrieval_debug", project_name, current_story_id)
+    debug_payload = st.session_state.get(debug_key, {})
     if not debug_payload:
         return
     with st.expander("检索调试信息", expanded=False):
@@ -247,7 +255,7 @@ def _render_retrieval_debug_payload():
         render_step_json_expander("完整调试详细数据", debug_payload)
 
 
-def _render_retrieval_conflicts(project_name: str, current_hits: list[dict]):
+def _render_retrieval_conflicts(project_name: str, current_story_id: str, current_hits: list[dict]):
     conflicts = detect_potential_conflicts(current_hits)
     if conflicts:
         st.markdown("### 检索冲突裁决")
@@ -265,12 +273,25 @@ def _render_retrieval_conflicts(project_name: str, current_hits: list[dict]):
                     "裁决",
                     options=["merge", "use_project", "use_external", "ignore"],
                     format_func=lambda value: DECISION_LABELS.get(value, value),
-                    key=f"conflict_decision_{index}",
+                    key=scoped_widget_key("conflict_decision", project_name, current_story_id, index),
                 )
-                note = st.text_area("裁决说明", height=80, key=f"conflict_note_{index}")
-                if st.button("保存该冲突裁决", key=f"save_conflict_resolution_{index}"):
+                note = st.text_area(
+                    "裁决说明",
+                    height=80,
+                    key=scoped_widget_key("conflict_note", project_name, current_story_id, index),
+                )
+                if st.button(
+                    "保存该冲突裁决",
+                    key=scoped_widget_key("save_conflict_resolution", project_name, current_story_id, index),
+                ):
                     try:
-                        saved = save_retrieval_conflict_resolution(project_name, conflict, decision, note)
+                        saved = save_retrieval_conflict_resolution(
+                            project_name,
+                            conflict,
+                            decision,
+                            note,
+                            story_id=current_story_id,
+                        )
                         st.success(f"已保存裁决：{saved.get('conflict_id', '')}")
                         st.rerun()
                     except Exception as exc:
@@ -283,15 +304,29 @@ def _render_retrieval_conflicts(project_name: str, current_hits: list[dict]):
 
 
 def _render_retrieval_preview(project_name: str, current_story_id: str, manifest):
+    state_scope = (project_name, current_story_id)
+    hits_key = scoped_session_key("retrieval_hits", *state_scope)
+    last_query_key = scoped_session_key("retrieval_last_query", *state_scope)
+    debug_key = scoped_session_key("retrieval_debug", *state_scope)
     with st.expander("检索预览", expanded=True):
-        query = st.text_area("检索查询", height=120, key="retrieval_query")
-        top_k = st.slider("返回条数", min_value=1, max_value=12, value=6, key="retrieval_top_k")
+        query = st.text_area(
+            "检索查询",
+            height=120,
+            key=scoped_widget_key("retrieval_query", *state_scope),
+        )
+        top_k = st.slider(
+            "返回条数",
+            min_value=1,
+            max_value=12,
+            value=6,
+            key=scoped_widget_key("retrieval_top_k", *state_scope),
+        )
         retrieval_mode = st.selectbox(
             "检索模式",
             options=["hybrid", "lexical", "semantic"],
             index=0,
             format_func=label_retrieval_mode,
-            key="retrieval_mode"
+            key=scoped_widget_key("retrieval_mode", *state_scope),
         )
         retrieval_profile_options = [""] + list(RETRIEVAL_TASK_PROFILES.keys())
         retrieval_profile = st.selectbox(
@@ -299,7 +334,7 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             options=retrieval_profile_options,
             index=0,
             format_func=retrieval_profile_label,
-            key="retrieval_task_profile",
+            key=scoped_widget_key("retrieval_task_profile", *state_scope),
             help="选择后会使用对应任务的来源偏好和默认匹配数量；手动来源过滤会优先于任务策略。",
         )
         scope_options = st.multiselect(
@@ -307,7 +342,7 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             options=["project", "canon", "reference"],
             default=["project", "canon", "reference"],
             format_func=label_scope,
-            key="retrieval_scope_filter"
+            key=scoped_widget_key("retrieval_scope_filter", *state_scope),
         )
         source_type_candidates = sorted({chunk.source_type for chunk in manifest.chunks}) if manifest else []
         source_type_filter = st.multiselect(
@@ -315,7 +350,7 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             options=source_type_candidates,
             default=[],
             format_func=label_source_type,
-            key="retrieval_source_type_filter",
+            key=scoped_widget_key("retrieval_source_type_filter", *state_scope),
         )
         worldline_options = sorted({
             str(chunk.metadata.get("worldline_id") or "").strip()
@@ -326,18 +361,22 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             "世界线偏好（可选）",
             options=[""] + worldline_options,
             format_func=lambda value: "不限定" if not value else value,
-            key="retrieval_worldline_filter",
+            key=scoped_widget_key("retrieval_worldline_filter", *state_scope),
             help="选择后会优先匹配同世界线资料；通用资料仍会保留。",
         )
         worldline_mode = st.selectbox(
             "世界线模式",
             options=["prefer", "strict"],
             format_func=lambda value: {"prefer": "偏好匹配", "strict": "严格过滤"}.get(value, value),
-            key="retrieval_worldline_mode",
+            key=scoped_widget_key("retrieval_worldline_mode", *state_scope),
             help="偏好匹配会给同世界线资料加权、给其他世界线轻微降权；严格过滤会排除明确属于其他世界线的资料。",
         )
-        include_debug = st.checkbox("生成检索调试信息", value=False, key="retrieval_include_debug")
-        if st.button("执行检索"):
+        include_debug = st.checkbox(
+            "生成检索调试信息",
+            value=False,
+            key=scoped_widget_key("retrieval_include_debug", *state_scope),
+        )
+        if st.button("执行检索", key=scoped_widget_key("run_retrieval", *state_scope)):
             try:
                 hits = retrieve_context(
                     project_name,
@@ -351,9 +390,9 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
                     worldline_mode=worldline_mode,
                     story_id=current_story_id,
                 )
-                st.session_state["retrieval_hits"] = [hit.model_dump() for hit in hits]
-                st.session_state["retrieval_last_query"] = query
-                st.session_state["retrieval_debug"] = debug_retrieve_context(
+                st.session_state[hits_key] = [hit.model_dump() for hit in hits]
+                st.session_state[last_query_key] = query
+                st.session_state[debug_key] = debug_retrieve_context(
                     project_name,
                     query,
                     top_k=top_k,
@@ -368,14 +407,14 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             except Exception as exc:
                 st.error(f"检索失败：{exc}")
 
-        current_hits = _render_retrieval_hits(project_name, query)
-        _render_retrieval_debug_payload()
-        _render_retrieval_conflicts(project_name, current_hits)
+        current_hits = _render_retrieval_hits(project_name, current_story_id, query)
+        _render_retrieval_debug_payload(project_name, current_story_id)
+        _render_retrieval_conflicts(project_name, current_story_id, current_hits)
 
 
 def render_retrieval_center_page(project_name: str, current_story_id: str):
     manifest = _render_retrieval_index_controls(project_name)
     _render_retrieval_health_panel(project_name)
-    render_retrieval_eval_workbench(project_name, manifest)
+    render_retrieval_eval_workbench(project_name, current_story_id, manifest)
     _render_retrieval_source_management(project_name, manifest)
     _render_retrieval_preview(project_name, current_story_id, manifest)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -180,6 +181,9 @@ def _run_verification() -> int:
         "built_at": datetime.now().isoformat(timespec="seconds"),
         "embedding_model": "verify-embedding",
         "vectors": {"verify_doc_001#chunk001": [0.1, 0.2, 0.3]},
+        "content_hashes": {
+            "verify_doc_001#chunk001": sha256("验证文档\n验证检索片段。".encode("utf-8")).hexdigest()
+        },
     }, ensure_ascii=False, indent=2))
 
     append_auto_review_run(project_name, {"run_id": "auto_verify_001", "status": "active"})

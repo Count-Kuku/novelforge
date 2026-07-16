@@ -52,6 +52,11 @@ def main() -> int:
         _run("verify_db_authority_and_copy.py"),
         _run("verify_db_no_json_mirrors.py"),
         _run("verify_story_path_safety.py"),
+        _run("verify_review_regressions.py"),
+        _run("verify_story_copy_mirrors.py"),
+        _run("verify_confirmed_knowledge_atomicity.py"),
+        _run("verify_pending_transactions.py"),
+        _run("verify_app_smoke.py"),
     ]
     result = {
         "ok": all(item.get("ok") for item in checks),

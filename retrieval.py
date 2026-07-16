@@ -7,6 +7,7 @@ import os
 import re
 from collections import Counter
 from datetime import datetime
+from hashlib import sha256
 
 from llm import get_embedding
 from memory import (
@@ -846,6 +847,8 @@ def _documents_from_character_entities(project_name: str) -> list[RetrievalDocum
                 "confidence": card.get("confidence", 0.7),
                 "importance": card.get("importance", 0.5),
                 "canon_status": str(card.get("canon_status") or "unknown"),
+                "setting_scope": str(card.get("setting_scope") or ""),
+                "story_id": str(card.get("story_id") or ""),
                 "version_scope": str(card.get("version_scope") or ""),
                 "worldline_id": str(card.get("worldline_id") or ""),
                 "worldline_label": str(card.get("worldline_label") or ""),
@@ -931,6 +934,8 @@ def _documents_from_setting_entities(project_name: str) -> list[RetrievalDocumen
                 "confidence": card.get("confidence", 0.7),
                 "importance": card.get("importance", 0.5),
                 "canon_status": str(card.get("canon_status") or "unknown"),
+                "setting_scope": str(card.get("setting_scope") or ""),
+                "story_id": str(card.get("story_id") or ""),
                 "worldline_id": str(card.get("worldline_id") or ""),
                 "worldline_label": str(card.get("worldline_label") or ""),
                 "version_scope": str(card.get("version_scope") or ""),
@@ -1481,9 +1486,18 @@ def gather_retrieval_documents(project_name: str) -> list[RetrievalDocument]:
     documents.extend(_documents_from_setting_entities(project_name))
     documents.extend(_documents_from_external_sources(project_name))
 
-    # Project-level conflict resolutions are added once, not per story
+    # Conflict resolutions may be project-wide or story-owned.  Preserve the
+    # ownership in both the document ID and metadata so story filtering can
+    # keep identically named resolutions isolated.
     conflict_resolutions = load_conflict_resolutions(project_name)
     for item in conflict_resolutions:
+        conflict_id = str(item.get("conflict_id", "")).strip()
+        resolution_story_id = str(item.get("story_id") or "").strip()
+        resolution_identifier = (
+            f"story:{resolution_story_id}:{conflict_id}"
+            if resolution_story_id
+            else f"project:{conflict_id}"
+        )
         content = "\n".join([
             f"decision: {item.get('decision', '')}",
             f"note: {item.get('note', '')}",
@@ -1494,25 +1508,26 @@ def gather_retrieval_documents(project_name: str) -> list[RetrievalDocument]:
         doc = _make_document(
             project_name,
             "conflict_resolution",
-            str(item.get("conflict_id", "")),
-            f"Conflict Resolution {item.get('conflict_id', '')}",
+            resolution_identifier,
+            f"Conflict Resolution {conflict_id}",
             content,
             path=str(project_path(project_name) / "retrieval" / "conflict_resolutions.json"),
             tags=["conflict_resolution"],
-            metadata={"authority": "project", "decision": item.get("decision", "")},
+            metadata={
+                "authority": "project",
+                "decision": item.get("decision", ""),
+                "story_id": resolution_story_id,
+            },
         )
         if doc:
             documents.append(doc)
 
     for story in list_stories(project_name):
         story_id = story.get("story_id", "default")
-        try:
-            documents.extend(_documents_from_project_files(project_name, story_id))
-        except Exception as exc:
-            logging.getLogger("novelforge").warning(
-                "Failed to gather story retrieval documents: project=%s story=%s error=%s",
-                project_name, story_id, exc,
-            )
+        # Replacing the authoritative manifest with a partial snapshot would
+        # soft-delete every document belonging to the failed story.  Let the
+        # caller fail before save_retrieval_manifest instead.
+        documents.extend(_documents_from_project_files(project_name, story_id))
     return documents
 
 
@@ -1569,14 +1584,17 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 def build_vector_store(project_name: str, manifest: RetrievalIndexManifest | None = None) -> RetrievalVectorStore:
     manifest = manifest or load_retrieval_index(project_name)
     vectors = {}
+    content_hashes = {}
     for chunk in manifest.chunks:
         vectors[chunk.chunk_id] = get_embedding(f"{chunk.title}\n{chunk.content}")
+        content_hashes[chunk.chunk_id] = _retrieval_chunk_content_hash(chunk)
 
     store = RetrievalVectorStore(
         project_name=project_name,
         built_at=datetime.now().isoformat(timespec="seconds"),
         embedding_model=_active_embedding_model_name(),
         vectors=vectors,
+        content_hashes=content_hashes,
     )
     save_retrieval_vectors(project_name, store.model_dump_json(indent=2))
     return store
@@ -1735,7 +1753,12 @@ def rebuild_retrieval_assets(project_name: str, *, build_vectors: bool = True) -
         build_vector_store(project_name, manifest)
         manifest.embedding_enabled = True
         save_retrieval_manifest(project_name, manifest.model_dump_json(indent=2))
-    except Exception:
+    except Exception as exc:
+        logging.getLogger("novelforge.retrieval").warning(
+            "Vector index build failed for %s; lexical index remains available: %s",
+            project_name,
+            exc,
+        )
         manifest.embedding_enabled = False
         save_retrieval_manifest(project_name, manifest.model_dump_json(indent=2))
     return manifest
@@ -2041,17 +2064,35 @@ def _semantic_scores(project_name: str, query: str, chunks: list[RetrievalChunk]
     if not store or not store.vectors:
         return {}
 
+    # Embeddings from different models are not comparable even when their
+    # dimensions happen to match.
+    if store.embedding_model != _active_embedding_model_name():
+        return {}
+
     query_vector = get_embedding(query)
+    if not query_vector or not all(math.isfinite(value) for value in query_vector):
+        return {}
     scores = {}
     for chunk in chunks:
         vector = store.vectors.get(chunk.chunk_id)
         if not vector:
             continue
+        if store.content_hashes.get(chunk.chunk_id) != _retrieval_chunk_content_hash(chunk):
+            continue
+        if len(vector) != len(query_vector) or not all(math.isfinite(value) for value in vector):
+            continue
         scores[chunk.chunk_id] = _cosine_similarity(query_vector, vector)
     return scores
 
 
-def _build_feedback_stats(project_name: str) -> dict[str, dict[str, float]]:
+def _retrieval_chunk_content_hash(chunk: RetrievalChunk) -> str:
+    return sha256(f"{chunk.title}\n{chunk.content}".encode("utf-8")).hexdigest()
+
+
+def _build_feedback_stats(
+    project_name: str,
+    story_id: str | None = "default",
+) -> dict[str, dict[str, float]]:
     weights = {
         "helpful": 0.25,
         "priority": 0.6,
@@ -2059,8 +2100,12 @@ def _build_feedback_stats(project_name: str) -> dict[str, dict[str, float]]:
         "wrong": -0.8,
     }
     stats: dict[str, dict[str, float]] = {}
+    target_story_id = str(story_id or "default").strip() or "default"
     for item in load_retrieval_feedback(project_name):
         if not isinstance(item, dict):
+            continue
+        feedback_story_id = str(item.get("story_id") or "").strip()
+        if feedback_story_id and feedback_story_id != target_story_id:
             continue
         chunk_id = str(item.get("chunk_id") or "").strip()
         rating = str(item.get("rating") or "").strip()
@@ -2256,7 +2301,12 @@ def _run_retrieval(
     if retrieval_mode in {"semantic", "hybrid"}:
         try:
             semantic_scores = _semantic_scores(project_name, query_plan["semantic_query"], filtered_chunks)
-        except Exception:
+        except Exception as exc:
+            logging.getLogger("novelforge.retrieval").warning(
+                "Semantic retrieval failed for %s; using lexical scores: %s",
+                project_name,
+                exc,
+            )
             semantic_scores = {}
 
     initial_hits: list[RetrievalHit] = []
@@ -2299,7 +2349,7 @@ def _run_retrieval(
             ))
 
     initial_hits.sort(key=lambda item: (-item.score, -item.semantic_score, -item.lexical_score, item.chunk.chunk_id))
-    feedback_stats = _build_feedback_stats(project_name)
+    feedback_stats = _build_feedback_stats(project_name, story_id)
     reranked_hits = _rerank_hits(initial_hits, feedback_stats)
     diversified_hits = _diversify_hits(reranked_hits, top_k)
     return {

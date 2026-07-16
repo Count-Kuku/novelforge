@@ -1,11 +1,14 @@
+import json
 import os
 import socket
 import subprocess
 import sys
 import time
 import webbrowser
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import BinaryIO, Iterator
 from urllib.request import Request, urlopen
 
 
@@ -16,6 +19,10 @@ READY_TIMEOUT_SECONDS = 45
 READY_POLL_INTERVAL_SECONDS = 0.5
 APP_MARKER = "NovelForge"
 LOG_FILE_NAME = "launcher.log"
+SERVER_STATE_FILE_NAME = ".novelforge-server.json"
+LAUNCH_LOCK_FILE_NAME = ".novelforge-launch.lock"
+LAUNCH_LOCK_TIMEOUT_SECONDS = 15
+LAUNCH_LOCK_POLL_INTERVAL_SECONDS = 0.1
 STREAMLIT_MARKERS = ("streamlit", "stapp")
 
 
@@ -31,6 +38,182 @@ def _app_entrypoint(root: Path) -> Path:
 
 def _log_path(root: Path) -> Path:
     return root / LOG_FILE_NAME
+
+
+def _server_state_path(root: Path) -> Path:
+    return root / SERVER_STATE_FILE_NAME
+
+
+def _launch_lock_path(root: Path) -> Path:
+    return root / LAUNCH_LOCK_FILE_NAME
+
+
+def _load_server_state(root: Path) -> dict:
+    try:
+        payload = json.loads(_server_state_path(root).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _process_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+            if not process:
+                return False
+            ctypes.windll.kernel32.CloseHandle(process)
+            return True
+        except Exception:
+            return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _write_server_state(root: Path, pid: int, port: int) -> None:
+    state_path = _server_state_path(root)
+    temporary_path = state_path.with_suffix(".tmp")
+    temporary_path.write_text(
+        json.dumps(
+            {
+                "pid": int(pid),
+                "port": int(port),
+                "root": str(root.resolve()),
+                "started_at": datetime.now().isoformat(timespec="seconds"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    temporary_path.replace(state_path)
+
+
+def _remove_server_state(root: Path, expected_pid: int | None = None) -> None:
+    state_path = _server_state_path(root)
+    if expected_pid is not None:
+        state = _load_server_state(root)
+        if int(state.get("pid") or 0) != expected_pid:
+            return
+    try:
+        state_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _read_launch_lock_owner(handle: BinaryIO) -> dict:
+    try:
+        handle.seek(0)
+        raw = handle.read().decode("utf-8", errors="ignore").strip()
+        payload = json.loads(raw) if raw else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _try_lock_launch_file(handle: BinaryIO) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_launch_file(handle: BinaryIO) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _launcher_lock(root: Path) -> Iterator[None]:
+    """Serialize port selection and process registration across launchers.
+
+    The file is intentionally persistent: unlinking an advisory-lock file can
+    create two independently locked inodes during a hand-off. Kernel locks are
+    released automatically after a crash, so stale metadata never blocks the
+    next launcher and is overwritten by the next lock owner.
+    """
+
+    lock_path = _launch_lock_path(root)
+    handle = lock_path.open("a+b")
+    acquired = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b" ")
+            handle.flush()
+
+        deadline = time.monotonic() + LAUNCH_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                _try_lock_launch_file(handle)
+                acquired = True
+                break
+            except (OSError, BlockingIOError):
+                if time.monotonic() >= deadline:
+                    owner = _read_launch_lock_owner(handle)
+                    owner_pid = int(owner.get("pid") or 0)
+                    owner_text = f" pid={owner_pid}" if owner_pid else ""
+                    raise RuntimeError(
+                        "Another NovelForge launcher is still preparing the server"
+                        f"{owner_text}. Please try again shortly."
+                    )
+                time.sleep(LAUNCH_LOCK_POLL_INTERVAL_SECONDS)
+
+        previous_owner = _read_launch_lock_owner(handle)
+        previous_pid = int(previous_owner.get("pid") or 0)
+        if previous_pid and previous_pid != os.getpid():
+            _write_log(
+                root,
+                f"Recovered launcher lock metadata from pid={previous_pid}",
+                append=True,
+            )
+
+        payload = {
+            "pid": os.getpid(),
+            "root": str(root.resolve()),
+            "acquired_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        handle.seek(0)
+        handle.truncate()
+        handle.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+        handle.flush()
+        os.fsync(handle.fileno())
+        yield
+    finally:
+        if acquired:
+            try:
+                handle.seek(0)
+                handle.truncate()
+                handle.write(b" ")
+                handle.flush()
+            except OSError:
+                pass
+            try:
+                _unlock_launch_file(handle)
+            except OSError:
+                pass
+        handle.close()
 
 
 def _write_log(root: Path, message: str, append: bool = True):
@@ -56,24 +239,44 @@ def _launch_url(port: int) -> str:
 
 
 def _python_candidates(root: Path) -> list[Path]:
+    portable_candidates: list[Path]
     if os.name == "nt":
-        return [
+        portable_candidates = [
+            root / ".runtime" / "pythonw.exe",
+            root / ".runtime" / "python.exe",
+        ]
+        development_candidates = [
             root / ".venv" / "Scripts" / "pythonw.exe",
             root / ".venv" / "Scripts" / "python.exe",
-            Path(sys.executable),
         ]
-    return [
-        root / ".venv" / "bin" / "python3",
-        root / ".venv" / "bin" / "python",
-        Path(sys.executable),
-    ]
+    else:
+        portable_candidates = [
+            root / ".runtime" / "bin" / "python3",
+            root / ".runtime" / "bin" / "python",
+        ]
+        development_candidates = [
+            root / ".venv" / "bin" / "python3",
+            root / ".venv" / "bin" / "python",
+        ]
+    if getattr(sys, "frozen", False):
+        # A copied venv contains an absolute pyvenv.cfg reference to its build
+        # machine and is not a portable runtime. Release launchers accept only
+        # the explicitly assembled self-contained distribution.
+        return portable_candidates
+    return [*development_candidates, *portable_candidates, Path(sys.executable)]
 
 
 def _resolve_python(root: Path) -> Path:
+    launcher_executable = Path(sys.executable).resolve()
     for candidate in _python_candidates(root):
-        if candidate.exists():
+        if candidate.exists() and not (
+            getattr(sys, "frozen", False) and candidate.resolve() == launcher_executable
+        ):
             return candidate
-    raise RuntimeError("No bundled Python runtime found. Expected .venv/Scripts/pythonw.exe or python.exe (Windows) or .venv/bin/python3 or python (Unix).")
+    raise RuntimeError(
+        "No usable Python runtime found. Portable releases require "
+        ".runtime/pythonw.exe or .runtime/python.exe; development runs require .venv."
+    )
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -115,6 +318,29 @@ def _clean_subprocess_env() -> dict[str, str]:
 
 
 def _find_available_port(root: Path) -> tuple[int | None, int | None]:
+    state = _load_server_state(root)
+    state_pid = int(state.get("pid") or 0)
+    state_port = int(state.get("port") or 0)
+    state_root = str(state.get("root") or "")
+    if state_root == str(root.resolve()) and state_port in PORT_CANDIDATES and _process_is_running(state_pid):
+        url = _launch_url(state_port)
+        if _is_port_open(HOST, state_port):
+            try:
+                trusted_page = _fetch_page(url)
+            except Exception:
+                trusted_page = ""
+            if APP_MARKER in trusted_page or _looks_like_streamlit_shell(trusted_page):
+                _write_log(root, f"Detected tracked NovelForge process pid={state_pid} on port {state_port}", append=True)
+                webbrowser.open(url)
+                return None, None
+        # The tracked process may still be starting. Do not race it for the
+        # same project directory or launch a duplicate server.
+        _write_log(root, f"Tracked NovelForge process pid={state_pid} is still starting on port {state_port}", append=True)
+        webbrowser.open(url)
+        return None, None
+    if state:
+        _remove_server_state(root)
+
     first_conflicting_port = None
     for port in PORT_CANDIDATES:
         url = _launch_url(port)
@@ -198,6 +424,18 @@ def _launch_streamlit(root: Path, python_executable: Path, port: int):
             creationflags=creation_flags,
             startupinfo=startupinfo,
         )
+        try:
+            _write_server_state(root, process.pid, port)
+        except OSError as exc:
+            _write_log(root, f"Failed to persist server state: {exc}", append=True)
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            raise RuntimeError(
+                "Failed to register the launched server; the child process was stopped."
+            ) from exc
         _write_log(root, f"Spawned process with pid={process.pid}", append=True)
         return process
     except Exception:
@@ -209,6 +447,7 @@ def _launch_streamlit(root: Path, python_executable: Path, port: int):
 
 def _cleanup_process(root: Path, process: subprocess.Popen):
     if process.poll() is not None:
+        _remove_server_state(root, expected_pid=process.pid)
         return
     _write_log(root, f"Stopping process pid={process.pid} after launch failure", append=True)
     process.terminate()
@@ -217,6 +456,8 @@ def _cleanup_process(root: Path, process: subprocess.Popen):
     except subprocess.TimeoutExpired:
         _write_log(root, f"Force killing process pid={process.pid}", append=True)
         process.kill()
+    finally:
+        _remove_server_state(root, expected_pid=process.pid)
 
 
 def _fail(root: Path, message: str) -> int:
@@ -227,28 +468,37 @@ def _fail(root: Path, message: str) -> int:
 
 def main() -> int:
     root = _project_root()
-    _write_log(root, "=== Launcher started ===", append=False)
-    _write_log(root, f"Port candidates: {', '.join(str(port) for port in PORT_CANDIDATES)}", append=True)
-
-    selected_port, conflicting_port = _find_available_port(root)
-    if selected_port is None:
-        if conflicting_port is None:
-            return 0
-        return _fail(root, f"All candidate ports are unavailable. First conflicting port: {conflicting_port}.")
-
-    app_url = _launch_url(selected_port)
-    if selected_port != DEFAULT_PORT:
-        _write_log(root, f"Falling back from default port {DEFAULT_PORT} to {selected_port}", append=True)
-
     try:
-        python_executable = _resolve_python(root)
-    except Exception as exc:
-        return _fail(root, str(exc))
+        with _launcher_lock(root):
+            _write_log(root, "=== Launcher started ===", append=True)
+            _write_log(
+                root,
+                f"Port candidates: {', '.join(str(port) for port in PORT_CANDIDATES)}",
+                append=True,
+            )
 
-    try:
-        process = _launch_streamlit(root, python_executable, selected_port)
+            selected_port, conflicting_port = _find_available_port(root)
+            if selected_port is None:
+                if conflicting_port is None:
+                    return 0
+                return _fail(
+                    root,
+                    "All candidate ports are unavailable. "
+                    f"First conflicting port: {conflicting_port}.",
+                )
+
+            app_url = _launch_url(selected_port)
+            if selected_port != DEFAULT_PORT:
+                _write_log(
+                    root,
+                    f"Falling back from default port {DEFAULT_PORT} to {selected_port}",
+                    append=True,
+                )
+
+            python_executable = _resolve_python(root)
+            process = _launch_streamlit(root, python_executable, selected_port)
     except Exception as exc:
-        return _fail(root, f"Failed to launch Streamlit: {exc}")
+        return _fail(root, f"Failed to prepare or launch Streamlit: {exc}")
 
     if _wait_for_http_ready(app_url, READY_TIMEOUT_SECONDS):
         _write_log(root, f"NovelForge became ready on port {selected_port}; opening browser", append=True)
@@ -256,6 +506,7 @@ def main() -> int:
         return 0
 
     if process.poll() is not None:
+        _remove_server_state(root, expected_pid=process.pid)
         return _fail(root, f"NovelForge exited early with code {process.returncode}.")
 
     _cleanup_process(root, process)

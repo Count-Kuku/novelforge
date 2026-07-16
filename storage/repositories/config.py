@@ -45,6 +45,13 @@ def _story_id_or_none(conn: sqlite3.Connection, story_id: Any) -> str | None:
     return clean_story_id if row else None
 
 
+def _required_story_id(conn: sqlite3.Connection, story_id: Any, label: str) -> str:
+    clean_story_id = _story_id_or_none(conn, story_id)
+    if not clean_story_id:
+        raise ValueError(f"{label} requires an existing active story ID.")
+    return clean_story_id
+
+
 def sync_global_setting(conn: sqlite3.Connection, key: str, payload) -> None:
     clean_key = str(key or "").strip()
     if not clean_key:
@@ -83,9 +90,7 @@ def load_global_setting(conn: sqlite3.Connection, key: str):
 
 
 def sync_story_profile(conn: sqlite3.Connection, story_id: str, profile: dict) -> dict:
-    clean_story_id = _story_id_or_none(conn, story_id)
-    if not clean_story_id:
-        return dict(profile or {})
+    clean_story_id = _required_story_id(conn, story_id, "Story profile")
     payload = dict(profile or {})
     conn.execute(
         """
@@ -140,7 +145,7 @@ def sync_rules_payload(conn: sqlite3.Connection, scope: str, rules: dict, story_
     clean_scope = str(scope or "").strip()
     if clean_scope not in {"global", "project", "story"}:
         raise ValueError("Rules scope must be global, project, or story.")
-    clean_story_id = _story_id_or_none(conn, story_id) if clean_scope == "story" else None
+    clean_story_id = _required_story_id(conn, story_id, "Story rules") if clean_scope == "story" else None
     normalized = dict(rules or {})
     active_ids: list[str] = []
     for capability, raw_items in normalized.items():
@@ -261,7 +266,7 @@ def sync_prompt_options_payload(
     clean_scope = str(scope or "").strip()
     if clean_scope not in {"global", "project", "story"}:
         raise ValueError("Prompt option scope must be global, project, or story.")
-    clean_story_id = _story_id_or_none(conn, story_id) if clean_scope == "story" else None
+    clean_story_id = _required_story_id(conn, story_id, "Story prompt options") if clean_scope == "story" else None
     normalized = [dict(item) for item in options if isinstance(item, dict)]
     active_ids: list[str] = []
     for item in normalized:
@@ -269,19 +274,22 @@ def sync_prompt_options_payload(
         if not option_id:
             seed = _json_dumps(item)
             option_id = "prompt_" + sha256(seed.encode("utf-8")).hexdigest()[:24]
-        active_ids.append(option_id)
+        storage_option_id = "prompt_" + sha256(
+            f"{clean_scope}:{clean_story_id or ''}:{option_id}".encode("utf-8")
+        ).hexdigest()[:32]
+        active_ids.append(storage_option_id)
         tags = item.get("tags", [])
         if not isinstance(tags, list):
             tags = []
         conn.execute(
             """
             INSERT INTO prompt_options (
-                option_id, scope, story_id, capability, category, slot, name, content,
+                option_id, logical_id, scope, story_id, capability, category, slot, name, content,
                 enabled, built_in, priority, source, source_kind, source_ref, tags_json,
                 created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
@@ -289,6 +297,7 @@ def sync_prompt_options_payload(
             ON CONFLICT(option_id) DO UPDATE SET
                 scope = excluded.scope,
                 story_id = excluded.story_id,
+                logical_id = excluded.logical_id,
                 capability = excluded.capability,
                 category = excluded.category,
                 slot = excluded.slot,
@@ -305,6 +314,7 @@ def sync_prompt_options_payload(
                 deleted_at = NULL
             """,
             (
+                storage_option_id,
                 option_id,
                 clean_scope,
                 clean_story_id,
@@ -358,7 +368,8 @@ def load_prompt_options_payload(conn: sqlite3.Connection, scope: str, story_id: 
     if clean_scope == "story":
         rows = conn.execute(
             """
-            SELECT option_id, capability, category, slot, name, content, enabled,
+            SELECT COALESCE(NULLIF(logical_id, ''), option_id) AS logical_id,
+                   capability, category, slot, name, content, enabled,
                    built_in, priority, source, source_kind, source_ref, tags_json
             FROM prompt_options
             WHERE scope = 'story' AND story_id = ? AND deleted_at IS NULL
@@ -369,7 +380,8 @@ def load_prompt_options_payload(conn: sqlite3.Connection, scope: str, story_id: 
     elif clean_scope == "global":
         rows = conn.execute(
             """
-            SELECT option_id, capability, category, slot, name, content, enabled,
+            SELECT COALESCE(NULLIF(logical_id, ''), option_id) AS logical_id,
+                   capability, category, slot, name, content, enabled,
                    built_in, priority, source, source_kind, source_ref, tags_json
             FROM prompt_options
             WHERE scope = 'global' AND story_id IS NULL AND deleted_at IS NULL
@@ -379,7 +391,8 @@ def load_prompt_options_payload(conn: sqlite3.Connection, scope: str, story_id: 
     else:
         rows = conn.execute(
             """
-            SELECT option_id, capability, category, slot, name, content, enabled,
+            SELECT COALESCE(NULLIF(logical_id, ''), option_id) AS logical_id,
+                   capability, category, slot, name, content, enabled,
                    built_in, priority, source, source_kind, source_ref, tags_json
             FROM prompt_options
             WHERE scope = 'project' AND story_id IS NULL AND deleted_at IS NULL
@@ -389,7 +402,7 @@ def load_prompt_options_payload(conn: sqlite3.Connection, scope: str, story_id: 
     items: list[dict] = []
     for row in rows:
         item = {
-            "id": row["option_id"] if isinstance(row, sqlite3.Row) else row[0],
+            "id": row["logical_id"] if isinstance(row, sqlite3.Row) else row[0],
             "scope": clean_scope,
             "capability": row["capability"] if isinstance(row, sqlite3.Row) else row[1],
             "category": row["category"] if isinstance(row, sqlite3.Row) else row[2],

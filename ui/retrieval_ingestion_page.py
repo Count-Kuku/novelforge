@@ -22,6 +22,7 @@ from source_workflows import (
     import_organized_reference_entries,
     save_manual_retrieval_source_card,
 )
+from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_authority, label_knowledge_category, label_scope, label_source_type
 from ui.step_views import render_step_json_expander, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
@@ -45,11 +46,13 @@ def _render_ingestion_metrics(project_name: str) -> None:
 
 def _render_organized_reference_result(
     project_name: str,
+    current_story_id: str,
     paste_scope: str,
     paste_authority: str,
     paste_origin: str,
 ) -> None:
-    organized_result = st.session_state.get("organized_reference_result", {})
+    result_key = scoped_session_key("organized_reference_result", project_name, current_story_id)
+    organized_result = st.session_state.get(result_key, {})
     organized_payload = organized_result.get("data", {}).get("organized_reference", {})
     if not organized_payload:
         return
@@ -58,7 +61,12 @@ def _render_organized_reference_result(
     st.markdown(organized_result.get("data", {}).get("report_markdown", ""))
     render_step_validation(organized_result)
     render_step_json_expander("整理结果详细数据", organized_payload)
-    if st.button("保存到检索资料库", use_container_width=True, type="primary"):
+    if st.button(
+        "保存到检索资料库",
+        use_container_width=True,
+        type="primary",
+        key=scoped_widget_key("save_organized_reference", project_name, current_story_id),
+    ):
         imported = import_organized_reference_entries(
             project_name,
             organized_payload,
@@ -70,31 +78,47 @@ def _render_organized_reference_result(
         st.rerun()
 
 
-def _render_organized_reference_ingestion(project_name: str) -> None:
+def _render_organized_reference_ingestion(project_name: str, current_story_id: str) -> None:
+    state_scope = (project_name, current_story_id)
+    result_key = scoped_session_key("organized_reference_result", *state_scope)
     st.markdown("#### 粘贴资料 / 整理为检索资料")
-    paste_title = st.text_input("资料标题", key="organized_reference_title")
+    paste_title = st.text_input(
+        "资料标题",
+        key=scoped_widget_key("organized_reference_title", *state_scope),
+    )
     col_scope, col_auth = st.columns(2)
     paste_scope = col_scope.selectbox(
         "资料范围",
         options=["canon", "reference"],
         format_func=label_scope,
-        key="organized_reference_scope",
+        key=scoped_widget_key("organized_reference_scope", *state_scope),
     )
     paste_authority = col_auth.selectbox(
         "资料可信度",
         options=["official", "curated", "community", "unknown"],
         index=1,
         format_func=label_authority,
-        key="organized_reference_authority",
+        key=scoped_widget_key("organized_reference_authority", *state_scope),
     )
-    paste_origin = st.text_input("来源说明（可选）", key="organized_reference_origin")
-    paste_text = st.text_area("资料正文", height=240, key="organized_reference_text")
-    if st.button("整理并预览", use_container_width=True):
+    paste_origin = st.text_input(
+        "来源说明（可选）",
+        key=scoped_widget_key("organized_reference_origin", *state_scope),
+    )
+    paste_text = st.text_area(
+        "资料正文",
+        height=240,
+        key=scoped_widget_key("organized_reference_text", *state_scope),
+    )
+    if st.button(
+        "整理并预览",
+        use_container_width=True,
+        key=scoped_widget_key("organize_reference_preview", *state_scope),
+    ):
         if not paste_text.strip():
             st.error("请先粘贴资料正文。")
         else:
             try:
-                st.session_state["organized_reference_result"] = _run_with_stream(
+                st.session_state[result_key] = _run_with_stream(
                     "正在整理资料...",
                     organize_reference_text,
                     project_name,
@@ -105,16 +129,27 @@ def _render_organized_reference_ingestion(project_name: str) -> None:
             except Exception as exc:
                 st.error(f"整理失败：{exc}")
 
-    _render_organized_reference_result(project_name, paste_scope, paste_authority, paste_origin)
+    _render_organized_reference_result(
+        project_name,
+        current_story_id,
+        paste_scope,
+        paste_authority,
+        paste_origin,
+    )
 
 
-def _render_knowledge_extraction_settings(knowledge_category_options: list[str]) -> tuple[list[str], str, str]:
+def _render_knowledge_extraction_settings(
+    knowledge_category_options: list[str],
+    project_name: str,
+    current_story_id: str,
+) -> tuple[list[str], str, str]:
+    state_scope = (project_name, current_story_id)
     with st.expander("提取设置", expanded=False):
         expert_preset = st.selectbox(
             "专家提取预设",
             options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
             format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
-            key="knowledge_extract_expert_preset",
+            key=scoped_widget_key("knowledge_extract_expert_preset", *state_scope),
         )
         preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[expert_preset]
         enabled_categories = st.multiselect(
@@ -122,7 +157,7 @@ def _render_knowledge_extraction_settings(knowledge_category_options: list[str])
             options=knowledge_category_options,
             default=default_extraction_categories("preset", preset, knowledge_category_options),
             format_func=label_knowledge_category,
-            key=f"knowledge_extract_categories_{expert_preset}",
+            key=scoped_widget_key("knowledge_extract_categories", *state_scope, expert_preset),
         )
         extraction_modes = list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys())
         extraction_mode = st.selectbox(
@@ -130,13 +165,13 @@ def _render_knowledge_extraction_settings(knowledge_category_options: list[str])
             options=extraction_modes,
             index=extraction_modes.index(preset["mode"]) if preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
             format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
-            key=f"knowledge_extract_mode_{expert_preset}",
+            key=scoped_widget_key("knowledge_extract_mode", *state_scope, expert_preset),
         )
         st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(extraction_mode, "当前模式暂无说明。"))
         custom_instructions = st.text_area(
             "补充提取要求（可选）",
             height=90,
-            key=f"knowledge_extract_custom_instructions_{expert_preset}",
+            key=scoped_widget_key("knowledge_extract_custom_instructions", *state_scope, expert_preset),
             placeholder="例如：只保留长期复用的事实；不确定内容标为 ambiguous。",
         )
     return enabled_categories, extraction_mode, custom_instructions
@@ -144,6 +179,7 @@ def _render_knowledge_extraction_settings(knowledge_category_options: list[str])
 
 def _run_pasted_knowledge_extraction(
     project_name: str,
+    current_story_id: str,
     *,
     knowledge_title: str,
     knowledge_text: str,
@@ -171,7 +207,8 @@ def _run_pasted_knowledge_extraction(
         preview_language="json",
     )
     result = extraction_summary.get("result", {})
-    st.session_state["knowledge_extraction_result"] = result
+    result_key = scoped_session_key("knowledge_extraction_result", project_name, current_story_id)
+    st.session_state[result_key] = result
     if run_auto:
         auto_summary = extraction_summary.get("auto_confirm", {})
         st.success(
@@ -187,8 +224,9 @@ def _run_pasted_knowledge_extraction(
     st.rerun()
 
 
-def _render_knowledge_extraction_result() -> None:
-    extraction_result = st.session_state.get("knowledge_extraction_result", {})
+def _render_knowledge_extraction_result(project_name: str, current_story_id: str) -> None:
+    result_key = scoped_session_key("knowledge_extraction_result", project_name, current_story_id)
+    extraction_result = st.session_state.get(result_key, {})
     extraction_payload = extraction_result.get("data", {}).get("knowledge_extraction", {})
     if not extraction_payload:
         return
@@ -199,34 +237,60 @@ def _render_knowledge_extraction_result() -> None:
     render_step_json_expander("知识提取详细数据", extraction_payload)
 
 
-def _render_knowledge_extraction_ingestion(project_name: str, knowledge_category_options: list[str]) -> None:
+def _render_knowledge_extraction_ingestion(
+    project_name: str,
+    current_story_id: str,
+    knowledge_category_options: list[str],
+) -> None:
+    state_scope = (project_name, current_story_id)
     st.markdown("#### 粘贴资料 / 提取为知识库条目")
     st.caption("提取结果默认先进入待确认队列；也可以自动保存低风险条目。")
-    knowledge_title = st.text_input("资料标题", key="knowledge_extract_title")
+    knowledge_title = st.text_input(
+        "资料标题",
+        key=scoped_widget_key("knowledge_extract_title", *state_scope),
+    )
     col_scope, col_auth = st.columns(2)
     knowledge_scope = col_scope.selectbox(
         "知识范围",
         options=["canon", "reference", "project"],
         index=0,
         format_func=label_scope,
-        key="knowledge_extract_scope",
+        key=scoped_widget_key("knowledge_extract_scope", *state_scope),
     )
     knowledge_authority = col_auth.selectbox(
         "知识可信度",
         options=["official", "curated", "community", "project", "unknown"],
         index=1,
         format_func=label_authority,
-        key="knowledge_extract_authority",
+        key=scoped_widget_key("knowledge_extract_authority", *state_scope),
     )
-    knowledge_origin = st.text_input("来源说明（可选）", key="knowledge_extract_origin")
+    knowledge_origin = st.text_input(
+        "来源说明（可选）",
+        key=scoped_widget_key("knowledge_extract_origin", *state_scope),
+    )
     enabled_categories, extraction_mode, custom_instructions = _render_knowledge_extraction_settings(
-        knowledge_category_options
+        knowledge_category_options,
+        project_name,
+        current_story_id,
     )
-    knowledge_text = st.text_area("资料正文", height=260, key="knowledge_extract_text")
+    knowledge_text = st.text_area(
+        "资料正文",
+        height=260,
+        key=scoped_widget_key("knowledge_extract_text", *state_scope),
+    )
 
     action_cols = st.columns(2)
-    run_extract = action_cols[0].button("提取并预览", use_container_width=True)
-    run_auto = action_cols[1].button("自动提取并保存低风险", use_container_width=True, type="primary")
+    run_extract = action_cols[0].button(
+        "提取并预览",
+        use_container_width=True,
+        key=scoped_widget_key("extract_knowledge_preview", *state_scope),
+    )
+    run_auto = action_cols[1].button(
+        "自动提取并保存低风险",
+        use_container_width=True,
+        type="primary",
+        key=scoped_widget_key("extract_knowledge_auto", *state_scope),
+    )
     if run_extract or run_auto:
         if not knowledge_text.strip():
             st.error("请先粘贴资料正文。")
@@ -236,6 +300,7 @@ def _render_knowledge_extraction_ingestion(project_name: str, knowledge_category
             try:
                 _run_pasted_knowledge_extraction(
                     project_name,
+                    current_story_id,
                     knowledge_title=knowledge_title,
                     knowledge_text=knowledge_text,
                     enabled_categories=enabled_categories,
@@ -249,52 +314,77 @@ def _render_knowledge_extraction_ingestion(project_name: str, knowledge_category
             except Exception as exc:
                 st.error(f"知识提取失败：{exc}")
 
-    _render_knowledge_extraction_result()
+    _render_knowledge_extraction_result(project_name, current_story_id)
 
 
-def _render_pasted_ingestion(project_name: str, knowledge_category_options: list[str]) -> None:
+def _render_pasted_ingestion(
+    project_name: str,
+    current_story_id: str,
+    knowledge_category_options: list[str],
+) -> None:
     target_choice = st.radio(
         "处理方式",
         options=["整理为检索资料", "提取为知识库条目"],
         horizontal=True,
-        key="paste_ingestion_target",
+        key=scoped_widget_key("paste_ingestion_target", project_name, current_story_id),
     )
     if target_choice == "整理为检索资料":
-        _render_organized_reference_ingestion(project_name)
+        _render_organized_reference_ingestion(project_name, current_story_id)
     else:
-        _render_knowledge_extraction_ingestion(project_name, knowledge_category_options)
+        _render_knowledge_extraction_ingestion(project_name, current_story_id, knowledge_category_options)
 
 
-def _render_manual_retrieval_source_card(project_name: str, source_type_options: dict[str, str]) -> None:
+def _render_manual_retrieval_source_card(
+    project_name: str,
+    current_story_id: str,
+    source_type_options: dict[str, str],
+) -> None:
+    state_scope = (project_name, current_story_id)
     st.markdown("#### 手动资料卡")
     st.caption("适合少量已经整理好的设定卡、角色卡、事件卡。保存后直接进入检索资料库。")
-    source_name = st.text_input("资料名称", key="retrieval_source_name")
+    source_name = st.text_input("资料名称", key=scoped_widget_key("retrieval_source_name", *state_scope))
     col_scope, col_auth = st.columns(2)
     source_scope = col_scope.selectbox(
         "资料范围",
         options=["reference", "canon"],
         format_func=label_scope,
-        key="retrieval_source_scope",
+        key=scoped_widget_key("retrieval_source_scope", *state_scope),
     )
     source_authority = col_auth.selectbox(
         "资料可信度",
         options=["official", "curated", "community", "unknown"],
         index=1,
         format_func=label_authority,
-        key="retrieval_source_authority",
+        key=scoped_widget_key("retrieval_source_authority", *state_scope),
     )
-    source_origin = st.text_input("来源说明/链接（可选）", key="retrieval_source_origin")
+    source_origin = st.text_input(
+        "来源说明/链接（可选）",
+        key=scoped_widget_key("retrieval_source_origin", *state_scope),
+    )
     source_type = st.selectbox(
         "资料模板",
         options=list(source_type_options.keys()),
         format_func=lambda key: source_type_options.get(key, label_source_type(key)),
-        key="retrieval_source_type",
+        key=scoped_widget_key("retrieval_source_type", *state_scope),
     )
-    source_title = st.text_input("显示标题（可选）", key="retrieval_source_title")
-    source_summary = st.text_area("资料摘要（可选）", height=100, key="retrieval_source_summary")
-    source_tags = st.text_input("标签（逗号分隔，可选）", key="retrieval_source_tags")
-    source_content = st.text_area("资料正文", height=220, key="retrieval_source_content")
-    if st.button("保存资料卡", use_container_width=True, type="primary"):
+    source_title = st.text_input("显示标题（可选）", key=scoped_widget_key("retrieval_source_title", *state_scope))
+    source_summary = st.text_area(
+        "资料摘要（可选）",
+        height=100,
+        key=scoped_widget_key("retrieval_source_summary", *state_scope),
+    )
+    source_tags = st.text_input("标签（逗号分隔，可选）", key=scoped_widget_key("retrieval_source_tags", *state_scope))
+    source_content = st.text_area(
+        "资料正文",
+        height=220,
+        key=scoped_widget_key("retrieval_source_content", *state_scope),
+    )
+    if st.button(
+        "保存资料卡",
+        use_container_width=True,
+        type="primary",
+        key=scoped_widget_key("save_retrieval_source_card", *state_scope),
+    ):
         if not source_name.strip() or not source_content.strip():
             st.error("资料名称和资料正文不能为空。")
         else:
@@ -363,6 +453,7 @@ def render_retrieval_ingestion_page(
     render_knowledge_organizer,
     render_source_package_report_page,
 ):
+    current_story_id = str(st.session_state.get("active_story_id") or "default")
     _render_ingestion_metrics(project_name)
 
     st.markdown("### 导入向导")
@@ -371,15 +462,15 @@ def render_retrieval_ingestion_page(
         "资料来源",
         options=["长篇文本", "粘贴资料", "手动资料卡"],
         horizontal=True,
-        key="ingestion_source_choice",
+        key=scoped_widget_key("ingestion_source_choice", project_name, current_story_id),
     )
 
     if source_choice == "长篇文本":
         render_long_reference_importer(project_name, source_type_options, knowledge_category_options, expanded=True)
     elif source_choice == "粘贴资料":
-        _render_pasted_ingestion(project_name, knowledge_category_options)
+        _render_pasted_ingestion(project_name, current_story_id, knowledge_category_options)
     else:
-        _render_manual_retrieval_source_card(project_name, source_type_options)
+        _render_manual_retrieval_source_card(project_name, current_story_id, source_type_options)
 
     _render_ingestion_followup_tabs(
         project_name,

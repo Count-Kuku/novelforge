@@ -1,15 +1,18 @@
 import hashlib
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from memory import (
     KNOWLEDGE_CATEGORIES,
-    append_auto_review_run,
     confirm_pending_knowledge_items_with_records,
+    delete_confirmed_knowledge_item_records,
     load_auto_review_policy,
     load_knowledge_category,
     load_pending_knowledge_items,
+    merge_confirmed_knowledge_item_records,
     save_knowledge_category,
     save_pending_knowledge_items,
+    update_confirmed_knowledge_item_record,
 )
 
 
@@ -183,29 +186,37 @@ def save_confirmed_knowledge_item(
     category = str(original_category or "").strip()
     if category not in KNOWLEDGE_CATEGORIES:
         return False
-    items = load_knowledge_category(project_name, category)
-    if original_index < 0 or original_index >= len(items):
-        return False
+    updates = updated_item if isinstance(updated_item, dict) else {}
+    requested_item_id = str(
+        updates.get("id")
+        or updates.get("knowledge_id")
+        or ""
+    ).strip()
+    if requested_item_id:
+        item_id = requested_item_id
+    else:
+        items = load_knowledge_category(project_name, category)
+        if not (0 <= original_index < len(items)):
+            return False
+        original = items[original_index]
+        item_id = str(original.get("id") or original.get("knowledge_id") or "").strip()
+        if not item_id:
+            return False
 
-    target_category = str(updated_item.get("category") or category).strip()
+    target_category = str(
+        updates.get("category")
+        or category
+    ).strip()
     if target_category not in KNOWLEDGE_CATEGORIES:
         target_category = category
-
-    remaining = [item for index, item in enumerate(items) if index != original_index]
-    save_knowledge_category(project_name, category, remaining)
-    if delete_only:
-        return True
-
-    normalized = dict(updated_item)
-    normalized["category"] = target_category
-    normalized["status"] = normalized.get("status") or "confirmed"
-    if target_category == category:
-        target_items = remaining
-    else:
-        target_items = load_knowledge_category(project_name, target_category)
-    target_items.append(normalized)
-    save_knowledge_category(project_name, target_category, target_items)
-    return True
+    return update_confirmed_knowledge_item_record(
+        project_name,
+        category,
+        item_id,
+        updated_item,
+        target_category=target_category,
+        delete_only=delete_only,
+    )
 
 
 def merge_confirmed_knowledge_items(
@@ -213,41 +224,53 @@ def merge_confirmed_knowledge_items(
     category: str,
     selected_indices: list[int],
     merged_item: dict,
+    *,
+    selected_item_ids: list[str] | None = None,
 ) -> bool:
     clean_category = str(category or "").strip()
     if clean_category not in KNOWLEDGE_CATEGORIES:
         return False
-    items = load_knowledge_category(project_name, clean_category)
-    selected_set = {
-        int(index)
-        for index in selected_indices
-        if isinstance(index, int) and 0 <= index < len(items)
-    }
-    if len(selected_set) < 2:
+    item_ids = list(selected_item_ids or [])
+    if not item_ids:
+        items = load_knowledge_category(project_name, clean_category)
+        item_ids = [
+            str(items[index].get("id") or items[index].get("knowledge_id") or "").strip()
+            for index in selected_indices
+            if isinstance(index, int) and 0 <= index < len(items)
+        ]
+    item_ids = list(dict.fromkeys(item_id for item_id in item_ids if item_id))
+    if len(item_ids) < 2:
         return False
-    normalized = dict(merged_item)
-    normalized["category"] = clean_category
-    remaining = [item for index, item in enumerate(items) if index not in selected_set]
-    remaining.append(normalized)
-    save_knowledge_category(project_name, clean_category, remaining)
-    return True
+    return merge_confirmed_knowledge_item_records(
+        project_name,
+        clean_category,
+        item_ids,
+        merged_item,
+    )
 
 
-def delete_confirmed_knowledge_items(project_name: str, category: str, selected_indices: list[int]) -> int:
+def delete_confirmed_knowledge_items(
+    project_name: str,
+    category: str,
+    selected_indices: list[int],
+    *,
+    selected_item_ids: list[str] | None = None,
+) -> int:
     clean_category = str(category or "").strip()
     if clean_category not in KNOWLEDGE_CATEGORIES:
         return 0
-    items = load_knowledge_category(project_name, clean_category)
-    selected_set = {
-        int(index)
-        for index in selected_indices
-        if isinstance(index, int) and 0 <= index < len(items)
-    }
-    if not selected_set:
+    item_ids = list(selected_item_ids or [])
+    if not item_ids:
+        items = load_knowledge_category(project_name, clean_category)
+        item_ids = [
+            str(items[index].get("id") or items[index].get("knowledge_id") or "").strip()
+            for index in selected_indices
+            if isinstance(index, int) and 0 <= index < len(items)
+        ]
+    item_ids = list(dict.fromkeys(item_id for item_id in item_ids if item_id))
+    if not item_ids:
         return 0
-    remaining = [item for index, item in enumerate(items) if index not in selected_set]
-    save_knowledge_category(project_name, clean_category, remaining)
-    return len(selected_set)
+    return delete_confirmed_knowledge_item_records(project_name, clean_category, item_ids)
 
 
 def replace_knowledge_category_items(project_name: str, category: str, items: list[dict]) -> int:
@@ -504,59 +527,26 @@ def execute_pending_clear_plan(project_name: str, plan: dict, *, note: str = "")
     archive_ids = [pending_id for pending_id in candidate_ids if action_by_id.get(pending_id) == "archive"]
     manual_ids = [pending_id for pending_id in candidate_ids if action_by_id.get(pending_id) == "manual_review"]
 
-    run_at = datetime.now(timezone.utc).isoformat()
+    run_time = datetime.now(timezone.utc)
+    run_at = run_time.isoformat()
     id_digest = hashlib.sha1("|".join(sorted(candidate_ids)).encode("utf-8")).hexdigest()[:10]
-    run_id = f"pending_batch_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{id_digest}"
-
-    confirm_result = confirm_pending_knowledge_items_with_records(
-        project_name,
-        confirm_ids,
-        confirmation_metadata={
-            "auto_review_run_id": run_id,
-            "auto_reviewed_at": run_at,
-            "pending_batch_action": "confirm",
-        },
-    ) if confirm_ids else {"saved_count": 0, "confirmed_records": [], "pending_snapshots": []}
-
-    pending_after_confirm = load_pending_knowledge_items(project_name)
-    remove_ids = set(archive_ids + manual_ids)
-    if remove_ids:
-        remaining = [
-            item for item in pending_after_confirm
-            if str(item.get("pending_id") or "") not in remove_ids
-        ]
-        save_pending_knowledge_items(project_name, remaining)
-
-    archive_snapshots = []
-    manual_snapshots = []
-    for pending_id in archive_ids:
-        snapshot = dict(pending_by_id.get(pending_id, {}))
-        if snapshot:
-            snapshot["pending_batch_action"] = "archive"
-            snapshot["processed_batch_id"] = run_id
-            archive_snapshots.append(snapshot)
-    for pending_id in manual_ids:
-        snapshot = dict(pending_by_id.get(pending_id, {}))
-        if snapshot:
-            snapshot["pending_batch_action"] = "manual_review"
-            snapshot["processed_batch_id"] = run_id
-            manual_snapshots.append(snapshot)
-
-    pending_snapshots = []
-    seen_snapshot_ids = set()
-    for snapshot in list(confirm_result.get("pending_snapshots", [])) + archive_snapshots + manual_snapshots:
-        pending_id = str(snapshot.get("pending_id") or "")
-        if pending_id and pending_id in seen_snapshot_ids:
-            continue
-        if pending_id:
-            seen_snapshot_ids.add(pending_id)
-        pending_snapshots.append(dict(snapshot))
+    run_id = (
+        f"pending_batch_{run_time.strftime('%Y%m%d%H%M%S%f')}_"
+        f"{id_digest}_{uuid4().hex[:8]}"
+    )
 
     decision_rows = [
         decision for decision in decisions
         if str(decision.get("pending_id") or "") in set(candidate_ids)
     ]
-    run = append_auto_review_run(project_name, {
+    discard_snapshot_metadata = {
+        pending_id: {
+            "pending_batch_action": "archive" if pending_id in set(archive_ids) else "manual_review",
+            "processed_batch_id": run_id,
+        }
+        for pending_id in archive_ids + manual_ids
+    }
+    audit_payload = {
         "run_id": run_id,
         "source_type": "pending_batch_process",
         "source_title": "待确认批量处理方案",
@@ -567,11 +557,6 @@ def execute_pending_clear_plan(project_name: str, plan: dict, *, note: str = "")
         "archived_ids": archive_ids,
         "manual_review_ids": manual_ids,
         "decisions": decision_rows,
-        "confirmed_records": confirm_result.get("confirmed_records", []),
-        "pending_snapshots": pending_snapshots,
-        "archived_snapshots": archive_snapshots,
-        "manual_review_snapshots": manual_snapshots,
-        "saved_count": int(confirm_result.get("saved_count", 0)),
         "policy": load_auto_review_policy(project_name),
         "batch_summary": {
             "total": len(candidate_ids),
@@ -579,19 +564,43 @@ def execute_pending_clear_plan(project_name: str, plan: dict, *, note: str = "")
             "archived": len(archive_ids),
             "manual_review": len(manual_ids),
         },
-    })
+    }
+    confirm_result = confirm_pending_knowledge_items_with_records(
+        project_name,
+        confirm_ids,
+        confirmation_metadata={
+            "auto_review_run_id": run_id,
+            "auto_reviewed_at": run_at,
+            "pending_batch_action": "confirm",
+        },
+        discard_pending_ids=archive_ids + manual_ids,
+        discard_snapshot_metadata=discard_snapshot_metadata,
+        audit_run=audit_payload,
+    )
+    run = dict(confirm_result.get("audit_run") or audit_payload)
+    archive_snapshots = list(run.get("archived_snapshots", []))
+    manual_snapshots = list(run.get("manual_review_snapshots", []))
     if int(confirm_result.get("saved_count", 0)):
         from retrieval import rebuild_retrieval_assets
 
-        rebuild_retrieval_assets(project_name, build_vectors=True)
+        try:
+            rebuild_retrieval_assets(project_name, build_vectors=True)
+        except Exception as exc:
+            import logging
+
+            logging.getLogger("novelforge.retrieval").warning(
+                "Pending batch commit succeeded, but vector rebuild failed for %s: %s",
+                project_name,
+                exc,
+            )
     return {
         "success": True,
         "message": (
             f"处理完成：入库 {int(confirm_result.get('saved_count', 0))} 条，"
-            f"归档 {len(archive_ids)} 条，进入复核箱 {len(manual_ids)} 条。"
+            f"归档 {len(archive_snapshots)} 条，进入复核箱 {len(manual_snapshots)} 条。"
         ),
         "run_id": run.get("run_id", run_id),
         "confirmed_count": int(confirm_result.get("saved_count", 0)),
-        "archived_count": len(archive_ids),
-        "manual_review_count": len(manual_ids),
+        "archived_count": len(archive_snapshots),
+        "manual_review_count": len(manual_snapshots),
     }

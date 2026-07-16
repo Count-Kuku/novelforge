@@ -4,15 +4,17 @@ from datetime import datetime, timezone
 from typing import Any
 
 from memory import (
+    delete_knowledge_category_item_record,
     KNOWLEDGE_CATEGORIES,
     list_stories,
     load_knowledge_base,
     load_knowledge_category,
     load_memory,
     load_story_memory,
+    load_story_memory_overrides,
     save_knowledge_category,
-    story_path,
     sync_project_retrieval_assets,
+    upsert_knowledge_category_item_record,
 )
 
 
@@ -138,14 +140,7 @@ def _setting_category_rank(category: str) -> int:
 def _load_story_overrides(project_name: str, story_id: str) -> dict:
     if story_id == "default":
         return load_memory(project_name)
-    path = story_path(project_name, story_id) / "memory_overrides.json"
-    if not path.exists():
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return load_story_memory_overrides(project_name, story_id)
 
 
 def build_setting_items_from_memory(
@@ -250,18 +245,7 @@ def upsert_setting_item(project_name: str, category: str, item: dict) -> dict:
     if not isinstance(normalized.get("evidence"), list):
         normalized["evidence"] = []
 
-    items = load_knowledge_category(project_name, category)
-    index_by_id = _knowledge_item_index(items)
-    existing_index = index_by_id.get(normalized["id"])
-    if existing_index is None:
-        items.append(normalized)
-    else:
-        existing = items[existing_index] if isinstance(items[existing_index], dict) else {}
-        normalized["created_at"] = existing.get("created_at") or normalized["created_at"]
-        items[existing_index] = normalized
-    save_knowledge_category(project_name, category, items)
-    sync_project_retrieval_assets(project_name)
-    return normalized
+    return upsert_knowledge_category_item_record(project_name, category, normalized)
 
 
 def delete_setting_item(project_name: str, category: str, item_id: str) -> bool:
@@ -270,13 +254,7 @@ def delete_setting_item(project_name: str, category: str, item_id: str) -> bool:
     target_id = str(item_id or "").strip()
     if not target_id:
         return False
-    items = load_knowledge_category(project_name, category)
-    remaining = [item for item in items if str(item.get("id") or "") != target_id]
-    if len(remaining) == len(items):
-        return False
-    save_knowledge_category(project_name, category, remaining)
-    sync_project_retrieval_assets(project_name)
-    return True
+    return delete_knowledge_category_item_record(project_name, category, target_id)
 
 
 def delete_story_setting_items(project_name: str, story_id: str) -> dict:

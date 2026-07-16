@@ -8,6 +8,7 @@ import streamlit as st
 from memory import (
     KNOWLEDGE_CATEGORIES,
     confirm_pending_knowledge_items,
+    copy_story,
     create_story,
     discard_pending_knowledge_items,
     list_stories,
@@ -491,13 +492,16 @@ def render_settings_page(project_name: str, *, render_memory_page):
             st.warning(f"旧核心设定迁移失败，当前仍可继续编辑新的统一设定：{exc}")
     st.caption("正式设定现在统一保存为知识条目。核心设定页只展示会优先影响生成的高优先级设定。")
 
-    story_tab, project_tab = st.tabs(["故事设定", "项目设定"])
+    story_tab, project_tab, management_tab = st.tabs(["故事设定", "项目设定", "故事管理"])
 
     with story_tab:
         _render_story_settings_tab(project_name, story_id, current_story_name, render_memory_page=render_memory_page)
 
     with project_tab:
         _render_project_settings_tab(project_name)
+
+    with management_tab:
+        _render_story_management_tab(project_name)
 
 
 def _render_story_settings_tab(project_name: str, story_id: str, story_name: str, *, render_memory_page):
@@ -619,8 +623,7 @@ def _render_story_management_tab(project_name: str):
         if cols[5].button("复制", key=f"copy_{story_id}", use_container_width=True):
             try:
                 new_story_name = f"{s.get('name') or story_id} 副本"
-                meta = create_story(project_name, new_story_name, str(s.get("description") or ""))
-                copy_story_workspace_settings(project_name, story_id, meta["story_id"])
+                meta = copy_story(project_name, story_id, new_story_name)
                 activate_story_after_creation(project_name, meta, notice_action="copied")
                 st.rerun()
             except Exception as exc:

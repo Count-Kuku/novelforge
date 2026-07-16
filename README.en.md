@@ -279,7 +279,7 @@ NovelForge can also be packaged as a local Windows portable app that automatical
 The intended local distribution is:
 
 - `NovelForge.exe` as a lightweight launcher
-- bundled `.venv` runtime
+- bundled self-contained `.runtime` Python distribution (not a copied, machine-bound `.venv`)
 - project source files
 - local `data/` directory for project storage
 
@@ -298,15 +298,18 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 ```
 
-2. Run the packaging script from PowerShell:
+2. Prepare a self-contained Windows Python distribution with the dependencies from `requirements.txt` installed. Its root must contain `python.exe` and must not contain `pyvenv.cfg`.
+
+3. Run the packaging script from PowerShell and pass that distribution via `RuntimeRoot`:
 
 ```powershell
-.\build_release.ps1 -Version v0.5.1
+.\build_release.ps1 -Version v0.5.1 -RuntimeRoot D:\Runtimes\python-standalone
 ```
 
-3. The script will automatically:
+4. The script will automatically:
 
 - install `pyinstaller` into `.venv`
+- validate the self-contained runtime and copy it as `.runtime`
 - build `NovelForge.exe` from `launcher.py`
 - assemble `release/NovelForge-Portable/`
 - create `release/NovelForge-windows-portable-v0.5.1.zip`

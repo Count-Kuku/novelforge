@@ -23,7 +23,7 @@ from source_workflows import (
     run_long_reference_quick_process,
     split_long_reference_text,
 )
-from ui.common import create_batch_progress_callback
+from ui.common import create_batch_progress_callback, scoped_widget_key
 from ui.labels import label_authority, label_knowledge_category, label_scope, label_source_type
 from ui.streaming import run_with_stream as _run_with_stream
 
@@ -49,51 +49,57 @@ LONG_REFERENCE_PRESET_INFO = {
     },
 }
 
+StateScope = tuple[str, str]
 
-def apply_long_reference_fanfic_preset(preset: str):
+
+def _long_reference_key(base: str, state_scope: StateScope, *parts: object) -> str:
+    return scoped_widget_key(base, *state_scope, *parts)
+
+
+def apply_long_reference_fanfic_preset(preset: str, state_scope: StateScope):
     if preset not in LONG_REFERENCE_PRESET_INFO:
         return
     if preset == "canon_foundation":
-        st.session_state["long_reference_scope"] = "canon"
-        st.session_state["long_reference_authority"] = "official"
-        st.session_state["long_reference_source_type"] = "external_source"
-        st.session_state["long_reference_quick_import_index"] = True
-        st.session_state["long_reference_quick_auto_confirm"] = True
-        st.session_state["long_reference_quick_consolidate"] = False
-        st.session_state["long_reference_shared_expert_preset"] = "canon_auditor"
-        st.session_state["long_reference_shared_category_strategy_canon_auditor"] = "preset"
-        st.session_state["long_reference_shared_mode_canon_auditor"] = "strict_canon"
+        st.session_state[_long_reference_key("long_reference_scope", state_scope)] = "canon"
+        st.session_state[_long_reference_key("long_reference_authority", state_scope)] = "official"
+        st.session_state[_long_reference_key("long_reference_source_type", state_scope)] = "external_source"
+        st.session_state[_long_reference_key("long_reference_quick_import_index", state_scope)] = True
+        st.session_state[_long_reference_key("long_reference_quick_auto_confirm", state_scope)] = True
+        st.session_state[_long_reference_key("long_reference_quick_consolidate", state_scope)] = False
+        st.session_state[_long_reference_key("long_reference_shared_expert_preset", state_scope)] = "canon_auditor"
+        st.session_state[_long_reference_key("long_reference_shared_category_strategy", state_scope, "canon_auditor")] = "preset"
+        st.session_state[_long_reference_key("long_reference_shared_mode", state_scope, "canon_auditor")] = "strict_canon"
     elif preset == "fanfic_foundation":
-        st.session_state["long_reference_scope"] = "canon"
-        st.session_state["long_reference_authority"] = "official"
-        st.session_state["long_reference_source_type"] = "external_source"
-        st.session_state["long_reference_quick_import_index"] = True
-        st.session_state["long_reference_quick_auto_confirm"] = True
-        st.session_state["long_reference_quick_consolidate"] = True
-        st.session_state["long_reference_shared_expert_preset"] = "balanced"
-        st.session_state["long_reference_shared_category_strategy_balanced"] = "preset"
-        st.session_state["long_reference_shared_mode_balanced"] = "deep"
+        st.session_state[_long_reference_key("long_reference_scope", state_scope)] = "canon"
+        st.session_state[_long_reference_key("long_reference_authority", state_scope)] = "official"
+        st.session_state[_long_reference_key("long_reference_source_type", state_scope)] = "external_source"
+        st.session_state[_long_reference_key("long_reference_quick_import_index", state_scope)] = True
+        st.session_state[_long_reference_key("long_reference_quick_auto_confirm", state_scope)] = True
+        st.session_state[_long_reference_key("long_reference_quick_consolidate", state_scope)] = True
+        st.session_state[_long_reference_key("long_reference_shared_expert_preset", state_scope)] = "balanced"
+        st.session_state[_long_reference_key("long_reference_shared_category_strategy", state_scope, "balanced")] = "preset"
+        st.session_state[_long_reference_key("long_reference_shared_mode", state_scope, "balanced")] = "deep"
     elif preset == "style_reference":
-        st.session_state["long_reference_scope"] = "reference"
-        st.session_state["long_reference_authority"] = "curated"
-        st.session_state["long_reference_source_type"] = "external_source"
-        st.session_state["long_reference_quick_import_index"] = True
-        st.session_state["long_reference_quick_auto_confirm"] = True
-        st.session_state["long_reference_quick_consolidate"] = False
-        st.session_state["long_reference_shared_expert_preset"] = "style_expert"
-        st.session_state["long_reference_shared_category_strategy_style_expert"] = "preset"
-        st.session_state["long_reference_shared_mode_style_expert"] = "style"
-    st.session_state["long_reference_active_preset"] = preset
-    st.session_state["long_reference_preset_notice"] = f"已应用：{LONG_REFERENCE_PRESET_INFO[preset]['label']}"
+        st.session_state[_long_reference_key("long_reference_scope", state_scope)] = "reference"
+        st.session_state[_long_reference_key("long_reference_authority", state_scope)] = "curated"
+        st.session_state[_long_reference_key("long_reference_source_type", state_scope)] = "external_source"
+        st.session_state[_long_reference_key("long_reference_quick_import_index", state_scope)] = True
+        st.session_state[_long_reference_key("long_reference_quick_auto_confirm", state_scope)] = True
+        st.session_state[_long_reference_key("long_reference_quick_consolidate", state_scope)] = False
+        st.session_state[_long_reference_key("long_reference_shared_expert_preset", state_scope)] = "style_expert"
+        st.session_state[_long_reference_key("long_reference_shared_category_strategy", state_scope, "style_expert")] = "preset"
+        st.session_state[_long_reference_key("long_reference_shared_mode", state_scope, "style_expert")] = "style"
+    st.session_state[_long_reference_key("long_reference_active_preset", state_scope)] = preset
+    st.session_state[_long_reference_key("long_reference_preset_notice", state_scope)] = f"已应用：{LONG_REFERENCE_PRESET_INFO[preset]['label']}"
 
 
-def _render_long_reference_preset_selector():
+def _render_long_reference_preset_selector(state_scope: StateScope):
     with st.expander("1. 选择处理方案", expanded=True):
         st.caption("先选资料用途。第一次整理整本原作，通常直接选“同人创作地基”。系统会自动设置资料范围、可信度、自动处理方式和提取模式，之后仍可手动调整。")
-        active_preset = st.session_state.get("long_reference_active_preset", "")
+        active_preset = st.session_state.get(_long_reference_key("long_reference_active_preset", state_scope), "")
         if active_preset in LONG_REFERENCE_PRESET_INFO:
             active_info = LONG_REFERENCE_PRESET_INFO[active_preset]
-            st.success(st.session_state.get("long_reference_preset_notice", f"当前方案：{active_info['label']}"))
+            st.success(st.session_state.get(_long_reference_key("long_reference_preset_notice", state_scope), f"当前方案：{active_info['label']}"))
             st.caption(active_info["effect"])
         else:
             st.info("当前还没有套用处理方案。第一次整理整本原作，建议选“同人创作地基（推荐）”。")
@@ -107,11 +113,11 @@ def _render_long_reference_preset_selector():
                 st.caption(preset_info["effect"])
                 if st.button(
                     "已应用" if is_active else preset_info["button"],
-                    key=f"long_reference_preset_{preset_key}",
+                    key=_long_reference_key("long_reference_preset", state_scope, preset_key),
                     use_container_width=True,
                     type="primary" if is_active else "secondary",
                 ):
-                    apply_long_reference_fanfic_preset(preset_key)
+                    apply_long_reference_fanfic_preset(preset_key, state_scope)
                     st.rerun()
 
 
@@ -127,45 +133,49 @@ def _render_long_reference_flow_notes():
         )
 
 
-def _render_long_reference_source_inputs(source_type_options: dict) -> dict:
+def _render_long_reference_source_inputs(source_type_options: dict, state_scope: StateScope) -> dict:
     st.markdown("#### 2. 上传或粘贴资料")
-    long_title = st.text_input("资料标题", key="long_reference_title", placeholder="例如：某某原作正文")
+    long_title = st.text_input("资料标题", key=_long_reference_key("long_reference_title", state_scope), placeholder="例如：某某原作正文")
     with st.expander("资料属性与切分规则（可选）", expanded=False):
         col_a, col_b = st.columns(2)
-        long_scope = col_a.selectbox("资料范围", options=["canon", "reference"], format_func=label_scope, key="long_reference_scope")
+        long_scope = col_a.selectbox("资料范围", options=["canon", "reference"], format_func=label_scope, key=_long_reference_key("long_reference_scope", state_scope))
         long_authority = col_b.selectbox(
             "资料可信度",
             options=["official", "curated", "community", "unknown"],
             index=0,
             format_func=label_authority,
-            key="long_reference_authority",
+            key=_long_reference_key("long_reference_authority", state_scope),
         )
         long_source_type = col_a.selectbox(
             "资料模板",
             options=list(source_type_options.keys()),
             index=0,
             format_func=lambda key: source_type_options.get(key, label_source_type(key)),
-            key="long_reference_source_type",
+            key=_long_reference_key("long_reference_source_type", state_scope),
         )
-        long_origin = col_b.text_input("来源说明/链接（可选）", key="long_reference_origin")
-        max_chars = st.slider("没有章节标题时，每段最多字数", min_value=2000, max_value=12000, value=6000, step=1000, key="long_reference_max_chars")
-    uploaded_file = st.file_uploader("上传 txt/md 文件", type=["txt", "md"], key="long_reference_file")
+        long_origin = col_b.text_input("来源说明/链接（可选）", key=_long_reference_key("long_reference_origin", state_scope))
+        max_chars = st.slider("没有章节标题时，每段最多字数", min_value=2000, max_value=12000, value=6000, step=1000, key=_long_reference_key("long_reference_max_chars", state_scope))
+    uploaded_file = st.file_uploader("上传 txt/md 文件", type=["txt", "md"], key=_long_reference_key("long_reference_file", state_scope))
     uploaded_text = decode_uploaded_text(uploaded_file)
+    upload_signature_key = _long_reference_key("long_reference_uploaded_signature", state_scope)
+    text_key = _long_reference_key("long_reference_text", state_scope)
+    segments_key = _long_reference_key("long_reference_segments", state_scope)
+    batch_id_key = _long_reference_key("long_reference_batch_id", state_scope)
     if uploaded_file is not None:
         upload_signature = hashlib.sha1(uploaded_file.getvalue()).hexdigest()
-        if st.session_state.get("long_reference_uploaded_signature") != upload_signature:
-            st.session_state["long_reference_uploaded_signature"] = upload_signature
-            st.session_state["long_reference_text"] = uploaded_text
-            st.session_state.pop("long_reference_segments", None)
-            st.session_state.pop("long_reference_batch_id", None)
+        if st.session_state.get(upload_signature_key) != upload_signature:
+            st.session_state[upload_signature_key] = upload_signature
+            st.session_state[text_key] = uploaded_text
+            st.session_state.pop(segments_key, None)
+            st.session_state.pop(batch_id_key, None)
         st.caption(f"已读取文件：{uploaded_file.name} / {len(uploaded_file.getvalue())} 字节 / 解码后 {len(uploaded_text)} 字符")
         if not uploaded_text.strip():
             st.warning("文件已上传，但没有解码出文本内容。请确认文件不是二进制格式，或尝试另存为 UTF-8/UTF-16 txt。")
     pasted_text = st.text_area(
         "或直接粘贴资料正文",
-        value=st.session_state.get("long_reference_text", uploaded_text),
+        value=st.session_state.get(text_key, uploaded_text),
         height=260,
-        key="long_reference_text",
+        key=text_key,
     )
     return {
         "long_title": long_title,
@@ -184,30 +194,42 @@ def _long_reference_fallback_title(long_title: str, uploaded_file) -> str:
     return long_title.strip() or (uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料")
 
 
-def _render_long_reference_split_controls(long_title: str, uploaded_file, pasted_text: str, max_chars: int) -> list[dict] | None:
+def _render_long_reference_split_controls(
+    long_title: str,
+    uploaded_file,
+    pasted_text: str,
+    max_chars: int,
+    state_scope: StateScope,
+) -> list[dict] | None:
+    segments_key = _long_reference_key("long_reference_segments", state_scope)
+    batch_id_key = _long_reference_key("long_reference_batch_id", state_scope)
     # 自动切分：有文本且尚未切分时自动执行，省去手动点"预览切分"的步骤
-    if pasted_text.strip() and "long_reference_segments" not in st.session_state:
+    if pasted_text.strip() and segments_key not in st.session_state:
         title = _long_reference_fallback_title(long_title, uploaded_file)
         segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
-        st.session_state["long_reference_segments"] = segments
-        st.session_state.pop("long_reference_batch_id", None)
+        st.session_state[segments_key] = segments
+        st.session_state.pop(batch_id_key, None)
         if segments:
             st.caption(f"已自动切分为 {len(segments)} 个资料片段。如需调整切分参数，修改后点击“重新生成切分预览”。")
 
-    if st.button("重新生成切分预览", help="修改资料或切分参数后，重新生成片段预览。已有片段将被替换。"):
+    if st.button(
+        "重新生成切分预览",
+        help="修改资料或切分参数后，重新生成片段预览。已有片段将被替换。",
+        key=_long_reference_key("long_reference_resplit", state_scope),
+    ):
         title = _long_reference_fallback_title(long_title, uploaded_file)
         if not pasted_text.strip():
             st.error("没有可处理的文本内容。请上传 txt/md 文件，或把文本粘贴到输入框中。")
             return None
         segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
-        st.session_state["long_reference_segments"] = segments
-        st.session_state.pop("long_reference_batch_id", None)
+        st.session_state[segments_key] = segments
+        st.session_state.pop(batch_id_key, None)
         if segments:
             st.success(f"已切分为 {len(segments)} 个资料片段。")
         else:
             st.error("没有可切分的资料内容。")
 
-    return st.session_state.get("long_reference_segments", [])
+    return st.session_state.get(segments_key, [])
 
 
 def _render_long_reference_segment_preview(
@@ -215,6 +237,7 @@ def _render_long_reference_segment_preview(
     uploaded_file,
     pasted_text: str,
     segments: list[dict],
+    state_scope: StateScope,
 ) -> dict:
     total_chars = sum(int(item.get("char_count", 0)) for item in segments)
     source_file_name = uploaded_file.name if uploaded_file else ""
@@ -247,10 +270,13 @@ def _render_long_reference_segment_preview(
                 ),
                 batch_id,
             ),
-            key="long_reference_matching_batch",
+            key=_long_reference_key("long_reference_matching_batch", state_scope),
         )
-        if st.button("使用已有批次继续处理"):
-            st.session_state["long_reference_batch_id"] = selected_match_id
+        if st.button(
+            "使用已有批次继续处理",
+            key=_long_reference_key("long_reference_use_matching_batch", state_scope),
+        ):
+            st.session_state[_long_reference_key("long_reference_batch_id", state_scope)] = selected_match_id
             st.success("已绑定到已有批次。请在“长篇资料批次管理”里继续导入、提取或重试。")
             st.rerun()
     for segment in segments[:10]:
@@ -266,7 +292,7 @@ def _render_long_reference_segment_preview(
         options=segment_options,
         default=segment_options,
         format_func=lambda index: f"{segments[index].get('index')}. {segments[index].get('title')}（{segments[index].get('char_count')} 字符）",
-        key="long_reference_selected_segments",
+        key=_long_reference_key("long_reference_selected_segments", state_scope),
     )
     return {
         "source_file_name": source_file_name,
@@ -276,7 +302,9 @@ def _render_long_reference_segment_preview(
 
 
 def _get_or_create_long_reference_preview_batch(batch_context: dict) -> dict:
-    batch_id = st.session_state.get("long_reference_batch_id")
+    state_scope = batch_context["state_scope"]
+    batch_id_key = _long_reference_key("long_reference_batch_id", state_scope)
+    batch_id = st.session_state.get(batch_id_key)
     if batch_id:
         existing = load_long_reference_batch(batch_context["project_name"], batch_id)
         if existing:
@@ -295,18 +323,21 @@ def _get_or_create_long_reference_preview_batch(batch_context: dict) -> dict:
         content_char_count=len(normalize_text_for_fingerprint(batch_context["pasted_text"])),
         segments=batch_context["segments"],
     )
-    st.session_state["long_reference_batch_id"] = batch.get("batch_id")
+    st.session_state[batch_id_key] = batch.get("batch_id")
     return batch
 
 
-def _render_long_reference_extraction_options(knowledge_category_options: list[str]) -> dict:
+def _render_long_reference_extraction_options(
+    knowledge_category_options: list[str],
+    state_scope: StateScope,
+) -> dict:
     with st.expander("提取参数设置", expanded=False):
         shared_expert_preset = st.selectbox(
             "专家提取预设",
             options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
             index=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()).index("balanced"),
             format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
-            key="long_reference_shared_expert_preset",
+            key=_long_reference_key("long_reference_shared_expert_preset", state_scope),
             help="预设会自动推荐提取分类和提取模式。第一次处理长篇资料建议使用“平衡总管”。",
         )
         shared_preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[shared_expert_preset]
@@ -315,7 +346,7 @@ def _render_long_reference_extraction_options(knowledge_category_options: list[s
             options=["preset", "all", "none"],
             format_func=lambda value: {"preset": "按专家预设", "all": "全选分类", "none": "不预选分类"}.get(value, value),
             horizontal=True,
-            key=f"long_reference_shared_category_strategy_{shared_expert_preset}",
+            key=_long_reference_key("long_reference_shared_category_strategy", state_scope, shared_expert_preset),
             help="只影响当前控件的默认勾选。分类越多，覆盖越广；分类越少，输出越聚焦。",
         )
         shared_categories = st.multiselect(
@@ -323,7 +354,12 @@ def _render_long_reference_extraction_options(knowledge_category_options: list[s
             options=knowledge_category_options,
             default=default_extraction_categories(shared_category_strategy, shared_preset, knowledge_category_options),
             format_func=label_knowledge_category,
-            key=f"long_reference_shared_categories_{shared_expert_preset}_{shared_category_strategy}",
+            key=_long_reference_key(
+                "long_reference_shared_categories",
+                state_scope,
+                shared_expert_preset,
+                shared_category_strategy,
+            ),
             help="决定允许模型输出哪些类型的知识。没有选中的分类不会被主动提取。",
         )
         shared_extraction_mode = st.selectbox(
@@ -331,14 +367,14 @@ def _render_long_reference_extraction_options(knowledge_category_options: list[s
             options=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()),
             index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(shared_preset["mode"]) if shared_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
             format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
-            key=f"long_reference_shared_mode_{shared_expert_preset}",
+            key=_long_reference_key("long_reference_shared_mode", state_scope, shared_expert_preset),
             help="模式决定模型看资料时的优先级。通用更稳，深度更适合正式搭同人资料地基。",
         )
         st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(shared_extraction_mode, "当前模式暂无说明。"))
         shared_custom_instructions = st.text_area(
             "补充提取要求（高级，可选）",
             height=90,
-            key=f"long_reference_shared_custom_instructions_{shared_expert_preset}",
+            key=_long_reference_key("long_reference_shared_custom_instructions", state_scope, shared_expert_preset),
             placeholder="例如：优先提取主角相关关系；忽略普通战斗过程；保留所有称呼和口癖。",
         )
     return {
@@ -350,6 +386,7 @@ def _render_long_reference_extraction_options(knowledge_category_options: list[s
 
 def _render_long_reference_quick_processing(
     project_name: str,
+    state_scope: StateScope,
     batch_context: dict,
     segments: list[dict],
     selected_indices: list[int],
@@ -361,7 +398,7 @@ def _render_long_reference_quick_processing(
         "本次最多处理片段数",
         min_value=1,
         value=min(5, max(1, len(selected_indices))),
-        key="long_reference_quick_limit",
+        key=_long_reference_key("long_reference_quick_limit", state_scope),
         help="不设上限，超过 50 段需要额外确认。",
     )
     quick_quick_high_ok = True
@@ -369,7 +406,7 @@ def _render_long_reference_quick_processing(
         st.warning(f"处理 {quick_extract_limit} 段将产生约 {quick_extract_limit} 次 LLM 调用，预计耗时会较长。")
         quick_quick_high_ok = st.checkbox(
             "我确认要大量处理",
-            key="long_reference_quick_high_confirm",
+            key=_long_reference_key("long_reference_quick_high_confirm", state_scope),
         )
     selected_count = len(selected_indices)
     planned_quick_count = min(int(quick_extract_limit), selected_count)
@@ -381,28 +418,33 @@ def _render_long_reference_quick_processing(
         quick_import_to_index = st.checkbox(
             "同时导入资料索引",
             value=True,
-            key="long_reference_quick_import_index",
+            key=_long_reference_key("long_reference_quick_import_index", state_scope),
             help="开启后，原文片段会进入检索库，后续写作可以匹配原文证据。",
         )
         quick_auto_confirm = st.checkbox(
             "自动审核并保存低风险知识",
             value=True,
-            key="long_reference_quick_auto_confirm",
+            key=_long_reference_key("long_reference_quick_auto_confirm", state_scope),
             help="只自动确认没有冲突、证据存在、置信度尚可的条目；风险条目会留在待确认队列。",
         )
         quick_consolidate = st.checkbox(
             "提取后自动整理散知识",
             value=False,
-            key="long_reference_quick_consolidate",
+            key=_long_reference_key("long_reference_quick_consolidate", state_scope),
             help="会尝试把同一批次里的散知识合并成更稳定的角色/关系/设定条目。正式大批量处理时再开启更稳。",
         )
 
-    extraction_options = _render_long_reference_extraction_options(knowledge_category_options)
+    extraction_options = _render_long_reference_extraction_options(knowledge_category_options, state_scope)
     shared_categories = extraction_options["categories"]
     shared_extraction_mode = extraction_options["mode"]
     shared_custom_instructions = extraction_options["custom_instructions"]
 
-    if st.button("开始处理所选片段", use_container_width=True, type="primary"):
+    if st.button(
+        "开始处理所选片段",
+        use_container_width=True,
+        type="primary",
+        key=_long_reference_key("long_reference_quick_process", state_scope),
+    ):
         if not selected_indices:
             st.error("请先选择片段。")
         elif not shared_categories:
@@ -427,7 +469,7 @@ def _render_long_reference_quick_processing(
                 custom_instructions=shared_custom_instructions,
                 progress_callback=progress_callback,
             )
-            st.session_state["long_reference_quick_result"] = quick_summary
+            st.session_state[_long_reference_key("long_reference_quick_result", state_scope)] = quick_summary
             st.success(
                 f"自动处理完成：导入 {quick_summary.get('imported_count', 0)} 段，"
                 f"提取 {quick_summary.get('processed_count', 0)} 段，"
@@ -439,12 +481,12 @@ def _render_long_reference_quick_processing(
                 st.warning(f"处理失败：{failure}")
             st.rerun()
 
-    _render_long_reference_quick_result()
+    _render_long_reference_quick_result(state_scope)
     return extraction_options
 
 
-def _render_long_reference_quick_result():
-    quick_result = st.session_state.get("long_reference_quick_result", {})
+def _render_long_reference_quick_result(state_scope: StateScope):
+    quick_result = st.session_state.get(_long_reference_key("long_reference_quick_result", state_scope), {})
     if not quick_result:
         return
     with st.expander("上次自动处理结果", expanded=bool(quick_result.get("blocked_count"))):
@@ -466,6 +508,7 @@ def _render_long_reference_quick_result():
 
 def _render_long_reference_stepwise_processing(
     project_name: str,
+    state_scope: StateScope,
     batch_context: dict,
     selected_indices: list[int],
     shared_categories: list[str],
@@ -474,7 +517,11 @@ def _render_long_reference_stepwise_processing(
 ):
     with st.expander("高级：分步处理", expanded=False):
         st.caption("适合调试或手动控制。保存批次、导入索引、提取知识可以分别执行。")
-        if st.button("保存为处理批次", help="保存当前切分结果，方便之后继续处理、重试失败片段或重新提取。"):
+        if st.button(
+            "保存为处理批次",
+            help="保存当前切分结果，方便之后继续处理、重试失败片段或重新提取。",
+            key=_long_reference_key("long_reference_save_batch", state_scope),
+        ):
             batch = _get_or_create_long_reference_preview_batch(batch_context)
             st.success(f"已保存批次：{batch.get('title')} / {batch.get('summary', {}).get('segment_count', 0)} 个片段。")
             st.rerun()
@@ -482,6 +529,7 @@ def _render_long_reference_stepwise_processing(
         if st.button(
             "导入资料索引",
             help="把所选片段作为可检索原文资料保存。适合让后续写作引用原文，但不会自动生成角色/设定知识。",
+            key=_long_reference_key("long_reference_import_segments", state_scope),
         ):
             if not selected_indices:
                 st.error("请先选择片段。")
@@ -492,21 +540,30 @@ def _render_long_reference_stepwise_processing(
                 st.rerun()
 
         st.markdown("##### 手动提取知识库条目")
-        batch_limit = st.number_input("本次最多提取片段数", min_value=1, value=3, key="long_reference_extract_limit")
+        batch_limit = st.number_input(
+            "本次最多提取片段数",
+            min_value=1,
+            value=3,
+            key=_long_reference_key("long_reference_extract_limit", state_scope),
+        )
         manual_extract_high_ok = True
         if batch_limit > 50:
             st.warning(f"提取 {batch_limit} 段将产生约 {batch_limit} 次 LLM 调用，预计耗时会较长。")
             manual_extract_high_ok = st.checkbox(
                 "我确认要大量处理",
-                key="long_reference_manual_extract_high_confirm",
+                key=_long_reference_key("long_reference_manual_extract_high_confirm", state_scope),
             )
         manual_consolidate = st.checkbox(
             "提取后自动整理散知识",
             value=False,
-            key="long_reference_manual_consolidate",
+            key=_long_reference_key("long_reference_manual_consolidate", state_scope),
             help="提取完成后自动合并重复/同名的候选知识条目。提取片段数较多时建议开启。",
         )
-        if st.button("提取知识库条目", use_container_width=True):
+        if st.button(
+            "提取知识库条目",
+            use_container_width=True,
+            key=_long_reference_key("long_reference_manual_extract", state_scope),
+        ):
             if not selected_indices:
                 st.error("请先选择片段。")
             elif not shared_categories:
@@ -527,7 +584,8 @@ def _render_long_reference_stepwise_processing(
                     custom_instructions=shared_custom_instructions,
                     progress_callback=progress_callback,
                 )
-                st.session_state["long_reference_manual_extract_result"] = {
+                manual_result_key = _long_reference_key("long_reference_manual_extract_result", state_scope)
+                st.session_state[manual_result_key] = {
                     "processed": processed,
                     "queued_total": queued_total,
                     "failed_titles": failed_titles,
@@ -547,10 +605,13 @@ def _render_long_reference_stepwise_processing(
                         f"追加整理：合并 {consolidation_summary.get('source_count', 0)} 条为 "
                         f"{consolidation_summary.get('queued_count', 0)} 条稳定知识。"
                     )
-                    st.session_state["long_reference_manual_extract_result"]["consolidation"] = consolidation_summary
+                    st.session_state[manual_result_key]["consolidation"] = consolidation_summary
                 st.rerun()
 
-        manual_result = st.session_state.get("long_reference_manual_extract_result", {})
+        manual_result = st.session_state.get(
+            _long_reference_key("long_reference_manual_extract_result", state_scope),
+            {},
+        )
         if manual_result:
             with st.expander("上次手动提取结果", expanded=bool(manual_result.get("failed_titles"))):
                 st.json({
@@ -562,12 +623,14 @@ def _render_long_reference_stepwise_processing(
 
 
 def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str], expanded: bool = False):
+    current_story_id = str(st.session_state.get("active_story_id") or "default")
+    state_scope = (project_name, current_story_id)
     with st.expander("长篇文本导入", expanded=expanded):
         st.info("推荐顺序：选择处理方案 / 上传或粘贴文本 / 检查切分结果 / 自动处理。处理完成后，风险条目会留在“待确认知识”里。")
-        _render_long_reference_preset_selector()
+        _render_long_reference_preset_selector(state_scope)
         _render_long_reference_flow_notes()
 
-        source_inputs = _render_long_reference_source_inputs(source_type_options)
+        source_inputs = _render_long_reference_source_inputs(source_type_options, state_scope)
         long_title = source_inputs["long_title"]
         long_scope = source_inputs["long_scope"]
         long_authority = source_inputs["long_authority"]
@@ -577,11 +640,23 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
         uploaded_file = source_inputs["uploaded_file"]
         pasted_text = source_inputs["pasted_text"]
 
-        segments = _render_long_reference_split_controls(long_title, uploaded_file, pasted_text, max_chars)
+        segments = _render_long_reference_split_controls(
+            long_title,
+            uploaded_file,
+            pasted_text,
+            max_chars,
+            state_scope,
+        )
         if not segments:
             return
 
-        preview_state = _render_long_reference_segment_preview(project_name, uploaded_file, pasted_text, segments)
+        preview_state = _render_long_reference_segment_preview(
+            project_name,
+            uploaded_file,
+            pasted_text,
+            segments,
+            state_scope,
+        )
         source_file_name = preview_state["source_file_name"]
         content_fingerprint = preview_state["content_fingerprint"]
         selected_indices = preview_state["selected_indices"]
@@ -598,10 +673,12 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             "content_fingerprint": content_fingerprint,
             "pasted_text": pasted_text,
             "segments": segments,
+            "state_scope": state_scope,
         }
 
         extraction_options = _render_long_reference_quick_processing(
             project_name,
+            state_scope,
             batch_context,
             segments,
             selected_indices,
@@ -613,6 +690,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
 
         _render_long_reference_stepwise_processing(
             project_name,
+            state_scope,
             batch_context,
             selected_indices,
             shared_categories,

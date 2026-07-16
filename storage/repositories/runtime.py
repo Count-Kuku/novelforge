@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from hashlib import sha256
 from typing import Any
 
 
@@ -26,6 +27,38 @@ def _float_or_default(value: Any, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _optional_story_id(conn: sqlite3.Connection, story_id: Any, label: str) -> str | None:
+    clean_story_id = str(story_id or "").strip()
+    if not clean_story_id:
+        return None
+    row = conn.execute(
+        "SELECT story_id FROM stories WHERE story_id = ? AND deleted_at IS NULL",
+        (clean_story_id,),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"{label} references an unknown or deleted story ID: {clean_story_id}")
+    return clean_story_id
+
+
+def _reject_cross_story_id_collision(
+    conn: sqlite3.Connection,
+    table: str,
+    id_column: str,
+    item_id: str,
+    story_id: str | None,
+    label: str,
+) -> None:
+    row = conn.execute(
+        f"SELECT story_id FROM {table} WHERE {id_column} = ?",
+        (item_id,),
+    ).fetchone()
+    if not row:
+        return
+    existing_story_id = row["story_id"] if isinstance(row, sqlite3.Row) else row[0]
+    if (existing_story_id or None) != (story_id or None):
+        raise ValueError(f"{label} ID already belongs to a different story: {item_id}")
 
 
 def sync_auto_review_policy(conn: sqlite3.Connection, policy: dict) -> dict:
@@ -82,14 +115,8 @@ def sync_auto_review_runs(conn: sqlite3.Connection, runs: list[dict]) -> list[di
                 str(item.get("created_at") or ""),
             ),
         )
-    if active_ids:
-        placeholders = ",".join("?" for _ in active_ids)
-        conn.execute(
-            f"DELETE FROM auto_review_runs WHERE run_id NOT IN ({placeholders})",
-            tuple(active_ids),
-        )
-    else:
-        conn.execute("DELETE FROM auto_review_runs")
+    # This table is an audit log. A caller may save only its recent in-memory
+    # window, so absence from a snapshot is not authorization to erase history.
     return normalized
 
 
@@ -120,6 +147,10 @@ def sync_retrieval_eval_cases(conn: sqlite3.Connection, cases: list[dict]) -> li
         case_id = str(item.get("case_id") or "").strip()
         if not case_id:
             continue
+        story_id = _optional_story_id(conn, item.get("story_id"), "Retrieval evaluation case")
+        _reject_cross_story_id_collision(
+            conn, "retrieval_eval_cases", "case_id", case_id, story_id, "Retrieval evaluation case"
+        )
         active_ids.append(case_id)
         conn.execute(
             """
@@ -127,8 +158,9 @@ def sync_retrieval_eval_cases(conn: sqlite3.Connection, cases: list[dict]) -> li
                 case_id, story_id, name, query, task_type, expected_json, enabled,
                 created_at, updated_at, deleted_at
             )
-            VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(case_id) DO UPDATE SET
+                story_id = excluded.story_id,
                 name = excluded.name,
                 query = excluded.query,
                 task_type = excluded.task_type,
@@ -139,6 +171,7 @@ def sync_retrieval_eval_cases(conn: sqlite3.Connection, cases: list[dict]) -> li
             """,
             (
                 case_id,
+                story_id,
                 str(item.get("name") or item.get("query") or "未命名评测用例"),
                 str(item.get("query") or ""),
                 str(item.get("retrieval_profile") or item.get("task_type") or ""),
@@ -186,6 +219,9 @@ def load_retrieval_eval_case_rows(conn: sqlite3.Connection) -> list[dict]:
         payload = _json_loads_dict(row["expected_json"] if isinstance(row, sqlite3.Row) else row[5])
         case_id = row["case_id"] if isinstance(row, sqlite3.Row) else row[0]
         payload.setdefault("case_id", case_id)
+        story_id = row["story_id"] if isinstance(row, sqlite3.Row) else row[1]
+        if story_id:
+            payload.setdefault("story_id", story_id)
         payload.setdefault("name", row["name"] if isinstance(row, sqlite3.Row) else row[2])
         payload.setdefault("query", row["query"] if isinstance(row, sqlite3.Row) else row[3])
         payload.setdefault("retrieval_profile", row["task_type"] if isinstance(row, sqlite3.Row) else row[4])
@@ -202,18 +238,24 @@ def sync_retrieval_eval_run(conn: sqlite3.Connection, run: dict) -> dict:
     run_id = str(payload.get("run_id") or "").strip()
     if not run_id:
         raise ValueError("Retrieval evaluation run ID cannot be empty.")
+    story_id = _optional_story_id(conn, payload.get("story_id"), "Retrieval evaluation run")
+    _reject_cross_story_id_collision(
+        conn, "retrieval_eval_runs", "run_id", run_id, story_id, "Retrieval evaluation run"
+    )
     conn.execute(
         """
         INSERT INTO retrieval_eval_runs (run_id, case_id, story_id, status, result_json, created_at)
-        VALUES (?, ?, NULL, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(run_id) DO UPDATE SET
             case_id = excluded.case_id,
+            story_id = excluded.story_id,
             status = excluded.status,
             result_json = excluded.result_json
         """,
         (
             run_id,
             str(payload.get("case_id") or "").strip() or None,
+            story_id,
             str(payload.get("status") or "completed"),
             _json_dumps(payload),
             str(payload.get("created_at") or ""),
@@ -225,20 +267,23 @@ def sync_retrieval_eval_run(conn: sqlite3.Connection, run: dict) -> dict:
 def load_retrieval_eval_run_rows(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT run_id, case_id, status, result_json, created_at
+        SELECT run_id, case_id, story_id, status, result_json, created_at
         FROM retrieval_eval_runs
         ORDER BY created_at, run_id
         """
     ).fetchall()
     items: list[dict] = []
     for row in rows:
-        payload = _json_loads_dict(row["result_json"] if isinstance(row, sqlite3.Row) else row[3])
+        payload = _json_loads_dict(row["result_json"] if isinstance(row, sqlite3.Row) else row[4])
         payload.setdefault("run_id", row["run_id"] if isinstance(row, sqlite3.Row) else row[0])
         case_id = row["case_id"] if isinstance(row, sqlite3.Row) else row[1]
         if case_id is not None:
             payload.setdefault("case_id", case_id)
-        payload.setdefault("status", row["status"] if isinstance(row, sqlite3.Row) else row[2])
-        payload.setdefault("created_at", row["created_at"] if isinstance(row, sqlite3.Row) else row[4])
+        story_id = row["story_id"] if isinstance(row, sqlite3.Row) else row[2]
+        if story_id:
+            payload.setdefault("story_id", story_id)
+        payload.setdefault("status", row["status"] if isinstance(row, sqlite3.Row) else row[3])
+        payload.setdefault("created_at", row["created_at"] if isinstance(row, sqlite3.Row) else row[5])
         items.append(payload)
     return items
 
@@ -256,15 +301,20 @@ def append_retrieval_feedback_row(conn: sqlite3.Connection, feedback: dict) -> d
         ).fetchone()
         if not row:
             chunk_id = None
+    story_id = _optional_story_id(conn, payload.get("story_id"), "Retrieval feedback")
+    _reject_cross_story_id_collision(
+        conn, "retrieval_feedback", "feedback_id", feedback_id, story_id, "Retrieval feedback"
+    )
     conn.execute(
         """
         INSERT INTO retrieval_feedback (
             feedback_id, chunk_id, story_id, task_type, feedback_type, reason,
             weight, created_at, payload_json
         )
-        VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(feedback_id) DO UPDATE SET
             chunk_id = excluded.chunk_id,
+            story_id = excluded.story_id,
             task_type = excluded.task_type,
             feedback_type = excluded.feedback_type,
             reason = excluded.reason,
@@ -272,8 +322,9 @@ def append_retrieval_feedback_row(conn: sqlite3.Connection, feedback: dict) -> d
             payload_json = excluded.payload_json
         """,
             (
-                feedback_id,
+            feedback_id,
             chunk_id,
+            story_id,
             str(payload.get("retrieval_profile") or payload.get("task_type") or "").strip() or None,
             str(payload.get("rating") or payload.get("feedback_type") or "").strip(),
             str(payload.get("note") or payload.get("reason") or "").strip(),
@@ -288,7 +339,7 @@ def append_retrieval_feedback_row(conn: sqlite3.Connection, feedback: dict) -> d
 def load_retrieval_feedback_rows(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT feedback_id, chunk_id, task_type, feedback_type, reason, weight,
+        SELECT feedback_id, chunk_id, story_id, task_type, feedback_type, reason, weight,
                created_at, payload_json
         FROM retrieval_feedback
         ORDER BY created_at, feedback_id
@@ -296,16 +347,19 @@ def load_retrieval_feedback_rows(conn: sqlite3.Connection) -> list[dict]:
     ).fetchall()
     items: list[dict] = []
     for row in rows:
-        payload = _json_loads_dict(row["payload_json"] if isinstance(row, sqlite3.Row) else row[7])
+        payload = _json_loads_dict(row["payload_json"] if isinstance(row, sqlite3.Row) else row[8])
         payload.setdefault("feedback_id", row["feedback_id"] if isinstance(row, sqlite3.Row) else row[0])
         chunk_id = row["chunk_id"] if isinstance(row, sqlite3.Row) else row[1]
         if chunk_id is not None:
             payload.setdefault("chunk_id", chunk_id)
-        payload.setdefault("retrieval_profile", row["task_type"] if isinstance(row, sqlite3.Row) else row[2])
-        payload.setdefault("rating", row["feedback_type"] if isinstance(row, sqlite3.Row) else row[3])
-        payload.setdefault("note", row["reason"] if isinstance(row, sqlite3.Row) else row[4])
-        payload.setdefault("weight", row["weight"] if isinstance(row, sqlite3.Row) else row[5])
-        payload.setdefault("created_at", row["created_at"] if isinstance(row, sqlite3.Row) else row[6])
+        story_id = row["story_id"] if isinstance(row, sqlite3.Row) else row[2]
+        if story_id:
+            payload.setdefault("story_id", story_id)
+        payload.setdefault("retrieval_profile", row["task_type"] if isinstance(row, sqlite3.Row) else row[3])
+        payload.setdefault("rating", row["feedback_type"] if isinstance(row, sqlite3.Row) else row[4])
+        payload.setdefault("note", row["reason"] if isinstance(row, sqlite3.Row) else row[5])
+        payload.setdefault("weight", row["weight"] if isinstance(row, sqlite3.Row) else row[6])
+        payload.setdefault("created_at", row["created_at"] if isinstance(row, sqlite3.Row) else row[7])
         items.append(payload)
     return items
 
@@ -315,6 +369,11 @@ def sync_conflict_resolution(conn: sqlite3.Connection, resolution: dict) -> dict
     resolution_id = str(payload.get("conflict_id") or payload.get("resolution_id") or "").strip()
     if not resolution_id:
         raise ValueError("Conflict resolution ID cannot be empty.")
+    story_id = _optional_story_id(conn, payload.get("story_id"), "Conflict resolution")
+    storage_resolution_id = resolution_id
+    if story_id:
+        digest = sha256(f"{story_id}:{resolution_id}".encode("utf-8")).hexdigest()[:32]
+        storage_resolution_id = f"resolution_{digest}"
     conn.execute(
         """
         INSERT INTO retrieval_conflict_resolutions (
@@ -322,7 +381,7 @@ def sync_conflict_resolution(conn: sqlite3.Connection, resolution: dict) -> dict
             decision, rationale, payload_json, created_at, updated_at
         )
         VALUES (
-            ?, NULL, ?, ?, NULL, ?, ?, ?,
+            ?, ?, ?, ?, NULL, ?, ?, ?,
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
         )
@@ -335,7 +394,8 @@ def sync_conflict_resolution(conn: sqlite3.Connection, resolution: dict) -> dict
             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
         """,
         (
-            resolution_id,
+            storage_resolution_id,
+            story_id,
             str(payload.get("conflict_key") or payload.get("conflict_id") or resolution_id),
             str(payload.get("preferred_scope") or payload.get("scope") or "").strip() or None,
             str(payload.get("decision") or payload.get("chosen_resolution") or "manual"),
@@ -349,7 +409,7 @@ def sync_conflict_resolution(conn: sqlite3.Connection, resolution: dict) -> dict
 def load_conflict_resolution_rows(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT resolution_id, conflict_key, preferred_scope, decision, rationale,
+        SELECT resolution_id, story_id, conflict_key, preferred_scope, decision, rationale,
                payload_json, created_at, updated_at
         FROM retrieval_conflict_resolutions
         ORDER BY updated_at, resolution_id
@@ -357,13 +417,16 @@ def load_conflict_resolution_rows(conn: sqlite3.Connection) -> list[dict]:
     ).fetchall()
     items: list[dict] = []
     for row in rows:
-        payload = _json_loads_dict(row["payload_json"] if isinstance(row, sqlite3.Row) else row[5])
+        payload = _json_loads_dict(row["payload_json"] if isinstance(row, sqlite3.Row) else row[6])
         resolution_id = row["resolution_id"] if isinstance(row, sqlite3.Row) else row[0]
         payload.setdefault("conflict_id", resolution_id)
-        payload.setdefault("resolution_id", resolution_id)
-        payload.setdefault("conflict_key", row["conflict_key"] if isinstance(row, sqlite3.Row) else row[1])
-        payload.setdefault("decision", row["decision"] if isinstance(row, sqlite3.Row) else row[3])
-        payload.setdefault("note", row["rationale"] if isinstance(row, sqlite3.Row) else row[4])
-        payload.setdefault("updated_at", row["updated_at"] if isinstance(row, sqlite3.Row) else row[7])
+        payload.setdefault("resolution_id", payload.get("conflict_id") or resolution_id)
+        story_id = row["story_id"] if isinstance(row, sqlite3.Row) else row[1]
+        if story_id:
+            payload.setdefault("story_id", story_id)
+        payload.setdefault("conflict_key", row["conflict_key"] if isinstance(row, sqlite3.Row) else row[2])
+        payload.setdefault("decision", row["decision"] if isinstance(row, sqlite3.Row) else row[4])
+        payload.setdefault("note", row["rationale"] if isinstance(row, sqlite3.Row) else row[5])
+        payload.setdefault("updated_at", row["updated_at"] if isinstance(row, sqlite3.Row) else row[8])
         items.append(payload)
     return items

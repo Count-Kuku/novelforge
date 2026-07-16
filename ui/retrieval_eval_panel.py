@@ -21,10 +21,18 @@ from ui.labels import label_retrieval_mode, label_scope, label_source_type
 from ui.step_views import render_step_json_expander
 
 
-def _load_eval_workbench_state(project_name: str, manifest) -> tuple[list[dict], list[dict], list[dict], list[str]]:
-    cases = load_retrieval_eval_cases(project_name)
-    runs = list(reversed(load_retrieval_eval_runs(project_name)))
-    feedback_items = load_retrieval_feedback(project_name)
+def _load_eval_workbench_state(
+    project_name: str,
+    story_id: str,
+    manifest,
+) -> tuple[list[dict], list[dict], list[dict], list[str]]:
+    def belongs_to_scope(item: dict) -> bool:
+        item_story_id = str(item.get("story_id") or "").strip()
+        return not item_story_id or item_story_id == story_id
+
+    cases = [case for case in load_retrieval_eval_cases(project_name) if belongs_to_scope(case)]
+    runs = list(reversed([run for run in load_retrieval_eval_runs(project_name) if belongs_to_scope(run)]))
+    feedback_items = [item for item in load_retrieval_feedback(project_name) if belongs_to_scope(item)]
     source_type_candidates = sorted({chunk.source_type for chunk in manifest.chunks}) if manifest else []
     return cases, runs, feedback_items, source_type_candidates
 
@@ -44,26 +52,32 @@ def _eval_case_label(cases: list[dict], value: str) -> str:
     return next((case.get("name", value) for case in cases if case.get("case_id") == value), value)
 
 
-def _render_eval_case_selector(project_name: str, cases: list[dict]) -> tuple[str, dict]:
+def _render_eval_case_selector(project_name: str, story_id: str, cases: list[dict]) -> tuple[str, dict]:
     edit_options = ["__new__"] + [str(case.get("case_id") or "") for case in cases]
     edit_case_id = st.selectbox(
         "编辑目标",
         options=edit_options,
         format_func=lambda value: _eval_case_label(cases, value),
-        key=scoped_widget_key("rag_eval_edit_case_id", project_name),
+        key=scoped_widget_key("rag_eval_edit_case_id", project_name, story_id),
     )
     current_case = next((case for case in cases if case.get("case_id") == edit_case_id), {}) if edit_case_id != "__new__" else {}
     return edit_case_id, current_case
 
 
-def _render_eval_case_filters(project_name: str, current_case: dict, edit_case_id: str, source_type_candidates: list[str]) -> dict:
+def _render_eval_case_filters(
+    project_name: str,
+    story_id: str,
+    current_case: dict,
+    edit_case_id: str,
+    source_type_candidates: list[str],
+) -> dict:
     eval_col_a, eval_col_b, eval_col_c = st.columns(3)
     expected_source_types = eval_col_a.multiselect(
         "期望来源类型（可选）",
         options=source_type_candidates,
         default=[item for item in current_case.get("expected_source_types", []) if item in source_type_candidates],
         format_func=label_source_type,
-        key=scoped_widget_key("rag_eval_expected_source_types", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_expected_source_types", project_name, story_id, edit_case_id),
     )
     profile_options = [""] + list(RETRIEVAL_TASK_PROFILES.keys())
     eval_profile = eval_col_b.selectbox(
@@ -71,28 +85,28 @@ def _render_eval_case_filters(project_name: str, current_case: dict, edit_case_i
         options=profile_options,
         index=profile_options.index(current_case.get("retrieval_profile", "")) if current_case.get("retrieval_profile", "") in profile_options else 0,
         format_func=retrieval_profile_label,
-        key=scoped_widget_key("rag_eval_profile", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_profile", project_name, story_id, edit_case_id),
     )
     eval_mode = eval_col_c.selectbox(
         "检索模式",
         options=["hybrid", "lexical", "semantic"],
         index=["hybrid", "lexical", "semantic"].index(current_case.get("retrieval_mode", "hybrid")) if current_case.get("retrieval_mode", "hybrid") in {"hybrid", "lexical", "semantic"} else 0,
         format_func=label_retrieval_mode,
-        key=scoped_widget_key("rag_eval_mode", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_mode", project_name, story_id, edit_case_id),
     )
     scope_values = st.multiselect(
         "范围过滤",
         options=["project", "canon", "reference"],
         default=current_case.get("allowed_scopes", []) or ["project", "canon", "reference"],
         format_func=label_scope,
-        key=scoped_widget_key("rag_eval_scopes", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_scopes", project_name, story_id, edit_case_id),
     )
     source_type_values = st.multiselect(
         "来源类型过滤（可选）",
         options=source_type_candidates,
         default=[item for item in current_case.get("allowed_source_types", []) if item in source_type_candidates],
         format_func=label_source_type,
-        key=scoped_widget_key("rag_eval_allowed_source_types", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_allowed_source_types", project_name, story_id, edit_case_id),
     )
     return {
         "expected_source_types": expected_source_types,
@@ -103,65 +117,72 @@ def _render_eval_case_filters(project_name: str, current_case: dict, edit_case_i
     }
 
 
-def _render_eval_case_config(project_name: str, current_case: dict, edit_case_id: str) -> dict:
+def _render_eval_case_config(project_name: str, story_id: str, current_case: dict, edit_case_id: str) -> dict:
     config_col_a, config_col_b, config_col_c = st.columns(3)
     eval_top_k = config_col_a.number_input(
         "返回条数",
         min_value=1,
         max_value=20,
         value=int(current_case.get("top_k", 6) or 6),
-        key=scoped_widget_key("rag_eval_top_k", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_top_k", project_name, story_id, edit_case_id),
     )
     eval_min_matches = config_col_b.number_input(
         "最少命中预期数",
         min_value=1,
         max_value=20,
         value=int(current_case.get("min_expected_matches", 1) or 1),
-        key=scoped_widget_key("rag_eval_min_matches", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_min_matches", project_name, story_id, edit_case_id),
     )
     eval_status = config_col_c.selectbox(
         "状态",
         options=["active", "disabled"],
         index=0 if current_case.get("status", "active") != "disabled" else 1,
         format_func=lambda value: "启用" if value == "active" else "停用",
-        key=scoped_widget_key("rag_eval_status", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_status", project_name, story_id, edit_case_id),
     )
     return {"top_k": int(eval_top_k), "min_expected_matches": int(eval_min_matches), "status": eval_status}
 
 
-def _render_eval_case_form_payload(project_name: str, current_case: dict, edit_case_id: str, source_type_candidates: list[str]) -> dict:
-    case_name = st.text_input("用例名称", value=current_case.get("name", ""), key=scoped_widget_key("rag_eval_case_name", project_name, edit_case_id))
-    case_query = st.text_area("测试查询", value=current_case.get("query", ""), height=90, key=scoped_widget_key("rag_eval_case_query", project_name, edit_case_id))
+def _render_eval_case_form_payload(
+    project_name: str,
+    story_id: str,
+    current_case: dict,
+    edit_case_id: str,
+    source_type_candidates: list[str],
+) -> dict:
+    case_name = st.text_input("用例名称", value=current_case.get("name", ""), key=scoped_widget_key("rag_eval_case_name", project_name, story_id, edit_case_id))
+    case_query = st.text_area("测试查询", value=current_case.get("query", ""), height=90, key=scoped_widget_key("rag_eval_case_query", project_name, story_id, edit_case_id))
     expected_terms_text = st.text_area(
         "期望命中词（逗号或换行分隔）",
         value="\n".join(current_case.get("expected_terms", [])),
         height=80,
-        key=scoped_widget_key("rag_eval_expected_terms", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_expected_terms", project_name, story_id, edit_case_id),
     )
     expected_chunk_ids_text = st.text_area(
         "期望片段 ID（可选，逗号或换行分隔）",
         value="\n".join(current_case.get("expected_chunk_ids", [])),
         height=70,
-        key=scoped_widget_key("rag_eval_expected_chunks", project_name, edit_case_id),
+        key=scoped_widget_key("rag_eval_expected_chunks", project_name, story_id, edit_case_id),
     )
     payload = {
         "case_id": "" if edit_case_id == "__new__" else edit_case_id,
+        "story_id": story_id if edit_case_id == "__new__" else str(current_case.get("story_id") or ""),
         "name": case_name,
         "query": case_query,
         "expected_terms": parse_multiline_or_comma_values(expected_terms_text),
         "expected_chunk_ids": parse_multiline_or_comma_values(expected_chunk_ids_text),
     }
-    payload.update(_render_eval_case_filters(project_name, current_case, edit_case_id, source_type_candidates))
-    payload.update(_render_eval_case_config(project_name, current_case, edit_case_id))
-    payload["notes"] = st.text_area("备注", value=current_case.get("notes", ""), height=70, key=scoped_widget_key("rag_eval_notes", project_name, edit_case_id))
+    payload.update(_render_eval_case_filters(project_name, story_id, current_case, edit_case_id, source_type_candidates))
+    payload.update(_render_eval_case_config(project_name, story_id, current_case, edit_case_id))
+    payload["notes"] = st.text_area("备注", value=current_case.get("notes", ""), height=70, key=scoped_widget_key("rag_eval_notes", project_name, story_id, edit_case_id))
     return payload
 
 
-def _render_eval_case_editor(project_name: str, cases: list[dict], source_type_candidates: list[str]) -> None:
+def _render_eval_case_editor(project_name: str, story_id: str, cases: list[dict], source_type_candidates: list[str]) -> None:
     with st.expander("新增 / 更新评测用例", expanded=False):
-        edit_case_id, current_case = _render_eval_case_selector(project_name, cases)
-        payload = _render_eval_case_form_payload(project_name, current_case, edit_case_id, source_type_candidates)
-        if st.button("保存评测用例", key=scoped_widget_key("save_rag_eval_case", project_name, edit_case_id), use_container_width=True):
+        edit_case_id, current_case = _render_eval_case_selector(project_name, story_id, cases)
+        payload = _render_eval_case_form_payload(project_name, story_id, current_case, edit_case_id, source_type_candidates)
+        if st.button("保存评测用例", key=scoped_widget_key("save_rag_eval_case", project_name, story_id, edit_case_id), use_container_width=True):
             try:
                 saved = upsert_retrieval_eval_case(project_name, payload)
                 st.success(f"已保存评测用例：{saved.get('name')}")
@@ -185,41 +206,46 @@ def _render_eval_cases_table(cases: list[dict]) -> None:
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
 
-def _render_eval_case_actions(project_name: str, cases: list[dict]) -> None:
-    last_run_key = scoped_session_key("rag_eval_last_run", project_name)
+def _render_eval_case_actions(project_name: str, story_id: str, cases: list[dict]) -> None:
+    last_run_key = scoped_session_key("rag_eval_last_run", project_name, story_id)
     action_col_a, action_col_b, action_col_c = st.columns(3)
     selected_case_id = action_col_a.selectbox(
         "选择运行/删除用例",
         options=[str(case.get("case_id") or "") for case in cases],
         format_func=lambda value: _eval_case_label(cases, value),
-        key=scoped_widget_key("rag_eval_selected_case", project_name),
+        key=scoped_widget_key("rag_eval_selected_case", project_name, story_id),
     )
-    if action_col_b.button("运行所选用例", key=scoped_widget_key("run_selected_rag_eval", project_name), use_container_width=True):
+    if action_col_b.button("运行所选用例", key=scoped_widget_key("run_selected_rag_eval", project_name, story_id), use_container_width=True):
         selected_case = next((case for case in cases if case.get("case_id") == selected_case_id), None)
         if selected_case:
-            run = run_retrieval_eval_cases(project_name, [selected_case], note="手动运行单个评测用例")
+            scoped_case = {**selected_case, "story_id": str(selected_case.get("story_id") or story_id)}
+            run = run_retrieval_eval_cases(project_name, [scoped_case], note="手动运行单个评测用例")
             st.session_state[last_run_key] = run
             st.success(f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}")
     if confirmed_button(
         action_col_c,
         "删除所选用例",
         "确认删除所选用例",
-        scoped_widget_key("delete_selected_rag_eval", project_name),
+        scoped_widget_key("delete_selected_rag_eval", project_name, story_id, selected_case_id),
     ):
         if delete_retrieval_eval_case(project_name, selected_case_id):
             st.success("已删除评测用例。")
             st.rerun()
-    if st.button("运行全部启用评测用例", key=scoped_widget_key("run_all_rag_eval", project_name), use_container_width=True):
-        run = run_retrieval_eval_cases(project_name, cases, note="手动运行全部启用评测用例")
+    if st.button("运行全部启用评测用例", key=scoped_widget_key("run_all_rag_eval", project_name, story_id), use_container_width=True):
+        scoped_cases = [
+            {**case, "story_id": str(case.get("story_id") or story_id)}
+            for case in cases
+        ]
+        run = run_retrieval_eval_cases(project_name, scoped_cases, note="手动运行全部启用评测用例")
         st.session_state[last_run_key] = run
         st.success(f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}，通过率 {run.get('pass_rate', 0):.0%}")
 
 
-def _render_eval_cases(project_name: str, cases: list[dict]) -> None:
+def _render_eval_cases(project_name: str, story_id: str, cases: list[dict]) -> None:
     if not cases:
         return
     _render_eval_cases_table(cases)
-    _render_eval_case_actions(project_name, cases)
+    _render_eval_case_actions(project_name, story_id, cases)
 
 
 def _eval_result_rows(last_run: dict) -> list[dict]:
@@ -236,8 +262,8 @@ def _eval_result_rows(last_run: dict) -> list[dict]:
     return rows
 
 
-def _render_last_eval_run(project_name: str, runs: list[dict]) -> None:
-    last_run = st.session_state.get(scoped_session_key("rag_eval_last_run", project_name)) or (runs[0] if runs else {})
+def _render_last_eval_run(project_name: str, story_id: str, runs: list[dict]) -> None:
+    last_run = st.session_state.get(scoped_session_key("rag_eval_last_run", project_name, story_id)) or (runs[0] if runs else {})
     if not last_run:
         return
     with st.expander("最近一次评测结果", expanded=True):
@@ -272,12 +298,12 @@ def _render_retrieval_feedback(feedback_items: list[dict]) -> None:
         )
 
 
-def render_retrieval_eval_workbench(project_name: str, manifest):
-    cases, runs, feedback_items, source_type_candidates = _load_eval_workbench_state(project_name, manifest)
+def render_retrieval_eval_workbench(project_name: str, story_id: str, manifest):
+    cases, runs, feedback_items, source_type_candidates = _load_eval_workbench_state(project_name, story_id, manifest)
     with st.expander("检索评测与反馈", expanded=False):
         st.caption("用固定测试问题评估匹配是否命中预期资料；检索反馈会影响后续排序，适合持续调教项目资料库。")
         _render_eval_metrics(cases, runs, feedback_items)
-        _render_eval_case_editor(project_name, cases, source_type_candidates)
-        _render_eval_cases(project_name, cases)
-        _render_last_eval_run(project_name, runs)
+        _render_eval_case_editor(project_name, story_id, cases, source_type_candidates)
+        _render_eval_cases(project_name, story_id, cases)
+        _render_last_eval_run(project_name, story_id, runs)
         _render_retrieval_feedback(feedback_items)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from hashlib import sha256
 from typing import Any
@@ -46,6 +47,12 @@ def _story_id_or_none(conn: sqlite3.Connection, story_id: Any) -> str | None:
         (clean_story_id,),
     ).fetchone()
     return clean_story_id if row else None
+
+
+def _chunk_content_hash(chunk: dict) -> str:
+    title = str(chunk.get("title") or "")
+    content = str(chunk.get("content") or "")
+    return sha256(f"{title}\n{content}".encode("utf-8")).hexdigest()
 
 
 def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) -> dict:
@@ -113,6 +120,7 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
             continue
         active_chunk_ids.append(chunk_id)
         metadata = chunk.get("metadata", {}) if isinstance(chunk.get("metadata"), dict) else {}
+        content_hash = _chunk_content_hash(chunk)
         conn.execute(
             """
             INSERT INTO retrieval_chunks (
@@ -120,7 +128,7 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
                 metadata_json, created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, ?, ?, NULL, NULL, ?,
+                ?, ?, ?, ?, NULL, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
@@ -129,6 +137,7 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
                 document_id = excluded.document_id,
                 chunk_index = excluded.chunk_index,
                 text = excluded.text,
+                content_hash = excluded.content_hash,
                 metadata_json = excluded.metadata_json,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 deleted_at = NULL
@@ -138,8 +147,15 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
                 document_id,
                 int(metadata.get("chunk_index") or _infer_chunk_index(chunk_id)),
                 str(chunk.get("content") or ""),
+                content_hash,
                 _json_dumps(chunk),
             ),
+        )
+        # A chunk id is position based and survives edits.  Vectors generated
+        # from an older payload must never be reused for the new text.
+        conn.execute(
+            "DELETE FROM retrieval_vectors WHERE chunk_id = ? AND COALESCE(content_hash, '') <> ?",
+            (chunk_id, content_hash),
         )
 
     if active_chunk_ids:
@@ -302,6 +318,9 @@ def sync_retrieval_vector_store_payload(conn: sqlite3.Connection, payload: dict)
     vectors = vector_store.get("vectors", {})
     if not isinstance(vectors, dict):
         vectors = {}
+    content_hashes = vector_store.get("content_hashes", {})
+    if not isinstance(content_hashes, dict):
+        content_hashes = {}
     active_chunk_ids: list[str] = []
     for chunk_id, raw_vector in vectors.items():
         clean_chunk_id = str(chunk_id or "").strip()
@@ -310,15 +329,19 @@ def sync_retrieval_vector_store_payload(conn: sqlite3.Connection, payload: dict)
         vector = []
         for value in raw_vector:
             try:
-                vector.append(float(value))
+                numeric_value = float(value)
             except (TypeError, ValueError):
                 vector = []
                 break
+            if not math.isfinite(numeric_value):
+                vector = []
+                break
+            vector.append(numeric_value)
         if not vector:
             continue
         row = conn.execute(
             """
-            SELECT chunk.chunk_id
+            SELECT chunk.chunk_id, chunk.content_hash
             FROM retrieval_chunks AS chunk
             JOIN retrieval_documents AS doc ON doc.document_id = chunk.document_id
             WHERE chunk.chunk_id = ?
@@ -330,6 +353,10 @@ def sync_retrieval_vector_store_payload(conn: sqlite3.Connection, payload: dict)
         if not row:
             continue
         encoded = json.dumps(vector, separators=(",", ":")).encode("utf-8")
+        chunk_content_hash = str(row["content_hash"] or "") if isinstance(row, sqlite3.Row) else str(row[1] or "")
+        expected_content_hash = str(content_hashes.get(clean_chunk_id) or "")
+        if not chunk_content_hash or expected_content_hash != chunk_content_hash:
+            continue
         active_chunk_ids.append(clean_chunk_id)
         conn.execute(
             """
@@ -353,7 +380,7 @@ def sync_retrieval_vector_store_payload(conn: sqlite3.Connection, payload: dict)
                 embedding_model,
                 len(vector),
                 encoded,
-                sha256(encoded).hexdigest(),
+                chunk_content_hash,
             ),
         )
     if active_chunk_ids:
@@ -394,13 +421,14 @@ def load_retrieval_vector_store_payload(conn: sqlite3.Connection, project_name: 
 
     rows = conn.execute(
         """
-        SELECT vector.chunk_id, vector.vector_blob, vector.updated_at
+        SELECT vector.chunk_id, vector.vector_blob, vector.content_hash, vector.updated_at
         FROM retrieval_vectors AS vector
         JOIN retrieval_chunks AS chunk ON chunk.chunk_id = vector.chunk_id
         JOIN retrieval_documents AS doc ON doc.document_id = chunk.document_id
         WHERE vector.embedding_model = ?
           AND chunk.deleted_at IS NULL
           AND doc.deleted_at IS NULL
+          AND vector.content_hash = chunk.content_hash
         ORDER BY vector.chunk_id
         """,
         (clean_model,),
@@ -409,6 +437,7 @@ def load_retrieval_vector_store_payload(conn: sqlite3.Connection, project_name: 
         return {}
 
     vectors: dict[str, list[float]] = {}
+    content_hashes: dict[str, str] = {}
     updated_values: list[str] = []
     for row in rows:
         chunk_id = row["chunk_id"] if isinstance(row, sqlite3.Row) else row[0]
@@ -423,12 +452,16 @@ def load_retrieval_vector_store_payload(conn: sqlite3.Connection, project_name: 
             vector = []
         if isinstance(vector, list):
             vectors[str(chunk_id)] = [float(value) for value in vector]
-        updated_values.append(str(row["updated_at"] if isinstance(row, sqlite3.Row) else row[2]))
+        content_hash = row["content_hash"] if isinstance(row, sqlite3.Row) else row[2]
+        if content_hash:
+            content_hashes[str(chunk_id)] = str(content_hash)
+        updated_values.append(str(row["updated_at"] if isinstance(row, sqlite3.Row) else row[3]))
     return {
         "project_name": project_name,
         "built_at": max([value for value in updated_values if value] or [""]),
         "embedding_model": clean_model,
         "vectors": vectors,
+        "content_hashes": content_hashes,
     }
 
 

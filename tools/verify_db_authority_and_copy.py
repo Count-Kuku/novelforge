@@ -112,7 +112,8 @@ def _verify_empty_db_is_authoritative() -> list[str]:
     save_auto_review_runs(project_name, [{"run_id": "auto_db", "status": "completed"}])
     save_auto_review_runs(project_name, [])
     _write_json(auto_review_runs_path(project_name), [{"run_id": "auto_stale", "status": "completed"}])
-    _expect(load_auto_review_runs(project_name) == [], "auto_review_runs_empty_db_wins", failures)
+    review_run_ids = {str(item.get("run_id") or "") for item in load_auto_review_runs(project_name)}
+    _expect(review_run_ids == {"auto_db"}, "auto_review_audit_history_is_append_only", failures)
 
     save_project_rules(project_name, {"write": ["project db rule"]})
     save_project_rules(project_name, {})

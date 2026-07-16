@@ -54,10 +54,35 @@ def find_duplicate_knowledge_groups(items: list[dict]) -> list[list[int]]:
     return [indices for indices in groups.values() if len(indices) > 1]
 
 
-def normalized_knowledge_key(item: dict) -> tuple[str, str]:
+def _knowledge_isolation_domain(item: dict) -> tuple[str, str, str, str]:
+    story_id = str(item.get("story_id") or "").strip()
+    setting_scope = str(item.get("setting_scope") or ("story" if story_id else "project")).strip().lower()
+    if setting_scope != "story":
+        story_id = ""
+    worldline_id = str(item.get("worldline_id") or "").strip().lower()
+    if worldline_id in {"", "all", "global", "shared", "common", "canon", "unknown"}:
+        worldline_id = ""
+    version_scope = str(item.get("version_scope") or "").strip().lower()
+    if version_scope == "unknown":
+        version_scope = ""
+    return setting_scope, story_id, worldline_id, version_scope
+
+
+def _knowledge_domains_compatible(left: dict, right: dict) -> bool:
+    left_domain = _knowledge_isolation_domain(left)
+    right_domain = _knowledge_isolation_domain(right)
+    # Different explicit stories/worldlines/versions are separate continuities.
+    for left_value, right_value in zip(left_domain[1:], right_domain[1:]):
+        if left_value and right_value and left_value != right_value:
+            return False
+    return True
+
+
+def normalized_knowledge_key(item: dict) -> tuple[str, str, str, str, str, str]:
     return (
         str(item.get("category") or "").strip(),
         normalize_knowledge_match_name(item.get("name", "")),
+        *_knowledge_isolation_domain(item),
     )
 
 
@@ -270,13 +295,14 @@ def upsert_entity_alias_group(
 
 def build_pending_knowledge_quality_issues(project_name: str, pending_items: list[dict]) -> list[dict]:
     issues: list[dict] = []
-    by_key: dict[tuple[str, str], list[tuple[int, dict]]] = {}
+    by_key: dict[tuple[str, str, str, str, str, str], list[tuple[int, dict]]] = {}
     for index, item in enumerate(pending_items):
         key = normalized_knowledge_key(item)
         if key[0] and key[1]:
             by_key.setdefault(key, []).append((index, item))
 
-    for (category, _), indexed_items in by_key.items():
+    for key, indexed_items in by_key.items():
+        category = key[0]
         if len(indexed_items) < 2:
             continue
         items = [item for _, item in indexed_items]
@@ -332,7 +358,7 @@ def build_pending_knowledge_quality_issues(project_name: str, pending_items: lis
         left = pending_items[left_index]
         for right_index in range(left_index + 1, len(pending_items)):
             right = pending_items[right_index]
-            if possible_alias_pair(left, right):
+            if _knowledge_domains_compatible(left, right) and possible_alias_pair(left, right):
                 issues.append({
                     "type": "alias_candidate",
                     "severity": "低",
@@ -346,11 +372,13 @@ def build_pending_knowledge_quality_issues(project_name: str, pending_items: lis
                     "indices": [left_index, right_index],
                 })
 
-    confirmed_by_key: dict[tuple[str, str], list[dict]] = {}
+    confirmed_by_key: dict[tuple[str, str, str, str, str, str], list[dict]] = {}
     for category, items in load_knowledge_base(project_name).items():
         for item in items:
             if isinstance(item, dict):
-                key = (category, normalize_knowledge_match_name(item.get("name", "")))
+                candidate = dict(item)
+                candidate.setdefault("category", category)
+                key = normalized_knowledge_key(candidate)
                 if key[1]:
                     confirmed_by_key.setdefault(key, []).append(item)
 

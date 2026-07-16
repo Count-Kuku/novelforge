@@ -15,6 +15,8 @@ from prompt_options import normalize_prompt_options_payload
 from storage import initialize_global_db, initialize_project_db, inspect_global_db, inspect_project_db, open_global_db, open_project_db
 from storage.repositories import (
     append_retrieval_feedback_row,
+    delete_knowledge_category_item,
+    delete_pending_knowledge_items,
     delete_workflow_run_snapshot,
     get_project_meta,
     load_global_setting,
@@ -42,6 +44,9 @@ from storage.repositories import (
     list_workflow_run_summaries,
     load_workflow_run_snapshot,
     list_story_rows,
+    clone_story_storage_rows,
+    purge_story_scoped_rows,
+    rename_project_meta,
     mark_asset_deleted,
     mark_long_reference_batch_deleted,
     mark_retrieval_source_file_deleted,
@@ -65,6 +70,8 @@ from storage.repositories import (
     sync_stories_index,
     sync_workflow_run_snapshot,
     upsert_asset_payload,
+    upsert_knowledge_category_item,
+    upsert_pending_knowledge_items,
     upsert_project_meta,
 )
 
@@ -96,6 +103,12 @@ MANAGED_ENV_KEYS = [
     "LLM_EMBEDDING_MODEL",
 ]
 DEFAULT_LLM_PROFILE_NAME = "默认配置"
+WINDOWS_RESERVED_PATH_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
+WINDOWS_INVALID_PATH_CHARS = set('<>:"/\\|?*')
 DEFAULT_MEMORY = {
     "title": "",
     "genre": "",
@@ -131,6 +144,8 @@ KNOWLEDGE_CATEGORIES = {
 _DB_UNAVAILABLE_PROJECTS: set[str] = set()
 _GLOBAL_DB_UNAVAILABLE = False
 _PENDING_MIRROR_DELETIONS: list[Path] = []
+_PROJECT_DB_BOOTSTRAP_IN_PROGRESS: set[str] = set()
+_GLOBAL_DB_BOOTSTRAP_IN_PROGRESS = False
 
 
 def _write_json_mirrors_enabled() -> bool:
@@ -503,8 +518,32 @@ def normalize_project_name(project_name: str) -> str:
     normalized = project_name.strip()
     if not normalized:
         raise ValueError("Project name cannot be empty.")
-    if ".." in normalized or "/" in normalized or "\\" in normalized:
+    if (
+        normalized in {".", ".."}
+        or ".." in normalized
+        or any(char in WINDOWS_INVALID_PATH_CHARS for char in normalized)
+        or any(ord(char) < 32 for char in normalized)
+        or normalized.endswith(".")
+        or normalized.split(".", 1)[0].upper() in WINDOWS_RESERVED_PATH_NAMES
+    ):
         raise ValueError("Invalid project name: path traversal characters not allowed.")
+    return normalized
+
+
+def normalize_storage_component(value: str, label: str = "Storage key") -> str:
+    """Validate a user/data supplied value before using it in a filename."""
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{label} cannot be empty.")
+    if (
+        normalized in {".", ".."}
+        or any(char in WINDOWS_INVALID_PATH_CHARS for char in normalized)
+        or any(ord(char) < 32 for char in normalized)
+        or normalized.endswith(".")
+        or normalized.split(".", 1)[0].upper() in WINDOWS_RESERVED_PATH_NAMES
+    ):
+        raise ValueError(f"Invalid {label.lower()}: path characters are not allowed.")
     return normalized
 
 
@@ -656,6 +695,12 @@ def load_project_registry() -> dict:
     return _save_project_registry(_build_project_registry_from_directories())
 
 
+def restore_project_registry(registry: dict) -> dict:
+    """Restore a previously loaded registry snapshot during compensation."""
+
+    return _save_project_registry(registry)
+
+
 def list_projects() -> list[str]:
     return _discover_legacy_project_names()
 
@@ -763,6 +808,18 @@ def inspect_global_database() -> dict:
     return inspect_global_db(Path("data"))
 
 
+def rename_project_database_record(project_name: str, old_name: str, new_name: str) -> dict:
+    """Rename the project metadata row inside an already moved project DB."""
+
+    normalized_project_name = normalize_project_name(project_name)
+    normalized_old_name = normalize_project_name(old_name)
+    normalized_new_name = normalize_project_name(new_name)
+    with open_project_db(project_path(normalized_project_name).resolve()) as conn:
+        result = rename_project_meta(conn, normalized_old_name, normalized_new_name)
+        conn.commit()
+    return result
+
+
 def _db_only_storage_required() -> bool:
     return not _write_json_mirrors_enabled()
 
@@ -776,6 +833,7 @@ def _raise_if_db_only(message: str, exc: Exception | None = None) -> None:
 
 
 def _project_db_marked_unavailable(project_name: str) -> bool:
+    _bootstrap_project_database_if_needed(project_name)
     if project_name not in _DB_UNAVAILABLE_PROJECTS:
         return False
     _initialize_project_db_best_effort(project_name)
@@ -786,6 +844,7 @@ def _project_db_marked_unavailable(project_name: str) -> bool:
 
 
 def _global_db_marked_unavailable() -> bool:
+    _bootstrap_global_database_if_needed()
     if not _GLOBAL_DB_UNAVAILABLE:
         return False
     _initialize_global_db_best_effort()
@@ -793,6 +852,71 @@ def _global_db_marked_unavailable() -> bool:
         return False
     _raise_if_db_only("Global database is unavailable.")
     return True
+
+
+def _bootstrap_project_database_if_needed(project_name: str) -> None:
+    """Import a legacy file-backed project before the first DB-first read.
+
+    Opening SQLite creates an empty database.  If that happens before legacy
+    JSON has been imported, valid file-backed data is indistinguishable from
+    an intentionally empty authoritative database and is silently hidden.
+    """
+
+    normalized_name = normalize_project_name(project_name)
+    root = project_path(normalized_name)
+    db_path = root / "project.db"
+    if normalized_name in _PROJECT_DB_BOOTSTRAP_IN_PROGRESS:
+        return
+    if not root.exists() or not _project_dir_looks_like_project(root):
+        return
+    if db_path.exists():
+        try:
+            if db_path.stat().st_size > 0:
+                return
+        except OSError:
+            return
+        raise RuntimeError(
+            f"Legacy project {normalized_name} has a zero-byte project.db. "
+            "Automatic import was stopped to avoid racing a running app. "
+            "Close NovelForge, move the empty database aside, then reopen the project."
+        )
+
+    _PROJECT_DB_BOOTSTRAP_IN_PROGRESS.add(normalized_name)
+    try:
+        result = sync_project_database_from_files(normalized_name)
+        if not result.get("ok"):
+            error = str(result.get("error") or "unknown legacy import error")
+            raise RuntimeError(f"Failed to import legacy project storage for {normalized_name}: {error}")
+    finally:
+        _PROJECT_DB_BOOTSTRAP_IN_PROGRESS.discard(normalized_name)
+
+
+def _bootstrap_global_database_if_needed() -> None:
+    """Import legacy global JSON/.env settings before creating global.db."""
+
+    global _GLOBAL_DB_BOOTSTRAP_IN_PROGRESS
+    database_path = Path("data") / "global.db"
+    if _GLOBAL_DB_BOOTSTRAP_IN_PROGRESS:
+        return
+    if database_path.exists():
+        try:
+            if database_path.stat().st_size > 0:
+                return
+        except OSError:
+            return
+        raise RuntimeError(
+            "data/global.db is zero bytes. Automatic import was stopped to avoid "
+            "racing a running app. Close NovelForge, move the empty database aside, "
+            "then restart."
+        )
+    _GLOBAL_DB_BOOTSTRAP_IN_PROGRESS = True
+    try:
+        result = sync_global_database_from_files()
+        if not result.get("ok"):
+            error = str(result.get("error") or "unknown legacy import error")
+            raise RuntimeError(f"Failed to import legacy global storage: {error}")
+    finally:
+        _GLOBAL_DB_BOOTSTRAP_IN_PROGRESS = False
 
 
 def _initialize_global_db_best_effort() -> None:
@@ -1677,9 +1801,12 @@ def _story_id_slug(name: str) -> str:
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", text).strip("_").lower()
     slug = re.sub(r"_+", "_", slug)
     if slug and (re.search(r"[a-zA-Z]", slug) or len(slug) >= 3):
-        return slug[:48]
+        slug = slug[:48]
+        if slug.split(".", 1)[0].upper() in WINDOWS_RESERVED_PATH_NAMES:
+            slug = f"story_{slug}"[:48]
+        return normalize_story_id(slug)
     digest = hashlib.md5(text.encode("utf-8")).hexdigest()[:10]
-    return f"story_{digest}"
+    return normalize_story_id(f"story_{digest}")
 
 
 def normalize_story_id(story_id: str) -> str:
@@ -1689,9 +1816,10 @@ def normalize_story_id(story_id: str) -> str:
     if (
         normalized in {".", ".."}
         or ".." in normalized
-        or "/" in normalized
-        or "\\" in normalized
-        or ":" in normalized
+        or any(char in WINDOWS_INVALID_PATH_CHARS for char in normalized)
+        or any(ord(char) < 32 for char in normalized)
+        or normalized.endswith(".")
+        or normalized.split(".", 1)[0].upper() in WINDOWS_RESERVED_PATH_NAMES
     ):
         raise ValueError("Invalid story ID: path traversal characters not allowed.")
     return normalized
@@ -1756,6 +1884,43 @@ def story_path(project_name: str, story_id: str) -> Path:
     if resolved_root != resolved_target and resolved_root not in resolved_target.parents:
         raise ValueError("Invalid story path.")
     return target
+
+
+def _stories_index_payload_from_rows(
+    rows: list[dict],
+    *,
+    active_story_id: str = "",
+) -> dict:
+    stories = [
+        {
+            "story_id": row.get("story_id", ""),
+            "name": row.get("name", ""),
+            "description": row.get("description", ""),
+            "status": row.get("status", "active"),
+            "created_at": row.get("created_at", ""),
+            "updated_at": row.get("updated_at", ""),
+        }
+        for row in rows
+        if str(row.get("story_id") or "")
+    ]
+    if not stories:
+        stories = [_default_story_meta()]
+    story_ids = {str(item.get("story_id") or "") for item in stories}
+    resolved_active_id = str(active_story_id or "")
+    if resolved_active_id not in story_ids:
+        resolved_active_id = next(
+            (
+                str(row.get("story_id") or "")
+                for row in rows
+                if row.get("is_active")
+                and str(row.get("story_id") or "") in story_ids
+            ),
+            str(stories[0].get("story_id") or "default"),
+        )
+    return _normalize_stories_index_payload({
+        "stories": stories,
+        "active_story_id": resolved_active_id,
+    })
 
 
 def _story_chapter_summaries_path(project_name: str, story_id: str) -> Path:
@@ -1831,42 +1996,107 @@ def get_active_story_id(project_name: str) -> str:
 
 def set_active_story(project_name: str, story_id: str):
     clean_story_id = normalize_story_id(story_id)
-    index = load_stories_index(project_name)
-    story_ids = {s["story_id"] for s in index.get("stories", [])}
-    if clean_story_id not in story_ids:
-        raise ValueError(f"故事不存在：{clean_story_id}")
-    index["active_story_id"] = clean_story_id
-    save_stories_index(project_name, index)
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = [dict(row) for row in list_story_rows(conn)]
+        if clean_story_id not in {str(row.get("story_id") or "") for row in rows}:
+            conn.rollback()
+            raise ValueError(f"故事不存在：{clean_story_id}")
+        normalized_index = _stories_index_payload_from_rows(
+            rows,
+            active_story_id=clean_story_id,
+        )
+        sync_stories_index(conn, normalized_index)
+        conn.commit()
+    _refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
 
 
 def create_story(project_name: str, name: str, description: str = "") -> dict:
-    index = load_stories_index(project_name)
-    story_id = _story_id_slug(name)
-    existing_ids = {s["story_id"] for s in index.get("stories", [])}
-    if story_id in existing_ids:
-        counter = 2
-        while f"{story_id}_{counter}" in existing_ids:
-            counter += 1
-            if counter > 1000:
-                raise RuntimeError(f"无法为故事名 '{name}' 生成唯一 ID：计数器已超上限。")
-        story_id = f"{story_id}_{counter}"
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    meta = StoryMeta(
-        story_id=story_id,
-        name=name,
-        description=description,
-        status="active",
-        created_at=now,
-        updated_at=now,
-    )
-    stories = index.get("stories", [])
-    stories.append(meta.model_dump())
-    index["stories"] = stories
-    if not index.get("active_story_id") or index["active_story_id"] == "default":
-        index["active_story_id"] = story_id
-    save_stories_index(project_name, index)
-    sp = story_path(project_name, story_id)
-    sp.mkdir(parents=True, exist_ok=True)
+    clean_name = str(name or "").strip()
+    if not clean_name:
+        raise ValueError("故事名称不能为空。")
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    normalized_index: dict | None = None
+    sp: Path | None = None
+    meta: StoryMeta | None = None
+    try:
+        with open_project_db(project_path(project_name).resolve()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current_rows = [dict(row) for row in list_story_rows(conn)]
+            existing_ids = {
+                str(row.get("story_id") or "")
+                for row in current_rows
+            }
+            base_story_id = normalize_story_id(_story_id_slug(clean_name))
+            story_id = base_story_id
+            if story_id in existing_ids:
+                counter = 2
+                while f"{base_story_id}_{counter}" in existing_ids:
+                    counter += 1
+                    if counter > 1000:
+                        raise RuntimeError(f"无法为故事名 '{clean_name}' 生成唯一 ID：计数器已超上限。")
+                story_id = normalize_story_id(f"{base_story_id}_{counter}")
+
+            sp = story_path(project_name, story_id)
+            if sp.exists():
+                raise FileExistsError(f"故事目录已存在但未登记：{story_id}")
+            sp.mkdir(parents=True, exist_ok=False)
+
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            meta = StoryMeta(
+                story_id=story_id,
+                name=clean_name,
+                description=description,
+                status="active",
+                created_at=now,
+                updated_at=now,
+            )
+            stories = [
+                {
+                    "story_id": row.get("story_id", ""),
+                    "name": row.get("name", ""),
+                    "description": row.get("description", ""),
+                    "status": row.get("status", "active"),
+                    "created_at": row.get("created_at", ""),
+                    "updated_at": row.get("updated_at", ""),
+                }
+                for row in current_rows
+            ]
+            stories.append(meta.model_dump())
+            active_story_id = next(
+                (
+                    str(row.get("story_id") or "")
+                    for row in current_rows
+                    if row.get("is_active")
+                ),
+                "",
+            )
+            if not active_story_id or active_story_id == "default":
+                active_story_id = story_id
+            normalized_index = _normalize_stories_index_payload({
+                "stories": stories,
+                "active_story_id": active_story_id,
+            })
+            sync_stories_index(conn, normalized_index)
+            conn.commit()
+    except Exception:
+        if sp is not None:
+            try:
+                sp.rmdir()
+            except OSError as rollback_exc:
+                logging.getLogger("novelforge.storage").warning(
+                    "Failed to remove story directory after create rollback %s: %s",
+                    sp,
+                    rollback_exc,
+                )
+        raise
+    if normalized_index is not None:
+        _refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
+    if meta is None:
+        raise RuntimeError("Story creation did not produce metadata.")
     return meta.model_dump()
 
 
@@ -1876,20 +2106,41 @@ def rename_story(project_name: str, story_id: str, name: str, description: str |
     if not clean_name:
         raise ValueError("故事名称不能为空。")
 
-    index = load_stories_index(project_name)
-    for story in index.get("stories", []):
-        if story.get("story_id") == clean_story_id:
-            story["name"] = clean_name
-            if description is not None:
-                story["description"] = str(description or "").strip()
-            story["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            save_stories_index(project_name, index)
-            return dict(story)
-    raise ValueError(f"故事不存在：{clean_story_id}")
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = [dict(row) for row in list_story_rows(conn)]
+        target = next(
+            (row for row in rows if str(row.get("story_id") or "") == clean_story_id),
+            None,
+        )
+        if target is None:
+            conn.rollback()
+            raise ValueError(f"故事不存在：{clean_story_id}")
+        target["name"] = clean_name
+        if description is not None:
+            target["description"] = str(description or "").strip()
+        target["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        normalized_index = _stories_index_payload_from_rows(rows)
+        sync_stories_index(conn, normalized_index)
+        conn.commit()
+    _refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
+    return next(
+        dict(story)
+        for story in normalized_index.get("stories", [])
+        if story.get("story_id") == clean_story_id
+    )
 
 
 
-def copy_story_settings(project_name: str, source_story_id: str, target_story_id: str):
+def copy_story_settings(
+    project_name: str,
+    source_story_id: str,
+    target_story_id: str,
+    *,
+    include_discussions: bool = True,
+):
     """复制故事级创作配置、讨论工件、Prompt 选项、规则、旧 memory 覆盖层和正式核心设定。"""
     profile = load_creative_profile(project_name, source_story_id)
     save_creative_profile(
@@ -1899,7 +2150,11 @@ def copy_story_settings(project_name: str, source_story_id: str, target_story_id
         mark_configured=bool(profile.get("is_configured")),
     )
 
-    discussion_artifact = load_creative_profile_discussion_artifact(project_name, source_story_id)
+    discussion_artifact = (
+        load_creative_profile_discussion_artifact(project_name, source_story_id)
+        if include_discussions
+        else {}
+    )
     if discussion_artifact:
         save_creative_profile_discussion_artifact(
             project_name,
@@ -1910,11 +2165,12 @@ def copy_story_settings(project_name: str, source_story_id: str, target_story_id
 
     save_story_memory(project_name, target_story_id, load_story_memory(project_name, source_story_id))
     save_story_rules(project_name, target_story_id, load_story_rules(project_name, source_story_id))
-    save_story_prompt_options(
-        project_name,
-        target_story_id,
-        load_story_prompt_options(project_name, source_story_id),
-    )
+    copied_prompt_options: list[dict] = []
+    for source_option in load_story_prompt_options(project_name, source_story_id):
+        clone = dict(source_option)
+        clone["source"] = "story_copy"
+        copied_prompt_options.append(clone)
+    save_story_prompt_options(project_name, target_story_id, copied_prompt_options)
     save_rule_conflict_resolutions(
         project_name,
         "story",
@@ -1922,18 +2178,9 @@ def copy_story_settings(project_name: str, source_story_id: str, target_story_id
         target_story_id,
     )
 
-    core_result = {"copied": 0, "updated": 0, "skipped": 0}
-    try:
-        from setting_knowledge import copy_story_core_settings_to_story
-        core_result = copy_story_core_settings_to_story(project_name, source_story_id, target_story_id)
-    except Exception as exc:
-        logging.getLogger("novelforge").warning(
-            "Failed to copy story core settings: project=%s source=%s target=%s error=%s",
-            project_name,
-            source_story_id,
-            target_story_id,
-            exc,
-        )
+    from setting_knowledge import copy_story_core_settings_to_story
+
+    core_result = copy_story_core_settings_to_story(project_name, source_story_id, target_story_id)
 
     sync_project_retrieval_assets(project_name)
     return core_result
@@ -2234,83 +2481,535 @@ def load_effective_rule_conflict_resolutions(project_name: str, story_id: str, s
     return effective
 
 
+_STORY_COPY_CHAPTER_DIRS = {
+    "chapters",
+    "chapter_outlines",
+    "reviews",
+    "analysis",
+    "evaluation",
+    "runs",
+}
+
+_STORY_COPY_TOP_LEVEL_JSON_MIRRORS = {
+    "chapter_summaries.json",
+    "creative_profile.discussion.json",
+    "creative_profile.json",
+    "memory_overrides.json",
+    "outline.discussion.json",
+    "prompt_options.json",
+    "rule_conflict_resolutions.json",
+    "rules_overrides.json",
+}
+
+
+def _story_copy_path_is_known_json_mirror(relative_path: Path) -> bool:
+    parts = tuple(part.casefold() for part in relative_path.parts)
+    if len(parts) == 1:
+        return parts[0] in _STORY_COPY_TOP_LEVEL_JSON_MIRRORS
+    if len(parts) != 2:
+        return False
+    directory, file_name = parts
+    if directory == "runs":
+        return file_name.endswith(".json")
+    patterns = {
+        "reviews": r"chapter_\d+\.json",
+        "evaluation": r"chapter_\d+\.json",
+        "chapter_outlines": r"chapter_\d+\.(?:meta|discussion)\.json",
+        "volumes": r"volume_\d+\.(?:meta|discussion)\.json",
+        "arcs": r"arc_\d+\.(?:meta|discussion|chapter_plan)\.json",
+    }
+    pattern = patterns.get(directory)
+    return bool(pattern and re.fullmatch(pattern, file_name))
+
+
+def _story_db_json_mirror_paths(conn, story_id: str) -> set[str]:
+    prefix = f"stories/{story_id}/"
+    rows = conn.execute(
+        """
+        SELECT asset.relative_path
+        FROM asset_files AS asset
+        INNER JOIN asset_payloads AS payload ON payload.asset_id = asset.asset_id
+        WHERE asset.story_id = ? AND asset.deleted_at IS NULL
+        """,
+        (story_id,),
+    ).fetchall()
+    paths: set[str] = set()
+    for row in rows:
+        project_relative = str(row["relative_path"] or "").replace("\\", "/")
+        if project_relative.startswith(prefix) and project_relative.casefold().endswith(".json"):
+            paths.add(project_relative[len(prefix):])
+    return paths
+
+
+def _story_copy_file_is_included(
+    relative_path: Path,
+    *,
+    include_discussions: bool,
+    include_summaries: bool,
+    include_chapters: bool,
+    db_json_mirror_paths: set[str] | None = None,
+) -> bool:
+    parts = relative_path.parts
+    top_level = parts[0] if parts else ""
+    if not include_chapters and top_level in _STORY_COPY_CHAPTER_DIRS:
+        return False
+    if not include_summaries and relative_path.name == "chapter_summaries.json":
+        return False
+    if not include_discussions:
+        if top_level in {"volumes", "arcs"}:
+            return False
+        if "discussion" in relative_path.name.casefold():
+            return False
+    normalized_relative_path = "/".join(relative_path.parts)
+    if (
+        relative_path.suffix.casefold() == ".json"
+        and (
+            _story_copy_path_is_known_json_mirror(relative_path)
+            or normalized_relative_path in (db_json_mirror_paths or set())
+        )
+    ):
+        return False
+    return True
+
+
+def _copy_story_files(
+    source_dir: Path,
+    target_dir: Path,
+    *,
+    include_discussions: bool,
+    include_summaries: bool,
+    include_chapters: bool,
+    db_json_mirror_paths: set[str] | None = None,
+) -> None:
+    import shutil
+
+    if not source_dir.exists():
+        return
+    source_root = source_dir.resolve()
+    target_root = target_dir.resolve()
+    for item in source_dir.rglob("*"):
+        if item.is_symlink():
+            raise ValueError(f"Story copies do not follow symbolic links: {item}")
+        if not item.is_file():
+            continue
+        resolved_item = item.resolve()
+        if source_root not in resolved_item.parents:
+            raise ValueError(f"Story file escaped its source directory: {item}")
+        relative_path = item.relative_to(source_dir)
+        if not _story_copy_file_is_included(
+            relative_path,
+            include_discussions=include_discussions,
+            include_summaries=include_summaries,
+            include_chapters=include_chapters,
+            db_json_mirror_paths=db_json_mirror_paths,
+        ):
+            continue
+        target_file = (target_dir / relative_path).resolve()
+        if target_root not in target_file.parents:
+            raise ValueError(f"Story copy target escaped its directory: {relative_path}")
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(resolved_item), str(target_file))
+
+
+def _copied_story_json_mirror_path(
+    project_name: str,
+    target_story_id: str,
+    project_relative_path: str,
+) -> Path:
+    normalized = str(project_relative_path or "").replace("\\", "/")
+    parts = tuple(normalized.split("/"))
+    if (
+        len(parts) < 3
+        or parts[:2] != ("stories", target_story_id)
+        or any(part in {"", ".", ".."} or ":" in part for part in parts)
+        or not parts[-1].casefold().endswith(".json")
+    ):
+        raise ValueError(f"Invalid copied story JSON mirror path: {project_relative_path}")
+    target_root = story_path(project_name, target_story_id).resolve()
+    target_file = project_path(project_name).joinpath(*parts).resolve()
+    if target_root not in target_file.parents:
+        raise ValueError(f"Copied story JSON mirror escaped its story directory: {project_relative_path}")
+    return target_file
+
+
+def _materialize_copied_story_json_mirrors(project_name: str, target_story_id: str) -> None:
+    if not _write_json_mirrors_enabled():
+        return
+    project_root = project_path(project_name).resolve()
+    with open_project_db(project_root) as conn:
+        asset_rows = conn.execute(
+            """
+            SELECT asset.asset_id, asset.relative_path, payload.payload_json
+            FROM asset_files AS asset
+            INNER JOIN asset_payloads AS payload ON payload.asset_id = asset.asset_id
+            WHERE asset.story_id = ? AND asset.deleted_at IS NULL
+            ORDER BY asset.asset_id
+            """,
+            (target_story_id,),
+        ).fetchall()
+        for row in asset_rows:
+            relative_path = str(row["relative_path"] or "")
+            if not relative_path.replace("\\", "/").casefold().endswith(".json"):
+                continue
+            target_file = _copied_story_json_mirror_path(
+                project_name,
+                target_story_id,
+                relative_path,
+            )
+            payload = json.loads(str(row["payload_json"] or "null"))
+            _write_json_mirror(target_file, payload)
+            content_hash = hashlib.sha256(target_file.read_bytes()).hexdigest()
+            conn.execute(
+                "UPDATE asset_files SET content_hash = ? WHERE asset_id = ?",
+                (content_hash, str(row["asset_id"])),
+            )
+
+        workflow_rows = conn.execute(
+            """
+            SELECT run_id, output_json
+            FROM workflow_runs
+            WHERE story_id = ?
+            ORDER BY run_id
+            """,
+            (target_story_id,),
+        ).fetchall()
+        for row in workflow_rows:
+            run_id = normalize_storage_component(str(row["run_id"]), "Workflow run ID")
+            relative_path = f"stories/{target_story_id}/runs/{run_id}.json"
+            target_file = _copied_story_json_mirror_path(
+                project_name,
+                target_story_id,
+                relative_path,
+            )
+            payload = json.loads(str(row["output_json"] or "{}"))
+            _write_json_mirror(target_file, payload)
+            content_hash = hashlib.sha256(target_file.read_bytes()).hexdigest()
+            conn.execute(
+                """
+                UPDATE asset_files
+                SET content_hash = ?
+                WHERE story_id = ?
+                  AND asset_type = 'workflow_run_snapshot'
+                  AND logical_key = ?
+                  AND deleted_at IS NULL
+                """,
+                (content_hash, target_story_id, run_id),
+            )
+        conn.commit()
+
+
+def _rollback_story_copy(project_name: str, target_story_id: str, original_index: dict) -> list[str]:
+    import shutil
+
+    errors: list[str] = []
+    normalized_index: dict | None = None
+    database_cleaned = False
+    try:
+        if _project_db_marked_unavailable(project_name):
+            raise RuntimeError(f"Project database is unavailable for {project_name}.")
+        with open_project_db(project_path(project_name).resolve()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current_rows = [
+                dict(row)
+                for row in list_story_rows(conn)
+                if str(row.get("story_id") or "") != target_story_id
+            ]
+            current_stories = [
+                {
+                    "story_id": row.get("story_id", ""),
+                    "name": row.get("name", ""),
+                    "description": row.get("description", ""),
+                    "status": row.get("status", "active"),
+                    "created_at": row.get("created_at", ""),
+                    "updated_at": row.get("updated_at", ""),
+                }
+                for row in current_rows
+            ]
+            if not current_stories:
+                current_stories = [_default_story_meta()]
+            active_story_id = next(
+                (
+                    str(row.get("story_id") or "")
+                    for row in current_rows
+                    if row.get("is_active")
+                ),
+                "",
+            )
+            current_ids = {str(item.get("story_id") or "") for item in current_stories}
+            original_active_id = str(original_index.get("active_story_id") or "")
+            if active_story_id not in current_ids:
+                active_story_id = (
+                    original_active_id
+                    if original_active_id in current_ids
+                    else str(current_stories[0].get("story_id") or "default")
+                )
+            normalized_index = _normalize_stories_index_payload({
+                "stories": current_stories,
+                "active_story_id": active_story_id,
+            })
+            sync_stories_index(conn, normalized_index)
+            purge_story_scoped_rows(conn, target_story_id)
+            conn.commit()
+        database_cleaned = True
+    except Exception as exc:
+        errors.append(f"database cleanup failed: {exc}")
+
+    if database_cleaned and normalized_index is not None:
+        try:
+            _write_json_mirror(stories_index_path(project_name), normalized_index)
+            if not _write_json_mirrors_enabled():
+                _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
+        except Exception as exc:
+            errors.append(f"index mirror cleanup failed: {exc}")
+
+    target_dir = story_path(project_name, target_story_id)
+    if database_cleaned:
+        try:
+            if target_dir.exists():
+                shutil.rmtree(str(target_dir))
+        except Exception as exc:
+            errors.append(f"file cleanup failed: {exc}")
+    elif target_dir.exists():
+        errors.append("file cleanup skipped because database cleanup failed")
+
+    if database_cleaned:
+        try:
+            sync_project_retrieval_assets(project_name)
+        except Exception as exc:
+            logging.getLogger("novelforge").warning(
+                "Failed to refresh retrieval assets after rolling back story copy: "
+                "project=%s target=%s error=%s",
+                project_name,
+                target_story_id,
+                exc,
+            )
+    return errors
+
+
 def copy_story(project_name: str, source_story_id: str, new_name: str,
                *, include_discussions: bool = True, include_summaries: bool = True,
                include_chapters: bool = True) -> dict:
-    import shutil
+    source_story_id = normalize_story_id(source_story_id)
+    original_index = _normalize_stories_index_payload(load_stories_index(project_name))
+    source_story = next(
+        (
+            story
+            for story in original_index.get("stories", [])
+            if str(story.get("story_id") or "") == source_story_id
+        ),
+        None,
+    )
+    if source_story is None:
+        raise ValueError(f"故事不存在：{source_story_id}")
 
-    meta = create_story(project_name, new_name)
-    target_id = meta["story_id"]
-    src_dir = story_path(project_name, source_story_id)
-    dst_dir = story_path(project_name, target_id)
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    target_id = _story_id_slug(new_name)
+    existing_ids = {
+        str(story.get("story_id") or "")
+        for story in original_index.get("stories", [])
+    }
+    if target_id in existing_ids:
+        counter = 2
+        while f"{target_id}_{counter}" in existing_ids:
+            counter += 1
+            if counter > 1000:
+                raise RuntimeError(f"无法为故事名 '{new_name}' 生成唯一 ID：计数器已超上限。")
+        target_id = f"{target_id}_{counter}"
 
-    copy_story_settings(project_name, source_story_id, target_id)
+    # create_story validates and creates the directory before committing the
+    # index, so compensation is only needed after it returns an owned target.
+    meta: dict | None = None
+    try:
+        created_meta = create_story(
+            project_name,
+            new_name,
+            str(source_story.get("description") or ""),
+        )
+        meta = created_meta
+        target_id = str(created_meta["story_id"])
+        src_dir = story_path(project_name, source_story_id)
+        dst_dir = story_path(project_name, target_id)
+        dst_dir.mkdir(parents=True, exist_ok=True)
 
-    for item in src_dir.iterdir():
-        if item.is_dir():
-            if not include_chapters and item.name in {"chapters", "chapter_outlines", "reviews", "analysis", "evaluation", "runs"}:
-                continue
-            if not include_discussions and item.name in {"volumes", "arcs"}:
-                continue
-            shutil.copytree(str(item), str(dst_dir / item.name), dirs_exist_ok=True)
-        elif item.is_file():
-            if not include_summaries and item.name == "chapter_summaries.json":
-                continue
-            if not include_discussions and "discussion" in item.name:
-                continue
-            shutil.copy2(str(item), str(dst_dir / item.name))
+        with open_project_db(project_path(project_name).resolve()) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source_json_mirror_paths = _story_db_json_mirror_paths(conn, source_story_id)
+            clone_story_storage_rows(
+                conn,
+                source_story_id,
+                target_id,
+                include_discussions=include_discussions,
+                include_summaries=include_summaries,
+                include_chapters=include_chapters,
+            )
+            conn.commit()
 
-    sync_project_retrieval_assets(project_name)
-    return meta
+        _copy_story_files(
+            src_dir,
+            dst_dir,
+            include_discussions=include_discussions,
+            include_summaries=include_summaries,
+            include_chapters=include_chapters,
+            db_json_mirror_paths=source_json_mirror_paths,
+        )
+
+        copy_story_settings(
+            project_name,
+            source_story_id,
+            target_id,
+            include_discussions=include_discussions,
+        )
+        _materialize_copied_story_json_mirrors(project_name, target_id)
+        sync_project_retrieval_assets(project_name)
+        return meta
+    except Exception as exc:
+        if meta is not None:
+            cleanup_errors = _rollback_story_copy(
+                project_name,
+                str(meta.get("story_id") or ""),
+                original_index,
+            )
+            if cleanup_errors:
+                raise RuntimeError(
+                    "Story copy failed and rollback was incomplete: " + "; ".join(cleanup_errors)
+                ) from exc
+        raise
 
 
 def archive_story(project_name: str, story_id: str) -> bool:
-    index = load_stories_index(project_name)
-    for s in index.get("stories", []):
-        if s["story_id"] == story_id:
-            s["status"] = "archived"
-            s["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            save_stories_index(project_name, index)
-            return True
-    return False
+    clean_story_id = normalize_story_id(story_id)
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = [dict(row) for row in list_story_rows(conn)]
+        target = next(
+            (row for row in rows if str(row.get("story_id") or "") == clean_story_id),
+            None,
+        )
+        if target is None:
+            conn.rollback()
+            return False
+        target["status"] = "archived"
+        target["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        normalized_index = _stories_index_payload_from_rows(rows)
+        sync_stories_index(conn, normalized_index)
+        conn.commit()
+    _refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
+    return True
 
 
 def delete_story(project_name: str, story_id: str) -> bool:
-    index = load_stories_index(project_name)
-    before = len(index.get("stories", []))
-    index["stories"] = [s for s in index.get("stories", []) if s["story_id"] != story_id]
-    if len(index["stories"]) == before:
-        return False
-    if index.get("active_story_id") == story_id:
-        if index["stories"]:
-            index["active_story_id"] = index["stories"][0]["story_id"]
-        else:
-            default = StoryMeta(
-                story_id="default",
-                name="默认故事",
-                description="",
-                status="active",
-                created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                updated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            )
-            index["stories"].append(default.model_dump())
-            index["active_story_id"] = "default"
-    save_stories_index(project_name, index)
-    try:
-        from setting_knowledge import delete_story_setting_items
-
-        delete_story_setting_items(project_name, story_id)
-    except Exception as exc:
-        logging.getLogger("novelforge").warning(
-            "Failed to delete story-scoped settings: project=%s story=%s error=%s",
-            project_name, story_id, exc,
+    story_id = normalize_story_id(story_id)
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current_rows = [dict(row) for row in list_story_rows(conn)]
+        if not any(str(row.get("story_id") or "") == story_id for row in current_rows):
+            conn.rollback()
+            return False
+        remaining_rows = [
+            row
+            for row in current_rows
+            if str(row.get("story_id") or "") != story_id
+        ]
+        remaining_stories = [
+            {
+                "story_id": row.get("story_id", ""),
+                "name": row.get("name", ""),
+                "description": row.get("description", ""),
+                "status": row.get("status", "active"),
+                "created_at": row.get("created_at", ""),
+                "updated_at": row.get("updated_at", ""),
+            }
+            for row in remaining_rows
+        ]
+        if not remaining_stories:
+            remaining_stories = [_default_story_meta()]
+        remaining_ids = {
+            str(item.get("story_id") or "")
+            for item in remaining_stories
+        }
+        active_story_id = next(
+            (
+                str(row.get("story_id") or "")
+                for row in remaining_rows
+                if row.get("is_active")
+                and str(row.get("story_id") or "") in remaining_ids
+            ),
+            str(remaining_stories[0].get("story_id") or "default"),
         )
+        normalized_index = _normalize_stories_index_payload({
+            "stories": remaining_stories,
+            "active_story_id": active_story_id,
+        })
+        sync_stories_index(conn, normalized_index)
+        purge_story_scoped_rows(conn, story_id)
+        conn.commit()
+
+    try:
+        _write_json_mirror(stories_index_path(project_name), normalized_index)
+        if not _write_json_mirrors_enabled():
+            _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
+    except OSError as exc:
+        logging.getLogger("novelforge.storage").warning(
+            "Story %s was deleted from SQLite, but its index mirror could not be refreshed: %s",
+            story_id,
+            exc,
+        )
+
+    # Compatibility mirrors are non-authoritative. Keep shared knowledge files
+    # consistent when mirror mode is explicitly enabled, without performing a
+    # second series of whole-category database writes.
+    if _write_json_mirrors_enabled():
+        for category in KNOWLEDGE_CATEGORIES:
+            path = knowledge_category_path(project_name, category)
+            if not path.exists():
+                continue
+            items = _load_json_list(path)
+            remaining = [
+                item for item in items
+                if str(item.get("story_id") or "").strip() != story_id
+            ]
+            if remaining != items:
+                try:
+                    _write_json_mirror(path, remaining)
+                except OSError as exc:
+                    logging.getLogger("novelforge.storage").warning(
+                        "Failed to refresh knowledge mirror %s after story deletion: %s",
+                        path,
+                        exc,
+                    )
+        pending_path = pending_knowledge_path(project_name)
+        if pending_path.exists():
+            pending_items = _load_json_list(pending_path)
+            remaining_pending = [
+                item for item in pending_items
+                if str(item.get("story_id") or "").strip() != story_id
+            ]
+            if remaining_pending != pending_items:
+                try:
+                    _write_json_mirror(pending_path, remaining_pending)
+                except OSError as exc:
+                    logging.getLogger("novelforge.storage").warning(
+                        "Failed to refresh pending mirror %s after story deletion: %s",
+                        pending_path,
+                        exc,
+                    )
+
     sp = story_path(project_name, story_id)
     if sp.exists():
         import shutil
         shutil.rmtree(str(sp))
-    sync_project_retrieval_assets(project_name)
+    try:
+        sync_project_retrieval_assets(project_name)
+    except Exception as exc:
+        logging.getLogger("novelforge.retrieval").warning(
+            "Story %s was deleted, but retrieval rebuild failed for %s: %s",
+            story_id,
+            project_name,
+            exc,
+        )
     return True
 
 
@@ -2319,8 +3018,12 @@ def list_stories(project_name: str) -> list[dict]:
     return list(index.get("stories", []))
 
 
-def load_story_memory(project_name: str, story_id: str) -> dict:
-    base = load_memory(project_name)
+def load_story_memory_overrides(project_name: str, story_id: str) -> dict:
+    """Load only a story's persisted override layer, using SQLite first."""
+
+    story_id = normalize_story_id(story_id)
+    if story_id == "default":
+        return {}
     db_overrides = _load_asset_payload_from_db_best_effort(
         project_name,
         asset_type="story_memory_overrides",
@@ -2333,22 +3036,31 @@ def load_story_memory(project_name: str, story_id: str) -> dict:
         overrides = None
     overrides_path = _story_memory_overrides_path(project_name, story_id)
     if overrides is None and not overrides_path.exists():
-        return base
+        return {}
     if overrides is None:
         try:
             overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
         except Exception:
-            return base
-        _sync_asset_payload_to_db_best_effort(
-            project_name,
-            overrides_path,
-            asset_type="story_memory_overrides",
-            logical_key="memory_overrides",
-            story_id=story_id,
-            title="Story Memory Overrides",
-            payload=overrides,
-        )
+            return {}
+        if isinstance(overrides, dict):
+            _sync_asset_payload_to_db_best_effort(
+                project_name,
+                overrides_path,
+                asset_type="story_memory_overrides",
+                logical_key="memory_overrides",
+                story_id=story_id,
+                title="Story Memory Overrides",
+                payload=overrides,
+            )
     if not isinstance(overrides, dict):
+        return {}
+    return dict(overrides)
+
+
+def load_story_memory(project_name: str, story_id: str) -> dict:
+    base = load_memory(project_name)
+    overrides = load_story_memory_overrides(project_name, story_id)
+    if not overrides:
         return base
     merged = dict(base)
     for key, value in overrides.items():
@@ -2451,6 +3163,19 @@ def migrate_project_to_stories(project_name: str) -> bool:
     marker = project_path(project_name) / ".migrated"
     if marker.exists():
         return False
+    legacy_memory: dict = {}
+    legacy_memory_path = project_path(project_name) / "memory.json"
+    if legacy_memory_path.exists():
+        try:
+            loaded_legacy_memory = json.loads(legacy_memory_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_legacy_memory, dict):
+                legacy_memory = loaded_legacy_memory
+        except (json.JSONDecodeError, OSError) as exc:
+            logging.getLogger("novelforge.storage").warning(
+                "Failed to read legacy memory during story migration for %s: %s",
+                project_name,
+                exc,
+            )
     sp = story_path(project_name, "default")
     sp.mkdir(parents=True, exist_ok=True)
 
@@ -2484,7 +3209,7 @@ def migrate_project_to_stories(project_name: str) -> bool:
         conflict_dst.parent.mkdir(parents=True, exist_ok=True)
         conflict_src.rename(conflict_dst)
 
-    summaries = load_memory(project_name).get("chapter_summaries", [])
+    summaries = legacy_memory.get("chapter_summaries", [])
     if summaries:
         save_story_chapter_summaries(project_name, "default", list(summaries))
 
@@ -2817,16 +3542,10 @@ def queue_pending_knowledge_items(
     authority: str,
     source_title: str = "",
     source_origin: str = "",
+    replace_pending_ids: list[str] | None = None,
 ) -> int:
-    pending = load_pending_knowledge_items(project_name)
-    pending_index_by_id = {
-        str(item.get("pending_id") or ""): index
-        for index, item in enumerate(pending)
-        if isinstance(item, dict) and str(item.get("pending_id") or "").strip()
-    }
     queued_at = datetime.now(timezone.utc).isoformat()
-    added_count = 0
-    changed = False
+    normalized_items: list[dict] = []
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -2847,32 +3566,48 @@ def queue_pending_knowledge_items(
         normalized["worldline_id"] = normalized.get("worldline_id") or "main"
         normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
         normalized["status"] = "pending"
-        existing_index = pending_index_by_id.get(pending_id)
-        if existing_index is not None:
-            existing_item = pending[existing_index] if isinstance(pending[existing_index], dict) else {}
-            normalized["queued_at"] = existing_item.get("queued_at") or queued_at
-            normalized["updated_at"] = queued_at
-            pending[existing_index] = normalized
-        else:
-            normalized["queued_at"] = queued_at
-            pending.append(normalized)
-            pending_index_by_id[pending_id] = len(pending) - 1
-            added_count += 1
-        changed = True
-    if changed:
-        save_pending_knowledge_items(project_name, pending)
-    return added_count
+        normalized["queued_at"] = queued_at
+        normalized["updated_at"] = queued_at
+        normalized_items.append(normalized)
+    if not normalized_items:
+        return 0
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        added_count, pending = upsert_pending_knowledge_items(conn, normalized_items)
+        incoming_ids = {
+            str(item.get("pending_id") or "")
+            for item in normalized_items
+            if str(item.get("pending_id") or "")
+        }
+        replacement_ids = {
+            str(item)
+            for item in (replace_pending_ids or [])
+            if str(item)
+        } - incoming_ids
+        if replacement_ids:
+            _, pending = delete_pending_knowledge_items(conn, replacement_ids)
+        conn.commit()
+    _write_json_mirror(pending_knowledge_path(project_name), pending)
+    if not _write_json_mirrors_enabled():
+        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
+    return len(incoming_ids) if replace_pending_ids is not None else added_count
 
 
 def discard_pending_knowledge_items(project_name: str, pending_ids: list[str]) -> int:
     id_set = {str(item) for item in pending_ids}
     if not id_set:
         return 0
-    pending = load_pending_knowledge_items(project_name)
-    remaining = [item for item in pending if str(item.get("pending_id", "")) not in id_set]
-    removed_count = len(pending) - len(remaining)
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        removed_count, remaining = delete_pending_knowledge_items(conn, id_set)
+        conn.commit()
     if removed_count:
-        save_pending_knowledge_items(project_name, remaining)
+        _write_json_mirror(pending_knowledge_path(project_name), remaining)
+        if not _write_json_mirrors_enabled():
+            _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
     return removed_count
 
 
@@ -2881,48 +3616,292 @@ def confirm_pending_knowledge_items(project_name: str, pending_ids: list[str]) -
     return int(result.get("saved_count", 0))
 
 
+def _append_knowledge_items_in_transaction(
+    conn,
+    items: list[dict],
+    *,
+    scope: str,
+    authority: str,
+    source_title: str = "",
+    source_origin: str = "",
+    status: str = "confirmed",
+    confirmation_metadata: dict | None = None,
+) -> tuple[int, list[dict], dict[str, list[dict]]]:
+    """Append knowledge rows while the caller holds a project write lock."""
+
+    grouped: dict[str, list[dict]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        if category not in KNOWLEDGE_CATEGORIES:
+            continue
+        grouped.setdefault(category, []).append(item)
+
+    saved_count = 0
+    saved_records: list[dict] = []
+    category_snapshots: dict[str, list[dict]] = {}
+    protected_metadata_keys = {"id", "knowledge_id", "category", "pending_id", "queued_at"}
+    for category, category_items in grouped.items():
+        existing = load_knowledge_category_rows(conn, category)
+        used_ids = {
+            str(item.get("id") or item.get("knowledge_id") or "").strip()
+            for item in existing
+            if str(item.get("id") or item.get("knowledge_id") or "").strip()
+        }
+        next_index = len(existing) + 1
+        for item in category_items:
+            normalized = dict(item)
+            source_pending_id = str(normalized.get("pending_id") or "")
+            normalized.pop("pending_id", None)
+            normalized.pop("queued_at", None)
+            normalized.setdefault("name", "")
+            if not str(normalized.get("name", "")).strip():
+                continue
+
+            requested_id = str(normalized.get("id") or normalized.get("knowledge_id") or "").strip()
+            if not requested_id or requested_id in used_ids:
+                while True:
+                    requested_id = _make_knowledge_id(category, next_index)
+                    next_index += 1
+                    if requested_id not in used_ids:
+                        break
+            normalized["id"] = requested_id
+            normalized.pop("knowledge_id", None)
+            used_ids.add(requested_id)
+            normalized["category"] = category
+            normalized["scope"] = scope
+            normalized["authority"] = authority
+            normalized["source_title"] = source_title or normalized.get("source_title", "")
+            normalized["source_origin"] = source_origin
+            normalized["version_scope"] = normalized.get("version_scope") or (
+                "canon" if scope == "canon" else "project_main"
+            )
+            normalized["worldline_id"] = normalized.get("worldline_id") or "main"
+            normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
+            normalized["status"] = status
+            if confirmation_metadata:
+                normalized.update({
+                    str(key): value
+                    for key, value in confirmation_metadata.items()
+                    if str(key).strip() and str(key) not in protected_metadata_keys
+                })
+            if source_pending_id:
+                normalized["source_pending_id"] = source_pending_id
+            existing.append(normalized)
+            saved_records.append({
+                "pending_id": source_pending_id,
+                "category": category,
+                "knowledge_id": requested_id,
+                "name": normalized.get("name", ""),
+                "source_title": normalized.get("source_title", ""),
+                "source_origin": normalized.get("source_origin", ""),
+            })
+            saved_count += 1
+        sync_knowledge_category(conn, category, existing)
+        category_snapshots[category] = existing
+    return saved_count, saved_records, category_snapshots
+
+
+def _refresh_project_json_mirror(project_name: str, path: Path, payload) -> None:
+    try:
+        _write_json_mirror(path, payload)
+        if not _write_json_mirrors_enabled():
+            _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
+    except OSError as exc:
+        logging.getLogger("novelforge.storage").warning(
+            "SQLite commit succeeded, but JSON mirror refresh failed for %s: %s",
+            path,
+            exc,
+        )
+
+
+def _refresh_knowledge_retrieval_best_effort(project_name: str) -> None:
+    try:
+        sync_project_retrieval_assets(project_name)
+    except Exception as exc:
+        logging.getLogger("novelforge.retrieval").warning(
+            "Knowledge commit succeeded, but retrieval rebuild failed for %s: %s",
+            project_name,
+            exc,
+        )
+
+
 def confirm_pending_knowledge_items_with_records(
     project_name: str,
     pending_ids: list[str],
     *,
     confirmation_metadata: dict | None = None,
+    discard_pending_ids: list[str] | None = None,
+    discard_snapshot_metadata: dict[str, dict] | None = None,
+    audit_run: dict | None = None,
 ) -> dict:
-    id_set = {str(item) for item in pending_ids}
-    if not id_set:
-        return {"saved_count": 0, "confirmed_records": [], "pending_snapshots": []}
-    pending = load_pending_knowledge_items(project_name)
-    selected = [item for item in pending if str(item.get("pending_id", "")) in id_set]
-    remaining = [item for item in pending if str(item.get("pending_id", "")) not in id_set]
+    id_set = {str(item) for item in pending_ids if str(item)}
+    discard_id_set = {
+        str(item)
+        for item in (discard_pending_ids or [])
+        if str(item)
+    }
+    if not id_set and not discard_id_set and not audit_run:
+        return {
+            "saved_count": 0,
+            "confirmed_records": [],
+            "pending_snapshots": [],
+            "discarded_snapshots": [],
+            "skipped_pending_ids": [],
+            "audit_run": {},
+        }
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
 
-    saved_count = 0
-    confirmed_records: list[dict] = []
-    grouped: dict[tuple[str, str, str, str], list[dict]] = {}
-    for item in selected:
-        key = (
-            str(item.get("scope") or "reference"),
-            str(item.get("authority") or "curated"),
-            str(item.get("source_title") or ""),
-            str(item.get("source_origin") or ""),
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        pending = load_pending_knowledge_rows(conn)
+        selected = [item for item in pending if str(item.get("pending_id", "")) in id_set]
+
+        saved_count = 0
+        confirmed_records: list[dict] = []
+        category_snapshots: dict[str, list[dict]] = {}
+        grouped: dict[tuple[str, str, str, str], list[dict]] = {}
+        for item in selected:
+            key = (
+                str(item.get("scope") or "reference"),
+                str(item.get("authority") or "curated"),
+                str(item.get("source_title") or ""),
+                str(item.get("source_origin") or ""),
+            )
+            grouped.setdefault(key, []).append(item)
+        for (scope, authority, source_title, source_origin), items in grouped.items():
+            count, records, snapshots = _append_knowledge_items_in_transaction(
+                conn,
+                items,
+                scope=scope,
+                authority=authority,
+                source_title=source_title,
+                source_origin=source_origin,
+                confirmation_metadata=confirmation_metadata,
+            )
+            saved_count += count
+            confirmed_records.extend(records)
+            category_snapshots.update(snapshots)
+        confirmed_pending_ids = {
+            str(record.get("pending_id") or "")
+            for record in confirmed_records
+            if str(record.get("pending_id") or "")
+        }
+        confirmed_selected = [
+            item
+            for item in selected
+            if str(item.get("pending_id") or "") in confirmed_pending_ids
+        ]
+        skipped_pending_ids = sorted(
+            str(item.get("pending_id") or "")
+            for item in selected
+            if str(item.get("pending_id") or "") not in confirmed_pending_ids
         )
-        grouped.setdefault(key, []).append(item)
-    for (scope, authority, source_title, source_origin), items in grouped.items():
-        count, records = append_knowledge_items_with_records(
+        discard_metadata = discard_snapshot_metadata or {}
+        discarded_snapshots: list[dict] = []
+        discarded_pending_ids: set[str] = set()
+        for item in pending:
+            pending_id = str(item.get("pending_id") or "")
+            if pending_id not in discard_id_set or pending_id in confirmed_pending_ids:
+                continue
+            snapshot = dict(item)
+            metadata = discard_metadata.get(pending_id, {})
+            if isinstance(metadata, dict):
+                snapshot.update(metadata)
+            discarded_snapshots.append(snapshot)
+            discarded_pending_ids.add(pending_id)
+        removed_pending_ids = confirmed_pending_ids | discarded_pending_ids
+        remaining = [
+            item
+            for item in pending
+            if str(item.get("pending_id") or "") not in removed_pending_ids
+        ]
+        if removed_pending_ids:
+            sync_pending_knowledge(conn, remaining)
+
+        audit_record: dict = {}
+        if audit_run:
+            audit_record = dict(audit_run)
+            audit_record["run_id"] = str(audit_record.get("run_id") or f"auto_review_{uuid4().hex}")
+            audit_record["created_at"] = str(
+                audit_record.get("created_at") or datetime.now(timezone.utc).isoformat()
+            )
+            audit_record["status"] = str(audit_record.get("status") or "active")
+            audit_record["confirmed_ids"] = sorted(confirmed_pending_ids)
+            audit_record["confirmed_records"] = confirmed_records
+            audit_record["pending_snapshots"] = [
+                *[dict(item) for item in confirmed_selected],
+                *discarded_snapshots,
+            ]
+            audit_record["saved_count"] = saved_count
+            archived_snapshots = [
+                item
+                for item in discarded_snapshots
+                if item.get("pending_batch_action") == "archive"
+            ]
+            manual_review_snapshots = [
+                item
+                for item in discarded_snapshots
+                if item.get("pending_batch_action") == "manual_review"
+            ]
+            if discard_id_set:
+                audit_record["archived_snapshots"] = archived_snapshots
+                audit_record["manual_review_snapshots"] = manual_review_snapshots
+                audit_record["archived_ids"] = sorted(
+                    str(item.get("pending_id") or "")
+                    for item in archived_snapshots
+                    if str(item.get("pending_id") or "")
+                )
+                audit_record["manual_review_ids"] = sorted(
+                    str(item.get("pending_id") or "")
+                    for item in manual_review_snapshots
+                    if str(item.get("pending_id") or "")
+                )
+                audit_record["blocked_ids"] = list(audit_record["manual_review_ids"])
+            batch_summary = audit_record.get("batch_summary")
+            if isinstance(batch_summary, dict):
+                audit_record["batch_summary"] = {
+                    **batch_summary,
+                    "confirmed": len(confirmed_pending_ids),
+                    "archived": len(archived_snapshots),
+                    "manual_review": len(manual_review_snapshots),
+                }
+            if skipped_pending_ids:
+                blocked_ids = {
+                    str(item)
+                    for item in audit_record.get("blocked_ids", [])
+                    if str(item)
+                }
+                blocked_ids.update(skipped_pending_ids)
+                audit_record["blocked_ids"] = sorted(blocked_ids)
+                blocked_reasons = dict(audit_record.get("blocked_reasons") or {})
+                for pending_id in skipped_pending_ids:
+                    blocked_reasons.setdefault(pending_id, "未生成有效的正式知识，已保留在待确认队列")
+                audit_record["blocked_reasons"] = blocked_reasons
+            sync_auto_review_runs(conn, [audit_record])
+        conn.commit()
+
+    for category, items in category_snapshots.items():
+        _refresh_project_json_mirror(project_name, knowledge_category_path(project_name, category), items)
+    if removed_pending_ids:
+        _refresh_project_json_mirror(project_name, pending_knowledge_path(project_name), remaining)
+    if audit_record:
+        _refresh_project_json_mirror(
             project_name,
-            items,
-            scope=scope,
-            authority=authority,
-            source_title=source_title,
-            source_origin=source_origin,
-            confirmation_metadata=confirmation_metadata,
+            auto_review_runs_path(project_name),
+            load_auto_review_runs(project_name),
         )
-        saved_count += count
-        confirmed_records.extend(records)
-    if selected:
-        save_pending_knowledge_items(project_name, remaining)
+    if saved_count:
+        _refresh_knowledge_retrieval_best_effort(project_name)
     return {
         "saved_count": saved_count,
         "confirmed_records": confirmed_records,
-        "pending_snapshots": [dict(item) for item in selected],
+        "pending_snapshots": [dict(item) for item in confirmed_selected],
+        "discarded_snapshots": discarded_snapshots,
+        "skipped_pending_ids": skipped_pending_ids,
+        "audit_run": audit_record,
     }
 
 
@@ -2963,58 +3942,29 @@ def append_knowledge_items_with_records(
     status: str = "confirmed",
     confirmation_metadata: dict | None = None,
 ) -> tuple[int, list[dict]]:
-    grouped: dict[str, list[dict]] = {}
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        category = str(item.get("category") or "").strip()
-        if category not in KNOWLEDGE_CATEGORIES:
-            continue
-        grouped.setdefault(category, []).append(item)
-
-    saved_count = 0
-    saved_records: list[dict] = []
-    for category, category_items in grouped.items():
-        existing = load_knowledge_category(project_name, category)
-        next_index = len(existing) + 1
-        for item in category_items:
-            normalized = dict(item)
-            source_pending_id = str(normalized.get("pending_id") or "")
-            normalized.pop("pending_id", None)
-            normalized.pop("queued_at", None)
-            normalized.setdefault("name", "")
-            if not str(normalized.get("name", "")).strip():
-                continue
-            normalized["id"] = normalized.get("id") or _make_knowledge_id(category, next_index)
-            normalized["category"] = category
-            normalized["scope"] = scope
-            normalized["authority"] = authority
-            normalized["source_title"] = source_title or normalized.get("source_title", "")
-            normalized["source_origin"] = source_origin
-            normalized["version_scope"] = normalized.get("version_scope") or ("canon" if scope == "canon" else "project_main")
-            normalized["worldline_id"] = normalized.get("worldline_id") or "main"
-            normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
-            normalized["status"] = status
-            if confirmation_metadata:
-                normalized.update({
-                    key: value
-                    for key, value in confirmation_metadata.items()
-                    if str(key).strip()
-                })
-            if source_pending_id:
-                normalized["source_pending_id"] = source_pending_id
-            existing.append(normalized)
-            saved_records.append({
-                "pending_id": source_pending_id,
-                "category": category,
-                "knowledge_id": normalized.get("id", ""),
-                "name": normalized.get("name", ""),
-                "source_title": normalized.get("source_title", ""),
-                "source_origin": normalized.get("source_origin", ""),
-            })
-            next_index += 1
-            saved_count += 1
-        save_knowledge_category(project_name, category, existing)
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        saved_count, saved_records, category_snapshots = _append_knowledge_items_in_transaction(
+            conn,
+            items,
+            scope=scope,
+            authority=authority,
+            source_title=source_title,
+            source_origin=source_origin,
+            status=status,
+            confirmation_metadata=confirmation_metadata,
+        )
+        conn.commit()
+    for category, category_items in category_snapshots.items():
+        _refresh_project_json_mirror(
+            project_name,
+            knowledge_category_path(project_name, category),
+            category_items,
+        )
+    if saved_count:
+        _refresh_knowledge_retrieval_best_effort(project_name)
     return saved_count, saved_records
 
 
@@ -4573,6 +5523,260 @@ def save_review_json(project_name: str, chapter_no: int, data: dict, story_id: s
     sync_project_retrieval_assets(project_name)
 
 
+def upsert_knowledge_category_item_record(project_name: str, category: str, item: dict) -> dict:
+    """Atomically upsert one knowledge item without replacing concurrent peers."""
+
+    if category not in KNOWLEDGE_CATEGORIES:
+        raise ValueError(f"未知知识分类：{category}")
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        saved, items = upsert_knowledge_category_item(conn, category, item)
+        conn.commit()
+    _refresh_project_json_mirror(project_name, knowledge_category_path(project_name, category), items)
+    _refresh_knowledge_retrieval_best_effort(project_name)
+    return saved
+
+
+def delete_knowledge_category_item_record(project_name: str, category: str, item_id: str) -> bool:
+    """Atomically delete one knowledge item without replacing concurrent peers."""
+
+    if category not in KNOWLEDGE_CATEGORIES:
+        return False
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        deleted, items = delete_knowledge_category_item(conn, category, item_id)
+        conn.commit()
+    if deleted:
+        _refresh_project_json_mirror(project_name, knowledge_category_path(project_name, category), items)
+        _refresh_knowledge_retrieval_best_effort(project_name)
+    return deleted
+
+
+def update_confirmed_knowledge_item_record(
+    project_name: str,
+    original_category: str,
+    item_id: str,
+    updated_item: dict,
+    *,
+    target_category: str | None = None,
+    delete_only: bool = False,
+) -> bool:
+    """Atomically update, move, or delete one confirmed knowledge item.
+
+    A category move changes the source and target categories inside one
+    ``BEGIN IMMEDIATE`` transaction.  This prevents a failure while writing
+    the target category from committing the source-category deletion.
+    """
+
+    source_category = str(original_category or "").strip()
+    destination_category = str(target_category or source_category).strip()
+    clean_item_id = str(item_id or "").strip()
+    if (
+        source_category not in KNOWLEDGE_CATEGORIES
+        or destination_category not in KNOWLEDGE_CATEGORIES
+        or not clean_item_id
+    ):
+        return False
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+
+    snapshots: dict[str, list[dict]] = {}
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        source_items = load_knowledge_category_rows(conn, source_category)
+        original = next(
+            (
+                item
+                for item in source_items
+                if str(item.get("id") or item.get("knowledge_id") or "").strip() == clean_item_id
+            ),
+            None,
+        )
+        if original is None:
+            conn.rollback()
+            return False
+
+        if delete_only:
+            deleted, source_after = delete_knowledge_category_item(
+                conn,
+                source_category,
+                clean_item_id,
+            )
+            if not deleted:
+                conn.rollback()
+                return False
+            snapshots[source_category] = source_after
+        else:
+            updates = updated_item if isinstance(updated_item, dict) else {}
+            normalized = {
+                **original,
+                **updates,
+                "id": clean_item_id,
+                "knowledge_id": clean_item_id,
+                "category": destination_category,
+                "status": str(updates.get("status") or original.get("status") or "confirmed"),
+            }
+            if destination_category == source_category:
+                _, source_after = upsert_knowledge_category_item(
+                    conn,
+                    source_category,
+                    normalized,
+                )
+                snapshots[source_category] = source_after
+            else:
+                deleted, source_after = delete_knowledge_category_item(
+                    conn,
+                    source_category,
+                    clean_item_id,
+                )
+                if not deleted:
+                    conn.rollback()
+                    return False
+                _, target_after = upsert_knowledge_category_item(
+                    conn,
+                    destination_category,
+                    normalized,
+                )
+                snapshots[source_category] = source_after
+                snapshots[destination_category] = target_after
+        conn.commit()
+
+    for category, items in snapshots.items():
+        _refresh_project_json_mirror(
+            project_name,
+            knowledge_category_path(project_name, category),
+            items,
+        )
+    _refresh_knowledge_retrieval_best_effort(project_name)
+    return True
+
+
+def merge_confirmed_knowledge_item_records(
+    project_name: str,
+    category: str,
+    item_ids: list[str],
+    merged_item: dict,
+) -> bool:
+    """Atomically replace confirmed knowledge items with one merged item."""
+
+    clean_category = str(category or "").strip()
+    clean_item_ids = list(dict.fromkeys(
+        str(item_id or "").strip()
+        for item_id in item_ids
+        if str(item_id or "").strip()
+    ))
+    if clean_category not in KNOWLEDGE_CATEGORIES or len(clean_item_ids) < 2:
+        return False
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = load_knowledge_category_rows(conn, clean_category)
+        current_by_id = {
+            str(item.get("id") or item.get("knowledge_id") or "").strip(): item
+            for item in current
+        }
+        if any(item_id not in current_by_id for item_id in clean_item_ids):
+            conn.rollback()
+            return False
+
+        normalized = dict(merged_item or {})
+        merged_id = str(
+            normalized.get("id")
+            or normalized.get("knowledge_id")
+            or clean_item_ids[0]
+        ).strip()
+        if not merged_id or (merged_id in current_by_id and merged_id not in clean_item_ids):
+            conn.rollback()
+            return False
+        normalized.update({
+            "id": merged_id,
+            "knowledge_id": merged_id,
+            "category": clean_category,
+            "status": str(normalized.get("status") or "confirmed"),
+        })
+        normalized.setdefault("created_at", current_by_id[clean_item_ids[0]].get("created_at"))
+
+        category_after = current
+        for selected_id in clean_item_ids:
+            deleted, category_after = delete_knowledge_category_item(
+                conn,
+                clean_category,
+                selected_id,
+            )
+            if not deleted:
+                conn.rollback()
+                return False
+        _, category_after = upsert_knowledge_category_item(
+            conn,
+            clean_category,
+            normalized,
+        )
+        conn.commit()
+
+    _refresh_project_json_mirror(
+        project_name,
+        knowledge_category_path(project_name, clean_category),
+        category_after,
+    )
+    _refresh_knowledge_retrieval_best_effort(project_name)
+    return True
+
+
+def delete_confirmed_knowledge_item_records(
+    project_name: str,
+    category: str,
+    item_ids: list[str],
+) -> int:
+    """Atomically delete explicitly identified confirmed knowledge items."""
+
+    clean_category = str(category or "").strip()
+    clean_item_ids = list(dict.fromkeys(
+        str(item_id or "").strip()
+        for item_id in item_ids
+        if str(item_id or "").strip()
+    ))
+    if clean_category not in KNOWLEDGE_CATEGORIES or not clean_item_ids:
+        return 0
+    if _project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+
+    deleted_count = 0
+    category_after: list[dict] = []
+    with open_project_db(project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = load_knowledge_category_rows(conn, clean_category)
+        active_ids = {
+            str(item.get("id") or item.get("knowledge_id") or "").strip()
+            for item in current
+        }
+        selected_ids = [item_id for item_id in clean_item_ids if item_id in active_ids]
+        if not selected_ids:
+            conn.rollback()
+            return 0
+        category_after = current
+        for selected_id in selected_ids:
+            deleted, category_after = delete_knowledge_category_item(
+                conn,
+                clean_category,
+                selected_id,
+            )
+            if deleted:
+                deleted_count += 1
+        conn.commit()
+
+    _refresh_project_json_mirror(
+        project_name,
+        knowledge_category_path(project_name, clean_category),
+        category_after,
+    )
+    _refresh_knowledge_retrieval_best_effort(project_name)
+    return deleted_count
+
+
 def load_review_json(project_name: str, chapter_no: int, story_id: str = "default") -> dict | None:
     db_payload = _load_asset_payload_from_db_best_effort(
         project_name,
@@ -4605,6 +5809,7 @@ def load_review_json(project_name: str, chapter_no: int, story_id: str = "defaul
 
 
 def save_analysis_report(project_name: str, analysis_type: str, chapter_no: int, content: str, story_id: str = "default"):
+    analysis_type = normalize_storage_component(analysis_type, "Analysis type")
     path = _story_path_from_project_path(project_name, story_id, "analysis")
     path.mkdir(parents=True, exist_ok=True)
     file = path / f"{analysis_type}_chapter_{chapter_no:03d}.md"
@@ -4623,6 +5828,7 @@ def save_analysis_report(project_name: str, analysis_type: str, chapter_no: int,
 
 
 def load_analysis_report(project_name: str, analysis_type: str, chapter_no: int, story_id: str = "default") -> str:
+    analysis_type = normalize_storage_component(analysis_type, "Analysis type")
     file = _story_path_from_project_path(project_name, story_id, "analysis") / f"{analysis_type}_chapter_{chapter_no:03d}.md"
     if not file.exists():
         return ""
@@ -4741,6 +5947,7 @@ def runs_path(project_name: str, story_id: str = "default") -> Path:
 
 
 def save_pipeline_run(project_name: str, run_id: str, content: str, story_id: str = "default"):
+    run_id = normalize_storage_component(run_id, "Workflow run ID")
     file = runs_path(project_name, story_id) / f"{run_id}.json"
     _write_text_mirror(file, content)
     try:
@@ -4775,6 +5982,7 @@ def save_pipeline_run(project_name: str, run_id: str, content: str, story_id: st
 
 
 def load_pipeline_run(project_name: str, run_id: str, story_id: str = "default") -> str:
+    run_id = normalize_storage_component(run_id, "Workflow run ID")
     db_payload = _load_runtime_from_db_best_effort(
         project_name,
         lambda conn: load_workflow_run_snapshot(conn, run_id, story_id),
@@ -4870,6 +6078,7 @@ def list_pipeline_run_summaries(project_name: str, chapter_no: int | None = None
 
 
 def delete_pipeline_run_record(project_name: str, run_id: str, story_id: str = "default") -> bool:
+    run_id = normalize_storage_component(run_id, "Workflow run ID")
     if _project_db_marked_unavailable(project_name):
         return False
     try:
@@ -5151,7 +6360,14 @@ def save_conflict_resolution(project_name: str, resolution: dict) -> dict:
         "updated_at": str(resolution.get("updated_at") or datetime.now().isoformat(timespec="seconds")),
     }).model_dump()
     resolutions = load_conflict_resolutions(project_name)
-    resolutions = [item for item in resolutions if item.get("conflict_id") != normalized["conflict_id"]]
+    resolutions = [
+        item
+        for item in resolutions
+        if not (
+            item.get("conflict_id") == normalized["conflict_id"]
+            and str(item.get("story_id") or "") == str(normalized.get("story_id") or "")
+        )
+    ]
     resolutions.append(normalized)
     file = conflict_resolutions_path(project_name)
     _write_json_mirror(file, resolutions)
@@ -5193,6 +6409,7 @@ def normalize_retrieval_eval_case(case: dict) -> dict:
         worldline_mode = "prefer"
     return {
         "case_id": case_id,
+        "story_id": str(payload.get("story_id") or "").strip(),
         "name": str(payload.get("name") or payload.get("query") or "未命名评测用例").strip(),
         "query": str(payload.get("query") or "").strip(),
         "expected_terms": _normalize_string_list_field(payload.get("expected_terms", [])),
@@ -5334,6 +6551,7 @@ def append_retrieval_feedback(project_name: str, feedback: dict) -> dict:
         "scope": str(payload.get("scope") or "").strip(),
         "title": str(payload.get("title") or "").strip(),
         "path": str(payload.get("path") or "").strip(),
+        "story_id": str(payload.get("story_id") or "").strip(),
     }
     items = load_retrieval_feedback(project_name)
     items.append(normalized)
@@ -5490,20 +6708,44 @@ def chapter_count(project_name: str, story_id: str = "default") -> int:
 
 
 def sync_project_database_from_files(project_name: str) -> dict:
-    """Backfill project.db from the current JSON/Markdown storage without changing file storage."""
+    """Create project.db from legacy files when no authoritative DB exists."""
     normalized_name = normalize_project_name(project_name)
+    database_path = project_path(normalized_name) / "project.db"
     result = {
         "ok": False,
         "project_name": normalized_name,
-        "db_path": str((project_path(normalized_name) / "project.db")),
+        "db_path": str(database_path),
         "synced": {},
         "warnings": [],
         "error": "",
     }
+    if database_path.exists():
+        result["error"] = (
+            "Refusing to import legacy files over an existing authoritative project.db. "
+            "Move or back up the database first if a full legacy restore is intended."
+        )
+        return result
     try:
         initialize_project_db(ensure_project_path(normalized_name), normalized_name)
         with open_project_db(project_path(normalized_name).resolve()) as conn:
             project_root = project_path(normalized_name).resolve()
+
+            memory_file = project_root / "memory.json"
+            legacy_memory = {}
+            if memory_file.exists():
+                try:
+                    raw_memory = json.loads(memory_file.read_text(encoding="utf-8"))
+                    if isinstance(raw_memory, dict):
+                        legacy_memory = raw_memory
+                except Exception as exc:
+                    result["warnings"].append(f"project memory metadata skipped: {exc}")
+            upsert_project_meta(
+                conn,
+                project_name=normalized_name,
+                title=str(legacy_memory.get("title") or normalized_name),
+                genre=str(legacy_memory.get("genre") or ""),
+            )
+            result["synced"]["project_metadata"] = 1
 
             def sync_payload_asset(
                 file: Path,
@@ -5904,9 +7146,35 @@ def sync_project_database_from_files(project_name: str) -> dict:
                     project_payload_count += 1
             result["synced"]["project_asset_payloads"] = project_payload_count
 
+            legacy_setting_items: dict[str, list[dict]] = {}
+            if legacy_memory:
+                try:
+                    from setting_knowledge import build_setting_items_from_memory
+
+                    for item in build_setting_items_from_memory(
+                        legacy_memory,
+                        setting_scope="project",
+                        source_title="项目核心设定",
+                    ):
+                        category = str(item.get("category") or "")
+                        if category in KNOWLEDGE_CATEGORIES:
+                            legacy_setting_items.setdefault(category, []).append(item)
+                except Exception as exc:
+                    result["warnings"].append(f"legacy core settings skipped: {exc}")
+
             knowledge_total = 0
             for category in KNOWLEDGE_CATEGORIES:
                 items = _load_json_list(knowledge_category_path(normalized_name, category))
+                existing_ids = {
+                    str(item.get("id") or "")
+                    for item in items
+                    if isinstance(item, dict) and str(item.get("id") or "")
+                }
+                for legacy_item in legacy_setting_items.get(category, []):
+                    legacy_id = str(legacy_item.get("id") or "")
+                    if legacy_id and legacy_id not in existing_ids:
+                        items.append(legacy_item)
+                        existing_ids.add(legacy_id)
                 sync_knowledge_category(conn, category, items)
                 knowledge_total += len(items)
             result["synced"]["knowledge_items"] = knowledge_total
@@ -6027,7 +7295,10 @@ def sync_project_database_from_files(project_name: str) -> dict:
                 result["synced"]["retrieval_vectors"] = 0
 
             workflow_count = 0
-            for story in list_stories(normalized_name):
+            # Reuse the file snapshot already synchronized above. Calling the
+            # DB-first list_stories() while this import transaction is open
+            # would open a second writer and deadlock on a fresh legacy DB.
+            for story in stories_index.get("stories", []):
                 story_id = str(story.get("story_id") or "default")
                 for run_id in _list_pipeline_runs_from_files(normalized_name, story_id=story_id):
                     run_file = runs_path(normalized_name, story_id) / f"{run_id}.json"
@@ -6062,15 +7333,22 @@ def sync_project_database_from_files(project_name: str) -> dict:
 
 
 def sync_global_database_from_files() -> dict:
-    """Backfill data/global.db from current global JSON/env-adjacent storage."""
+    """Create global.db from legacy JSON/.env when no authoritative DB exists."""
     global _GLOBAL_DB_UNAVAILABLE
+    database_path = Path("data") / "global.db"
     result = {
         "ok": False,
-        "db_path": str(Path("data") / "global.db"),
+        "db_path": str(database_path),
         "synced": {},
         "warnings": [],
         "error": "",
     }
+    if database_path.exists():
+        result["error"] = (
+            "Refusing to import legacy files over an existing authoritative global.db. "
+            "Move or back up the database first if a full legacy restore is intended."
+        )
+        return result
     try:
         initialize_global_db(Path("data"))
         with open_global_db(Path("data")) as conn:

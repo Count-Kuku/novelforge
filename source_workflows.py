@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from extraction_presets import (
     KNOWLEDGE_CONSOLIDATION_MODE_LABELS,
@@ -22,9 +23,7 @@ from knowledge_workflows import (
     summarize_item_evidence,
 )
 from memory import (
-    append_auto_review_run,
     confirm_pending_knowledge_items_with_records,
-    discard_pending_knowledge_items,
     list_long_reference_batches,
     list_retrieval_source_files,
     load_auto_review_policy,
@@ -333,8 +332,29 @@ def split_long_reference_text(source_title: str, raw_text: str, max_chars: int =
                 "char_count": len(content),
             })
 
+    # Chapter headings are useful boundaries, but a single chapter can still
+    # be much larger than an LLM context. Apply the same hard size bound to
+    # every preliminary segment.
+    bounded_segments: list[dict] = []
+    for segment in segments:
+        content = str(segment.get("content") or "").strip()
+        if len(content) <= max_chars:
+            bounded_segments.append(segment)
+            continue
+        pieces = [content[start:start + max_chars].strip() for start in range(0, len(content), max_chars)]
+        pieces = [piece for piece in pieces if piece]
+        for part_index, piece in enumerate(pieces, start=1):
+            item = dict(segment)
+            item["title"] = f"{segment.get('title') or source_title}（{part_index}/{len(pieces)}）"
+            item["content"] = piece
+            item["split_method"] = f"{segment.get('split_method') or '字数切分'}+字数切分"
+            item["part_index"] = part_index
+            item["part_count"] = len(pieces)
+            item["char_count"] = len(piece)
+            bounded_segments.append(item)
+
     normalized = []
-    for index, segment in enumerate(segments, start=1):
+    for index, segment in enumerate(bounded_segments, start=1):
         item = dict(segment)
         item["index"] = index
         item["title"] = item.get("title") or f"{source_title} 片段 {index:03d}"
@@ -343,9 +363,11 @@ def split_long_reference_text(source_title: str, raw_text: str, max_chars: int =
     return normalized
 
 
-def build_long_reference_source_name(base_title: str, segment: dict, fallback_order: int) -> str:
+def build_long_reference_source_name(base_title: str, segment: dict, fallback_order: int, batch_id: str = "") -> str:
     short_title = re.sub(r"\s+", "_", str(segment.get("title", "segment")))[:40]
-    return f"{base_title}_{int(segment.get('index', fallback_order)):04d}_{short_title}"
+    batch_token = re.sub(r"[^A-Za-z0-9_-]+", "_", str(batch_id or "")).strip("_")[:20]
+    batch_prefix = f"{batch_token}_" if batch_token else ""
+    return f"{base_title}_{batch_prefix}{int(segment.get('index', fallback_order)):04d}_{short_title}"
 
 
 def import_long_reference_segments(
@@ -382,19 +404,27 @@ def import_long_reference_segments(
                 "selected_count": total_selected,
             },
         )
-        source_name = build_long_reference_source_name(base_title, segment, order)
-        saved_source_name = ingest_external_source_file(
-            project_name,
-            source_name,
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            overwrite=False,
-        )
-        segment["import_status"] = "imported"
-        segment["imported_source_name"] = saved_source_name
-        segment["import_error"] = ""
-        imported += 1
-    if imported:
+        source_name = build_long_reference_source_name(base_title, segment, order, str(batch.get("batch_id") or ""))
+        try:
+            saved_source_name = ingest_external_source_file(
+                project_name,
+                source_name,
+                json.dumps(payload, ensure_ascii=False, indent=2),
+                # batch/segment-derived names are deterministic; retries must
+                # update the same source rather than create _02 duplicates.
+                overwrite=True,
+            )
+            segment["import_status"] = "imported"
+            segment["imported_source_name"] = saved_source_name
+            segment["import_error"] = ""
+            imported += 1
+        except Exception as exc:
+            segment["import_status"] = "failed"
+            segment["import_error"] = str(exc)
+        # Persist progress after every segment so a crash or page reload can
+        # resume exactly where the import stopped.
         batch = save_long_reference_batch(project_name, batch)
+    if imported:
         rebuild_retrieval_assets(project_name, build_vectors=True)
     return batch, imported
 
@@ -1345,7 +1375,6 @@ def consolidate_batch_pending_items(
         }
 
     target_ids = [str(item.get("pending_id", "")) for item in target_items if item.get("pending_id")]
-    discard_pending_knowledge_items(project_name, target_ids)
     queued_count = queue_pending_knowledge_items(
         project_name,
         enriched_items,
@@ -1353,7 +1382,16 @@ def consolidate_batch_pending_items(
         authority=target_items[0].get("authority", batch.get("authority", "curated")),
         source_title=batch.get("title", payload.get("source_title", "")),
         source_origin=batch.get("source_origin", ""),
+        replace_pending_ids=target_ids,
     )
+    if queued_count <= 0:
+        return {
+            "success": False,
+            "message": "整理结果未能写入待确认知识，原始条目已保留。",
+            "source_count": len(target_items),
+            "queued_count": 0,
+            "result": result,
+        }
     return {
         "success": True,
         "message": f"已整理 {len(target_items)} 条散知识，生成 {queued_count} 条待确认知识。",
@@ -1400,35 +1438,47 @@ def auto_confirm_pending_items_without_risk(
         else:
             confirmed_ids.append(pending_id)
 
+    reviewed_at = datetime.now(timezone.utc)
     id_digest = hashlib.sha1("|".join(sorted(id_set)).encode("utf-8")).hexdigest()[:10]
-    run_id = f"auto_review_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{id_digest}"
-    confirm_result = confirm_pending_knowledge_items_with_records(
-        project_name,
-        confirmed_ids,
-        confirmation_metadata={
-            "auto_review_run_id": run_id,
-            "auto_reviewed_at": datetime.now(timezone.utc).isoformat(),
-        },
+    run_id = (
+        f"auto_review_{reviewed_at.strftime('%Y%m%d%H%M%S%f')}_"
+        f"{id_digest}_{uuid4().hex[:8]}"
     )
-    saved_count = int(confirm_result.get("saved_count", 0))
-    run = append_auto_review_run(project_name, {
+    audit_payload = {
         "run_id": run_id,
         "source_type": source_type or "auto_confirm",
         "source_title": source_title,
         "batch_id": batch_id,
         "note": note,
         "candidate_ids": sorted(id_set),
-        "confirmed_ids": confirmed_ids,
         "blocked_ids": blocked_ids,
         "blocked_reasons": blocked_reasons,
         "decisions": decisions,
-        "confirmed_records": confirm_result.get("confirmed_records", []),
-        "pending_snapshots": confirm_result.get("pending_snapshots", []),
-        "saved_count": saved_count,
         "policy": policy,
-    })
+    }
+    confirm_result = confirm_pending_knowledge_items_with_records(
+        project_name,
+        confirmed_ids,
+        confirmation_metadata={
+            "auto_review_run_id": run_id,
+            "auto_reviewed_at": reviewed_at.isoformat(),
+        },
+        audit_run=audit_payload,
+    )
+    saved_count = int(confirm_result.get("saved_count", 0))
+    run = dict(confirm_result.get("audit_run") or audit_payload)
+    confirmed_ids = [str(item) for item in run.get("confirmed_ids", []) if str(item)]
+    blocked_ids = [str(item) for item in run.get("blocked_ids", []) if str(item)]
+    blocked_reasons = dict(run.get("blocked_reasons") or {})
     if saved_count:
-        rebuild_retrieval_assets(project_name, build_vectors=True)
+        try:
+            rebuild_retrieval_assets(project_name, build_vectors=True)
+        except Exception as exc:
+            LOGGER.warning(
+                "Auto-review commit succeeded, but vector rebuild failed for %s: %s",
+                project_name,
+                exc,
+            )
     return {
         "confirmed_ids": confirmed_ids,
         "blocked_ids": blocked_ids,

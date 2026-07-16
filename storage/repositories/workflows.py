@@ -156,15 +156,6 @@ def load_workflow_run_snapshot(conn: sqlite3.Connection, run_id: str, story_id: 
             """,
             (clean_run_id, clean_story_id),
         ).fetchone()
-        if not row:
-            row = conn.execute(
-                """
-                SELECT output_json
-                FROM workflow_runs
-                WHERE run_id = ?
-                """,
-                (clean_run_id,),
-            ).fetchone()
     else:
         row = conn.execute(
             """
@@ -283,7 +274,6 @@ def delete_workflow_run_snapshot(
             "DELETE FROM workflow_runs WHERE run_id = ? AND story_id = ?",
             (clean_run_id, clean_story_id),
         )
-        if cursor.rowcount:
-            return int(cursor.rowcount)
+        return int(cursor.rowcount or 0)
     cursor = conn.execute("DELETE FROM workflow_runs WHERE run_id = ?", (clean_run_id,))
     return int(cursor.rowcount or 0)

@@ -17,14 +17,18 @@ from .config import (
     sync_story_profile,
 )
 from .knowledge import (
+    delete_knowledge_category_item,
+    delete_pending_knowledge_items,
     load_entity_alias_group_rows,
     load_knowledge_category_rows,
     load_pending_knowledge_rows,
     sync_entity_alias_groups,
     sync_knowledge_category,
+    upsert_knowledge_category_item,
+    upsert_pending_knowledge_items,
     sync_pending_knowledge,
 )
-from .projects import get_project_meta, upsert_project_meta
+from .projects import get_project_meta, rename_project_meta, upsert_project_meta
 from .runtime import (
     append_retrieval_feedback_row,
     load_auto_review_policy_row,
@@ -61,11 +65,15 @@ from .workflows import (
     load_workflow_run_snapshot,
     sync_workflow_run_snapshot,
 )
-from .stories import list_story_rows, set_active_story_row, sync_stories_index
+from .stories import list_story_rows, purge_story_scoped_rows, set_active_story_row, sync_stories_index
+from .story_copy import clone_story_storage_rows
 
 __all__ = [
     "get_project_meta",
+    "rename_project_meta",
     "delete_workflow_run_snapshot",
+    "delete_knowledge_category_item",
+    "delete_pending_knowledge_items",
     "load_entity_alias_group_rows",
     "load_asset_payload",
     "load_global_setting",
@@ -91,6 +99,8 @@ __all__ = [
     "list_workflow_run_summaries",
     "load_workflow_run_snapshot",
     "list_story_rows",
+    "clone_story_storage_rows",
+    "purge_story_scoped_rows",
     "mark_asset_deleted",
     "mark_long_reference_batch_deleted",
     "mark_retrieval_source_file_deleted",
@@ -116,5 +126,7 @@ __all__ = [
     "sync_stories_index",
     "sync_workflow_run_snapshot",
     "upsert_project_meta",
+    "upsert_knowledge_category_item",
+    "upsert_pending_knowledge_items",
     "upsert_asset_payload",
 ]

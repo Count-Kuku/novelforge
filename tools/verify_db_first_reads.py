@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -256,6 +257,9 @@ def _run_verification() -> int:
         "built_at": datetime.now().isoformat(timespec="seconds"),
         "embedding_model": "verify-embedding",
         "vectors": {"doc_read_verify#chunk001": [0.1, 0.2, 0.3]},
+        "content_hashes": {
+            "doc_read_verify#chunk001": sha256("Read Verify Document\nretrieval chunk".encode("utf-8")).hexdigest()
+        },
     }, ensure_ascii=False, indent=2))
     append_retrieval_feedback(project_name, {
         "feedback_id": "feedback_read_verify",

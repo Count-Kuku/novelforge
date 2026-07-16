@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 
 import logging
+import math
 import os
 from collections.abc import Callable
 from urllib.parse import urlparse
@@ -28,6 +29,10 @@ NotFoundError = None
 OpenAI = None
 PermissionDeniedError = None
 RateLimitError = None
+
+
+class _InvalidLLMResponseError(RuntimeError):
+    """模型服务成功响应，但响应体不满足调用方契约。"""
 
 
 def _require_openai():
@@ -167,6 +172,56 @@ def _emit_stream_delta(stream_callback: Callable[[str], None], content: str) -> 
         LOGGER.warning("Stream callback failed; model request will continue: %s", exc, exc_info=True)
 
 
+def _validate_chat_content(content, *, action: str = "模型请求") -> str:
+    if not isinstance(content, str):
+        raise _InvalidLLMResponseError(f"{action}失败：模型服务返回了非文本内容。")
+    if not content.strip():
+        raise _InvalidLLMResponseError(f"{action}失败：模型服务返回了空响应。")
+    return content
+
+
+def _extract_chat_content(response) -> str:
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise _InvalidLLMResponseError("模型请求失败：模型服务没有返回任何候选结果。")
+
+    try:
+        first_choice = choices[0]
+    except (KeyError, TypeError, IndexError) as exc:
+        raise _InvalidLLMResponseError("模型请求失败：模型服务返回的候选结果格式无效。") from exc
+    message = getattr(first_choice, "message", None)
+    if message is None:
+        raise _InvalidLLMResponseError("模型请求失败：模型服务返回的候选结果缺少消息内容。")
+    return _validate_chat_content(getattr(message, "content", None))
+
+
+def _extract_embedding(response) -> list[float]:
+    data = getattr(response, "data", None)
+    if not data:
+        raise RuntimeError("向量生成失败：模型服务没有返回向量数据。")
+
+    try:
+        first_item = data[0]
+    except (KeyError, TypeError, IndexError) as exc:
+        raise RuntimeError("向量生成失败：模型服务返回的向量数据格式无效。") from exc
+    embedding = getattr(first_item, "embedding", None)
+    if not isinstance(embedding, (list, tuple)) or not embedding:
+        raise RuntimeError("向量生成失败：模型服务返回了空向量。")
+
+    normalized = []
+    for value in embedding:
+        if isinstance(value, bool):
+            raise RuntimeError("向量生成失败：模型服务返回的向量包含非数值元素。")
+        try:
+            number = float(value)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("向量生成失败：模型服务返回的向量包含非数值元素。") from exc
+        if not math.isfinite(number):
+            raise RuntimeError("向量生成失败：模型服务返回的向量包含非有限数值。")
+        normalized.append(number)
+    return normalized
+
+
 def call_llm(
     prompt: str,
     system_message: str = "",
@@ -199,27 +254,32 @@ def call_llm(
             else:
                 parts = []
                 for chunk in chunks:
-                    if not chunk.choices:
+                    choices = getattr(chunk, "choices", None)
+                    if not choices:
                         continue
-                    delta = chunk.choices[0].delta
-                    content = getattr(delta, "content", None) or ""
-                    if not content:
+                    delta = getattr(choices[0], "delta", None)
+                    content = getattr(delta, "content", None)
+                    if content is None or content == "":
                         continue
+                    if not isinstance(content, str):
+                        raise _InvalidLLMResponseError("模型请求失败：模型服务返回了非文本流式内容。")
                     parts.append(content)
                     _emit_stream_delta(stream_callback, content)
-                return "".join(parts)
+                return _validate_chat_content("".join(parts))
 
         response = _get_client().chat.completions.create(
             model=_get_model_name(),
             messages=messages,
             temperature=temperature,
         )
+    except _InvalidLLMResponseError as exc:
+        raise RuntimeError(str(exc)) from exc
     except Exception as exc:
         if getattr(exc, "cancel_generation", False):
             raise
         raise RuntimeError(_format_llm_error(exc)) from exc
 
-    content = response.choices[0].message.content or ""
+    content = _extract_chat_content(response)
     if fallback_to_non_streaming and content:
         _emit_stream_delta(stream_callback, content)
     return content
@@ -241,7 +301,7 @@ def get_embedding(text: str) -> list[float]:
         )
     except Exception as exc:
         raise RuntimeError(_format_llm_error(exc, action="向量生成")) from exc
-    return response.data[0].embedding
+    return _extract_embedding(response)
 
 
 PROVIDER_PRESETS = {

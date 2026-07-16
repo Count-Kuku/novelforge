@@ -34,7 +34,9 @@ def _story_id_or_none(conn: sqlite3.Connection, story_id: Any) -> str | None:
         "SELECT story_id FROM stories WHERE story_id = ? AND deleted_at IS NULL",
         (clean_story_id,),
     ).fetchone()
-    return clean_story_id if row else None
+    if not row:
+        raise ValueError(f"Knowledge row references an unknown or archived story: {clean_story_id}")
+    return clean_story_id
 
 
 def _item_title(item: dict) -> str:
@@ -261,6 +263,61 @@ def load_knowledge_category_rows(conn: sqlite3.Connection, category: str) -> lis
             payload["knowledge_id"] = knowledge_id
         items.append(payload)
     return items
+
+
+def upsert_knowledge_category_item(
+    conn: sqlite3.Connection,
+    category: str,
+    item: dict,
+) -> tuple[dict, list[dict]]:
+    """Serialize a single-item category update to prevent lost writes."""
+
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    clean_category = str(category or "").strip()
+    normalized = dict(item or {})
+    item_id = str(normalized.get("id") or normalized.get("knowledge_id") or "").strip()
+    if not clean_category or not item_id:
+        raise ValueError("Knowledge category and item ID are required.")
+    normalized["id"] = item_id
+    items = load_knowledge_category_rows(conn, clean_category)
+    replaced = False
+    for index, existing in enumerate(items):
+        existing_id = str(existing.get("id") or existing.get("knowledge_id") or "").strip()
+        if existing_id != item_id:
+            continue
+        normalized["created_at"] = existing.get("created_at") or normalized.get("created_at")
+        items[index] = normalized
+        replaced = True
+        break
+    if not replaced:
+        items.append(normalized)
+    sync_knowledge_category(conn, clean_category, items)
+    return normalized, items
+
+
+def delete_knowledge_category_item(
+    conn: sqlite3.Connection,
+    category: str,
+    item_id: str,
+) -> tuple[bool, list[dict]]:
+    """Serialize a single-item category delete to prevent lost writes."""
+
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    clean_category = str(category or "").strip()
+    clean_item_id = str(item_id or "").strip()
+    if not clean_category or not clean_item_id:
+        return False, load_knowledge_category_rows(conn, clean_category) if clean_category else []
+    items = load_knowledge_category_rows(conn, clean_category)
+    remaining = [
+        item for item in items
+        if str(item.get("id") or item.get("knowledge_id") or "").strip() != clean_item_id
+    ]
+    if len(remaining) == len(items):
+        return False, items
+    sync_knowledge_category(conn, clean_category, remaining)
+    return True, remaining
 
 
 def _graph_node_type_for_category(category: str) -> str:
@@ -636,6 +693,60 @@ def load_pending_knowledge_rows(conn: sqlite3.Connection) -> list[dict]:
             payload["pending_id"] = pending_id
         items.append(payload)
     return items
+
+
+def upsert_pending_knowledge_items(
+    conn: sqlite3.Connection,
+    items: list[dict],
+) -> tuple[int, list[dict]]:
+    """Merge pending candidates under a write lock instead of replacing peers."""
+
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    current = load_pending_knowledge_rows(conn)
+    index_by_id = {
+        str(item.get("pending_id") or ""): index
+        for index, item in enumerate(current)
+        if str(item.get("pending_id") or "").strip()
+    }
+    added_count = 0
+    for raw_item in items:
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        pending_id = str(item.get("pending_id") or "").strip()
+        if not pending_id:
+            raise ValueError("Pending knowledge ID cannot be empty.")
+        existing_index = index_by_id.get(pending_id)
+        if existing_index is None:
+            current.append(item)
+            index_by_id[pending_id] = len(current) - 1
+            added_count += 1
+            continue
+        existing = current[existing_index]
+        item["queued_at"] = existing.get("queued_at") or item.get("queued_at")
+        current[existing_index] = item
+    sync_pending_knowledge(conn, current)
+    return added_count, current
+
+
+def delete_pending_knowledge_items(
+    conn: sqlite3.Connection,
+    pending_ids: set[str],
+) -> tuple[int, list[dict]]:
+    """Delete selected pending candidates under a serialized write lock."""
+
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    clean_ids = {str(item or "").strip() for item in pending_ids if str(item or "").strip()}
+    current = load_pending_knowledge_rows(conn)
+    if not clean_ids:
+        return 0, current
+    remaining = [item for item in current if str(item.get("pending_id") or "") not in clean_ids]
+    removed_count = len(current) - len(remaining)
+    if removed_count:
+        sync_pending_knowledge(conn, remaining)
+    return removed_count, remaining
 
 
 def sync_entity_alias_groups(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:

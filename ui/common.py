@@ -49,7 +49,15 @@ def confirmed_button(
     type: str = "secondary",
     help_text: str | None = None,
 ) -> bool:
-    confirmed = container.checkbox(confirm_label, key=f"{key}_confirm")
+    confirm_key = f"{key}_confirm"
+    confirmed = container.checkbox(confirm_label, key=confirm_key)
+
+    def consume_confirmation() -> None:
+        # Button callbacks run before the next script pass, so the destructive
+        # action is authorized exactly once and cannot carry over to a newly
+        # selected target after st.rerun().
+        st.session_state[confirm_key] = False
+
     return container.button(
         label,
         key=key,
@@ -57,6 +65,7 @@ def confirmed_button(
         use_container_width=use_container_width,
         type=type,
         help=help_text,
+        on_click=consume_confirmation,
     )
 
 def render_quick_action(label: str, page: str, help_text: str):
