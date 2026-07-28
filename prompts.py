@@ -1113,14 +1113,20 @@ def write_chapter_prompt(
     chapter_outline: str,
     writing_guidance: dict | None = None,
     word_count: str = "2500-3500",
-    rules_text: str = "当前无额外规则。"
+    rules_text: str = "当前无额外规则。",
+    assembled_context: str | None = None,
 ) -> str:
     writing_guidance = writing_guidance or {}
     focus = writing_guidance.get("focus", []) if isinstance(writing_guidance.get("focus", []), list) else []
     focus_text = "、".join([str(item).strip() for item in focus if str(item).strip()]) or "未特别指定"
-    return f"""
-你是章节写作 Agent。
-
+    if assembled_context is not None:
+        context_section = f"""
+本次已装配上下文：
+{assembled_context or '当前没有额外上下文。'}
+"""
+        guidance_section = ""
+    else:
+        context_section = f"""
 规则约束：
 {rules_text}
 
@@ -1128,10 +1134,8 @@ def write_chapter_prompt(
 {memory}
 
 {format_story_state_guidance(memory)}
-
-章节细纲：
-{chapter_outline}
-
+"""
+        guidance_section = f"""
 写作指导：
 - 文风/基调：{writing_guidance.get('tone', '') or '未特别指定'}
 - 节奏：{writing_guidance.get('pacing', '') or '未特别指定'}
@@ -1139,6 +1143,16 @@ def write_chapter_prompt(
 - 描写重点：{focus_text}
 - 结尾力度：{writing_guidance.get('ending_strength', '') or '未特别指定'}
 - 补充要求：{writing_guidance.get('extra_requirements', '') or '无'}
+"""
+    return f"""
+你是章节写作 Agent。
+
+{context_section}
+
+章节细纲：
+{chapter_outline}
+
+{guidance_section}
 
 请写出完整章节正文。
 

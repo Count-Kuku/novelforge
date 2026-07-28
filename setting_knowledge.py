@@ -7,6 +7,7 @@ from memory import (
     delete_knowledge_category_item_record,
     KNOWLEDGE_CATEGORIES,
     list_stories,
+    load_creative_profile,
     load_knowledge_base,
     load_knowledge_category,
     load_memory,
@@ -47,6 +48,9 @@ SETTING_CATEGORY_ORDER = [
     "writing_style",
     "dialogue_style",
 ]
+
+INJECTION_POLICIES = {"always", "retrieval", "manual_only"}
+GLOBAL_WORLDLINE_IDS = {"", "all", "global", "shared", "common", "canon", "unknown"}
 
 
 def _now() -> str:
@@ -128,6 +132,24 @@ def _setting_item_identity(item: dict, setting_scope: str, story_id: str) -> str
 def _normalize_scope_value(value: str) -> str:
     normalized = str(value or "project").strip().lower()
     return "story" if normalized == "story" else "project"
+
+
+def normalize_injection_policy(value: str | None, *, default: str = "always") -> str:
+    fallback = str(default or "always").strip().lower()
+    if fallback not in INJECTION_POLICIES:
+        fallback = "always"
+    normalized = str(value or fallback).strip().lower()
+    return normalized if normalized in INJECTION_POLICIES else fallback
+
+
+def _setting_worldline_allowed(item: dict, worldline_id: str | None, worldline_mode: str) -> bool:
+    if str(worldline_mode or "prefer").strip().lower() != "strict":
+        return True
+    target = str(worldline_id or "").strip().lower()
+    if not target:
+        return True
+    item_worldline = str(item.get("worldline_id") or "").strip().lower()
+    return not item_worldline or item_worldline in GLOBAL_WORLDLINE_IDS or item_worldline == target
 
 
 def _setting_category_rank(category: str) -> int:
@@ -218,7 +240,7 @@ def upsert_setting_item(project_name: str, category: str, item: dict) -> dict:
     normalized["setting_scope"] = _normalize_scope_value(str(normalized.get("setting_scope") or "project"))
     normalized["setting_field"] = str(normalized.get("setting_field") or "")
     normalized["story_id"] = str(normalized.get("story_id") or "") if normalized["setting_scope"] == "story" else ""
-    normalized["injection_policy"] = str(normalized.get("injection_policy") or "always")
+    normalized["injection_policy"] = normalize_injection_policy(normalized.get("injection_policy"))
     normalized["source_origin"] = str(normalized.get("source_origin") or "manual_setting")
     normalized["source_title"] = str(normalized.get("source_title") or ("故事核心设定" if normalized["setting_scope"] == "story" else "项目核心设定"))
     normalized["version_scope"] = str(normalized.get("version_scope") or "project_main")
@@ -314,7 +336,7 @@ def _clone_setting_item(
     clone["setting_scope"] = target_scope
     clone["story_id"] = target_story_id if target_scope == "story" else ""
     clone["setting_role"] = str(clone.get("setting_role") or "core")
-    clone["injection_policy"] = str(clone.get("injection_policy") or "always")
+    clone["injection_policy"] = normalize_injection_policy(clone.get("injection_policy"))
     clone["scope"] = "project"
     clone["authority"] = "project"
     clone["status"] = "confirmed"
@@ -486,7 +508,20 @@ def migrate_core_settings_to_knowledge(project_name: str, story_id: str | None =
     return {"migrated": migrated, "updated": updated}
 
 
-def list_setting_items(project_name: str, story_id: str = "default", *, core_only: bool = True) -> list[dict]:
+def list_setting_items(
+    project_name: str,
+    story_id: str = "default",
+    *,
+    core_only: bool = True,
+    injection_policies: set[str] | None = None,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+) -> list[dict]:
+    allowed_policies = (
+        {normalize_injection_policy(value) for value in injection_policies}
+        if injection_policies is not None
+        else None
+    )
     rows: list[dict] = []
     knowledge_base = load_knowledge_base(project_name)
     for category, items in knowledge_base.items():
@@ -497,15 +532,23 @@ def list_setting_items(project_name: str, story_id: str = "default", *, core_onl
             if status != "confirmed":
                 continue
             setting_role = str(item.get("setting_role") or "")
-            injection_policy = str(item.get("injection_policy") or "")
+            injection_policy = normalize_injection_policy(
+                item.get("injection_policy"),
+                default="always" if setting_role == "core" else "retrieval",
+            )
             if core_only and setting_role != "core" and injection_policy != "always":
+                continue
+            if allowed_policies is not None and injection_policy not in allowed_policies:
                 continue
             setting_scope = str(item.get("setting_scope") or "project")
             item_story_id = str(item.get("story_id") or "")
             if setting_scope == "story" and item_story_id != story_id:
                 continue
+            if not _setting_worldline_allowed(item, worldline_id, worldline_mode):
+                continue
             row = dict(item)
             row["category"] = category
+            row["injection_policy"] = injection_policy
             rows.append(row)
     rows.sort(key=lambda item: (
         0 if str(item.get("setting_scope") or "project") == "story" else 1,
@@ -526,8 +569,35 @@ def group_setting_items_by_field(items: list[dict]) -> dict[str, list[dict]]:
 
 
 def build_generation_setting_context(project_name: str, story_id: str = "default") -> dict:
+    try:
+        profile = load_creative_profile(project_name, story_id) or {}
+    except Exception:
+        profile = {}
+    worldline_id = str(profile.get("worldline_id") or "")
+    worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer")
     memory = load_story_memory(project_name, story_id)
-    items = list_setting_items(project_name, story_id, core_only=True)
+    structured_items = [
+        item
+        for item in list_setting_items(project_name, story_id, core_only=True)
+        if str(item.get("setting_role") or "") == "core"
+    ]
+    items = list_setting_items(
+        project_name,
+        story_id,
+        core_only=True,
+        injection_policies={"always"},
+        worldline_id=worldline_id,
+        worldline_mode=worldline_mode,
+    )
+    structured_fields = {
+        str(item.get("setting_field") or "")
+        for item in structured_items
+        if str(item.get("setting_field") or "") in SETTING_FIELD_SPECS
+    }
+    if structured_fields:
+        for field_name in structured_fields:
+            spec = SETTING_FIELD_SPECS[field_name]
+            memory[field_name] = "" if spec.get("scalar") else []
     grouped = group_setting_items_by_field(items)
     for field_name, field_items in grouped.items():
         if not field_items:

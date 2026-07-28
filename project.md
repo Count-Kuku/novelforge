@@ -6,7 +6,7 @@ For user-facing feature introductions, setup steps, and workflow guidance, see `
 
 For the planned SQLite-first long-term storage architecture, see `storage_architecture.md`.
 
-Current release marker: `v0.5.1`
+Current release marker: `v0.6.0`
 
 ## Project Overview
 
@@ -85,6 +85,10 @@ Current practical status:
 * Lightweight quick-generation playground supporting prompt-only or fully-configured execution for testing and experimentation
 * Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and setting-extraction chaining
 * Content generation chained pipeline: write → review → setting extraction, plus reset-based full pipeline from requirement
+* Unified context assembly for outline generation, chapter planning, chapter and quick-generation drafting, and chapter review, including deterministic block ordering, budget-aware omission, activation reasons, and stable fingerprints
+* Project/story/chapter/run-scoped director notes that are persisted as generic SQLite assets and consumed only after a successful saved generation
+* Strict `always`, `retrieval`, and `manual_only` setting-injection semantics plus explicit retrieval source composition (`union`, `intersect`, or `replace`)
+* Persisted generation-context snapshots exposed through the project resource browser for post-generation auditing
 * Structured knowledge extraction from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 * Deep source extraction modes for fan-fiction groundwork: general, deep, characters, relationships, timeline, world, style, strict canon, and fanfic reference
 * Specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes
@@ -273,6 +277,7 @@ novelforge/
 |-- llm.py
 |-- memory.py
 |-- retrieval.py
+|-- context_assembly.py
 |-- merge.py
 |-- schemas.py
 |-- setting_knowledge.py
@@ -290,7 +295,8 @@ novelforge/
 |-- creative_profile_workflows.py
 |-- retrieval_eval.py
 |-- docs/
-|   `-- app_decomposition_plan.md
+|   |-- app_decomposition_plan.md
+|   `-- sillytavern_reference_update_plan.md
 |-- requirements.txt
 |-- .env
 |-- .env.example
@@ -828,6 +834,7 @@ Responsibilities:
 * Define structured discussion result models for outline-level, volume-level, arc-level, and chapter-level planning conversations
 * Define structured metadata models for volume outlines, arc outlines, and chapter assignment to parent planning nodes
 * Define structured writing-guidance model for lightweight chapter execution control
+* Define context-directive, context-block, and context-assembly models for explainable prompt construction
 * Define retrieval documents, chunks, hits, and index manifest models
 * Convert validated analysis objects into Markdown for UI/storage
 * Centralize schema error formatting
@@ -839,6 +846,23 @@ Design purpose:
 * Allow tolerant input normalization where LLMs return object-shaped list items instead of plain strings
 * Standardize `WorkflowStepResult` / `WorkflowPipelineResult` so UI and future workflow engines consume the same result contract
 * Define explicit chapter workflow state objects before introducing an external workflow runtime
+
+---
+
+## context_assembly.py
+
+Generation-context orchestration layer.
+
+Responsibilities:
+
+* Collect effective rules, creative profile, always-on settings, story state, director notes, explicit knowledge, retrieval hits, prompt options, and run guidance
+* Order context through bounded placement slots instead of arbitrary prompt-depth injection
+* Apply a deterministic token estimate and context budget while preserving hard constraints
+* Record activation reasons and omission reasons for UI inspection
+* Produce a stable fingerprint for preview comparison, saved-generation auditing, and future candidate variants
+* Render the exact included context blocks used by chapter drafting
+
+Persistence remains in `memory.py`: director notes use `context_directive` asset payloads, and successful saved drafts create `generation_context_snapshot` payloads.
 
 ---
 

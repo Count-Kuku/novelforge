@@ -2,7 +2,7 @@
 
 # NovelForge
 
-当前版本：`v0.5.1`
+当前版本：`v0.6.0`
 
 NovelForge 是一个面向长篇小说创作的 LLM 写作工作台，核心围绕持久化项目存储、检索增强、结构化工作流，以及未来的多 Agent 协作能力构建。
 
@@ -76,6 +76,11 @@ NovelForge 已经不再是早期原型。
 - 待确认知识表单编辑器：无需编辑 JSON 即可修正分类、名称、摘要、详情、证据、标签和质量字段
 - 正式知识库表单编辑器：保存后仍可用表单维护单条知识、移动分类、删除错误条目并重建索引
 - 版本 / 世界线字段：知识库条目支持记录原作、项目主线、AU/分支等范围，避免不同版本事实混杂
+- 统一上下文装配：全书大纲、章节规划、正文、快速生成和章节审阅使用同一套规则、核心设定、导演注、检索资料、提示词选项和临时参数装配流程
+- 真实上下文预览：按需显示最终注入顺序、来源、激活原因、预算占用、省略项与上下文指纹
+- 导演注：支持项目、故事、章节和单次成功生成四种范围；单次导演注只在正式保存成功后消费
+- 严格注入策略：`always`、`retrieval`、`manual_only` 的直接注入和检索行为保持一致
+- 生成上下文快照：正式章节保存时同步记录实际上下文和检索命中，便于复查与故事复制
 - 资料健康度总览：汇总导入未提取、提取失败、待确认质量风险、分类缺口和世界线分布
 - 提取计划模板库：多专家计划可保存、查看、删除或 JSON 编辑为项目模板，后续批次可直接复用
 - 设定实体卡：从世界规则、地点、组织、能力、物品和硬性约束聚合可检索设定卡
@@ -370,7 +375,7 @@ python -m venv .venv
 3. 在 PowerShell 中运行构建脚本，并通过 `RuntimeRoot` 指定该发行版：
 
 ```powershell
-.\build_release.ps1 -Version v0.5.1 -RuntimeRoot D:\Runtimes\python-standalone
+.\build_release.ps1 -Version v0.6.0 -RuntimeRoot D:\Runtimes\python-standalone
 ```
 
 4. 脚本会自动：
@@ -380,7 +385,7 @@ python -m venv .venv
 - 校验自包含运行时及 NovelForge 运行依赖，并复制为 `.runtime`
 - 根据 `launcher.py` 构建 `NovelForge.exe`
 - 组装 `release/NovelForge-Portable/`
-- 生成 `release/NovelForge-windows-portable-v0.5.1.zip`
+- 生成 `release/NovelForge-windows-portable-v0.6.0.zip`
 - 在 `release/` 下保存本地构建日志
 
 ### 使用说明

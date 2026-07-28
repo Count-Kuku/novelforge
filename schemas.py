@@ -539,11 +539,87 @@ class ChapterWritingGuidance(NovelForgeSchema):
     ending_strength: str = ""
     extra_requirements: str = ""
     prompt_option_ids: list[str] = Field(default_factory=list)
+    manual_knowledge_ids: list[str] = Field(default_factory=list)
 
-    @field_validator("focus", "prompt_option_ids", mode="before")
+    @field_validator("focus", "prompt_option_ids", "manual_knowledge_ids", mode="before")
     @classmethod
     def _normalize_lists(cls, value: Any) -> list[str]:
         return _normalize_string_list(value)
+
+
+class ContextDirective(NovelForgeSchema):
+    directive_id: str = ""
+    name: str = ""
+    content: str = ""
+    scope: Literal["project", "story", "chapter", "run"] = "story"
+    story_id: str | None = None
+    chapter_start: int | None = Field(default=None, ge=1)
+    chapter_end: int | None = Field(default=None, ge=1)
+    capabilities: list[str] = Field(default_factory=list)
+    placement: Literal[
+        "hard_constraints",
+        "story_state",
+        "chapter_direction",
+        "character_voice",
+        "style",
+        "reference",
+    ] = "chapter_direction"
+    priority: int = 50
+    enabled: bool = True
+    remaining_uses: int | None = Field(default=None, ge=0)
+    expires_at: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def _normalize_capabilities(cls, value: Any) -> list[str]:
+        return _normalize_string_list(value)
+
+    @model_validator(mode="after")
+    def _validate_directive(self):
+        if self.scope == "chapter" and self.chapter_start is None and self.chapter_end is None:
+            raise ValueError("chapter-scoped directives require a chapter range")
+        if self.chapter_start is not None and self.chapter_end is not None and self.chapter_end < self.chapter_start:
+            raise ValueError("chapter_end cannot be earlier than chapter_start")
+        if self.scope == "run" and self.remaining_uses is None:
+            self.remaining_uses = 1
+        return self
+
+
+class ContextBlock(NovelForgeSchema):
+    block_id: str
+    category: str
+    content: str
+    source_type: str
+    source_ref: str | None = None
+    scope: str = "project"
+    story_id: str | None = None
+    worldline: str | None = None
+    placement: str = "reference"
+    priority: int = 0
+    hard_constraint: bool = False
+    activation_reason: str = ""
+    estimated_tokens: int = 0
+    included: bool = True
+    omission_reason: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ContextAssembly(NovelForgeSchema):
+    assembly_id: str
+    capability: str
+    query: str
+    chapter_no: int | None = None
+    blocks: list[ContextBlock] = Field(default_factory=list)
+    retrieval_hits: list[dict[str, Any]] = Field(default_factory=list)
+    total_estimated_tokens: int = 0
+    context_budget: int = 0
+    omitted_blocks: list[ContextBlock] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    hard_budget_exceeded: bool = False
+    fingerprint: str = ""
+    created_at: str = ""
 
 
 class PromptOption(NovelForgeSchema):

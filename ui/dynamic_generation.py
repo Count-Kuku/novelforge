@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import streamlit as st
 
+from context_assembly import build_chapter_context_query
 from memory import load_creative_profile
-from skills import run_dynamic_generation_task
+from setting_knowledge import list_setting_items
+from skills import build_dynamic_direct_outline, run_dynamic_generation_task
 from ui.common import scoped_session_key, scoped_widget_key
+from ui.context_directives import render_context_directive_tools
 from ui.labels import label_status, label_step_name
 from ui.layout import render_section_heading
+from ui.prompt_option_tools import _render_generation_injection_preview, render_context_assembly_summary
 from ui.step_views import render_step_json_expander, render_step_retrieval, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
 
@@ -70,6 +74,30 @@ def _render_dynamic_writing_parameters(project_name: str, story_id: str) -> dict
             key=scoped_widget_key("quick_gen_extra", project_name, story_id),
             placeholder="例如：减少说明性段落，多用短句。",
         )
+    active_profile = load_creative_profile(project_name, story_id=story_id) or {}
+    manual_knowledge_items = list_setting_items(
+        project_name,
+        story_id,
+        core_only=False,
+        injection_policies={"manual_only"},
+        worldline_id=str(active_profile.get("worldline_id") or ""),
+        worldline_mode=str(active_profile.get("worldline_retrieval_mode") or "prefer"),
+    )
+    manual_knowledge_labels = {
+        str(item.get("id") or ""): (
+            f"{item.get('name') or item.get('summary') or item.get('id')} · "
+            f"{item.get('category') or 'knowledge'}"
+        )
+        for item in manual_knowledge_items
+        if str(item.get("id") or "")
+    }
+    manual_knowledge_ids = st.multiselect(
+        "本次手动注入知识",
+        options=list(manual_knowledge_labels),
+        format_func=lambda item_id: manual_knowledge_labels.get(item_id, item_id),
+        key=scoped_widget_key("quick_gen_manual_knowledge_ids", project_name, story_id),
+        help="这里只显示注入策略为“仅手动管理”的已确认知识。",
+    )
     return {
         "tone": tone,
         "pacing": pacing,
@@ -77,6 +105,7 @@ def _render_dynamic_writing_parameters(project_name: str, story_id: str) -> dict
         "focus": focus,
         "ending_strength": ending_strength,
         "extra_requirements": extra_requirements,
+        "manual_knowledge_ids": manual_knowledge_ids,
     }
 
 
@@ -165,6 +194,10 @@ def _render_dynamic_generation_steps(result: dict) -> None:
         status_text = label_status(step_result.get("status", "-"))
         st.caption(f"{label_step_name(step_name)}：{status_text}")
         render_step_validation(step_result)
+        render_context_assembly_summary(
+            (step_result.get("data") or {}).get("context_assembly") or {},
+            f"{label_step_name(step_name)}实际上下文",
+        )
         render_step_retrieval(step_result, f"{label_step_name(step_name)}参考的资料")
 
 
@@ -215,6 +248,34 @@ def render_dynamic_generation_page(project_name: str, render_prompt_option_capab
             help="0 表示不保存，仅预览。",
         )
     config = _render_dynamic_advanced_config(project_name, story_id, profile, render_prompt_option_capability_tools)
+    effective_chapter_no = max(int(chapter_no), 1)
+    render_context_directive_tools(
+        project_name,
+        story_id,
+        capability="write",
+        chapter_no=effective_chapter_no,
+    )
+    preview_guidance = dict(config["writing_guidance"])
+    if config["selected_prompt_option_ids"] is not None:
+        preview_guidance["prompt_option_ids"] = config["selected_prompt_option_ids"]
+    if config["workflow_depth"] == "只生成正文":
+        preview_outline = build_dynamic_direct_outline(profile, requirement)
+    else:
+        preview_outline = requirement
+        st.caption("当前生成层级会先生成结构或章节计划；这里按当前需求预估，正文完成后请以“实际上下文”为准。")
+    _render_generation_injection_preview(
+        project_name,
+        story_id,
+        "write",
+        config["selected_prompt_option_ids"],
+        preview_guidance,
+        query=build_chapter_context_query(
+            effective_chapter_no,
+            preview_outline,
+            preview_guidance,
+        ),
+        chapter_no=effective_chapter_no,
+    )
     action_col.write("")
     action_col.write("")
     _render_dynamic_generation_action(project_name, story_id, requirement, int(chapter_no), config, action_col)

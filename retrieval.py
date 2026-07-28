@@ -723,6 +723,7 @@ def _documents_from_memory(project_name: str) -> list[RetrievalDocument]:
 
 def _knowledge_item_retrieval_metadata(category: str, item: dict) -> dict:
     return {
+        "knowledge_id": str(item.get("id") or ""),
         "knowledge_category": category,
         "authority": str(item.get("authority") or "project"),
         "source_title": str(item.get("source_title") or ""),
@@ -2212,13 +2213,31 @@ def resolve_retrieval_params(
     top_k: int | None = None,
     retrieval_mode: str | None = None,
     retrieval_profile: str | None = None,
+    source_type_strategy: str = "union",
 ) -> dict:
     profile = RETRIEVAL_TASK_PROFILES.get(str(retrieval_profile or "").strip(), {})
+    profile_source_types = list(profile.get("source_types", []) or [])
+    explicit_source_types = list(allowed_source_types or [])
+    normalized_strategy = str(source_type_strategy or "union").strip().lower()
+    if normalized_strategy not in {"union", "intersect", "replace"}:
+        raise ValueError(f"Unsupported source type strategy: {source_type_strategy}")
+
+    if not explicit_source_types:
+        resolved_source_types = profile_source_types or None
+    elif not profile_source_types or normalized_strategy == "replace":
+        resolved_source_types = explicit_source_types
+    elif normalized_strategy == "intersect":
+        explicit_set = set(explicit_source_types)
+        resolved_source_types = [value for value in profile_source_types if value in explicit_set]
+    else:
+        resolved_source_types = list(dict.fromkeys([*profile_source_types, *explicit_source_types]))
+
     params: dict = {
-        "allowed_source_types": list(allowed_source_types) if allowed_source_types else list(profile.get("source_types", []) or []) or None,
+        "allowed_source_types": resolved_source_types,
         "allowed_scopes": list(allowed_scopes) if allowed_scopes else None,
         "top_k": top_k or int(profile.get("top_k") or DEFAULT_TOP_K),
         "retrieval_mode": retrieval_mode or str(profile.get("mode") or "hybrid"),
+        "source_type_strategy": normalized_strategy,
     }
 
     if reference_strength and reference_strength in REFERENCE_STRENGTH_PARAMS:
@@ -2260,6 +2279,8 @@ def _run_retrieval(
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
     story_id: str = "default",
+    source_type_strategy: str = "union",
+    explicit_knowledge_ids: list[str] | None = None,
 ) -> dict:
     resolved = resolve_retrieval_params(
         reference_focus,
@@ -2269,6 +2290,7 @@ def _run_retrieval(
         top_k,
         retrieval_mode,
         retrieval_profile,
+        source_type_strategy,
     )
     top_k = resolved["top_k"]
     retrieval_mode = resolved["retrieval_mode"]
@@ -2283,17 +2305,30 @@ def _run_retrieval(
     query_plan = _build_query_plan(project_name, query)
     query_terms = query_plan["query_terms"]
     scope_filter = set(allowed_scopes or ["project", "canon", "reference"])
+    source_filter_enabled = allowed_source_types is not None
     source_filter = set(allowed_source_types or [])
+    explicit_knowledge_id_set = {
+        str(value or "").strip()
+        for value in (explicit_knowledge_ids or [])
+        if str(value or "").strip()
+    }
 
     filtered_chunks = []
+    manual_only_excluded_count = 0
     for chunk in index.chunks:
         if chunk.scope not in scope_filter:
             continue
-        if source_filter and chunk.source_type not in source_filter:
+        if source_filter_enabled and chunk.source_type not in source_filter:
             continue
         if not _story_scope_allowed(chunk, story_id):
             continue
         if not _worldline_allowed(chunk, normalized_worldline, normalized_worldline_mode):
+            continue
+        metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+        injection_policy = str(metadata.get("injection_policy") or "").strip().lower()
+        knowledge_id = str(metadata.get("knowledge_id") or "").strip()
+        if injection_policy == "manual_only" and knowledge_id not in explicit_knowledge_id_set:
+            manual_only_excluded_count += 1
             continue
         filtered_chunks.append(chunk)
 
@@ -2364,6 +2399,9 @@ def _run_retrieval(
         "top_k": top_k,
         "scope_filter": sorted(scope_filter),
         "source_type_filter": sorted(source_filter),
+        "source_type_strategy": resolved.get("source_type_strategy", "union"),
+        "explicit_knowledge_ids": sorted(explicit_knowledge_id_set),
+        "manual_only_excluded_count": manual_only_excluded_count,
         "candidate_chunk_count": len(filtered_chunks),
         "semantic_enabled": bool(semantic_scores),
         "story_id": str(story_id or "default"),
@@ -2388,6 +2426,8 @@ def retrieve_context(
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
     story_id: str = "default",
+    source_type_strategy: str = "union",
+    explicit_knowledge_ids: list[str] | None = None,
 ) -> list[RetrievalHit]:
     result = _run_retrieval(
         project_name,
@@ -2402,6 +2442,8 @@ def retrieve_context(
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
         story_id=story_id,
+        source_type_strategy=source_type_strategy,
+        explicit_knowledge_ids=explicit_knowledge_ids,
     )
     return result["reranked_hits"]
 
@@ -2420,6 +2462,8 @@ def debug_retrieve_context(
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
     story_id: str = "default",
+    source_type_strategy: str = "union",
+    explicit_knowledge_ids: list[str] | None = None,
 ) -> dict:
     result = _run_retrieval(
         project_name,
@@ -2434,6 +2478,8 @@ def debug_retrieve_context(
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
         story_id=story_id,
+        source_type_strategy=source_type_strategy,
+        explicit_knowledge_ids=explicit_knowledge_ids,
     )
     return {
         **{key: value for key, value in result.items() if key not in {"initial_hits", "reranked_hits"}},

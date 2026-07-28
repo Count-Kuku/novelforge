@@ -45,7 +45,13 @@ DISCUSSION_RESOURCE_GROUPS = {
     "chapter_discussion",
     "arc_chapter_plan",
 }
-READONLY_RESOURCE_GROUPS = {"knowledge_item", "pending_knowledge", "long_reference_batch"}
+READONLY_RESOURCE_GROUPS = {
+    "knowledge_item",
+    "pending_knowledge",
+    "long_reference_batch",
+    "context_directive",
+    "generation_context",
+}
 STATUS_OPTIONS = ["draft", "approved", "archived"]
 GLOBAL_FILTER_PASSTHROUGH_GROUPS = {
     "outline",
@@ -60,6 +66,8 @@ GLOBAL_FILTER_PASSTHROUGH_GROUPS = {
     "knowledge_item",
     "pending_knowledge",
     "long_reference_batch",
+    "context_directive",
+    "generation_context",
 }
 ARC_FILTER_PASSTHROUGH_GROUPS = GLOBAL_FILTER_PASSTHROUGH_GROUPS | {"volume_outline", "volume_discussion"}
 
@@ -95,6 +103,11 @@ def _render_discussion_resource_detail(project_name: str, story_id: str, resourc
 
 
 def _render_readonly_resource_detail(project_name: str, story_id: str, resource: dict) -> None:
+    group = str(resource.get("group") or "")
+    if group in {"context_directive", "generation_context"}:
+        st.caption("该审计资源在浏览器中只读；导演注请在生成页管理，上下文快照会随正式生成自动保存。")
+        st.code(resource.get("content", ""), language="json")
+        return
     st.caption("该资源在浏览器中只读；编辑和批量处理请回到「资料导入」。")
     st.code(resource.get("content", ""), language="json")
     if st.button(

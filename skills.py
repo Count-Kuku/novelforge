@@ -7,6 +7,12 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 from llm import call_llm
 from pydantic import ValidationError
+from context_assembly import (
+    assemble_generation_context,
+    build_chapter_context_query,
+    ensure_context_budget,
+    render_context_for_prompt,
+)
 from prompts import (
     discuss_creative_profile_prompt,
     discuss_creative_profile_turn_prompt,
@@ -45,6 +51,7 @@ from memory import (
     delete_arc_discussion_artifact,
     delete_outline_discussion_artifact,
     delete_volume_discussion_artifact,
+    consume_context_directives,
     get_recent_chapter_summaries,
     load_story_chapter_summaries,
     load_chapter_discussion_artifact,
@@ -94,6 +101,7 @@ from memory import (
     save_volume_metadata,
     save_volume_discussion_artifact,
     save_volume_outline,
+    save_generation_context_snapshot,
 )
 from prompt_options import format_prompt_options_for_prompt, merge_prompt_option_layers
 from schemas import (
@@ -1958,24 +1966,26 @@ def _format_review_markdown(review: ReviewResult | dict) -> str:
 """
 
 def generate_outline(project_name: str, user_idea: str, story_id: str = "default", stream_callback=None) -> dict:
-    memory = build_generation_setting_context(project_name, story_id)
     approved_discussion_context = _format_discussion_context(
         load_outline_discussion_artifact(project_name, story_id=story_id),
         "当前全书暂无已批准讨论结论。",
     )
     trace_key = _story_trace_key("outline", project_name, story_id)
-    retrieval_context = _build_retrieval_context(
+    context_query = f"{user_idea} {approved_discussion_context}"
+    context_assembly = assemble_generation_context(
         project_name,
-        f"{user_idea} {approved_discussion_context}",
-        allowed_source_types=["outline", "outline_discussion", "memory_character", "memory_world", "memory_au_rule", "memory_relationship", "memory_timeline", "memory_foreshadowing", "memory_active_constraint", "external_source"] + KNOWLEDGE_SOURCE_TYPES,
-        allowed_scopes=["project", "canon", "reference"],
-        trace_key=trace_key,
         story_id=story_id,
+        capability="outline",
+        query=context_query,
+        allowed_scopes=["project", "canon", "reference"],
         retrieval_profile="outline_generation",
     )
-    prompt = merge_retrieval_context(
-        outline_prompt(memory, f"{user_idea}\n\n已批准讨论结论：\n{approved_discussion_context}".strip(), _build_rules_text(project_name, "outline", story_id=story_id)),
-        retrieval_context,
+    ensure_context_budget(context_assembly)
+    _LAST_RETRIEVAL_TRACES[trace_key] = list(context_assembly.retrieval_hits)
+    prompt = outline_prompt(
+        {},
+        f"{user_idea}\n\n已批准讨论结论：\n{approved_discussion_context}".strip(),
+        render_context_for_prompt(context_assembly),
     )
     outline = call_llm(prompt, stream_callback=stream_callback)
     if not outline.strip():
@@ -1985,7 +1995,8 @@ def generate_outline(project_name: str, user_idea: str, story_id: str = "default
         "outline",
         success=True,
         status="completed",
-        data={"outline": outline},
+        data={"outline": outline, "context_assembly": context_assembly.model_dump()},
+        warnings=context_assembly.warnings,
         retrieval_hits=get_retrieval_trace(trace_key),
         artifacts={"saved_path": f"data/projects/{project_name}/stories/{story_id}/outline.md"},
     ).model_dump()
@@ -2313,7 +2324,6 @@ def generate_chapter_outline(
     stream_callback=None,
     save_output: bool = True,
 ) -> dict:
-    memory = build_generation_setting_context(project_name, story_id)
     outline = load_outline(project_name, story_id=story_id)
     existing_metadata = load_chapter_outline_metadata(project_name, chapter_no, story_id=story_id)
     effective_volume_no = volume_no if volume_no is not None else existing_metadata.get("volume_no")
@@ -2334,36 +2344,23 @@ def generate_chapter_outline(
     )
     trace_key = _story_trace_key("chapter_outline", project_name, story_id, chapter_no)
     recent_summaries = get_recent_chapter_summaries(project_name, story_id=story_id)
-    retrieval_context = _build_retrieval_context(
+    context_query = (
+        f"第{chapter_no}章 {user_requirement} {outline} {volume_outline} {arc_outline} "
+        f"{volume_discussion_context} {arc_discussion_context} {chapter_discussion_context}"
+    )
+    context_assembly = assemble_generation_context(
         project_name,
-        f"第{chapter_no}章 {user_requirement} {outline} {volume_outline} {arc_outline} {volume_discussion_context} {arc_discussion_context} {chapter_discussion_context}",
-        allowed_source_types=[
-            "outline",
-            "creative_profile_discussion",
-            "outline_discussion",
-            "volume_outline",
-            "volume_discussion",
-            "arc_outline",
-            "arc_discussion",
-            "chapter_discussion",
-            "chapter_summary",
-            "chapter_outline",
-            "memory_character",
-            "memory_world",
-            "memory_au_rule",
-            "memory_relationship",
-            "memory_timeline",
-            "memory_foreshadowing",
-            "memory_active_constraint",
-            "external_source",
-        ] + KNOWLEDGE_SOURCE_TYPES,
-        allowed_scopes=["project", "canon", "reference"],
-        trace_key=trace_key,
         story_id=story_id,
+        capability="chapter_outline",
+        query=context_query,
+        chapter_no=chapter_no,
+        allowed_scopes=["project", "canon", "reference"],
         retrieval_profile="chapter_planning",
     )
-    prompt = merge_retrieval_context(chapter_outline_prompt(
-        memory,
+    ensure_context_budget(context_assembly)
+    _LAST_RETRIEVAL_TRACES[trace_key] = list(context_assembly.retrieval_hits)
+    prompt = chapter_outline_prompt(
+        {},
         outline,
         volume_outline,
         arc_outline,
@@ -2373,8 +2370,8 @@ def generate_chapter_outline(
         recent_summaries,
         chapter_no,
         user_requirement,
-        _build_rules_text(project_name, "chapter_outline", story_id=story_id),
-    ), retrieval_context)
+        render_context_for_prompt(context_assembly),
+    )
     outline = call_llm(prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回章节细纲。")
@@ -2391,7 +2388,16 @@ def generate_chapter_outline(
         "chapter_outline",
         success=True,
         status="completed",
-        data={"chapter_outline": outline, "chapter_outline_metadata": {"chapter_no": chapter_no, "volume_no": effective_volume_no, "arc_no": effective_arc_no}},
+        data={
+            "chapter_outline": outline,
+            "chapter_outline_metadata": {
+                "chapter_no": chapter_no,
+                "volume_no": effective_volume_no,
+                "arc_no": effective_arc_no,
+            },
+            "context_assembly": context_assembly.model_dump(),
+        },
+        warnings=context_assembly.warnings,
         retrieval_hits=get_retrieval_trace(trace_key),
         artifacts=artifacts,
     ).model_dump()
@@ -2406,72 +2412,102 @@ def write_chapter(
     stream_callback=None,
     save_output: bool = True,
 ) -> dict:
-    memory = build_generation_setting_context(project_name, story_id)
     raw_guidance = writing_guidance if isinstance(writing_guidance, dict) else {}
     selected_prompt_option_ids = raw_guidance.get("prompt_option_ids") if "prompt_option_ids" in raw_guidance else None
     normalized_guidance = ChapterWritingGuidance.model_validate(raw_guidance).model_dump()
     trace_key = _story_trace_key("write", project_name, story_id, chapter_no)
-    retrieval_context = _build_retrieval_context(
+    context_assembly = assemble_generation_context(
         project_name,
-        f"第{chapter_no}章 {chapter_outline} {normalized_guidance}",
-        allowed_source_types=[
-            "creative_profile_discussion",
-            "chapter_summary",
-            "chapter_outline",
-            "chapter_discussion",
-            "chapter_content",
-            "memory_character",
-            "memory_world",
-            "memory_au_rule",
-            "memory_relationship",
-            "memory_timeline",
-            "memory_foreshadowing",
-            "memory_active_constraint",
-            "review_issue",
-            "analysis_consistency",
-            "analysis_characters",
-            "analysis_timeline",
-            "analysis_foreshadowing",
-            "external_source",
-        ] + KNOWLEDGE_SOURCE_TYPES,
-        allowed_scopes=["project", "canon", "reference"],
-        trace_key=trace_key,
         story_id=story_id,
+        capability="write",
+        query=build_chapter_context_query(chapter_no, chapter_outline, normalized_guidance),
+        chapter_no=chapter_no,
+        generation_guidance=normalized_guidance,
+        prompt_option_ids=selected_prompt_option_ids,
+        manual_knowledge_ids=normalized_guidance.get("manual_knowledge_ids"),
+        allowed_scopes=["project", "canon", "reference"],
         retrieval_profile="drafting",
     )
-    prompt = merge_retrieval_context(
-        write_chapter_prompt(
-            memory,
-            chapter_outline,
-            normalized_guidance,
-            word_count,
-            _build_rules_text(
-                project_name,
-                "write",
-                story_id=story_id,
-                prompt_option_ids=selected_prompt_option_ids,
-            ),
-        ),
-        retrieval_context,
+    ensure_context_budget(context_assembly)
+    _LAST_RETRIEVAL_TRACES[trace_key] = list(context_assembly.retrieval_hits)
+    prompt = write_chapter_prompt(
+        {},
+        chapter_outline,
+        normalized_guidance,
+        word_count,
+        assembled_context=render_context_for_prompt(context_assembly),
     )
     chapter = call_llm(prompt, stream_callback=stream_callback)
     if not chapter.strip():
         raise RuntimeError("模型没有返回章节正文。")
     artifacts = {"saved": False}
+    warnings = list(context_assembly.warnings)
     if save_output:
         save_chapter(project_name, chapter_no, chapter, story_id=story_id)
         artifacts = {
             "saved": True,
             "saved_path": f"data/projects/{project_name}/stories/{story_id}/chapters/chapter_{chapter_no:03d}.md",
         }
+        try:
+            snapshot_key = save_generation_context_snapshot(
+                project_name,
+                story_id,
+                context_assembly.model_dump(),
+            )
+            artifacts["context_snapshot_id"] = snapshot_key
+        except Exception as exc:
+            logging.getLogger("novelforge").warning(
+                "Failed to save generation context snapshot: project=%s story=%s chapter=%s error=%s",
+                project_name,
+                story_id,
+                chapter_no,
+                exc,
+            )
+            warnings.append(f"正文已保存，但上下文快照保存失败：{exc}")
+
+        directive_ids = [
+            str(block.metadata.get("directive_id") or "")
+            for block in context_assembly.blocks
+            if block.source_type == "context_directive" and str(block.metadata.get("directive_id") or "")
+        ]
+        try:
+            consumed = consume_context_directives(project_name, story_id, directive_ids)
+            if consumed:
+                artifacts["consumed_directive_ids"] = [
+                    str(item.get("directive_id") or "")
+                    for item in consumed
+                ]
+        except Exception as exc:
+            logging.getLogger("novelforge").warning(
+                "Failed to consume context directives: project=%s story=%s chapter=%s error=%s",
+                project_name,
+                story_id,
+                chapter_no,
+                exc,
+            )
+            warnings.append(f"正文已保存，但导演注剩余次数更新失败：{exc}")
     return _make_step_result(
         "write_chapter",
         success=True,
         status="completed",
-        data={"chapter": chapter, "writing_guidance": normalized_guidance},
+        data={
+            "chapter": chapter,
+            "writing_guidance": normalized_guidance,
+            "context_assembly": context_assembly.model_dump(),
+        },
+        warnings=warnings,
         retrieval_hits=get_retrieval_trace(trace_key),
         artifacts=artifacts,
     ).model_dump()
+
+
+def build_dynamic_direct_outline(profile: dict, user_requirement: str) -> str:
+    return "\n\n".join([
+        "# 直接正文生成任务",
+        f"创作配置：{json.dumps(profile or {}, ensure_ascii=False)}",
+        f"用户需求：{user_requirement}",
+        "请根据创作配置和检索上下文直接写正文，不需要输出大纲。",
+    ])
 
 
 def run_dynamic_generation_task(
@@ -2501,12 +2537,7 @@ def run_dynamic_generation_task(
         _safe_stream_emit(stream_callback, f"\n\n## {title}\n\n")
 
     if effective_depth == "只生成正文":
-        direct_outline = "\n\n".join([
-            "# 直接正文生成任务",
-            f"创作配置：{json.dumps(profile, ensure_ascii=False)}",
-            f"用户需求：{user_requirement}",
-            "请根据创作配置和检索上下文直接写正文，不需要输出大纲。",
-        ])
+        direct_outline = build_dynamic_direct_outline(profile, user_requirement)
         emit_step_heading("正文")
         write_step = write_chapter(
             project_name,
@@ -2811,40 +2842,24 @@ def update_memory_from_chapter(
 
 
 def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: str = "default", stream_callback=None) -> dict:
-    memory = build_generation_setting_context(project_name, story_id)
     chapter_outline = load_chapter_outline(project_name, chapter_no, story_id=story_id)
     trace_key = _story_trace_key("review", project_name, story_id, chapter_no)
-    retrieval_context = _build_retrieval_context(
+    context_assembly = assemble_generation_context(
         project_name,
-        f"第{chapter_no}章审阅 {chapter_outline} {chapter}",
-        allowed_source_types=[
-            "chapter_summary",
-            "chapter_outline",
-            "chapter_content",
-            "memory_character",
-            "memory_world",
-            "memory_au_rule",
-            "memory_relationship",
-            "memory_timeline",
-            "memory_foreshadowing",
-            "memory_active_constraint",
-            "review_issue",
-            "review_timeline_check",
-            "review_foreshadowing_check",
-            "analysis_consistency",
-            "analysis_characters",
-            "analysis_timeline",
-            "analysis_foreshadowing",
-            "external_source",
-        ] + KNOWLEDGE_SOURCE_TYPES,
-        allowed_scopes=["project", "canon", "reference"],
-        trace_key=trace_key,
         story_id=story_id,
+        capability="review",
+        query=f"第{chapter_no}章审阅 {chapter_outline} {chapter}",
+        chapter_no=chapter_no,
+        allowed_scopes=["project", "canon", "reference"],
         retrieval_profile="review",
     )
-    prompt = merge_retrieval_context(
-        review_chapter_prompt(memory, chapter_outline, chapter, _build_rules_text(project_name, "review", story_id=story_id)),
-        retrieval_context,
+    ensure_context_budget(context_assembly)
+    _LAST_RETRIEVAL_TRACES[trace_key] = list(context_assembly.retrieval_hits)
+    prompt = review_chapter_prompt(
+        {},
+        chapter_outline,
+        chapter,
+        render_context_for_prompt(context_assembly),
     )
     result = call_llm(prompt, stream_callback=stream_callback)
     if not result.strip():
@@ -2880,9 +2895,10 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
             data={
                 "review": fallback_review.model_dump(),
                 "review_markdown": markdown,
+                "context_assembly": context_assembly.model_dump(),
             },
             error=reason,
-            warnings=["已生成并保存审阅报告的兜底版本。"],
+            warnings=[*context_assembly.warnings, "已生成并保存审阅报告的兜底版本。"],
             retrieval_hits=retrieval_hits,
             validation=_make_validation_status(
                 status="failed",
@@ -2918,9 +2934,10 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
             data={
                 "review": fallback_review.model_dump(),
                 "review_markdown": markdown,
+                "context_assembly": context_assembly.model_dump(),
             },
             error=str(exc),
-            warnings=["已生成并保存审阅报告的兜底版本。"],
+            warnings=[*context_assembly.warnings, "已生成并保存审阅报告的兜底版本。"],
             retrieval_hits=retrieval_hits,
             validation=_make_validation_status(
                 status="failed",
@@ -2947,7 +2964,9 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
         data={
             "review": review.model_dump(),
             "review_markdown": markdown,
+            "context_assembly": context_assembly.model_dump(),
         },
+        warnings=context_assembly.warnings,
         retrieval_hits=retrieval_hits,
         validation=_make_validation_status(
             status="passed",

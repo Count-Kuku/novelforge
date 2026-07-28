@@ -2,7 +2,7 @@
 
 # NovelForge
 
-Current version: `v0.5.1`
+Current version: `v0.6.0`
 
 NovelForge is an LLM-powered writing workspace for long-form fiction, built around persistent project storage, retrieval-augmented generation, structured workflows, and future multi-agent collaboration.
 
@@ -77,6 +77,11 @@ Current maturity can be summarized as:
 - pending knowledge form editor for correcting category, name, summary, details, evidence, tags, quality scores, provenance, and canon status without raw JSON editing
 - confirmed knowledge form editor for maintaining persisted knowledge, moving categories, deleting incorrect items, and rebuilding retrieval indexes
 - version/worldline metadata for separating canon, project-main, AU, branch, and mixed knowledge scopes
+- unified context assembly for outline generation, chapter planning, drafting, quick generation, and chapter review, covering rules, always-on settings, director notes, retrieval hits, prompt options, and run-specific guidance
+- on-demand context preview with final order, provenance, activation reasons, budget usage, omissions, and a reproducibility fingerprint
+- director notes scoped to the project, story, chapter, or next successful saved generation
+- strict `always`, `retrieval`, and `manual_only` injection semantics
+- persisted generation-context snapshots for auditing saved chapters and copying story workspaces
 - ingestion health overview for imported-but-unextracted material, failed extraction, quality risks, category gaps, and worldline distribution
 - project-level extraction plan templates with save, inspect, delete, and JSON-edit support for reusing multi-specialist pipelines across batches
 - setting entity cards generated from world rules, locations, organizations, abilities, items, and constraints
@@ -303,7 +308,7 @@ python -m venv .venv
 3. Run the packaging script from PowerShell and pass that distribution via `RuntimeRoot`:
 
 ```powershell
-.\build_release.ps1 -Version v0.5.1 -RuntimeRoot D:\Runtimes\python-standalone
+.\build_release.ps1 -Version v0.6.0 -RuntimeRoot D:\Runtimes\python-standalone
 ```
 
 4. The script will automatically:
@@ -312,7 +317,7 @@ python -m venv .venv
 - validate the self-contained runtime and copy it as `.runtime`
 - build `NovelForge.exe` from `launcher.py`
 - assemble `release/NovelForge-Portable/`
-- create `release/NovelForge-windows-portable-v0.5.1.zip`
+- create `release/NovelForge-windows-portable-v0.6.0.zip`
 - save a local build log under `release/`
 
 ### Notes

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from context_assembly import build_chapter_context_query
 from memory import (
     load_chapter,
     load_chapter_discussion_artifact,
@@ -14,6 +15,7 @@ from memory import (
     save_chapter,
 )
 from prompt_options import filter_prompt_options, merge_prompt_option_layers
+from setting_knowledge import list_setting_items
 from skills import (
     extract_setting_candidates_from_chapter,
     generate_chapter_outline,
@@ -23,6 +25,7 @@ from skills import (
     write_chapter,
 )
 from ui.common import scoped_session_key, scoped_widget_key
+from ui.context_directives import render_context_directive_tools
 from ui.discussion import (
     _format_discussion_artifact_as_guidance,
     _render_approved_discussion_artifact,
@@ -34,6 +37,7 @@ from ui.prompt_option_tools import (
     _render_generation_injection_preview,
     _render_prompt_option_capability_tools,
     _render_prompt_option_inline_tools,
+    render_context_assembly_summary,
 )
 from ui.step_views import (
     render_step_json_expander,
@@ -155,6 +159,30 @@ def _render_chapter_write_settings(
             capability="write",
             key_prefix=scoped_widget_key("write_prompt_option_tools", *chapter_scope),
         )
+    active_profile = load_creative_profile(project_name, story_id=story_id) or {}
+    manual_knowledge_items = list_setting_items(
+        project_name,
+        story_id,
+        core_only=False,
+        injection_policies={"manual_only"},
+        worldline_id=str(active_profile.get("worldline_id") or ""),
+        worldline_mode=str(active_profile.get("worldline_retrieval_mode") or "prefer"),
+    )
+    manual_knowledge_labels = {
+        str(item.get("id") or ""): (
+            f"{item.get('name') or item.get('summary') or item.get('id')} · "
+            f"{item.get('category') or 'knowledge'}"
+        )
+        for item in manual_knowledge_items
+        if str(item.get("id") or "")
+    }
+    manual_knowledge_ids = write_settings_ui.multiselect(
+        "本次手动注入知识",
+        options=list(manual_knowledge_labels),
+        format_func=lambda item_id: manual_knowledge_labels.get(item_id, item_id),
+        key=scoped_widget_key("write_manual_knowledge_ids", *chapter_scope),
+        help="这里只显示注入策略为“仅手动管理”的已确认知识；选中后只影响本次生成。",
+    )
     tone = write_settings_ui.selectbox(
         "文风/基调",
         options=["", "克制", "热血", "轻快", "压抑", "爽文推进"],
@@ -204,6 +232,7 @@ def _render_chapter_write_settings(
         "focus": focus,
         "ending_strength": ending_strength,
         "extra_requirements": combined_extra_requirements,
+        "manual_knowledge_ids": manual_knowledge_ids,
     }
     if selected_prompt_option_ids is not None:
         writing_guidance["prompt_option_ids"] = selected_prompt_option_ids
@@ -510,13 +539,22 @@ def _render_chapter_result_details(
                 st.markdown(pipeline_markdown)
 
     render_step_validation(chapter_step)
+    render_context_assembly_summary(
+        (chapter_step.get("data") or {}).get("context_assembly") or {},
+        "本次正文实际使用的上下文",
+    )
     render_step_retrieval(
         chapter_step,
         "本次正文生成参考的资料",
         get_retrieval_trace(f"write:{project_name}:{story_id}:{chapter_no}")
     )
+    review_step = st.session_state.get(review_inline_step_key, {})
+    render_context_assembly_summary(
+        (review_step.get("data") or {}).get("context_assembly") or {},
+        "本次审阅实际使用的上下文",
+    )
     render_step_retrieval(
-        st.session_state.get(review_inline_step_key, {}),
+        review_step,
         "本次审阅参考的资料",
         get_retrieval_trace(f"review:{project_name}:{story_id}:{chapter_no}")
     )
@@ -685,6 +723,12 @@ def _render_chapter_generation_section(project_name: str, context: dict, chapter
         context["chapter_scope"],
         discussion_guidance,
     )
+    render_context_directive_tools(
+        project_name,
+        context["story_id"],
+        capability="write",
+        chapter_no=context["chapter_no"],
+    )
     has_outline = bool(chapter_outline.strip())
     _render_generation_injection_preview(
         project_name,
@@ -692,6 +736,12 @@ def _render_chapter_generation_section(project_name: str, context: dict, chapter
         "write",
         selected_prompt_option_ids,
         writing_guidance,
+        query=build_chapter_context_query(
+            context["chapter_no"],
+            chapter_outline,
+            writing_guidance,
+        ),
+        chapter_no=context["chapter_no"],
     )
 
     _render_chapter_generation_actions(

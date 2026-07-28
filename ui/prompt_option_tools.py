@@ -1,20 +1,16 @@
 """Shared prompt option UI helpers."""
 from __future__ import annotations
 
+import hashlib
 import json
-import logging
 
 import streamlit as st
 
+from context_assembly import assemble_generation_context
 from memory import (
-    load_creative_profile,
-    load_effective_rule_conflict_resolutions,
     load_global_prompt_options,
-    load_global_rules,
     load_project_prompt_options,
-    load_project_rules,
     load_story_prompt_options,
-    load_story_rules,
     upsert_prompt_option,
     delete_prompt_option,
 )
@@ -24,16 +20,10 @@ from prompt_options import (
     PROMPT_OPTION_SLOTS,
     builtin_prompt_options,
     filter_prompt_options,
-    format_prompt_options_for_prompt,
     merge_prompt_option_layers,
     normalize_prompt_option,
 )
-from prompts import format_rules_for_prompt
-from setting_knowledge import build_generation_setting_context
 from ui.common import scoped_widget_key
-
-
-APP_LOGGER = logging.getLogger("novelforge.ui.prompt_option_tools")
 
 
 PROMPT_OPTION_LAYER_LABELS = {
@@ -378,90 +368,35 @@ def _render_prompt_option_layer(project_name: str, story_id: str, layer: str):
             )
 
 
-def _format_creative_profile_for_preview(project_name: str, story_id: str) -> str:
-    try:
-        profile = load_creative_profile(project_name, story_id)
-    except Exception as exc:
-        APP_LOGGER.warning(
-            "Failed to load creative profile preview for project=%s story=%s: %s",
-            project_name,
-            story_id,
-            exc,
-        )
-        profile = {}
-    if not profile:
-        return ""
-    lines = [
-        "项目创作配置：",
-        f"- 任务性质：{profile.get('story_mode', '-')}",
-        f"- 目标篇幅：{profile.get('target_length', '-')}",
-        f"- 目标字数：{profile.get('target_word_count', '') or '未设置'}",
-        f"- 生成层级：{profile.get('workflow_depth', '-')}",
-        f"- 资料参考强度：{profile.get('reference_strength', '-')}",
-        f"- 重点参考方向：{', '.join(profile.get('reference_focus', []) or []) or '未设置'}",
-        f"- 允许改写原设：{'是' if profile.get('allow_canon_deviation', True) else '否'}",
-        f"- 资料冲突处理：{profile.get('conflict_policy', '-')}",
-        f"- 当前世界线：{profile.get('worldline_label') or profile.get('worldline_id') or '未设置'}",
-        f"- 世界线检索模式：{profile.get('worldline_retrieval_mode', 'prefer')}",
-    ]
-    notes = str(profile.get("notes", "") or "").strip()
-    if notes:
-        lines.append(f"- 补充说明：{notes}")
-    return "\n".join(lines)
-
-
 def _build_generation_injection_preview(
     project_name: str,
     story_id: str,
     scope: str,
     prompt_option_ids: list[str] | None,
     generation_guidance: dict,
-) -> dict[str, str]:
-    sections: dict[str, str] = {}
-    try:
-        setting_context = str(build_generation_setting_context(project_name, story_id).get("_setting_context") or "").strip()
-    except Exception as exc:
-        setting_context = f"核心设定预览失败：{exc}"
-    if setting_context:
-        sections["核心设定"] = setting_context
-
-    try:
-        rules_text = format_rules_for_prompt(
-            load_global_rules(),
-            load_project_rules(project_name),
-            scope,
-            story_rules=load_story_rules(project_name, story_id),
-            conflict_resolutions=load_effective_rule_conflict_resolutions(project_name, story_id, scope),
-        )
-    except Exception as exc:
-        rules_text = f"规则预览失败：{exc}"
-    if rules_text:
-        sections["生成规则与人工裁决"] = rules_text
-
-    profile_text = _format_creative_profile_for_preview(project_name, story_id)
-    if profile_text:
-        sections["创作配置"] = profile_text
-
-    try:
-        options = merge_prompt_option_layers(
-            load_global_prompt_options(),
-            load_project_prompt_options(project_name),
-            load_story_prompt_options(project_name, story_id),
-        )
-        option_text = format_prompt_options_for_prompt(options, scope, selected_ids=prompt_option_ids)
-    except Exception as exc:
-        option_text = f"提示词选项预览失败：{exc}"
-    if option_text:
-        sections["提示词选项"] = option_text
-
-    cleaned_guidance = {
-        key: value
-        for key, value in (generation_guidance or {}).items()
-        if value not in ("", [], {}, None)
+    *,
+    query: str = "",
+    chapter_no: int | None = None,
+) -> dict:
+    profile_by_scope = {
+        "write": "drafting",
+        "chapter_outline": "chapter_planning",
+        "outline": "outline_generation",
+        "review": "review",
     }
-    if cleaned_guidance:
-        sections["本次临时写作参数"] = json.dumps(cleaned_guidance, ensure_ascii=False, indent=2)
-    return sections
+    assembly = assemble_generation_context(
+        project_name,
+        story_id=story_id,
+        capability=scope,
+        query=query or json.dumps(generation_guidance or {}, ensure_ascii=False),
+        chapter_no=chapter_no,
+        generation_guidance=generation_guidance,
+        prompt_option_ids=prompt_option_ids,
+        manual_knowledge_ids=list((generation_guidance or {}).get("manual_knowledge_ids") or []),
+        retrieval_profile=profile_by_scope.get(scope),
+        allowed_scopes=["project", "canon", "reference"],
+    )
+    return assembly.model_dump()
 
 
 def _render_generation_injection_preview(
@@ -470,19 +405,109 @@ def _render_generation_injection_preview(
     scope: str,
     prompt_option_ids: list[str] | None,
     generation_guidance: dict,
+    *,
+    query: str = "",
+    chapter_no: int | None = None,
 ):
     with st.expander("本次生成注入预览", expanded=False):
-        st.caption("这是点击生成前的只读检查。它不会保存新内容，只展示本次会影响模型的设定、规则、提示词选项和临时参数。")
-        sections = _build_generation_injection_preview(
+        st.caption("点击刷新后，会使用与实际生成相同的装配器计算规则、设定、导演注、检索命中、预算与省略项。预览不会消耗一次性导演注。")
+        request_payload = {
+            "project_name": project_name,
+            "story_id": story_id,
+            "scope": scope,
+            "prompt_option_ids": prompt_option_ids,
+            "generation_guidance": generation_guidance,
+            "query": query,
+            "chapter_no": chapter_no,
+        }
+        request_fingerprint = hashlib.sha256(
+            json.dumps(request_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        preview_state_key = scoped_widget_key(
+            "generation_context_preview_state",
             project_name,
             story_id,
             scope,
-            prompt_option_ids,
-            generation_guidance,
+            chapter_no if chapter_no is not None else "none",
         )
-        if not sections:
-            st.info("当前没有额外注入内容。")
+        if st.button(
+            "刷新真实上下文预览",
+            key=scoped_widget_key(
+                "generation_context_preview_refresh",
+                project_name,
+                story_id,
+                scope,
+                chapter_no if chapter_no is not None else "none",
+            ),
+        ):
+            try:
+                st.session_state[preview_state_key] = {
+                    "request_fingerprint": request_fingerprint,
+                    "assembly": _build_generation_injection_preview(
+                        project_name,
+                        story_id,
+                        scope,
+                        prompt_option_ids,
+                        generation_guidance,
+                        query=query,
+                        chapter_no=chapter_no,
+                    ),
+                }
+            except Exception as exc:
+                st.error(f"上下文预览失败：{exc}")
+
+        preview_state = st.session_state.get(preview_state_key, {})
+        assembly = preview_state.get("assembly") if isinstance(preview_state, dict) else None
+        if not isinstance(assembly, dict):
+            st.info("尚未计算预览。")
             return
-        for title, content in sections.items():
-            st.markdown(f"#### {title}")
-            st.code(content, language="markdown")
+        if preview_state.get("request_fingerprint") != request_fingerprint:
+            st.warning("写作输入或选项已变化，当前预览已过期，请重新刷新。")
+
+        metric_a, metric_b, metric_c = st.columns(3)
+        metric_a.metric("预计上下文", f"{int(assembly.get('total_estimated_tokens') or 0)} tokens")
+        metric_b.metric("预算", f"{int(assembly.get('context_budget') or 0)} tokens")
+        metric_c.metric("检索命中", len(assembly.get("retrieval_hits") or []))
+        st.caption(f"上下文指纹：`{assembly.get('fingerprint') or '-'}`")
+        for warning in assembly.get("warnings", []):
+            st.warning(str(warning))
+
+        blocks = assembly.get("blocks") or []
+        if not blocks:
+            st.info("当前没有额外注入内容。")
+        for index, block in enumerate(blocks, start=1):
+            st.markdown(f"#### {index}. {block.get('category') or block.get('source_type')}")
+            st.caption(
+                f"位置：{block.get('placement') or '-'} · 来源：{block.get('source_type') or '-'} · "
+                f"预计 {int(block.get('estimated_tokens') or 0)} tokens · 原因：{block.get('activation_reason') or '-'}"
+            )
+            st.code(str(block.get("content") or ""), language="markdown")
+
+        omitted = assembly.get("omitted_blocks") or []
+        if omitted:
+            with st.expander(f"已省略上下文（{len(omitted)}）", expanded=False):
+                for block in omitted:
+                    st.markdown(f"- `{block.get('block_id')}`：{block.get('omission_reason') or '未说明'}")
+
+
+def render_context_assembly_summary(assembly: dict, title: str = "实际生成上下文") -> None:
+    if not isinstance(assembly, dict) or not assembly:
+        return
+    with st.expander(title, expanded=False):
+        metric_a, metric_b, metric_c = st.columns(3)
+        metric_a.metric("预计上下文", f"{int(assembly.get('total_estimated_tokens') or 0)} tokens")
+        metric_b.metric("预算", f"{int(assembly.get('context_budget') or 0)} tokens")
+        metric_c.metric("检索命中", len(assembly.get("retrieval_hits") or []))
+        st.caption(f"上下文指纹：`{assembly.get('fingerprint') or '-'}`")
+        for warning in assembly.get("warnings", []):
+            st.warning(str(warning))
+        for index, block in enumerate(assembly.get("blocks") or [], start=1):
+            st.markdown(
+                f"{index}. **{block.get('category') or block.get('source_type')}** · "
+                f"{block.get('placement') or '-'} · {int(block.get('estimated_tokens') or 0)} tokens"
+            )
+            if block.get("activation_reason"):
+                st.caption(str(block.get("activation_reason")))
+        omitted = assembly.get("omitted_blocks") or []
+        if omitted:
+            st.caption(f"另有 {len(omitted)} 个上下文块因预算被省略。")

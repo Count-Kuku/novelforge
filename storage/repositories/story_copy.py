@@ -19,6 +19,7 @@ _CHAPTER_ASSET_TYPES = {
     "evaluation_markdown",
     "evaluation_json",
     "workflow_run_snapshot",
+    "generation_context_snapshot",
 }
 
 _DISCUSSION_ASSET_TYPES = {
@@ -374,13 +375,19 @@ def clone_story_storage_rows(
             ),
         )
         if row["payload_json"] is not None:
-            payload_json = _rewrite_json_text(
-                row["payload_json"],
-                source_story_id=source_story_id,
-                target_story_id=target_story_id,
-                run_id_map=run_id_map,
-                asset_id_map=asset_id_map,
-            )
+            if asset_type == "generation_context_snapshot":
+                # A context snapshot is an immutable record of the source
+                # generation. Rewriting embedded story IDs would make its
+                # persisted fingerprint inconsistent with the saved payload.
+                payload_json = str(row["payload_json"])
+            else:
+                payload_json = _rewrite_json_text(
+                    row["payload_json"],
+                    source_story_id=source_story_id,
+                    target_story_id=target_story_id,
+                    run_id_map=run_id_map,
+                    asset_id_map=asset_id_map,
+                )
             conn.execute(
                 """
                 INSERT INTO asset_payloads (asset_id, payload_json, created_at, updated_at)

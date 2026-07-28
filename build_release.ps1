@@ -122,6 +122,7 @@ $filesToCopy = @(
     "app.py",
     "asset_guardrails.py",
     "creative_profile_workflows.py",
+    "context_assembly.py",
     "discussion_assets.py",
     "extraction_presets.py",
     "knowledge_entities.py",

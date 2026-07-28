@@ -2,17 +2,20 @@ import hashlib
 import json
 
 from memory import (
+    GENERATION_CONTEXT_SNAPSHOT_ASSET_TYPE,
     delete_arc,
     delete_arc_chapter_plan,
     delete_retrieval_source_file,
     delete_volume,
     list_arcs,
     list_long_reference_batches,
+    list_asset_payload_records,
     list_volumes,
     load_arc_chapter_plan,
     load_arc_discussion_artifact,
     load_chapter_discussion_artifact,
     load_creative_profile_discussion_artifact,
+    load_context_directives,
     load_evaluation_json,
     load_evaluation_report,
     load_knowledge_base,
@@ -439,6 +442,49 @@ def _build_resource_browser_items(project_name: str, story_id: str = "default") 
             "chapter_no": None,
             "analysis_type": "",
             "relative_path": f"long_reference_batches/{batch.get('file_name') or batch_id}",
+            "editable": False,
+            "deletable": False,
+        })
+
+    for directive in load_context_directives(project_name, story_id):
+        directive_id = str(directive.get("directive_id") or "")
+        items.append({
+            "id": f"context-directive:{directive_id}",
+            "group": "context_directive",
+            "label": str(directive.get("name") or directive_id or "导演注"),
+            "path_label": (
+                f"context_directive / {directive.get('scope') or 'story'} / "
+                f"{directive.get('placement') or 'chapter_direction'} / {directive_id}"
+            ),
+            "content": _resource_browser_json_text(directive),
+            "chapter_no": directive.get("chapter_start"),
+            "analysis_type": "",
+            "relative_path": f"context_directive/{directive_id}.json",
+            "editable": False,
+            "deletable": False,
+        })
+
+    for record in list_asset_payload_records(
+        project_name,
+        asset_type=GENERATION_CONTEXT_SNAPSHOT_ASSET_TYPE,
+        story_id=story_id,
+    ):
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+        logical_key = str(record.get("logical_key") or "")
+        chapter_no = payload.get("chapter_no")
+        items.append({
+            "id": f"generation-context:{logical_key}",
+            "group": "generation_context",
+            "label": (
+                f"第 {int(chapter_no)} 章上下文 / {str(payload.get('fingerprint') or '')[:12]}"
+                if isinstance(chapter_no, int)
+                else f"生成上下文 / {str(payload.get('fingerprint') or '')[:12]}"
+            ),
+            "path_label": f"generation_context_snapshot / {logical_key}",
+            "content": _resource_browser_json_text(payload),
+            "chapter_no": chapter_no if isinstance(chapter_no, int) else None,
+            "analysis_type": "",
+            "relative_path": str(record.get("relative_path") or ""),
             "editable": False,
             "deletable": False,
         })
