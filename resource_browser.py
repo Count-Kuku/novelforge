@@ -10,12 +10,14 @@ from memory import (
     list_arcs,
     list_long_reference_batches,
     list_asset_payload_records,
+    list_creative_sessions,
     list_volumes,
     load_arc_chapter_plan,
     load_arc_discussion_artifact,
     load_chapter_discussion_artifact,
     load_creative_profile_discussion_artifact,
     load_context_directives,
+    load_creative_session_bundle,
     load_evaluation_json,
     load_evaluation_report,
     load_knowledge_base,
@@ -363,6 +365,33 @@ def _build_resource_browser_items(project_name: str, story_id: str = "default") 
             "relative_path": f"runs/{run.get('run_id', '')}.json",
             "editable": False,
             "deletable": True,
+        })
+
+    for session in list_creative_sessions(
+        project_name,
+        story_id,
+        include_archived=True,
+    ):
+        session_id = str(session.get("session_id") or "")
+        bundle = load_creative_session_bundle(
+            project_name,
+            session_id,
+            story_id=story_id,
+        ) or {"session": session, "turns": [], "fragments": []}
+        items.append({
+            "id": f"creative-session:{session_id}",
+            "group": "creative_session",
+            "label": (
+                f"{session.get('title') or session_id} · "
+                f"{session.get('status') or 'active'}"
+            ),
+            "path_label": f"creative_sessions / {session_id}",
+            "content": _resource_browser_json_text(bundle),
+            "chapter_no": session.get("target_chapter_no"),
+            "analysis_type": "",
+            "relative_path": f"creative_sessions/{session_id}",
+            "editable": False,
+            "deletable": False,
         })
 
     for source in list_retrieval_sources(project_name):

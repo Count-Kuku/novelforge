@@ -466,7 +466,7 @@ def render_creative_profile_page(project_name: str, embedded: bool = False, *, r
 
 def render_creative_task_wizard(project_name: str, story_id: str = "default"):
     st.markdown("### 创作任务向导")
-    st.caption("用中文目标快速生成一份创作配置。保存后，“快速生成”和各类生成提示会按这份配置调整。")
+    st.caption("用中文目标快速生成一份创作配置。保存后，“自由创作”和各类生成提示会按这份配置调整。")
 
     task_options = ["主线故事", "番外", "续写", "前传", "穿越", "平行世界", "原作补完", "单场景片段", "设定补写"]
     length_options = ["片段", "短篇", "中篇", "长篇"]

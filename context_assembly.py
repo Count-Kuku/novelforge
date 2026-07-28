@@ -50,6 +50,8 @@ CATEGORY_LABELS = {
     "prompt_options": "提示词选项",
     "generation_guidance": "本次写作指导",
     "manual_knowledge": "手动选择的知识",
+    "session_summary": "自由创作会话摘要",
+    "session_fragments": "当前分支最近片段",
 }
 
 
@@ -337,6 +339,7 @@ def assemble_generation_context(
     query: str,
     chapter_no: int | None = None,
     generation_guidance: dict | None = None,
+    additional_blocks: list[dict] | None = None,
     prompt_option_ids: list[str] | None = None,
     manual_knowledge_ids: list[str] | None = None,
     retrieval_profile: str | None = None,
@@ -569,6 +572,30 @@ def assemble_generation_context(
     )
     if guidance_block:
         blocks.append(guidance_block)
+
+    for index, raw_block in enumerate(additional_blocks or []):
+        if not isinstance(raw_block, dict):
+            continue
+        additional_block = _context_block(
+            block_id=f"additional:{str(raw_block.get('block_id') or index)}",
+            category=str(raw_block.get("category") or "session_fragments"),
+            content=str(raw_block.get("content") or ""),
+            source_type=str(raw_block.get("source_type") or "creative_session"),
+            source_ref=str(raw_block.get("source_ref") or "") or None,
+            placement=str(raw_block.get("placement") or "story_state"),
+            priority=int(raw_block.get("priority") or 75),
+            hard_constraint=bool(raw_block.get("hard_constraint", False)),
+            scope=str(raw_block.get("scope") or "story"),
+            story_id=str(raw_block.get("story_id") or story_id) or None,
+            worldline=str(raw_block.get("worldline") or worldline_id) or None,
+            activation_reason=str(
+                raw_block.get("activation_reason")
+                or "当前自由创作会话需要保持连续"
+            ),
+            metadata=dict(raw_block.get("metadata") or {}),
+        )
+        if additional_block:
+            blocks.append(additional_block)
 
     included, omitted, budget_warnings, hard_budget_exceeded = _apply_context_budget(blocks, context_budget)
     included_retrieval_refs = {

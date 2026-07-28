@@ -7,6 +7,8 @@ import sqlite3
 from pathlib import PurePosixPath
 from typing import Any
 
+from .creative_sessions import clone_creative_session_rows
+
 
 _CHAPTER_ASSET_TYPES = {
     "chapter_outline",
@@ -499,8 +501,20 @@ def clone_story_storage_rows(
                 ),
             )
 
+    creative_session_result = (
+        clone_creative_session_rows(conn, source_story_id, target_story_id)
+        if include_chapters
+        else {
+            "session_count": 0,
+            "turn_count": 0,
+            "fragment_count": 0,
+            "session_id_map": {},
+        }
+    )
+
     return {
         "asset_count": len(included_assets),
         "workflow_count": len(workflow_rows),
         "run_id_map": run_id_map,
+        "creative_sessions": creative_session_result,
     }

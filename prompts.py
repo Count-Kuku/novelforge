@@ -1163,6 +1163,98 @@ def write_chapter_prompt(
 4. 如果提供了写作指导，优先在不破坏章节细纲核心任务的前提下落实这些写法要求
 """
 
+
+def creative_fragment_prompt(
+    assembled_context: str,
+    session_goal: str,
+    user_message: str,
+    action_type: str,
+    word_count: str,
+) -> str:
+    action_instruction = {
+        "generate": "这是会话的首个片段，请建立清晰可继续的场景。",
+        "continue": "承接最近已接受片段继续写，不要复述已经发生的内容。",
+        "rewrite": "从相同父节点重新创作当前片段，不要参考被替代版本的具体措辞。",
+        "branch": "从指定父片段建立新的剧情分支，允许采用不同走向。",
+        "revise": "根据用户要求修订当前方向，同时保持已接受事实不变。",
+    }.get(action_type, "根据用户本轮要求生成可继续创作的正文片段。")
+    return f"""
+你是自由创作写作 Agent。你的任务是和用户逐段完成小说正文。
+
+本次已装配上下文：
+{assembled_context or "当前没有额外上下文。"}
+
+会话目标：
+{session_goal or "未单独指定，以本轮要求为准。"}
+
+本轮用户要求：
+{user_message}
+
+本轮操作：
+{action_type}
+
+操作要求：
+{action_instruction}
+
+请直接输出小说正文片段，不要输出标题、分析、计划、JSON、解释或 Markdown 代码块。
+
+要求：
+1. 目标长度约 {word_count or "800-1200"} 字
+2. 严格遵守角色卡、世界观、关系、时间线和硬性约束
+3. 已接受片段属于当前会话事实，不得无故推翻
+4. 对检索资料中没有明确支持的内容保持克制
+5. 本轮只完成适合一个片段的推进，保留自然的继续空间
+"""
+
+
+def creative_session_summary_prompt(
+    previous_summary: str,
+    accepted_fragments: str,
+) -> str:
+    return f"""
+你是小说创作会话记忆整理 Agent。
+
+请把已经接受的正文压缩成后续续写可直接使用的状态摘要。不要评价文笔，不要添加原文没有的事实。
+
+已有滚动摘要：
+{previous_summary or "暂无。"}
+
+新增已接受片段：
+{accepted_fragments}
+
+请使用以下固定结构输出纯文本，不要使用 JSON：
+- 已发生事件：
+- 当前时间与地点：
+- 在场及相关人物：
+- 人物状态与已知信息：
+- 关系变化：
+- 尚未完成的冲突：
+- 伏笔与后续承接：
+- 当前叙事视角与语气：
+
+每项只保留后续续写真正需要的信息，总长度控制在 1200 字以内。
+"""
+
+
+def compile_creative_fragments_prompt(
+    fragments: str,
+    target_word_count: str = "",
+) -> str:
+    return f"""
+你是小说正文衔接编辑。请把下列已经由用户接受的片段整理成一篇连续正文。
+
+已接受片段：
+{fragments}
+
+要求：
+1. 不改变事件结果、角色关系、世界规则和关键对白含义
+2. 只处理重复开头、转场、指代和时态等衔接问题
+3. 不新增重要剧情，不删除关键事实
+4. 直接输出整理后的正文，不要说明修改过程
+5. 目标长度：{target_word_count or "保持与原片段总长度接近"}
+"""
+
+
 def setting_extraction_prompt(memory: dict, chapter: str, rules_text: str = "当前无额外规则。") -> str:
     return f"""
 你是章节设定提炼 Agent。

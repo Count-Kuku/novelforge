@@ -53,12 +53,14 @@ def render_project_overview_page(project_name: str):
     with action_col2:
         render_quick_action("整理资料", "资料导入", "导入原作、参考和长文本资料。")
     with action_col3:
-        render_quick_action("开始生成", "正文生成", "根据需求或细纲写正文，可串联审阅和设定提炼。")
+        render_quick_action("自由创作", "自由创作", "生成一次或持续续写片段，并把稳定设定沉淀到知识库。")
 
-    action_col4, action_col5 = st.columns(2)
+    action_col4, action_col5, action_col6 = st.columns(3)
     with action_col4:
-        render_quick_action("查看资源", "项目资源", "集中管理章节、报告和资料。")
+        render_quick_action("正文生成", "正文生成", "根据需求或细纲写正式正文，可串联审阅和设定提炼。")
     with action_col5:
+        render_quick_action("查看资源", "项目资源", "集中管理章节、报告和资料。")
+    with action_col6:
         render_quick_action("调提示词", "提示词选项", "新增、复制或修改可切换的写作偏好。")
 
     render_section_heading("项目指标", "点击有数量的指标即可查看对应内容。")
@@ -70,11 +72,12 @@ def render_project_overview_page(project_name: str):
     render_resource_metric_link(col5, project_name, story_id, "评估报告", summary.get("evaluation_count", 0), ["evaluation"])
 
     with st.expander("高级：更多项目指标", expanded=False):
-        advanced_cols_a = st.columns(4)
+        advanced_cols_a = st.columns(5)
         render_resource_metric_link(advanced_cols_a[0], project_name, story_id, "分卷数量", summary.get("volume_count", 0), ["volume_outline"])
         render_resource_metric_link(advanced_cols_a[1], project_name, story_id, "剧情段数量", summary.get("arc_count", 0), ["arc_outline"])
         render_resource_metric_link(advanced_cols_a[2], project_name, story_id, "流水线记录", summary.get("run_count", 0), ["run"])
         render_resource_metric_link(advanced_cols_a[3], project_name, story_id, "外部资料", summary.get("retrieval_source_count", 0), ["source"])
+        render_resource_metric_link(advanced_cols_a[4], project_name, story_id, "自由创作会话", summary.get("creative_session_count", 0), ["creative_session"])
 
         advanced_cols_b = st.columns(3)
         render_resource_metric_link(advanced_cols_b[0], project_name, story_id, "知识库条目", summary.get("knowledge_item_count", 0), ["knowledge_item"])

@@ -547,6 +547,57 @@ class ChapterWritingGuidance(NovelForgeSchema):
         return _normalize_string_list(value)
 
 
+class CreativeSession(NovelForgeSchema):
+    session_id: str
+    story_id: str
+    title: str = ""
+    status: Literal["active", "completed", "archived"] = "active"
+    session_goal: str = ""
+    writing_guidance: dict[str, Any] = Field(default_factory=dict)
+    target_chapter_no: int | None = Field(default=None, ge=1)
+    rolling_summary: str = ""
+    summary_fragment_id: str | None = None
+    active_fragment_id: str | None = None
+    worldline_id: str = "main"
+    auto_extract_mode: Literal["manual", "on_accept"] = "manual"
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class CreativeTurn(NovelForgeSchema):
+    turn_id: str
+    session_id: str
+    turn_index: int = Field(ge=1)
+    user_message: str
+    action_type: Literal["generate", "continue", "rewrite", "branch", "revise"] = "generate"
+    parent_fragment_id: str | None = None
+    status: Literal["running", "completed", "failed"] = "running"
+    error_text: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class CreativeFragment(NovelForgeSchema):
+    fragment_id: str
+    session_id: str
+    turn_id: str
+    parent_fragment_id: str | None = None
+    content: str
+    status: Literal["proposed", "accepted", "superseded", "discarded", "finalized"] = "proposed"
+    content_hash: str = ""
+    word_count: int = Field(default=0, ge=0)
+    context_snapshot_id: str | None = None
+    extraction_status: Literal["not_started", "running", "completed", "failed"] = "not_started"
+    created_at: str = ""
+    accepted_at: str | None = None
+
+
+class CreativeSessionBundle(NovelForgeSchema):
+    session: CreativeSession
+    turns: list[CreativeTurn] = Field(default_factory=list)
+    fragments: list[CreativeFragment] = Field(default_factory=list)
+
+
 class ContextDirective(NovelForgeSchema):
     directive_id: str = ""
     name: str = ""

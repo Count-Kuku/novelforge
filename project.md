@@ -6,7 +6,7 @@ For user-facing feature introductions, setup steps, and workflow guidance, see `
 
 For the planned SQLite-first long-term storage architecture, see `storage_architecture.md`.
 
-Current release marker: `v0.6.0`
+Current release marker: `v0.7.0`
 
 ## Project Overview
 
@@ -82,10 +82,10 @@ Current practical status:
 * Long-form source fingerprinting to detect repeated whole-txt uploads and bind them to existing batches
 * Story-level creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 * Consolidated creative profile page for direct profile editing, discussion-assisted recommendations, one-click apply-to-form, and saved-conclusion persistence
-* Lightweight quick-generation playground supporting prompt-only or fully-configured execution for testing and experimentation
+* Persistent free-writing workspace that preserves prompt-only generation while supporting iterative continuation, rewrites, accepted-fragment branching, knowledge extraction, and chapter compilation
 * Profile-aware content generation page replacing standalone chapter-writing and pipeline pages; adapts between chapter mode and free-form mode based on creative profile, with inline review and setting-extraction chaining
 * Content generation chained pipeline: write → review → setting extraction, plus reset-based full pipeline from requirement
-* Unified context assembly for outline generation, chapter planning, chapter and quick-generation drafting, and chapter review, including deterministic block ordering, budget-aware omission, activation reasons, and stable fingerprints
+* Unified context assembly for outline generation, chapter planning, chapter and free-writing drafting, and chapter review, including deterministic block ordering, budget-aware omission, activation reasons, and stable fingerprints
 * Project/story/chapter/run-scoped director notes that are persisted as generic SQLite assets and consumed only after a successful saved generation
 * Strict `always`, `retrieval`, and `manual_only` setting-injection semantics plus explicit retrieval source composition (`union`, `intersect`, or `replace`)
 * Persisted generation-context snapshots exposed through the project resource browser for post-generation auditing
@@ -132,7 +132,7 @@ Current practical status:
 * Local launcher and portable-build scripts for desktop-style localhost packaging
 * Grouped workspace navigation in the sidebar: 工作台 (overview/config/resources), 资料 (ingestion/settings/retrieval center), 规划 (profile-aware planning), 写作 (quick gen, content generation, evaluation)
 * Project-aware workspace header and refreshed card-based UI styling for a more desktop-like writing console
-* Project overview page upgraded into a quick-action home screen for quick generation, content generation, ingestion, and project resources
+* Project overview page upgraded into a quick-action home screen for free writing, content generation, ingestion, and project resources
 * Story spaces support：one project can hold multiple independent stories, each with its own creative profile, memory overrides, outlines, chapters, reviews, evaluations, analysis reports, pipeline runs, and chapter summaries, while sharing project-level base memory, structured knowledge, source materials, rules, and retrieval index
 * Automatic migration of existing single-story projects into the default story space on first access, with the active story persisted in `stories/index.json`
 * Story management supports editing story display name/description and copying one story's settings into a newly registered story space
@@ -170,7 +170,7 @@ In short: the project already has a working V1 product, substantial V2 groundwor
 Current direction update:
 
 * NovelForge is now moving toward configurable fan-fiction generation rather than one fixed long-form pipeline.
-* This direction is now implemented through story creative profiles, quick generation, profile-aware content generation, source ingestion, multi-specialist extraction plans, automatic review, and RAG evaluation/feedback.
+* This direction is now implemented through story creative profiles, iterative free writing, profile-aware content generation, source ingestion, multi-specialist extraction plans, automatic review, and RAG evaluation/feedback.
 * True autonomous multi-agent orchestration is still deferred; the current ingestion implementation uses modular specialist workflows that can later be wrapped as agents.
 
 ---
@@ -278,6 +278,7 @@ novelforge/
 |-- memory.py
 |-- retrieval.py
 |-- context_assembly.py
+|-- interactive_writing.py
 |-- merge.py
 |-- schemas.py
 |-- setting_knowledge.py
@@ -366,7 +367,7 @@ Design purpose:
 Current status after the UI split:
 
 * `app.py` is roughly a routing shell and imports page renderers from `ui/`
-* Major page families now live under `ui/`: app shell/navigation, layout, labels, common widgets, step views, discussion helpers, planning pages, creative profile, chapter/content generation, quick generation, evaluation, retrieval center, retrieval ingestion, long-reference import/batch management, knowledge review/organization, settings, resource management, rules, prompt options, and project overview
+* Major page families now live under `ui/`: app shell/navigation, layout, labels, common widgets, step views, discussion helpers, planning pages, creative profile, chapter/content generation, free writing, evaluation, retrieval center, retrieval ingestion, long-reference import/batch management, knowledge review/organization, settings, resource management, rules, prompt options, and project overview
 * Streamlit widget keys were preserved where practical during extraction to avoid avoidable session-state churn
 * Non-UI workflow decisions remain in existing workflow/domain modules such as `knowledge_workflows.py`, `knowledge_quality.py`, `knowledge_entities.py`, `source_workflows.py`, `resource_browser.py`, `creative_profile_workflows.py`, `setting_knowledge.py`, and `retrieval_eval.py`
 
@@ -394,7 +395,7 @@ Current split highlights:
 * `ui.app_shell` owns project initialization, project/story switching, new-project/new-story controls, grouped sidebar navigation, and project summary captions
 * `ui.layout`, `ui.common`, `ui.labels`, `ui.step_views`, and `ui.retrieval_views` provide shared display infrastructure
 * `ui.outline_page`, `ui.volume_outline_page`, `ui.arc_outline_page`, and `ui.chapter_outline_page` own planning pages
-* `ui.creative_profile_page`, `ui.dynamic_generation`, `ui.chapter_page`, and `ui.evaluation` own profile, quick-generation, content-generation, and evaluation surfaces
+* `ui.creative_profile_page`, `ui.dynamic_generation`, `ui.chapter_page`, and `ui.evaluation` own profile, free-writing, content-generation, and evaluation surfaces
 * `ui.retrieval_ingestion_page`, `ui.retrieval_center_page`, `ui.long_reference_importer`, `ui.long_reference_batch`, `ui.knowledge_management`, and `ui.retrieval_eval_panel` own source/RAG/knowledge-review workspaces
 * `ui.resource_management`, `ui.settings_page`, `ui.rules_page`, `ui.prompt_options_page`, and `ui.project_overview` own operational workbench pages
 
@@ -779,6 +780,7 @@ Responsibilities:
 * Loading historical pipeline runs
 * Listing pipeline runs for inspection and future resume/replay flows
 * Loading and saving structured knowledge, pending knowledge, auto-review policy, and processing run records
+* Creating, loading, updating, copying, finalizing, and deleting free-writing sessions, turns, and fragment versions through story-scoped transactions
 * Upserting pending knowledge by internal `pending_id` so deterministic re-extraction updates existing candidates instead of duplicating same-ID records
 * Rolling back processing runs and restoring manual-review snapshots back into the pending queue
 * Fetching recent chapter summaries (configurable limit, default 5)
@@ -788,7 +790,7 @@ Current storage note:
 
 * `memory.json` is no longer the primary storage layer for stable settings. It is intentionally slimmed to project metadata such as title and genre.
 * Stable settings are managed as structured knowledge through `setting_knowledge.py`, with legacy memory-shaped dictionaries assembled only as compatibility views for prompt builders.
-* Structured data is SQLite-first as of schema version 6: project-local data is read from `project.db` first, including stories, story profiles, project/story rules, prompt options, structured knowledge, pending knowledge, aliases, source batches, retrieval source registry, retrieval manifest/chunks/vectors, retrieval feedback/evals, conflict resolutions, workflow run snapshots, project-manager run/inventory listings, RAG rebuild inputs for review/evaluation/discussion payloads, volume/arc/chapter metadata discovery, DB-only deletion for small JSON artifacts, and small JSON artifacts in `asset_payloads`; global data is read from `global.db` first, including LLM profiles, global rules, global prompt options, and global rule conflict resolutions. Schema version 5 adds active asset uniqueness indexes for both project-level and story-level assets; schema version 6 separates a prompt option's user-facing logical ID from its scope/story-specific storage ID so intentional overrides cannot move rows across stories. Legacy JSON files are compatibility mirrors and backfill sources.
+* Structured data is SQLite-first as of schema version 7: project-local data is read from `project.db` first, including stories, story profiles, project/story rules, prompt options, structured knowledge, pending knowledge, aliases, source batches, retrieval source registry, retrieval manifest/chunks/vectors, retrieval feedback/evals, conflict resolutions, workflow run snapshots, free-writing sessions/turns/fragments, project-manager run/inventory listings, RAG rebuild inputs for review/evaluation/discussion payloads, volume/arc/chapter metadata discovery, DB-only deletion for small JSON artifacts, and small JSON artifacts in `asset_payloads`; global data is read from `global.db` first, including LLM profiles, global rules, global prompt options, and global rule conflict resolutions. Schema version 5 adds active asset uniqueness indexes for both project-level and story-level assets; schema version 6 separates a prompt option's user-facing logical ID from its scope/story-specific storage ID so intentional overrides cannot move rows across stories; schema version 7 adds the persistent free-writing state model. Legacy JSON files are compatibility mirrors and backfill sources.
 * Structured JSON compatibility mirrors are disabled by default. Set `NOVELFORGE_WRITE_JSON_MIRRORS=1` before launching the app or tools only when temporary legacy JSON mirror output is needed. SQLite remains authoritative; old JSON can still be read as fallback/backfill until the corresponding structured resource is saved again, at which point that stale mirror is removed. Markdown/TXT long-text assets remain file-backed.
 * In the default no-JSON-mirror mode, SQLite is required rather than best-effort: database read/write/delete failures raise errors so structured data is not silently lost.
 
@@ -834,7 +836,7 @@ Responsibilities:
 * Define structured discussion result models for outline-level, volume-level, arc-level, and chapter-level planning conversations
 * Define structured metadata models for volume outlines, arc outlines, and chapter assignment to parent planning nodes
 * Define structured writing-guidance model for lightweight chapter execution control
-* Define context-directive, context-block, and context-assembly models for explainable prompt construction
+* Define context-directive, context-block, context-assembly, and persistent free-writing state models
 * Define retrieval documents, chunks, hits, and index manifest models
 * Convert validated analysis objects into Markdown for UI/storage
 * Centralize schema error formatting
@@ -855,7 +857,7 @@ Generation-context orchestration layer.
 
 Responsibilities:
 
-* Collect effective rules, creative profile, always-on settings, story state, director notes, explicit knowledge, retrieval hits, prompt options, and run guidance
+* Collect effective rules, creative profile, always-on settings, story state, director notes, explicit knowledge, retrieval hits, prompt options, run guidance, and caller-supplied bounded session blocks
 * Order context through bounded placement slots instead of arbitrary prompt-depth injection
 * Apply a deterministic token estimate and context budget while preserving hard constraints
 * Record activation reasons and omission reasons for UI inspection
@@ -863,6 +865,24 @@ Responsibilities:
 * Render the exact included context blocks used by chapter drafting
 
 Persistence remains in `memory.py`: director notes use `context_directive` asset payloads, and successful saved drafts create `generation_context_snapshot` payloads.
+
+---
+
+## interactive_writing.py
+
+Iterative free-writing service layer.
+
+Responsibilities:
+
+* Preserve the one-prompt quick-generation path while allowing later continuation, rewrite, and current-frontier candidate branching
+* Build the active fragment chain and inject recent fragments plus rolling session summaries through `context_assembly.py`
+* Keep model calls outside storage transactions while recording running, completed, failed, and stale-interrupted turns
+* Accept or switch same-parent candidate fragments without letting abandoned candidates enter the active branch
+* Extract structured knowledge only from accepted/finalized fragments and enqueue it through the existing pending-knowledge workflow
+* Compile only newly accepted active-branch fragments into chapters, protect existing chapter content from implicit overwrite, and finalize session state
+* Keep retrieval and extraction implementations behind existing public interfaces so later vector-store or extraction-policy changes do not require session migrations
+
+Persistence stays behind `memory.py` and `storage/repositories/creative_sessions.py`; Streamlit code only orchestrates user actions and renders results.
 
 ---
 
@@ -1718,7 +1738,7 @@ Current implementation status:
 * Implemented: one-click chapter pipeline across planning, writing, review, and setting extraction
 * Implemented: story-level creative profile for task nature, target length, workflow depth, and reference strength, including custom values
 * Implemented: consolidated creative profile page that maps plain Chinese discussion and direct form choices into the current story creative profile
-* Implemented: quick-generation playground for direct prose, short-form structure + prose, and chapter-plan + prose tasks
+* Implemented: persistent free-writing sessions for direct prompt generation, iterative continuation/rewrite/branch operations, accepted-fragment knowledge extraction, and chapter compilation
 * Implemented: modular Streamlit UI split under `ui/`, with `app.py` reduced to route setup and compatibility helpers
 * Implemented: streaming preview controls for major discussion, generation, writing, evaluation, and source-ingestion actions
 * Implemented: per-step error isolation with partial result recovery

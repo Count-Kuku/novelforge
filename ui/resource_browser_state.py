@@ -23,6 +23,7 @@ RESOURCE_BROWSER_GROUPS = [
     ("analysis", "分析报告"),
     ("evaluation", "评估报告"),
     ("run", "流水线记录"),
+    ("creative_session", "自由创作会话"),
     ("context_directive", "导演注"),
     ("generation_context", "生成上下文快照"),
     ("source", "外部资料"),

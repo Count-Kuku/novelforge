@@ -17,6 +17,7 @@ from memory import (
     load_knowledge_base,
     list_asset_records,
     list_asset_payload_records,
+    list_creative_sessions,
     list_long_reference_batches,
     load_outline,
     load_pending_knowledge_items,
@@ -753,6 +754,9 @@ def get_project_summary(project_name: str, story_id: str = "default") -> dict:
         "analysis_count": len(analysis_reports),
         "evaluation_count": len(evaluation_reports),
         "run_count": len(runs),
+        "creative_session_count": len(
+            list_creative_sessions(project_name, story_id, include_archived=True)
+        ),
         "long_reference_batch_count": len(long_reference_batches),
         "retrieval_source_count": retrieval_file_count,
         "knowledge_item_count": sum(len(items) for items in knowledge_base.values()),

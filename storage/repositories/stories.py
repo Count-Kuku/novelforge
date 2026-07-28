@@ -103,6 +103,9 @@ def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
     if not clean_story_id:
         raise ValueError("Story ID cannot be empty.")
 
+    # Creative-session turns and fragments cascade from the session row.
+    conn.execute("DELETE FROM creative_sessions WHERE story_id = ?", (clean_story_id,))
+
     # Evidence can be linked indirectly through knowledge or source rows and
     # has no story_id of its own, so remove it before deleting those parents.
     conn.execute(

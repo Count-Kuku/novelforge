@@ -189,6 +189,9 @@ def inspect_project_db(project_path: Path) -> dict:
         "retrieval_eval_cases",
         "retrieval_eval_runs",
         "retrieval_feedback",
+        "creative_sessions",
+        "creative_turns",
+        "creative_fragments",
     ]
     result = {
         "ok": False,

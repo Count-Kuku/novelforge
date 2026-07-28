@@ -162,7 +162,7 @@ def main():
         ui_modules["creative_profile"].render_creative_profile_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
     elif page == "核心设定":
         ui_modules["settings"].render_settings_page(project_name, render_memory_page=render_memory_page)
-    elif page == "快速生成":
+    elif page == "自由创作":
         render_dynamic_generation_page(project_name, _render_prompt_option_capability_tools)
     elif page == "项目资源":
         ui_modules["resource_management"].render_resource_management_page(project_name)

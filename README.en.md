@@ -2,7 +2,7 @@
 
 # NovelForge
 
-Current version: `v0.6.0`
+Current version: `v0.7.0`
 
 NovelForge is an LLM-powered writing workspace for long-form fiction, built around persistent project storage, retrieval-augmented generation, structured workflows, and future multi-agent collaboration.
 
@@ -77,7 +77,7 @@ Current maturity can be summarized as:
 - pending knowledge form editor for correcting category, name, summary, details, evidence, tags, quality scores, provenance, and canon status without raw JSON editing
 - confirmed knowledge form editor for maintaining persisted knowledge, moving categories, deleting incorrect items, and rebuilding retrieval indexes
 - version/worldline metadata for separating canon, project-main, AU, branch, and mixed knowledge scopes
-- unified context assembly for outline generation, chapter planning, drafting, quick generation, and chapter review, covering rules, always-on settings, director notes, retrieval hits, prompt options, and run-specific guidance
+- unified context assembly for outline generation, chapter planning, drafting, free writing, and chapter review, covering rules, always-on settings, director notes, retrieval hits, prompt options, and run-specific guidance
 - on-demand context preview with final order, provenance, activation reasons, budget usage, omissions, and a reproducibility fingerprint
 - director notes scoped to the project, story, chapter, or next successful saved generation
 - strict `always`, `retrieval`, and `manual_only` injection semantics
@@ -92,7 +92,7 @@ Current maturity can be summarized as:
 - project creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
 - story-level worldline settings in the creative profile, including worldline ID/name and RAG worldline mode for later discussions and generation
 - creative-profile discussion assist for turning natural-language goals into structured story creative settings
-- quick-generation playground that can run direct prose, short-form structure, or chapter-plan based generation from the creative profile
+- a free-writing workspace that starts from one prompt, then supports continuation, rewrites, accepted-fragment branches, knowledge extraction, and chapter compilation
 - structured knowledge ingestion from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
 - lexical, semantic, and hybrid retrieval
 - task-aware retrieval profiles for creative-profile discussion, outline discussion, volume discussion, arc discussion, chapter discussion, outline generation, chapter planning, drafting, and review/evaluation
@@ -226,11 +226,14 @@ This profile is injected into major generation, discussion, review, and analysis
 
 If the user is not sure how to configure the profile, the in-app creative-profile discussion assist can turn natural-language goals into recommended settings, backfill the form, and save an approved discussion artifact.
 
-The in-app `快速生成` (quick generation) page is designed for testing and experimentation:
+The in-app `自由创作` (free writing) page extends the old quick-generation playground into an iterative fragment workspace:
 
-- Works with just a prompt — no creative profile required
-- Optional advanced configuration for fine control
-- Suitable for side stories, continuations, prequels, crossovers, fragments, and other lightweight tasks
+- The first fragment still works from a single prompt with no creative profile required
+- Later turns can continue, rewrite, create and switch sibling candidates at the current accepted frontier; accepting one retires the remaining unaccepted siblings, while forks from older canon points use story copying
+- Every turn reuses the unified context assembly, confirmed knowledge, entity cards, director notes, and retrieval
+- Only accepted fragments can produce pending knowledge candidates; candidates become reusable knowledge only after confirmation
+- Accepted fragments on the active branch can be compiled into a new chapter or explicitly appended to an existing chapter
+- Sessions, turns, fragment versions, and context snapshots remain auditable in project storage
 
 Full automatic orchestration for long-form volume/arc/chapter pipelines is still planned.
 
@@ -308,7 +311,7 @@ python -m venv .venv
 3. Run the packaging script from PowerShell and pass that distribution via `RuntimeRoot`:
 
 ```powershell
-.\build_release.ps1 -Version v0.6.0 -RuntimeRoot D:\Runtimes\python-standalone
+.\build_release.ps1 -Version v0.7.0 -RuntimeRoot D:\Runtimes\python-standalone
 ```
 
 4. The script will automatically:
@@ -317,7 +320,7 @@ python -m venv .venv
 - validate the self-contained runtime and copy it as `.runtime`
 - build `NovelForge.exe` from `launcher.py`
 - assemble `release/NovelForge-Portable/`
-- create `release/NovelForge-windows-portable-v0.6.0.zip`
+- create `release/NovelForge-windows-portable-v0.7.0.zip`
 - save a local build log under `release/`
 
 ### Notes

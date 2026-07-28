@@ -49,6 +49,7 @@ READONLY_RESOURCE_GROUPS = {
     "knowledge_item",
     "pending_knowledge",
     "long_reference_batch",
+    "creative_session",
     "context_directive",
     "generation_context",
 }
@@ -66,6 +67,7 @@ GLOBAL_FILTER_PASSTHROUGH_GROUPS = {
     "knowledge_item",
     "pending_knowledge",
     "long_reference_batch",
+    "creative_session",
     "context_directive",
     "generation_context",
 }
@@ -104,6 +106,16 @@ def _render_discussion_resource_detail(project_name: str, story_id: str, resourc
 
 def _render_readonly_resource_detail(project_name: str, story_id: str, resource: dict) -> None:
     group = str(resource.get("group") or "")
+    if group == "creative_session":
+        st.caption("自由创作会话在资源浏览器中只读；继续创作、提炼设定或整理章节请回到“自由创作”。")
+        st.code(resource.get("content", ""), language="json")
+        if st.button(
+            "前往自由创作",
+            key=scoped_widget_key("browser_goto_creative", project_name, story_id, resource.get("id")),
+            use_container_width=True,
+        ):
+            navigate_to("自由创作")
+        return
     if group in {"context_directive", "generation_context"}:
         st.caption("该审计资源在浏览器中只读；导演注请在生成页管理，上下文快照会随正式生成自动保存。")
         st.code(resource.get("content", ""), language="json")

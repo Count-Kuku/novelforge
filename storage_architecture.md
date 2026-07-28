@@ -8,7 +8,7 @@
 * Markdown / TXT / JSON 导出文件作为长文本资产和可读产物。
 * 检索、证据、结构化知识、图谱、工作流运行记录都以稳定 ID 串联。
 * 从第一版数据库开始保留 `schema_version` 和 migrations，不依赖一次性硬编码建表。
-* 当前代码期望的数据库 schema version 是 `5`。
+* 当前代码期望的数据库 schema version 是 `7`。
 
 ---
 
@@ -835,6 +835,8 @@ format prompt context
 * schema version 3 增加 `asset_payloads`，用于让小型 JSON 工件 DB-first。
 * schema version 4 增加 `global_settings`，用于让 LLM profiles 和全局规则冲突记录进入 `global.db`。
 * schema version 5 增加项目级/故事级 active asset 唯一索引，并在迁移时软删除同键重复 active asset，避免 SQLite `NULL` 唯一约束放过项目级重复资产。
+* schema version 6 将提示词选项的用户逻辑 ID 与作用域/故事相关的存储 ID 分离，避免覆盖项跨故事移动。
+* schema version 7 增加自由创作会话、轮次和片段版本表，使迭代写作、接受/重写/分支、失败审计与章节汇编拥有稳定事务边界。
 
 ## Phase 6：图谱层
 
