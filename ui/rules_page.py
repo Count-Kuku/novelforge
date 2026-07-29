@@ -49,36 +49,35 @@ def _render_rules_copy_tools(project_name: str, story_id: str, current_story_nam
     st.markdown("#### 规则复制与导入")
     st.caption("用于在项目规则和故事规则之间同步长期生成约束。项目规则会被所有故事继承，故事规则只覆盖当前故事。")
 
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        if st.button("从项目导入规则", use_container_width=True):
-            merge_project_rules_to_story(project_name, story_id)
-            st.success(f"已将项目规则复制到 {current_story_name}")
-            st.rerun()
+    st.markdown("##### 当前故事与整个项目")
+    col_a, col_c = st.columns(2)
+    if col_a.button("把项目规则复制到当前故事", use_container_width=True):
+        merge_project_rules_to_story(project_name, story_id)
+        st.success(f"已将项目规则复制到 {current_story_name}")
+        st.rerun()
+    if col_c.button("把当前故事规则设为项目默认", use_container_width=True):
+        merge_story_rules_to_project(project_name, story_id)
+        st.success(f"已将 {current_story_name} 的规则合并为项目默认规则")
+        st.rerun()
 
-    with col_b:
-        other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
-        if other_stories:
-            selected_story = st.selectbox(
-                "从其他故事导入",
-                options=[s.get("story_id") for s in other_stories],
-                format_func=lambda sid: next((s.get("name", sid) for s in other_stories if s.get("story_id") == sid), sid),
-                key=f"rules_import_story_{story_id}",
-                label_visibility="collapsed",
-            )
-            if st.button("导入故事规则", use_container_width=True, key=f"import_rules_{story_id}"):
-                save_story_rules(project_name, story_id, load_story_rules(project_name, selected_story))
-                imported_name = next((s.get("name", selected_story) for s in other_stories if s.get("story_id") == selected_story), selected_story)
-                st.success(f"已从 {imported_name} 导入规则")
-                st.rerun()
-        else:
-            st.caption("没有其他故事可导入。")
-
-    with col_c:
-        if st.button("设为项目默认规则", use_container_width=True):
-            merge_story_rules_to_project(project_name, story_id)
-            st.success(f"已将 {current_story_name} 的规则合并为项目默认规则")
+    st.markdown("##### 从其他故事复制")
+    other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
+    if other_stories:
+        source_col, action_col = st.columns([2, 1])
+        selected_story = source_col.selectbox(
+            "来源故事",
+            options=[s.get("story_id") for s in other_stories],
+            format_func=lambda sid: next((s.get("name", sid) for s in other_stories if s.get("story_id") == sid), sid),
+            key=f"rules_import_story_{story_id}",
+        )
+        action_col.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
+        if action_col.button("复制所选故事规则", use_container_width=True, key=f"import_rules_{story_id}"):
+            save_story_rules(project_name, story_id, load_story_rules(project_name, selected_story))
+            imported_name = next((s.get("name", selected_story) for s in other_stories if s.get("story_id") == selected_story), selected_story)
+            st.success(f"已从 {imported_name} 导入规则")
             st.rerun()
+    else:
+        st.caption("当前项目没有其他故事可复制。")
 
     with st.expander("全局规则同步", expanded=False):
         st.caption("全局规则会影响所有项目。建议只放跨项目稳定偏好，例如输出语言、审阅标准、文风禁忌；具体角色、世界观和剧情要求更适合留在项目或故事规则。")
@@ -180,9 +179,8 @@ def render_rules_page(project_name: str):
             current_story_name = s.get("name", story_id)
             break
 
-    st.subheader("生成规则（长期硬约束）")
-    st.caption("把这里当成“模型不能违背的边界”。它适合保存角色底线、世界观事实、禁忌、视角限制、一致性要求等长期约束；如果只是某次想换文风或节奏，请放到提示词选项。规则生效优先级：故事 > 项目 > 全局。")
-    st.info("判断标准：这条要求被违反会导致设定错误、剧情矛盾或越过底线，就放到生成规则；只是影响表达口味，就放到提示词选项。")
+    st.info("这里保存模型不能违背的长期边界，例如角色底线、世界观事实、禁忌和固定视角。只是想换文风或节奏，请改用“提示词选项”。")
+    st.caption("判断方法：违反后会造成设定错误、剧情矛盾或越过底线的内容，放在生成规则。生效优先级为：故事规则 > 项目规则 > 全局规则。")
 
     with st.expander("快速记录新要求", expanded=True):
         rule_text = st.text_area(
@@ -196,7 +194,8 @@ def render_rules_page(project_name: str):
         scope_label = col1.selectbox("适用能力", options=list(RULE_SCOPE_OPTIONS.values()), key="rule_capture_scope")
         target_label = col2.selectbox("保存位置", options=["故事规则", "项目规则", "全局规则"], key="rule_capture_target")
 
-        if st.button("保存要求为规则"):
+        col3.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
+        if col3.button("保存为长期规则", use_container_width=True):
             scope = next(key for key, value in RULE_SCOPE_OPTIONS.items() if value == scope_label)
             target = "story" if target_label == "故事规则" else ("project" if target_label == "项目规则" else "global")
             try:

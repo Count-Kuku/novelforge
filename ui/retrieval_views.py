@@ -94,7 +94,7 @@ def render_retrieval_feedback_controls(
     if not current_hits:
         return
     with st.expander("记录本次检索反馈", expanded=False):
-        st.caption("反馈会保存到项目资料索引中；后续检索会对有用/优先片段加权，对无用/错误片段降权。")
+        st.caption("反馈会保存在当前项目中；后续查找资料时，有用内容会更靠前，无用或错误内容会降低优先级。")
         hit_options = [
             str(hit.get("chunk", {}).get("chunk_id") or "")
             for hit in current_hits

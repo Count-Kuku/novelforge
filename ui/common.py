@@ -79,7 +79,11 @@ def render_quick_action(label: str, page: str, help_text: str):
             """,
             unsafe_allow_html=True,
         )
-        if st.button("进入", key=f"quick_action_{stable_widget_suffix(page)}", use_container_width=True):
+        if st.button(
+            f"打开：{label}",
+            key=f"quick_action_{stable_widget_suffix(page)}",
+            use_container_width=True,
+        ):
             navigate_to(page)
 
 def _safe_int_metric_value(value) -> int:

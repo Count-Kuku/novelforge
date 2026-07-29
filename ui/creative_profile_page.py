@@ -115,12 +115,7 @@ def _render_creative_profile_header(current_story_name: str, embedded: bool):
     if not embedded:
         render_section_heading(
             f"当前故事：{current_story_name}",
-            "同一项目下的不同故事可以拥有各自的篇幅、参考强度和生成层级。",
-        )
-        st.info(
-            f"当前正在配置 **{current_story_name}** 的创作参数。"
-            "创作配置是故事级别的——同一项目不同故事可以设置各自的篇幅、参考强度和生成层级。"
-            "项目级别的资料（知识库、原材料、规则）为所有故事共享。",
+            "篇幅、参考强度和生成层级只对当前故事生效；知识库、原始资料和项目规则由同一项目下的所有故事共享。",
         )
 
 def _render_creative_profile_discussion(project_name: str, story_id: str, form_state: dict):
@@ -135,7 +130,6 @@ def _render_creative_profile_discussion(project_name: str, story_id: str, form_s
         st.session_state[discussion_input_key] = st.session_state.get(legacy_seed_key, "")
     discussion_step = st.session_state.get(discussion_result_key, {})
     messages = st.session_state.get(discussion_messages_key, [])
-    st.caption("把想写什么、写多长、参考资料强度和生成流程放在同一个对话里；系统会整理成配置草稿。")
     _render_creative_profile_discussion_workspace(
         project_name,
         story_id,
@@ -162,7 +156,7 @@ def _render_creative_profile_discussion_workspace(
         st.markdown("##### 讨论创作配置")
         _render_discussion_decision_hint(
             ["故事类型", "目标篇幅", "生成流程", "参考强度"],
-            "创作配置、项目资源和后续检索",
+            "创作配置、项目资源和后续资料匹配",
             note="建议可直接保存为正式配置；需要细调可在下方高级配置修改。",
         )
         current_messages = st.session_state.get(discussion_messages_key, [])
@@ -277,25 +271,25 @@ def _creative_profile_from_form_values(form_values: dict) -> dict:
 def _render_creative_worldline_fields(form_state: dict, profile_keys: dict[str, str]) -> dict:
     col_worldline_a, col_worldline_b, col_worldline_c = st.columns([1, 1, 1])
     worldline_id = col_worldline_a.text_input(
-        "当前世界线 ID",
+        "资料版本标识（高级）",
         value=form_state.get("worldline_id", DEFAULT_WORLDLINE_ID),
         placeholder="例如：main、au_modern、branch_01",
         key=profile_keys["worldline_id"],
-        help="用于 资料检索过滤和加权。建议使用稳定英文/拼音/数字 ID。",
+        help="用于区分同一项目中互不混用的主线、平行世界或剧情分支。建议使用稳定的英文、拼音或数字标识。",
     )
     worldline_label = col_worldline_b.text_input(
-        "当前世界线名称",
+        "资料版本名称",
         value=form_state.get("worldline_label", DEFAULT_WORLDLINE_LABEL),
-        placeholder="例如：本项目主线、现代 AU、二周目分支",
+        placeholder="例如：本项目主线、现代平行世界、二周目分支",
         key=profile_keys["worldline_label"],
     )
     worldline_retrieval_mode = col_worldline_c.selectbox(
-        "世界线检索模式",
+        "跨版本资料处理",
         options=["prefer", "strict"],
         index=0 if form_state.get("worldline_retrieval_mode", "prefer") != "strict" else 1,
-        format_func=lambda value: {"prefer": "偏好匹配", "strict": "严格过滤"}.get(value, value),
+        format_func=lambda value: {"prefer": "优先当前版本（推荐）", "strict": "只用当前版本"}.get(value, value),
         key=profile_keys["worldline_retrieval_mode"],
-        help="偏好匹配会保留其他世界线但降权；严格过滤会排除明确属于其他世界线的资料。",
+        help="“优先当前版本”仍允许使用通用资料；“只用当前版本”会排除明确属于其他版本的内容。",
     )
     return {
         "worldline_id": worldline_id,
@@ -454,13 +448,13 @@ def render_creative_profile_page(project_name: str, embedded: bool = False, *, r
     profile = load_creative_profile(project_name, story_id=story_id)
     _init_creative_profile_form_state(project_name, story_id, profile)
     form_state = _get_creative_profile_form_state(project_name, story_id)
-    render_section_heading("讨论创作配置", "把想写的内容说清楚，系统会整理成可采用的配置建议。")
+    render_section_heading("用对话确定创作方向", "说明想写什么、篇幅多长以及怎样参考原作，系统会整理成可直接保存的配置建议。")
     _render_creative_profile_discussion(
         project_name,
         story_id,
         form_state,
     )
-    render_section_heading("手动配置", "这些字段会决定后续规划、正文生成和检索资料的默认策略。")
+    render_section_heading("手动调整", "需要精细控制时，可在这里修改后续规划、正文生成和资料匹配的默认方式。")
     profile = _render_creative_profile_form(project_name, story_id, form_state)
     _render_creative_profile_recommendation(project_name, story_id, profile)
 

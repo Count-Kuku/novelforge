@@ -38,9 +38,9 @@ PROFILE_FIELD_LABELS = {
     "reference_focus": "重点参考方向",
     "allow_canon_deviation": "允许改写原设",
     "conflict_policy": "资料冲突处理",
-    "worldline_id": "世界线 ID",
-    "worldline_label": "当前世界线",
-    "worldline_retrieval_mode": "世界线检索模式",
+    "worldline_id": "资料版本标识",
+    "worldline_label": "当前资料版本",
+    "worldline_retrieval_mode": "跨版本资料处理",
 }
 
 

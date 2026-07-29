@@ -87,9 +87,9 @@ SOURCE_TYPE_LABELS = {
     "knowledge_dialogue_style": "知识库条目：对白风格",
     "knowledge_narrative_techniques": "知识库条目：写作手法",
     "knowledge_constraints": "知识库条目：硬性约束",
-    "entity_character_card": "实体卡：角色",
-    "entity_setting_card": "实体卡：设定",
-    "entity_alias_group": "实体别名组",
+    "entity_character_card": "角色资料卡",
+    "entity_setting_card": "世界设定卡",
+    "entity_alias_group": "名称与别名",
 }
 
 SCHEMA_LABELS = {
@@ -180,7 +180,7 @@ def label_batch_segment_status(value: str) -> str:
     labels = {
         "pending": "待处理",
         "imported": "已导入",
-        "queued": "已加入待确认",
+        "queued": "已加入待审核设定",
         "extracted": "已提取",
         "failed": "失败",
         "skipped": "已跳过",

@@ -48,14 +48,14 @@ def _setting_field_label(field_name: str) -> str:
 
 
 def _setting_scope_label(scope: str) -> str:
-    return {"project": "项目级", "story": "当前故事级"}.get(str(scope or ""), str(scope or "未知层级"))
+    return {"project": "整个项目", "story": "当前故事"}.get(str(scope or ""), str(scope or "未知范围"))
 
 
 def _setting_injection_label(policy: str) -> str:
     return {
-        "always": "总是注入",
-        "retrieval": "检索命中时注入",
-        "manual_only": "仅手动管理",
+        "always": "每次生成都使用",
+        "retrieval": "内容相关时自动使用",
+        "manual_only": "仅在手动选择时使用",
     }.get(str(policy or ""), str(policy or "未设置"))
 
 
@@ -94,7 +94,7 @@ def _render_setting_item_form(project_name: str, story_id: str, setting_scope: s
         name = st.text_input("名称", value=str(current.get("name") or ""))
         summary = st.text_area("设定内容", value=str(current.get("summary") or ""), height=120)
         injection_policy = st.selectbox(
-            "生成注入方式",
+            "生成时如何使用",
             options=["always", "retrieval", "manual_only"],
             index=["always", "retrieval", "manual_only"].index(str(current.get("injection_policy") or "always")) if str(current.get("injection_policy") or "always") in {"always", "retrieval", "manual_only"} else 0,
             format_func=_setting_injection_label,
@@ -158,7 +158,7 @@ def render_setting_items_editor(project_name: str, story_id: str, setting_scope:
     metric_cols = st.columns(3)
     metric_cols[0].metric("当前可用核心设定", len(all_items))
     metric_cols[1].metric(f"{_setting_scope_label(setting_scope)}设定", len(editable_items_all))
-    metric_cols[2].metric("总是注入", len([item for item in all_items if str(item.get("injection_policy") or "") == "always"]))
+    metric_cols[2].metric("每次生成都使用", len([item for item in all_items if str(item.get("injection_policy") or "") == "always"]))
 
     filter_cols = st.columns([1, 1, 1.3])
     available_categories = sorted({str(item.get("category") or "") for item in editable_items_all if item.get("category")})
@@ -169,7 +169,7 @@ def render_setting_items_editor(project_name: str, story_id: str, setting_scope:
         key=scoped_widget_key("setting_category_filter", project_name, story_id, setting_scope),
     )
     policy_filter = filter_cols[1].selectbox(
-        "注入方式",
+        "生成时如何使用",
         options=["", "always", "retrieval", "manual_only"],
         format_func=lambda value: "全部方式" if not value else _setting_injection_label(value),
         key=scoped_widget_key("setting_policy_filter", project_name, story_id, setting_scope),
@@ -209,7 +209,7 @@ def render_setting_items_editor(project_name: str, story_id: str, setting_scope:
         if editable_items_all:
             st.info("当前筛选条件下没有匹配的核心设定。")
         else:
-            st.info(f"当前还没有{_setting_scope_label(setting_scope)}核心设定。可以直接新增，底层会保存为正式知识条目。")
+            st.info(f"当前还没有{_setting_scope_label(setting_scope)}核心设定。可以直接新增，保存后会成为可复用的正式知识条目。")
         return
 
     for item in editable_items:
@@ -225,7 +225,7 @@ def render_setting_items_editor(project_name: str, story_id: str, setting_scope:
 
 
 def render_generation_setting_context_preview(project_name: str, story_id: str):
-    with st.expander("当前生成会看到的核心设定", expanded=False):
+    with st.expander("预览：模型会优先参考哪些核心设定", expanded=False):
         try:
             context = build_generation_setting_context(project_name, story_id)
         except Exception as exc:
@@ -233,7 +233,7 @@ def render_generation_setting_context_preview(project_name: str, story_id: str):
             return
         setting_context = str(context.get("_setting_context") or "").strip()
         if not setting_context:
-            st.caption("当前没有会优先注入生成的核心设定。")
+            st.caption("当前没有需要在每次生成中优先提供给模型的核心设定。")
             return
         st.caption("这里是统一设定知识合成后的只读预览。正文、细纲、审阅等生成流程会优先参考这些内容。")
         st.code(setting_context, language="markdown")
@@ -318,7 +318,7 @@ def _render_pending_core_setting_form(item: dict, pending_id: str, key_prefix: s
             key=f"{key_prefix}_category_{pending_id}",
         )
         injection_policy = col_meta_3.selectbox(
-            "注入方式",
+            "生成时如何使用",
             options=options["policy_options"],
             index=options["policy_options"].index(options["current_policy"]),
             format_func=_setting_injection_label,
@@ -425,8 +425,8 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
 
     scope_label = _setting_scope_label(setting_scope)
     key_prefix = scoped_widget_key("pending_core_settings", project_name, story_id, setting_scope)
-    with st.expander(f"待确认{scope_label}设定（{len(pending_items)}）", expanded=True):
-        st.caption("这些条目来自章节设定提炼或讨论生成依据。确认后会成为正式知识条目，并按注入方式影响后续生成。")
+    with st.expander(f"待审核{scope_label}设定（{len(pending_items)}）", expanded=True):
+        st.caption("这些条目来自章节设定提炼或创作讨论。确认后会成为正式知识条目，并按所选使用方式参与后续生成。")
         pending_ids = [str(item.get("pending_id") or "") for item in pending_items if item.get("pending_id")]
         selected_ids = st.multiselect(
             "选择要处理的候选设定",
@@ -478,7 +478,7 @@ def render_settings_page(project_name: str, *, render_memory_page):
             current_story_name = s.get("name", story_id)
             break
 
-    st.subheader(f"核心设定 · {current_story_name}")
+    st.info(f"当前正在管理 **{current_story_name}** 的核心设定。这里适合保存角色、世界观和长期事实；临时写作要求请使用“创作提醒”。")
     migration_key = f"setting_knowledge_migration:{project_name}"
     if not st.session_state.get(migration_key):
         try:
@@ -490,9 +490,9 @@ def render_settings_page(project_name: str, *, render_memory_page):
                 )
         except Exception as exc:
             st.warning(f"旧核心设定迁移失败，当前仍可继续编辑新的统一设定：{exc}")
-    st.caption("正式设定现在统一保存为知识条目。核心设定页只展示会优先影响生成的高优先级设定。")
+    st.caption("核心设定会作为正式知识条目保存。本页只集中展示需要优先影响生成的高优先级内容。")
 
-    story_tab, project_tab, management_tab = st.tabs(["故事设定", "项目设定", "故事管理"])
+    story_tab, project_tab, management_tab = st.tabs(["当前故事设定", "全项目共用设定", "故事管理"])
 
     with story_tab:
         _render_story_settings_tab(project_name, story_id, current_story_name, render_memory_page=render_memory_page)
@@ -506,33 +506,36 @@ def render_settings_page(project_name: str, *, render_memory_page):
 
 def _render_story_settings_tab(project_name: str, story_id: str, story_name: str, *, render_memory_page):
     st.markdown("#### 设定复制与导入")
-    st.caption("这里复制的是正式知识条目里的核心设定；创作配置、生成规则和提示词选项仍通过故事复制入口复制。")
-    col_a, col_b, col_c = st.columns(3)
-    if col_a.button("复制项目设定到当前故事", use_container_width=True):
+    st.caption("这里只复制正式知识条目中的核心设定，不会改变创作配置、生成规则或提示词选项。")
+
+    st.markdown("##### 当前故事与整个项目")
+    col_a, col_c = st.columns(2)
+    if col_a.button("把项目共用设定复制到当前故事", use_container_width=True):
         result = copy_project_core_settings_to_story(project_name, story_id)
         st.success(f"已处理项目核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
         st.rerun()
+    if col_c.button("把当前故事设定共享给整个项目", use_container_width=True):
+        result = copy_story_core_settings_to_project(project_name, story_id)
+        st.success(f"已共享当前故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
+        st.rerun()
 
     other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
+    st.markdown("##### 从其他故事复制")
     if other_stories:
-        sel_story = col_b.selectbox(
-            "从其他故事导入",
+        source_col, action_col = st.columns([2, 1])
+        sel_story = source_col.selectbox(
+            "来源故事",
             options=[s.get("story_id") for s in other_stories],
             format_func=lambda sid: next((s.get("name", sid) for s in other_stories if s["story_id"] == sid), sid),
             key="settings_import_story",
-            label_visibility="collapsed",
         )
-        if col_b.button("复制该故事设定", use_container_width=True, key="import_other_story"):
+        action_col.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
+        if action_col.button("复制所选故事设定", use_container_width=True, key="import_other_story"):
             result = copy_story_core_settings_to_story(project_name, sel_story, story_id)
             st.success(f"已复制故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
             st.rerun()
     else:
-        col_b.caption("暂无其他故事可复制。")
-
-    if col_c.button("提升为项目设定", use_container_width=True):
-        result = copy_story_core_settings_to_project(project_name, story_id)
-        st.success(f"已提升当前故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
-        st.rerun()
+        st.caption("当前项目没有其他故事可复制。")
 
     st.divider()
     st.markdown(f"#### {story_name} 的核心设定")

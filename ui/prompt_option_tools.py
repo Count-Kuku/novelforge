@@ -409,8 +409,8 @@ def _render_generation_injection_preview(
     query: str = "",
     chapter_no: int | None = None,
 ):
-    with st.expander("本次生成注入预览", expanded=False):
-        st.caption("点击刷新后，会使用与实际生成相同的装配器计算规则、设定、导演注、检索命中、预算与省略项。预览不会消耗一次性导演注。")
+    with st.expander("预览：本次会提供给模型什么", expanded=False):
+        st.caption("这里会按真实生成方式汇总规则、核心设定、创作提醒和匹配到的资料。预览不会消耗“仅下一次”的创作提醒。")
         request_payload = {
             "project_name": project_name,
             "story_id": story_id,
@@ -431,7 +431,7 @@ def _render_generation_injection_preview(
             chapter_no if chapter_no is not None else "none",
         )
         if st.button(
-            "刷新真实上下文预览",
+            "重新计算本次使用内容",
             key=scoped_widget_key(
                 "generation_context_preview_refresh",
                 project_name,
@@ -454,27 +454,27 @@ def _render_generation_injection_preview(
                     ),
                 }
             except Exception as exc:
-                st.error(f"上下文预览失败：{exc}")
+                st.error(f"使用内容预览失败：{exc}")
 
         preview_state = st.session_state.get(preview_state_key, {})
         assembly = preview_state.get("assembly") if isinstance(preview_state, dict) else None
         if not isinstance(assembly, dict):
-            st.info("尚未计算预览。")
+            st.info("尚未计算。点击上方按钮即可查看本次生成会使用哪些内容。")
             return
         if preview_state.get("request_fingerprint") != request_fingerprint:
             st.warning("写作输入或选项已变化，当前预览已过期，请重新刷新。")
 
         metric_a, metric_b, metric_c = st.columns(3)
-        metric_a.metric("预计上下文", f"{int(assembly.get('total_estimated_tokens') or 0)} tokens")
-        metric_b.metric("预算", f"{int(assembly.get('context_budget') or 0)} tokens")
-        metric_c.metric("检索命中", len(assembly.get("retrieval_hits") or []))
-        st.caption(f"上下文指纹：`{assembly.get('fingerprint') or '-'}`")
+        metric_a.metric("预计输入量", f"{int(assembly.get('total_estimated_tokens') or 0)} tokens")
+        metric_b.metric("可用上限", f"{int(assembly.get('context_budget') or 0)} tokens")
+        metric_c.metric("匹配到的资料", len(assembly.get("retrieval_hits") or []))
+        st.caption(f"本次计算标识：`{assembly.get('fingerprint') or '-'}`")
         for warning in assembly.get("warnings", []):
             st.warning(str(warning))
 
         blocks = assembly.get("blocks") or []
         if not blocks:
-            st.info("当前没有额外注入内容。")
+            st.info("当前没有额外规则、设定或资料需要提供给模型。")
         for index, block in enumerate(blocks, start=1):
             st.markdown(f"#### {index}. {block.get('category') or block.get('source_type')}")
             st.caption(
@@ -485,20 +485,20 @@ def _render_generation_injection_preview(
 
         omitted = assembly.get("omitted_blocks") or []
         if omitted:
-            with st.expander(f"已省略上下文（{len(omitted)}）", expanded=False):
+            with st.expander(f"因长度上限未使用的内容（{len(omitted)}）", expanded=False):
                 for block in omitted:
                     st.markdown(f"- `{block.get('block_id')}`：{block.get('omission_reason') or '未说明'}")
 
 
-def render_context_assembly_summary(assembly: dict, title: str = "实际生成上下文") -> None:
+def render_context_assembly_summary(assembly: dict, title: str = "实际使用的规则与资料") -> None:
     if not isinstance(assembly, dict) or not assembly:
         return
     with st.expander(title, expanded=False):
         metric_a, metric_b, metric_c = st.columns(3)
-        metric_a.metric("预计上下文", f"{int(assembly.get('total_estimated_tokens') or 0)} tokens")
-        metric_b.metric("预算", f"{int(assembly.get('context_budget') or 0)} tokens")
-        metric_c.metric("检索命中", len(assembly.get("retrieval_hits") or []))
-        st.caption(f"上下文指纹：`{assembly.get('fingerprint') or '-'}`")
+        metric_a.metric("预计输入量", f"{int(assembly.get('total_estimated_tokens') or 0)} tokens")
+        metric_b.metric("可用上限", f"{int(assembly.get('context_budget') or 0)} tokens")
+        metric_c.metric("匹配到的资料", len(assembly.get("retrieval_hits") or []))
+        st.caption(f"本次计算标识：`{assembly.get('fingerprint') or '-'}`")
         for warning in assembly.get("warnings", []):
             st.warning(str(warning))
         for index, block in enumerate(assembly.get("blocks") or [], start=1):
@@ -510,4 +510,4 @@ def render_context_assembly_summary(assembly: dict, title: str = "实际生成�
                 st.caption(str(block.get("activation_reason")))
         omitted = assembly.get("omitted_blocks") or []
         if omitted:
-            st.caption(f"另有 {len(omitted)} 个上下文块因预算被省略。")
+            st.caption(f"另有 {len(omitted)} 项内容因输入长度上限未使用。")

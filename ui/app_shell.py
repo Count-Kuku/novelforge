@@ -423,7 +423,7 @@ def _render_sidebar_project_summary(project_name: str | None) -> None:
             st.sidebar.caption(
                 f"正文 {summary.get('chapter_count', 0)} / 细纲 {summary.get('chapter_outline_count', 0)} / 资料 {summary.get('retrieval_source_count', 0)}"
             )
-            updated_at = summary.get("updated_at") or "-"
+            updated_at = str(summary.get("updated_at") or "-").replace("T", " ")[:16]
             st.sidebar.caption(f"最近更新：{updated_at}")
         except Exception as exc:
             LOGGER.warning(

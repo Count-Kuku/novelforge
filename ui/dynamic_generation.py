@@ -89,10 +89,10 @@ def _select_session(project_name: str, story_id: str) -> str:
         st.session_state[state_key] = current
     options = [""] + list(session_map)
     selected = st.selectbox(
-        "创作会话",
+        "继续已有创作",
         options=options,
         format_func=lambda value: (
-            "新建自由创作"
+            "开始新的创作"
             if not value
             else (
                 f"{session_map[value].get('title') or value} · "
@@ -127,7 +127,7 @@ def _manual_knowledge_selector(
         if str(item.get("id") or "")
     }
     return st.multiselect(
-        "本次固定使用的知识",
+        "本次固定参考的知识",
         options=list(labels),
         format_func=lambda item_id: labels.get(item_id, item_id),
         key=scoped_widget_key(
@@ -136,7 +136,7 @@ def _manual_knowledge_selector(
             story_id,
             session_scope,
         ),
-        help="仅显示注入策略为“仅手动管理”的知识；普通角色卡和世界观会自动检索。",
+        help="这里只显示设置为“仅在手动选择时使用”的知识；普通角色卡和世界观资料会根据本轮内容自动匹配。",
     )
 
 
@@ -149,7 +149,7 @@ def _render_writing_config(
 ) -> dict:
     stored_guidance = dict(session.get("writing_guidance") or {})
     session_scope = str(session.get("session_id") or "new")
-    with st.expander("写作参数与知识接入", expanded=not bool(session)):
+    with st.expander("可选设置：片段长度、文风与参考资料", expanded=False):
         word_count = st.text_input(
             "本轮片段字数",
             value=str(profile.get("target_word_count") or "800-1200")
@@ -197,7 +197,7 @@ def _render_writing_config(
             key=scoped_widget_key("creative_focus", project_name, story_id, session_scope),
         )
         extra_requirements = st.text_area(
-            "长期补充要求",
+            "整个会话持续生效的要求",
             value=str(stored_guidance.get("extra_requirements") or ""),
             height=80,
             key=scoped_widget_key("creative_extra", project_name, story_id, session_scope),
@@ -240,17 +240,19 @@ def _render_session_settings(
     session: dict,
 ) -> dict:
     if not session:
-        target_chapter_no = st.number_input(
-            "目标章节（0 表示暂不指定）",
+        target_col, setting_col = st.columns(2)
+        target_chapter_no = target_col.number_input(
+            "准备整理到第几章（0 表示稍后决定）",
             min_value=0,
             value=0,
             key=scoped_widget_key("creative_new_target_chapter", project_name, story_id),
         )
-        auto_extract = st.checkbox(
-            "接受片段后自动提炼候选设定",
+        setting_col.caption("新设定处理")
+        auto_extract = setting_col.checkbox(
+            "接受片段后，自动找出可保存的新设定",
             value=True,
             key=scoped_widget_key("creative_new_auto_extract", project_name, story_id),
-            help="候选仍需确认后才进入正式知识库。",
+            help="系统只会生成待审核设定；由你确认后才会写入正式知识库。",
         )
         return {
             "target_chapter_no": int(target_chapter_no) or None,
@@ -270,13 +272,13 @@ def _render_session_settings(
             key=scoped_widget_key("creative_session_goal", project_name, story_id, session.get("session_id")),
         )
         target_chapter_no = st.number_input(
-            "目标章节（0 表示暂不指定）",
+            "准备整理到第几章（0 表示稍后决定）",
             min_value=0,
             value=int(session.get("target_chapter_no") or 0),
             key=scoped_widget_key("creative_target_chapter", project_name, story_id, session.get("session_id")),
         )
         auto_extract = st.checkbox(
-            "接受片段后自动提炼候选设定",
+            "接受片段后，自动找出可保存的新设定",
             value=session.get("auto_extract_mode") == "on_accept",
             key=scoped_widget_key("creative_auto_extract", project_name, story_id, session.get("session_id")),
         )
@@ -475,7 +477,7 @@ def _render_fragment_knowledge(
         return
     issues = build_pending_knowledge_quality_issues(project_name, candidates)
     issue_map = build_pending_issue_map(issues)
-    with st.expander(f"本会话待确认设定（{len(candidates)}）", expanded=True):
+    with st.expander(f"本会话待审核设定（{len(candidates)}）", expanded=True):
         st.caption("确认后立即进入正式知识库并参与后续检索；高风险重复或冲突建议到“资料导入”详细处理。")
         labels = {}
         for item in candidates:
@@ -673,7 +675,7 @@ def _action_for_bundle(bundle: dict) -> tuple[str, str | None]:
                 f"当前创作前沿 · {str(branch_frontier.get('content') or '')[:50]}"
             ),
             key=branch_key,
-            help="会话内分支只比较当前前沿的候选，避免已确认的旧分支设定污染当前知识；更早章节的世界线分叉请复制故事。",
+            help="会话内分支只比较当前进展中的候选，避免旧分支设定混入当前资料；如果想保留更早章节开始的另一条剧情线，请复制为新故事。",
         )
     return action, branch_id
 
@@ -687,7 +689,7 @@ def _render_context_preview(
     config: dict,
     branch_id: str | None,
 ) -> None:
-    with st.expander("本轮真实上下文预览", expanded=False):
+    with st.expander("预览：本轮会使用哪些规则与资料", expanded=False):
         preview_key = scoped_session_key(
             "creative_context_preview",
             project_name,
@@ -713,10 +715,10 @@ def _render_context_preview(
                 )
                 st.session_state[preview_key] = assembly.model_dump()
             except Exception as exc:
-                st.error(f"上下文预览失败：{exc}")
+                st.error(f"本轮使用内容预览失败：{exc}")
         preview = st.session_state.get(preview_key, {})
         if preview:
-            render_context_assembly_summary(preview, "本轮预估上下文")
+            render_context_assembly_summary(preview, "本轮预计使用的内容")
 
 
 def _render_generation_form(
@@ -751,7 +753,7 @@ def _render_generation_form(
     if st.session_state.pop(clear_flag_key, False):
         st.session_state[input_key] = ""
     user_message = st.text_area(
-        "创作提示词",
+        "你希望模型怎么写",
         height=150,
         key=input_key,
         placeholder=(
@@ -921,7 +923,7 @@ def render_dynamic_generation_page(project_name: str, render_prompt_option_capab
     profile = load_creative_profile(project_name, story_id=story_id) or {}
     render_section_heading(
         "自由创作",
-        "输入一次就是快速生成；继续发送要求即可逐段创作。已接受片段可提炼为知识并最终整理成正式章节。",
+        "直接描述想写的内容即可生成片段；继续发送要求就能续写。满意的片段可以整理为章节，新设定也能保存到知识库。",
     )
     session_id = _select_session(project_name, story_id)
     bundle = (
@@ -961,8 +963,8 @@ def render_dynamic_generation_page(project_name: str, render_prompt_option_capab
         _render_chapter_compile(project_name, story_id, bundle)
 
     render_section_heading(
-        "本轮创作",
-        "普通角色卡、世界观和正式知识会自动检索；只有“仅手动管理”的条目需要在高级设置中固定选择。",
+        "输入本轮要求",
+        "系统会自动匹配相关的角色卡、世界观和正式知识；只有设置为“仅在手动选择时使用”的内容需要到可选设置中指定。",
     )
     _render_generation_form(
         project_name,

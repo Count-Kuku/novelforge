@@ -182,7 +182,7 @@ def _render_pending_auto_review_preview(auto_preview: dict) -> None:
     preview_cols[0].metric("候选条目", auto_preview.get("candidate_count", 0))
     preview_cols[1].metric("可自动确认", len(auto_preview.get("confirmed_ids", [])))
     preview_cols[2].metric("A 级", auto_preview.get("grade_counts", {}).get("A", 0))
-    preview_cols[3].metric("保留待确认", len(auto_preview.get("blocked_ids", [])))
+    preview_cols[3].metric("保留待审核", len(auto_preview.get("blocked_ids", [])))
     reason_counts = auto_preview.get("blocked_reason_counts", {})
     if reason_counts:
         st.caption("主要保留原因：" + " / ".join(f"{reason}={count}" for reason, count in list(reason_counts.items())[:8]))
@@ -230,8 +230,8 @@ def _render_pending_auto_review_panel(
                     project_name,
                     auto_candidate_ids,
                     source_type="pending_queue_manual_auto_review",
-                    source_title=f"待确认队列 / {auto_scope}",
-                    note="用户在待确认队列手动触发自动审核",
+                    source_title=f"待审核设定 / {auto_scope}",
+                    note="用户在待审核设定中手动触发自动审核",
                 )
                 st.success(
                     f"自动审核完成：确认 {len(auto_summary.get('confirmed_ids', []))} 条，"
@@ -259,7 +259,7 @@ def _render_pending_bulk_actions(project_name: str, selected_ids: list[str]) -> 
             st.rerun()
     if confirmed_button(
         col_b,
-        "丢弃所选待确认条目",
+        "丢弃所选待审核设定",
         "确认丢弃所选条目",
         scoped_widget_key("discard_selected_pending_knowledge", project_name, selection_scope),
     ):
@@ -267,12 +267,12 @@ def _render_pending_bulk_actions(project_name: str, selected_ids: list[str]) -> 
             st.error("请先选择条目。")
         else:
             removed_count = discard_pending_knowledge_items(project_name, selected_ids)
-            st.success(f"已丢弃 {removed_count} 条待确认知识。")
+            st.success(f"已丢弃 {removed_count} 条待审核设定。")
             st.rerun()
 
 
 def _render_pending_raw_json_editor(project_name: str, pending_items: list[dict]) -> None:
-    with st.expander("高级：待确认队列原始数据", expanded=False):
+    with st.expander("高级：待审核设定原始数据", expanded=False):
         serialized_pending = json.dumps(pending_items, ensure_ascii=False, indent=2)
         pending_json = st.text_area(
             "pending.json",
@@ -281,16 +281,16 @@ def _render_pending_raw_json_editor(project_name: str, pending_items: list[dict]
             key=scoped_widget_key("pending_knowledge_raw_json", project_name, serialized_pending),
         )
         if st.button(
-            "保存待确认队列修改",
+            "保存待审核设定修改",
             key=scoped_widget_key("save_pending_knowledge_raw_json", project_name),
         ):
             try:
                 parsed = json.loads(pending_json)
                 if not isinstance(parsed, list):
-                    st.error("待确认队列必须是列表结构。")
+                    st.error("待审核设定必须是列表结构。")
                 else:
                     save_pending_knowledge_items(project_name, parsed)
-                    st.success("待确认队列已保存。")
+                    st.success("待审核设定已保存。")
                     st.rerun()
             except json.JSONDecodeError as exc:
                 st.error(f"详细数据格式错误：{exc}")
@@ -299,10 +299,10 @@ def _render_pending_raw_json_editor(project_name: str, pending_items: list[dict]
 def render_pending_knowledge_queue(project_name: str):
     pending_items = load_pending_knowledge_items(project_name)
     pending_count = len(pending_items)
-    with st.expander(f"待确认知识库条目（{pending_count}）", expanded=bool(pending_count)):
+    with st.expander(f"待审核设定（{pending_count}）", expanded=bool(pending_count)):
         st.caption("提取结果先进入这里。确认后才写入知识库条目并重建检索索引；不合适的条目可以丢弃。")
         if not pending_items:
-            st.caption("当前没有待确认的知识条目。")
+            st.caption("当前没有待审核设定。")
             return
 
         quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
@@ -324,7 +324,7 @@ def render_pending_knowledge_queue(project_name: str):
 def render_auto_review_policy_panel(project_name: str):
     policy = load_auto_review_policy(project_name)
     with st.expander("自动审核策略", expanded=False):
-        st.caption("控制低风险知识是否自动保存。策略越严格，保留待确认越多；策略越宽松，人工审核负担越低。")
+        st.caption("控制低风险设定是否自动保存。策略越严格，保留待审核的内容越多；策略越宽松，人工审核负担越低。")
         col_conf, col_evidence = st.columns(2)
         min_confidence = col_conf.slider(
             "自动确认最低置信度",
@@ -470,7 +470,7 @@ def _auto_review_decision_rows(selected_run: dict) -> list[dict]:
             "confirm": "自动保存",
             "archive": "归档丢弃",
             "manual_review": "人工复核箱",
-        }.get(action) or ("自动确认" if decision_value == "confirm" else "保留待确认")
+        }.get(action) or ("自动确认" if decision_value == "confirm" else "保留待审核")
         rows.append({
             "决策": decision_label,
             "等级": decision.get("grade", ""),
@@ -539,7 +539,7 @@ def _render_manual_review_snapshots(project_name: str, selected_run_id: str, sel
             st.caption("仅展示前 120 条，完整快照保存在原始数据里。")
         restorable_snapshots = _restorable_manual_review_snapshots(manual_snapshots, restored_ids)
         selected_restore_ids = st.multiselect(
-            "选择要恢复到待确认队列的复核条目",
+            "选择要恢复到待审核设定的复核条目",
             options=[str(item.get("pending_id") or "") for item in restorable_snapshots],
             format_func=lambda pending_id: next(
                 (
@@ -553,7 +553,7 @@ def _render_manual_review_snapshots(project_name: str, selected_run_id: str, sel
         )
         restore_cols = st.columns(2)
         if restore_cols[0].button(
-            "恢复所选到待确认",
+            "恢复所选到待审核设定",
             key=f"restore_manual_review_selected_{selected_run_id}",
             disabled=not selected_restore_ids,
             use_container_width=True,
@@ -571,7 +571,7 @@ def _render_manual_review_snapshots(project_name: str, selected_run_id: str, sel
 def _render_auto_review_rollback(project_name: str, selected_run_id: str, selected_run: dict) -> None:
     if selected_run.get("status") == "rolled_back":
         result = selected_run.get("rollback_result", {})
-        st.warning(f"该记录已回退：删除 {result.get('removed_count', 0)} 条正式知识，恢复 {result.get('restored_count', 0)} 条待确认知识。")
+        st.warning(f"该记录已回退：删除 {result.get('removed_count', 0)} 条正式知识，恢复 {result.get('restored_count', 0)} 条待审核设定。")
         return
     confirm_text = st.text_input(
         "输入处理记录 ID 以确认回退",
@@ -681,13 +681,13 @@ def _render_pending_item_scope_fields(item: dict) -> dict:
 def _render_pending_item_version_fields(item: dict) -> dict:
     col_version, col_worldline = st.columns(2)
     version_scope = col_version.selectbox(
-        "版本 / 世界线范围",
+        "资料版本范围",
         options=list(VERSION_SCOPE_LABELS.keys()),
         index=list(VERSION_SCOPE_LABELS.keys()).index(item.get("version_scope")) if item.get("version_scope") in VERSION_SCOPE_LABELS else 4,
         format_func=lambda value: VERSION_SCOPE_LABELS.get(value, value),
     )
-    worldline_id = col_worldline.text_input("世界线 ID", value=str(item.get("worldline_id") or DEFAULT_WORLDLINE_ID))
-    worldline_label = st.text_input("世界线名称", value=str(item.get("worldline_label") or DEFAULT_WORLDLINE_LABEL))
+    worldline_id = col_worldline.text_input("资料版本标识", value=str(item.get("worldline_id") or DEFAULT_WORLDLINE_ID))
+    worldline_label = st.text_input("资料版本名称", value=str(item.get("worldline_label") or DEFAULT_WORLDLINE_LABEL))
     return {"version_scope": version_scope, "worldline_id": worldline_id, "worldline_label": worldline_label}
 
 
@@ -731,7 +731,7 @@ def _render_pending_item_form(project_name: str, item: dict, pending_id: str) ->
         values.update(_render_pending_item_source_fields(item, tags_value))
         values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_confirm = st.columns(2)
-        save_clicked = col_save.form_submit_button("保存修改到待确认队列", use_container_width=True)
+        save_clicked = col_save.form_submit_button("保存修改到待审核设定", use_container_width=True)
         confirm_clicked = col_confirm.form_submit_button("保存并确认", use_container_width=True)
     return values, save_clicked, confirm_clicked
 
@@ -786,7 +786,7 @@ def _build_pending_item_update(item: dict, values: dict, parsed_json: tuple) -> 
 
 def _save_pending_item_editor_result(project_name: str, pending_id: str, updated_item: dict, confirm_clicked: bool) -> None:
     if not update_pending_knowledge_item(project_name, pending_id, updated_item):
-        st.error("保存失败：待确认条目不存在，可能已被其他操作处理。")
+        st.error("保存失败：待审核设定不存在，可能已被其他操作处理。")
         return
     if confirm_clicked:
         saved_count = confirm_pending_knowledge_items(project_name, [pending_id])
@@ -794,12 +794,12 @@ def _save_pending_item_editor_result(project_name: str, pending_id: str, updated
             rebuild_retrieval_assets(project_name, build_vectors=True)
         st.success(f"已保存修改并确认 {saved_count} 条知识库条目。")
     else:
-        st.success("已保存修改到待确认队列。")
+        st.success("已保存修改到待审核设定。")
     st.rerun()
 
 
 def render_pending_knowledge_item_editor(project_name: str, pending_items: list[dict], filtered_indices: list[int]):
-    with st.expander("表单编辑：单条待确认知识", expanded=False):
+    with st.expander("表单编辑：单条待审核设定", expanded=False):
         if not filtered_indices:
             st.caption("当前筛选结果为空，没有可编辑条目。")
             return
@@ -880,18 +880,18 @@ def _render_return_confirmed_to_pending(project_name: str, category: str, select
         return False
     st.caption(
         f"自动审核记录：{item.get('auto_review_run_id', '-') or '-'} / "
-        f"原待确认条目：{item.get('source_pending_id', '-') or '-'}"
+        f"原待审核设定：{item.get('source_pending_id', '-') or '-'}"
     )
     item_id = str(item.get("id") or item.get("knowledge_id") or selected_index)
-    with st.expander("退回待确认", expanded=False):
-        st.caption("只退回这一条正式知识，不影响同一次自动审核的其他条目。退回后可在待确认队列重新编辑、确认或丢弃。")
+    with st.expander("退回待审核", expanded=False):
+        st.caption("只退回这一条正式知识，不影响同一次自动审核的其他条目。退回后可在待审核设定中重新编辑、确认或丢弃。")
         return_reason = st.text_input(
             "退回原因（可选）",
             key=scoped_widget_key("return_confirmed_reason", project_name, category, item_id),
-            placeholder="例如：自动审核误判、证据需要复核、世界线不对",
+            placeholder="例如：自动审核误判、证据需要复核、资料版本不对",
         )
         return_clicked = st.button(
-            "将该条正式知识退回待确认",
+            "将该条正式知识退回待审核",
             key=scoped_widget_key("return_confirmed_to_pending", project_name, category, item_id),
             use_container_width=True,
         )
@@ -900,7 +900,7 @@ def _render_return_confirmed_to_pending(project_name: str, category: str, select
     result = return_confirmed_knowledge_item_to_pending(project_name, category, str(item.get("id") or ""), reason=return_reason)
     if result.get("success"):
         rebuild_retrieval_assets(project_name, build_vectors=True)
-        st.success(result.get("message", "已退回待确认。"))
+        st.success(result.get("message", "已退回待审核。"))
         st.rerun()
     st.error(result.get("message", "退回失败。"))
     return True
@@ -1004,8 +1004,8 @@ def _run_pending_triage_auto_confirm(project_name: str, pending_items: list[dict
         project_name,
         candidate_ids,
         source_type="pending_queue_triage_auto_review",
-        source_title="待确认处理台 / 全量低风险",
-        note="用户在待确认处理台触发全量低风险自动确认",
+        source_title="待审核设定 / 全量低风险",
+        note="用户在待审核设定中触发全量低风险自动确认",
     )
     st.success(
         f"自动审核完成：确认 {len(auto_summary.get('confirmed_ids', []))} 条，"
@@ -1049,7 +1049,7 @@ def _render_pending_triage_actions(project_name: str, pending_items: list[dict],
         _apply_pending_triage_filter(["low_evidence", "low_confidence", "no_evidence"], "low_evidence")
     if action_cols[3].button("只看重复/别名", key="pending_triage_show_duplicates", use_container_width=True):
         _apply_pending_triage_filter(["duplicate", "alias_candidate"], "risk_first")
-    if st.button("清空待确认筛选", key="pending_triage_clear_filters", use_container_width=True):
+    if st.button("清空待审核筛选", key="pending_triage_clear_filters", use_container_width=True):
         _clear_pending_triage_filters()
 
 
@@ -1079,7 +1079,7 @@ def _render_pending_clear_plan_preview(clear_plan: dict) -> None:
             if len(clear_plan.get("decisions", [])) > len(preview_rows):
                 st.caption(f"仅展示前 {len(preview_rows)} 条，完整决策会写入批次记录。")
         else:
-            st.caption("当前没有可执行的待确认条目。")
+            st.caption("当前没有可处理的待审核设定。")
 
 
 def _render_pending_clear_plan(project_name: str, pending_items: list[dict], issue_map: dict[str, dict], policy: dict) -> None:
@@ -1088,7 +1088,7 @@ def _render_pending_clear_plan(project_name: str, pending_items: list[dict], iss
         "低证据、低置信、无证据条目直接归档丢弃",
         value=True,
         key=scoped_widget_key("pending_clear_archive_low_quality", project_name),
-        help="归档不会写入正式知识，但会保存在本次处理批次记录里；整批回退时会恢复到待确认队列。",
+        help="归档不会写入正式知识，但会保存在本次处理记录里；整批回退时会恢复到待审核设定。",
     )
     clear_plan = build_pending_clear_plan(pending_items, issue_map, policy, archive_low_quality=archive_low_quality)
     plan_counts = clear_plan.get("counts", {})
@@ -1097,7 +1097,7 @@ def _render_pending_clear_plan(project_name: str, pending_items: list[dict], iss
     plan_cols[1].metric("自动保存", plan_counts.get("confirm", 0))
     plan_cols[2].metric("归档丢弃", plan_counts.get("archive", 0))
     plan_cols[3].metric("人工复核箱", plan_counts.get("manual_review", 0))
-    st.caption("执行后，本次覆盖的条目会离开普通待确认队列；保存、归档和复核箱都会写进一条可回退的处理记录。")
+    st.caption("执行后，本次处理的内容会离开待审核设定；保存、归档和复核结果都会写入一条可回退的处理记录。")
     _render_pending_clear_plan_preview(clear_plan)
     plan_scope = "|".join(
         sorted(str(item.get("pending_id") or "") for item in pending_items if item.get("pending_id"))
@@ -1109,7 +1109,7 @@ def _render_pending_clear_plan(project_name: str, pending_items: list[dict], iss
         scoped_widget_key("pending_clear_execute_plan", project_name, plan_scope, archive_low_quality),
         type="primary",
     ):
-        result = execute_pending_clear_plan(project_name, clear_plan, note="用户在待确认处理台执行批量处理方案")
+        result = execute_pending_clear_plan(project_name, clear_plan, note="用户在待审核设定中执行批量处理方案")
         if result.get("success"):
             st.success(f"{result.get('message')} 批次记录：{result.get('run_id')}")
             st.rerun()
@@ -1134,7 +1134,7 @@ def _render_pending_triage_distribution(summary: dict) -> None:
             hide_index=True,
         )
         dist_cols[2].dataframe(
-            [{"世界线": worldline, "数量": count} for worldline, count in top_worldlines],
+            [{"资料版本": worldline, "数量": count} for worldline, count in top_worldlines],
             use_container_width=True,
             hide_index=True,
         )
@@ -1143,8 +1143,8 @@ def _render_pending_triage_distribution(summary: dict) -> None:
 def render_pending_triage_dashboard(project_name: str, pending_items: list[dict], issue_map: dict[str, dict], policy: dict):
     auto_preview = build_pending_auto_review_preview(pending_items, issue_map, policy)
     summary = build_pending_triage_summary(pending_items, issue_map, auto_preview)
-    with st.expander("待确认处理台", expanded=len(pending_items) >= 50):
-        st.caption("大批量待确认不要逐条读。推荐顺序：自动确认低风险 / 处理冲突和重复 / 再看低证据条目。")
+    with st.expander("批量处理待审核设定", expanded=len(pending_items) >= 50):
+        st.caption("数量较多时不必逐条阅读。推荐顺序：自动确认低风险内容 → 处理冲突和重复 → 再检查证据不足的内容。")
         _render_pending_triage_metrics(summary)
         _render_pending_triage_actions(project_name, pending_items, summary)
         _render_pending_clear_plan(project_name, pending_items, issue_map, policy)
@@ -1205,7 +1205,7 @@ def filter_pending_knowledge_indices(pending_items: list[dict], issue_map: dict[
         key="pending_sort_mode",
     )
 
-    keyword = st.text_input("搜索待确认知识", key="pending_filter_keyword", placeholder="名称、摘要、来源、标签、片段标题")
+    keyword = st.text_input("搜索待审核设定", key="pending_filter_keyword", placeholder="名称、摘要、来源、标签、片段标题")
     selected_source_titles = st.multiselect(
         "筛选来源",
         options=source_titles,
@@ -1213,7 +1213,7 @@ def filter_pending_knowledge_indices(pending_items: list[dict], issue_map: dict[
         key="pending_filter_sources",
     )
     selected_worldlines = st.multiselect(
-        "筛选世界线",
+        "筛选资料版本",
         options=worldlines,
         default=[],
         key="pending_filter_worldlines",
@@ -1249,7 +1249,7 @@ def _pending_quality_issue_rows(issues: list[dict], type_labels: dict[str, str])
             "类型": type_labels.get(issue.get("type", ""), issue.get("type", "")),
             "对象": issue.get("title", ""),
             "说明": issue.get("description", ""),
-            "关联待确认": len([item for item in issue.get("pending_ids", []) if item]),
+            "关联待审核": len([item for item in issue.get("pending_ids", []) if item]),
         }
         for index, issue in enumerate(issues, start=1)
     ]
@@ -1288,7 +1288,7 @@ def _render_pending_quality_alias_action(project_name: str, selected_items: list
     default_canonical = alias_names[0] if alias_names else ""
     alias_col_a, alias_col_b = st.columns(2)
     canonical_name = alias_col_a.text_input("别名组主名称", value=default_canonical, key="pending_quality_alias_canonical")
-    alias_notes = alias_col_b.text_input("别名备注", value="由待确认质检的疑似别名线索保存。", key="pending_quality_alias_notes")
+    alias_notes = alias_col_b.text_input("别名备注", value="由待审核设定中的疑似别名线索保存。", key="pending_quality_alias_notes")
     if st.button("保存为实体别名组", key="pending_quality_save_alias_group", use_container_width=True):
         try:
             alias_group = upsert_entity_alias_group(
@@ -1322,9 +1322,9 @@ def _merge_pending_quality_issue(project_name: str, selected_items: list[dict]) 
         replace_pending_ids=target_ids,
     )
     if queued_count <= 0:
-        st.error("合并结果未能写入待确认队列，原条目已保留。")
+        st.error("合并结果未能写入待审核设定，原内容已保留。")
         return
-    st.success(f"已合并 {len(target_ids)} 条，生成 {queued_count} 条新的待确认知识。")
+    st.success(f"已合并 {len(target_ids)} 条，生成 {queued_count} 条新的待审核设定。")
     st.rerun()
 
 
@@ -1333,7 +1333,7 @@ def _render_pending_quality_actions(project_name: str, issue: dict, selected_ite
     can_save_alias = issue.get("type") == "alias_candidate" and len(selected_items) >= 2
     if can_save_alias:
         _render_pending_quality_alias_action(project_name, selected_items)
-    if can_merge and st.button("将这组同名条目合并为新的待确认条目", key="pending_quality_merge_issue", use_container_width=True):
+    if can_merge and st.button("将这组同名内容合并为新的待审核设定", key="pending_quality_merge_issue", use_container_width=True):
         _merge_pending_quality_issue(project_name, selected_items)
 
 
@@ -1358,7 +1358,7 @@ def render_character_entity_card_panel(project_name: str):
     existing_cards = load_character_entities(project_name)
     preview_key = scoped_widget_key("character_entity_preview", project_name)
     preview_revision_key = scoped_widget_key("character_entity_preview_revision", project_name)
-    st.markdown("#### 角色实体卡")
+    st.markdown("#### 角色资料卡")
     st.caption("从已确认的角色、关系、能力、对白风格、时间线和约束知识中聚合角色资料卡。角色卡保存后会进入检索索引。")
     col_limit, col_action = st.columns([1, 1])
     max_characters = col_limit.number_input(
@@ -1370,14 +1370,14 @@ def render_character_entity_card_panel(project_name: str):
         key=scoped_widget_key("character_entity_max_count", project_name),
     )
     if col_action.button(
-        "生成角色实体卡预览",
+        "生成角色资料卡预览",
         key=scoped_widget_key("generate_character_entities", project_name),
         use_container_width=True,
     ):
         cards = build_character_entity_cards(project_name, max_characters=int(max_characters))
         st.session_state[preview_key] = cards
         st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
-        st.success(f"已生成 {len(cards)} 张角色实体卡预览。")
+        st.success(f"已生成 {len(cards)} 张角色资料卡预览。")
 
     preview_cards = st.session_state.get(preview_key, existing_cards)
     st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
@@ -1398,7 +1398,7 @@ def render_character_entity_card_panel(project_name: str):
 
     serialized_preview = json.dumps(preview_cards, ensure_ascii=False, indent=2)
     raw_cards_json = st.text_area(
-        "角色实体卡 JSON",
+        "角色资料卡 JSON",
         value=serialized_preview,
         height=320,
         key=scoped_widget_key(
@@ -1410,22 +1410,22 @@ def render_character_entity_card_panel(project_name: str):
     )
     col_save, col_clear = st.columns(2)
     if col_save.button(
-        "保存角色实体卡并重建索引",
+        "保存角色资料卡并更新可匹配资料",
         key=scoped_widget_key("save_character_entities", project_name),
         use_container_width=True,
     ):
         try:
             parsed = json.loads(raw_cards_json)
             if not isinstance(parsed, list):
-                st.error("角色实体卡必须是列表结构。")
+                st.error("角色资料卡必须是列表结构。")
             else:
                 save_character_entities(project_name, parsed)
                 rebuild_retrieval_assets(project_name, build_vectors=True)
                 st.session_state[preview_key] = parsed
-                st.success(f"已保存 {len(parsed)} 张角色实体卡。")
+                st.success(f"已保存 {len(parsed)} 张角色资料卡。")
                 st.rerun()
         except json.JSONDecodeError as exc:
-            st.error(f"角色实体卡 JSON 格式错误：{exc}")
+            st.error(f"角色资料卡 JSON 格式错误：{exc}")
     if col_clear.button(
         "清空预览",
         key=scoped_widget_key("clear_character_entity_preview", project_name),
@@ -1440,7 +1440,7 @@ def render_setting_entity_card_panel(project_name: str):
     existing_cards = load_setting_entities(project_name)
     preview_key = scoped_widget_key("setting_entity_preview", project_name)
     preview_revision_key = scoped_widget_key("setting_entity_preview_revision", project_name)
-    st.markdown("#### 设定实体卡")
+    st.markdown("#### 世界设定卡")
     st.caption("从已确认的世界规则、地点、组织、能力、物品和硬性约束中聚合设定资料卡。保存后会进入检索索引。")
     col_limit, col_action = st.columns([1, 1])
     max_cards = col_limit.number_input(
@@ -1452,14 +1452,14 @@ def render_setting_entity_card_panel(project_name: str):
         key=scoped_widget_key("setting_entity_max_count", project_name),
     )
     if col_action.button(
-        "生成设定实体卡预览",
+        "生成世界设定卡预览",
         key=scoped_widget_key("generate_setting_entities", project_name),
         use_container_width=True,
     ):
         cards = build_setting_entity_cards(project_name, max_cards=int(max_cards))
         st.session_state[preview_key] = cards
         st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
-        st.success(f"已生成 {len(cards)} 张设定实体卡预览。")
+        st.success(f"已生成 {len(cards)} 张世界设定卡预览。")
 
     preview_cards = st.session_state.get(preview_key, existing_cards)
     st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
@@ -1469,7 +1469,7 @@ def render_setting_entity_card_panel(project_name: str):
                 "类型": SETTING_ENTITY_CATEGORY_GROUPS.get(card.get("setting_type", ""), card.get("setting_type", "")),
                 "名称": card.get("name", ""),
                 "重要性": safe_confidence(card.get("importance", 0.5)),
-                "世界线": card.get("worldline_label", ""),
+                "资料版本": card.get("worldline_label", ""),
             }
             for card in preview_cards[:12]
         ]
@@ -1489,7 +1489,7 @@ def render_setting_entity_card_panel(project_name: str):
 
     serialized_preview = json.dumps(preview_cards, ensure_ascii=False, indent=2)
     raw_cards_json = st.text_area(
-        "设定实体卡 JSON",
+        "世界设定卡 JSON",
         value=serialized_preview,
         height=320,
         key=scoped_widget_key(
@@ -1501,22 +1501,22 @@ def render_setting_entity_card_panel(project_name: str):
     )
     col_save, col_clear = st.columns(2)
     if col_save.button(
-        "保存设定实体卡并重建索引",
+        "保存世界设定卡并更新可匹配资料",
         key=scoped_widget_key("save_setting_entities", project_name),
         use_container_width=True,
     ):
         try:
             parsed = json.loads(raw_cards_json)
             if not isinstance(parsed, list):
-                st.error("设定实体卡必须是列表结构。")
+                st.error("世界设定卡必须是列表结构。")
             else:
                 save_setting_entities(project_name, parsed)
                 rebuild_retrieval_assets(project_name, build_vectors=True)
                 st.session_state[preview_key] = parsed
-                st.success(f"已保存 {len(parsed)} 张设定实体卡。")
+                st.success(f"已保存 {len(parsed)} 张世界设定卡。")
                 st.rerun()
         except json.JSONDecodeError as exc:
-            st.error(f"设定实体卡 JSON 格式错误：{exc}")
+            st.error(f"世界设定卡 JSON 格式错误：{exc}")
     if col_clear.button(
         "清空设定卡预览",
         key=scoped_widget_key("clear_setting_entity_preview", project_name),
@@ -1530,7 +1530,7 @@ def render_setting_entity_card_panel(project_name: str):
 def render_entity_alias_panel(project_name: str):
     alias_groups = load_entity_aliases(project_name)
     st.markdown("#### 实体别名库")
-    st.caption("沉淀同一实体的不同称呼，后续可辅助提取质检、检索和实体卡整理。")
+    st.caption("记录同一角色、地点或物品的不同称呼，帮助系统识别别名并减少重复资料。")
     cols = st.columns(3)
     cols[0].metric("别名组", len(alias_groups))
     cols[1].metric("别名总数", sum(len(item.get("aliases", [])) for item in alias_groups if isinstance(item.get("aliases", []), list)))
@@ -1682,7 +1682,7 @@ def _filter_knowledge_organizer_indices(project_name: str, category: str, items:
         if isinstance(item, dict) and str(item.get("worldline_label") or item.get("worldline_id") or "").strip()
     })
     selected_worldlines = st.multiselect(
-        "筛选正式知识世界线",
+        "筛选正式知识的资料版本",
         options=worldline_options,
         default=[],
         key=scoped_widget_key("knowledge_organizer_worldlines", project_name, category),
@@ -1853,10 +1853,10 @@ def render_source_package_report_page(project_name: str):
     with st.expander("资料包报告", expanded=False):
         preview_key = scoped_widget_key("source_package_report_preview", project_name)
         preview_revision_key = scoped_widget_key("source_package_report_preview_revision", project_name)
-        st.caption("基于已确认知识库条目生成项目资料总览，可保存为分析报告并进入检索索引。")
+        st.caption("基于正式知识条目生成项目资料总览，可保存为分析报告并加入资料检索。")
         knowledge_base = load_knowledge_base(project_name)
         total_items = sum(len(items) for items in knowledge_base.values())
-        st.caption(f"当前已确认知识库条目：{total_items} 条")
+        st.caption(f"当前正式知识条目：{total_items} 条")
         max_items = st.slider(
             "每类最多写入条目数",
             min_value=5,
@@ -1911,14 +1911,14 @@ def render_ingestion_health_panel(project_name: str):
     with st.expander("资料健康度总览", expanded=True):
         cols = st.columns(6)
         cols[0].metric("健康分", report["score"])
-        cols[1].metric("已确认知识", report["confirmed_count"])
-        cols[2].metric("待确认", report["pending_count"])
+        cols[1].metric("正式知识", report["confirmed_count"])
+        cols[2].metric("待审核设定", report["pending_count"])
         cols[3].metric("导入未提取", report["imported_not_extracted"])
         cols[4].metric("提取失败", report["failed_segments"])
         cols[5].metric("高风险线索", report["high_risk_issue_count"])
         entity_cols = st.columns(4)
-        entity_cols[0].metric("角色实体卡", report["character_entity_count"])
-        entity_cols[1].metric("设定实体卡", report["setting_entity_count"])
+        entity_cols[0].metric("角色资料卡", report["character_entity_count"])
+        entity_cols[1].metric("世界设定卡", report["setting_entity_count"])
         entity_cols[2].metric("别名组", report["alias_group_count"])
         entity_cols[3].metric("计划模板", report["extraction_plan_template_count"])
         if report["total_segments"]:
@@ -1929,18 +1929,18 @@ def render_ingestion_health_panel(project_name: str):
         if report["weak_confirmed"]:
             warning_parts.append("正式库薄弱分类：" + "、".join(label_knowledge_category(category) for category in report["weak_confirmed"]))
         if report["low_evidence"] or report["low_confidence"] or report["no_evidence"]:
-            warning_parts.append(f"待确认质量风险：低证据 {report['low_evidence']} / 低置信 {report['low_confidence']} / 无证据 {report['no_evidence']}")
+            warning_parts.append(f"待审核质量风险：证据较少 {report['low_evidence']} / 可信度较低 {report['low_confidence']} / 无证据 {report['no_evidence']}")
         for text in warning_parts[:4]:
             st.warning(text)
         col_a, col_b = st.columns(2)
         col_a.dataframe(
-            [{"分类": label_knowledge_category(category), "正式库": report["confirmed_counts"].get(category, 0), "待确认": report["pending_counts"].get(category, 0)} for category in KNOWLEDGE_CATEGORY_LABELS],
+            [{"分类": label_knowledge_category(category), "正式知识": report["confirmed_counts"].get(category, 0), "待审核设定": report["pending_counts"].get(category, 0)} for category in KNOWLEDGE_CATEGORY_LABELS],
             use_container_width=True,
             hide_index=True,
         )
-        col_b.caption("世界线分布")
+        col_b.caption("资料版本分布")
         col_b.json({
-            "待确认": report["worldline_counts"],
+            "待审核设定": report["worldline_counts"],
             "正式库": report["confirmed_worldline_counts"],
         })
 
@@ -1979,9 +1979,9 @@ def render_source_record_detail(project_name: str, record: dict):
         )
         related = get_segment_related_knowledge_items(project_name, segment)
         cols = st.columns(2)
-        cols[0].metric("关联待确认", len(related["pending"]))
+        cols[0].metric("关联待审核", len(related["pending"]))
         cols[1].metric("关联已确认", len(related["confirmed"]))
-        for label, items in [("待确认知识", related["pending"][:12]), ("已确认知识", related["confirmed"][:12])]:
+        for label, items in [("待审核设定", related["pending"][:12]), ("正式知识", related["confirmed"][:12])]:
             if not items:
                 continue
             with st.expander(label, expanded=False):
@@ -2017,7 +2017,7 @@ def render_source_record_detail(project_name: str, record: dict):
             )
         return
 
-    st.caption("这个来源只在待确认或已确认知识中出现，当前没有对应的原文批次或检索资料文件。")
+    st.caption("这个来源只在待审核设定或正式知识中出现，当前没有对应的原文批次或资料文件。")
 
 
 def render_source_ledger_page(project_name: str):
@@ -2056,7 +2056,7 @@ def render_source_ledger_page(project_name: str):
         metric_cols = st.columns(4)
         metric_cols[0].metric("来源记录", len(filtered_records))
         metric_cols[1].metric("片段/资料", sum(int(item.get("segment_count") or 0) for item in filtered_records))
-        metric_cols[2].metric("待确认", sum(int(item.get("pending_count") or 0) for item in filtered_records))
+        metric_cols[2].metric("待审核设定", sum(int(item.get("pending_count") or 0) for item in filtered_records))
         metric_cols[3].metric("已确认", sum(int(item.get("confirmed_count") or 0) for item in filtered_records))
 
         table_rows = []
@@ -2071,7 +2071,7 @@ def render_source_ledger_page(project_name: str):
                 "已导入": record.get("imported_count", 0),
                 "已提取": record.get("extracted_count", 0),
                 "失败": record.get("failed_count", 0),
-                "待确认": record.get("pending_count", 0),
+                "待审核设定": record.get("pending_count", 0),
                 "已确认": record.get("confirmed_count", 0),
             })
         st.dataframe(table_rows, use_container_width=True, hide_index=True)

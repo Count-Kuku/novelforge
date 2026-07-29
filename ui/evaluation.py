@@ -15,8 +15,7 @@ def run_comprehensive_chapter_evaluation(project_name: str, chapter_no: int, cha
 
 def render_evaluation_page(project_name: str, render_prompt_option_capability_tools):
     story_id = st.session_state.get("active_story_id", "default")
-    st.subheader("章节评价")
-    st.caption("综合评价会一次性给出：通过/需改/阻塞结论、质量评分、一致性诊断和优先修改项。旧的审阅/专项分析能力仍保留给流水线和历史兼容。")
+    st.info("综合评价会一次给出通过、需要修改或阻塞的结论，并列出质量评分、一致性问题和优先修改项。")
 
     chapter_no = st.number_input("章节编号", min_value=1, value=1, key=scoped_widget_key("evaluation_chapter_no", project_name, story_id))
     chapter_no = int(chapter_no)
@@ -41,7 +40,7 @@ def render_evaluation_page(project_name: str, render_prompt_option_capability_to
             scoped_widget_key("evaluation_prompt_options", *evaluation_scope),
         )
 
-    if st.button("生成综合章节评价", key=scoped_widget_key("generate_evaluation", *evaluation_scope)):
+    if st.button("开始综合评价", key=scoped_widget_key("generate_evaluation", *evaluation_scope), type="primary", use_container_width=True):
         try:
             result = _run_with_stream(
                 "正在生成章节综合评价...",

@@ -14,7 +14,6 @@ from memory import (
     list_retrieval_source_files,
     load_knowledge_base,
     load_pending_knowledge_items,
-    retrieval_sources_path,
 )
 from skills import organize_reference_text
 from source_workflows import (
@@ -29,19 +28,18 @@ from ui.streaming import run_with_stream as _run_with_stream
 
 
 def _render_ingestion_metrics(project_name: str) -> None:
-    source_dir = retrieval_sources_path(project_name)
     pending_count = len(load_pending_knowledge_items(project_name))
     batch_count = len(list_long_reference_batches(project_name))
     source_count = len(list_retrieval_source_files(project_name))
     knowledge_base = load_knowledge_base(project_name)
     knowledge_count = sum(len(items) for items in knowledge_base.values())
 
-    st.caption(f"外部资料保存目录：`{source_dir}`")
+    st.caption("导入的资料会保存在当前项目中，并自动供后续规划、写作和审阅匹配使用。")
     metric_cols = st.columns(4)
-    metric_cols[0].metric("待确认知识", pending_count)
-    metric_cols[1].metric("长篇批次", batch_count)
-    metric_cols[2].metric("已导入资料", source_count)
-    metric_cols[3].metric("已确认知识", knowledge_count)
+    metric_cols[0].metric("待审核设定", pending_count)
+    metric_cols[1].metric("长篇处理批次", batch_count)
+    metric_cols[2].metric("已导入原文资料", source_count)
+    metric_cols[3].metric("正式知识条目", knowledge_count)
 
 
 def _render_organized_reference_result(
@@ -62,7 +60,7 @@ def _render_organized_reference_result(
     render_step_validation(organized_result)
     render_step_json_expander("整理结果详细数据", organized_payload)
     if st.button(
-        "保存到检索资料库",
+        "保存为可匹配资料",
         use_container_width=True,
         type="primary",
         key=scoped_widget_key("save_organized_reference", project_name, current_story_id),
@@ -81,7 +79,7 @@ def _render_organized_reference_result(
 def _render_organized_reference_ingestion(project_name: str, current_story_id: str) -> None:
     state_scope = (project_name, current_story_id)
     result_key = scoped_session_key("organized_reference_result", *state_scope)
-    st.markdown("#### 粘贴资料 / 整理为检索资料")
+    st.markdown("#### 粘贴并整理为可匹配资料")
     paste_title = st.text_input(
         "资料标题",
         key=scoped_widget_key("organized_reference_title", *state_scope),
@@ -212,14 +210,14 @@ def _run_pasted_knowledge_extraction(
     if run_auto:
         auto_summary = extraction_summary.get("auto_confirm", {})
         st.success(
-            f"已提取 {extraction_summary.get('item_count', 0)} 条，加入待确认 {extraction_summary.get('queued_count', 0)} 条，"
+            f"已整理 {extraction_summary.get('item_count', 0)} 条，加入待审核设定 {extraction_summary.get('queued_count', 0)} 条，"
             f"自动保存 {len(auto_summary.get('confirmed_ids', []))} 条，"
-            f"保留待确认 {len(auto_summary.get('blocked_ids', []))} 条。"
+            f"保留待审核 {len(auto_summary.get('blocked_ids', []))} 条。"
         )
         st.rerun()
     st.success(
         f"已提取 {extraction_summary.get('item_count', 0)} 条，"
-        f"并加入待确认队列 {extraction_summary.get('queued_count', 0)} 条。"
+        f"并加入待审核设定 {extraction_summary.get('queued_count', 0)} 条。"
     )
     st.rerun()
 
@@ -244,7 +242,7 @@ def _render_knowledge_extraction_ingestion(
 ) -> None:
     state_scope = (project_name, current_story_id)
     st.markdown("#### 粘贴资料 / 提取为知识库条目")
-    st.caption("提取结果默认先进入待确认队列；也可以自动保存低风险条目。")
+    st.caption("整理结果默认先进入待审核设定；也可以自动保存低风险条目。")
     knowledge_title = st.text_input(
         "资料标题",
         key=scoped_widget_key("knowledge_extract_title", *state_scope),
@@ -324,11 +322,11 @@ def _render_pasted_ingestion(
 ) -> None:
     target_choice = st.radio(
         "处理方式",
-        options=["整理为检索资料", "提取为知识库条目"],
+        options=["整理为可匹配资料", "提取为知识库条目"],
         horizontal=True,
         key=scoped_widget_key("paste_ingestion_target", project_name, current_story_id),
     )
-    if target_choice == "整理为检索资料":
+    if target_choice == "整理为可匹配资料":
         _render_organized_reference_ingestion(project_name, current_story_id)
     else:
         _render_knowledge_extraction_ingestion(project_name, current_story_id, knowledge_category_options)
@@ -341,7 +339,7 @@ def _render_manual_retrieval_source_card(
 ) -> None:
     state_scope = (project_name, current_story_id)
     st.markdown("#### 手动资料卡")
-    st.caption("适合少量已经整理好的设定卡、角色卡、事件卡。保存后直接进入检索资料库。")
+    st.caption("适合少量已经整理好的设定卡、角色卡或事件卡。保存后，后续生成可以按内容自动匹配。")
     source_name = st.text_input("资料名称", key=scoped_widget_key("retrieval_source_name", *state_scope))
     col_scope, col_auth = st.columns(2)
     source_scope = col_scope.selectbox(
@@ -400,7 +398,7 @@ def _render_manual_retrieval_source_card(
                 authority=source_authority,
                 origin=source_origin,
             )
-            st.success("资料卡已保存并重建索引。")
+            st.success("资料卡已保存，后续生成已可以匹配使用。")
             st.rerun()
 
 
@@ -420,7 +418,7 @@ def _render_ingestion_followup_tabs(
     st.divider()
     st.markdown("### 待处理与整理")
     ledger_tab, queue_tab, record_tab, batch_tab, knowledge_tab, package_tab = st.tabs(
-        ["来源台账", "待确认知识", "处理记录", "长篇批次", "知识整理", "资料包"]
+        ["资料来源", "待审核设定", "处理记录", "长篇批次", "知识整理", "资料包"]
     )
     with ledger_tab:
         render_ingestion_health_panel(project_name)
@@ -457,7 +455,7 @@ def render_retrieval_ingestion_page(
     _render_ingestion_metrics(project_name)
 
     st.markdown("### 导入向导")
-    st.caption("先选资料来源，再处理当前步骤。大段文本建议走“长篇文本”，少量资料可以直接粘贴或手动建卡。")
+    st.caption("先选择资料的输入方式。整本原作等大段文本用“长篇文本”，少量内容可直接粘贴或填写资料卡。")
     source_choice = st.radio(
         "资料来源",
         options=["长篇文本", "粘贴资料", "手动资料卡"],

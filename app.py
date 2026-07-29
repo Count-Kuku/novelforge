@@ -81,12 +81,6 @@ def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
 
 def render_retrieval_page(project_name: str, mode: str = "center"):
     current_story_id = st.session_state.get("active_story_id", "default")
-    if mode == "ingestion":
-        st.subheader("资料导入")
-        st.caption("导入原作资料、参考资料和样本文本，并把资料整理为检索条目或知识库条目。")
-    else:
-        st.subheader("检索中心")
-        st.caption("管理检索索引、测试资料匹配，并处理项目资料与原作/参考资料之间的潜在冲突。")
 
     source_type_options = {
         "external_source": "通用资料",

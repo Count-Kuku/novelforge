@@ -898,6 +898,19 @@ def apply_app_style():
             border-color: var(--nf-accent-strong) !important;
         }
 
+        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child::after {
+            content: "" !important;
+            display: block !important;
+            position: absolute !important;
+            left: 50% !important;
+            top: 46% !important;
+            width: 0.34rem !important;
+            height: 0.62rem !important;
+            border-right: 2px solid #ffffff !important;
+            border-bottom: 2px solid #ffffff !important;
+            transform: translate(-50%, -55%) rotate(45deg) !important;
+        }
+
         html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child *,
         html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child svg,
         html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child path,
@@ -1503,8 +1516,8 @@ def apply_app_style():
             max-width: 100% !important;
         }
 
-        .stApp [data-testid="column"],
-        .stApp [data-testid="column"] > div {
+        .stApp [data-testid="stColumn"],
+        .stApp [data-testid="stColumn"] > div {
             min-width: 0 !important;
             max-width: 100% !important;
         }
@@ -1747,6 +1760,176 @@ def apply_app_style():
             margin-bottom: 0.55rem !important;
         }
 
+        /*
+         * Cohesive layout system.
+         *
+         * Streamlit 1.5x exposes columns as `stColumn`.  Older rules in this
+         * stylesheet targeted `column`, so the column itself stretched while
+         * bordered cards and controls kept their content width/height.  Keep
+         * these selectors at the end of the theme so every page shares the
+         * same alignment contract.
+         */
+        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
+            align-items: stretch !important;
+            column-gap: 0.9rem !important;
+            row-gap: 0.8rem !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stColumn"] {
+            display: flex !important;
+            align-self: stretch !important;
+            min-width: 0 !important;
+            max-width: 100% !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
+            flex: 1 1 auto !important;
+            width: 100% !important;
+            min-width: 0 !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stButton"],
+        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stFormSubmitButton"],
+        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stButton"] > button,
+        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stFormSubmitButton"] > button {
+            width: 100% !important;
+            min-width: 0 !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stWidgetLabel"] {
+            display: flex !important;
+            align-items: flex-end !important;
+            min-height: 2.45rem !important;
+            margin-bottom: 0.32rem !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stWidgetLabel"] p {
+            margin: 0 !important;
+            line-height: 1.35 !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stMetric"] {
+            height: 100% !important;
+            min-height: 6.8rem !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title),
+        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title) > [data-testid="stVerticalBlock"],
+        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title) > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
+        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title) > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
+            height: 100% !important;
+        }
+
+        .nf-action-card-body {
+            min-height: 4.65rem !important;
+            margin-bottom: 0.7rem !important;
+        }
+
+        .nf-card,
+        .nf-hero,
+        .nf-status-item,
+        .stApp [data-testid="stVerticalBlockBorderWrapper"],
+        .stApp [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] .nf-action-title) {
+            border-radius: 10px !important;
+        }
+
+        .nf-card {
+            padding: 1.1rem !important;
+        }
+
+        .nf-card-copy,
+        .nf-action-copy,
+        .nf-section-caption,
+        .nf-subtitle {
+            text-wrap: pretty;
+        }
+
+        .stApp [data-testid="stMain"] [data-baseweb="tab-list"] {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            width: 100% !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-baseweb="tab"] {
+            flex: 1 1 8.5rem !important;
+            justify-content: center !important;
+            text-align: center !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stFileUploader"] section {
+            border: 1px dashed #b8c6d8 !important;
+            border-radius: 10px !important;
+            background: #fbfdff !important;
+        }
+
+        .stApp [data-testid="stMain"] [data-testid="stDataFrame"],
+        .stApp [data-testid="stMain"] [data-testid="stTable"] {
+            overflow: hidden !important;
+            border: 1px solid var(--nf-border) !important;
+            border-radius: 10px !important;
+        }
+
+        .nf-muted-note {
+            margin: 0.55rem 0 0.8rem;
+            padding: 0.72rem 0.85rem;
+            border: 1px solid #d8e3ef;
+            border-radius: 10px;
+            background: #f8fbff;
+            color: var(--nf-muted);
+            font-size: 0.88rem;
+            line-height: 1.55;
+        }
+
+        .nf-preset-card {
+            display: flex;
+            flex-direction: column;
+            gap: 0.55rem;
+            min-height: 11.8rem;
+        }
+
+        .nf-preset-card-title {
+            color: var(--nf-text);
+            font-size: 1rem;
+            font-weight: 750;
+            line-height: 1.4;
+        }
+
+        .nf-preset-card-copy {
+            color: var(--nf-text);
+            font-size: 0.9rem;
+            line-height: 1.55;
+        }
+
+        .nf-preset-card-effect {
+            color: var(--nf-muted);
+            font-size: 0.8rem;
+            line-height: 1.5;
+        }
+
+        .nf-button-align-spacer {
+            min-height: 2.77rem;
+        }
+
+        .stApp button[aria-label^="Help for"],
+        .stApp button[aria-label^="Help for"] svg {
+            width: 1rem !important;
+            min-width: 1rem !important;
+            height: 1rem !important;
+            min-height: 1rem !important;
+            padding: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            transform: none !important;
+        }
+
+        .stApp button[aria-label^="Help for"] svg,
+        .stApp button[aria-label^="Help for"] svg * {
+            color: var(--nf-muted) !important;
+            fill: none !important;
+            stroke: var(--nf-muted) !important;
+        }
+
         @media (max-width: 760px) {
             .block-container {
                 padding-top: 0.65rem;
@@ -1777,6 +1960,27 @@ def apply_app_style():
             .nf-header-meta {
                 grid-template-columns: 1fr;
             }
+
+            .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stWidgetLabel"] {
+                min-height: auto !important;
+            }
+
+            .stApp [data-testid="stMain"] [data-baseweb="tab-list"] {
+                flex-wrap: nowrap !important;
+                justify-content: flex-start !important;
+                overflow-x: auto !important;
+                scrollbar-width: none;
+            }
+
+            .stApp [data-testid="stMain"] [data-baseweb="tab-list"]::-webkit-scrollbar {
+                display: none;
+            }
+
+            .stApp [data-testid="stMain"] [data-baseweb="tab"] {
+                flex: 0 0 auto !important;
+                min-width: 6.5rem !important;
+                padding-inline: 0.75rem !important;
+            }
         }
         </style>
         """,
@@ -1791,7 +1995,7 @@ def render_app_header(project_name: str | None, page: str, memory: dict | None):
 
     title = html.escape(str((memory or {}).get("title") or project_name or "未选择项目"))
     genre = html.escape(str((memory or {}).get("genre") or "未设置类型"))
-    canon_mode = html.escape(str((memory or {}).get("canon_mode") or "未设置原作对齐"))
+    canon_mode = html.escape(str((memory or {}).get("canon_mode") or "未设置参考方式"))
     page_label = html.escape(str(page))
     page_description = html.escape(str(PAGE_DESCRIPTIONS.get(page, "")))
     project_label = html.escape(str(project_name or "-"))
@@ -1802,10 +2006,10 @@ def render_app_header(project_name: str | None, page: str, memory: dict | None):
             <div class="nf-title">{page_label}</div>
             {f'<div class="nf-subtitle">{page_description}</div>' if page_description else ''}
             <div class="nf-header-meta">
-                <span>作品 <b>{title}</b></span>
-                <span>项目 <b>{project_label}</b></span>
-                <span>类型 <b>{genre}</b></span>
-                <span>原作对齐 <b>{canon_mode}</b></span>
+                <span>作品名称 <b>{title}</b></span>
+                <span>项目文件 <b>{project_label}</b></span>
+                <span>作品类型 <b>{genre}</b></span>
+                <span>原作参考 <b>{canon_mode}</b></span>
             </div>
         </div>
         """,

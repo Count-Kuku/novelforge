@@ -160,17 +160,15 @@ def render_prompt_options_page(project_name: str):
     story_id = st.session_state.get("active_story_id", "default")
     context = _load_prompt_option_page_context(project_name, story_id)
 
-    st.subheader("提示词选项工作台")
-    st.caption("把这里当成“本次生成可以选择启用的写作方式”。它们适合描述文风、节奏、描写重点、规划方法和审稿关注点；如果内容属于不能违反的设定事实、边界或禁忌，请放到生成规则。")
-    st.info("提示词选项不需要先讨论才会出现。你可以在「新增」里手动创建，也可以在「内置预设」里复制现成选项；讨论只是另一种把建议保存成选项的方式。")
-    st.caption("它决定的是生成时额外注入哪些可切换提示，例如“正文更快节奏”“多写心理活动”“审稿时重点检查人物 OOC”。")
+    st.info("这里保存的是可随时开关的写作偏好，例如“正文节奏更快”“多写心理活动”。不能违反的设定事实、边界和禁忌，应放在“生成规则”。")
+    st.caption("可以从“新增”手动创建，也可以到“内置预设”复制现成方案；创作讨论中形成的写作建议也能保存到这里。")
 
     tab_overview, tab_create, tab_manage, tab_builtin, tab_preview = st.tabs([
-        "全部总览",
-        "新增",
-        "增删改",
+        "全部选项",
+        "新增选项",
+        "管理已有",
         "内置预设",
-        "生效预览",
+        "使用效果预览",
     ])
     all_records = _prompt_option_records(context)
     with tab_overview:

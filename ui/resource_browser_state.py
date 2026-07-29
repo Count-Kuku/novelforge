@@ -22,13 +22,13 @@ RESOURCE_BROWSER_GROUPS = [
     ("review", "审阅结果"),
     ("analysis", "分析报告"),
     ("evaluation", "评估报告"),
-    ("run", "流水线记录"),
+    ("run", "自动生成记录"),
     ("creative_session", "自由创作会话"),
-    ("context_directive", "导演注"),
-    ("generation_context", "生成上下文快照"),
+    ("context_directive", "创作提醒"),
+    ("generation_context", "生成时使用的资料"),
     ("source", "外部资料"),
     ("knowledge_item", "知识库条目"),
-    ("pending_knowledge", "待确认知识"),
+    ("pending_knowledge", "待审核设定"),
     ("long_reference_batch", "资料批次"),
 ]
 

@@ -117,7 +117,7 @@ def _render_readonly_resource_detail(project_name: str, story_id: str, resource:
             navigate_to("自由创作")
         return
     if group in {"context_directive", "generation_context"}:
-        st.caption("该审计资源在浏览器中只读；导演注请在生成页管理，上下文快照会随正式生成自动保存。")
+        st.caption("这类记录在资源页中只读；创作提醒请到生成页面管理，生成时实际使用的资料会自动随结果保存。")
         st.code(resource.get("content", ""), language="json")
         return
     st.caption("该资源在浏览器中只读；编辑和批量处理请回到「资料导入」。")
@@ -511,7 +511,6 @@ def _resolve_browser_selection(project_name: str, story_id: str, selected: dict,
 
 
 def render_resource_management_page(project_name: str):
-    st.subheader("项目资源")
     story_id = st.session_state.get("active_story_id", "default")
     browser_items = _build_resource_browser_items(project_name, story_id=story_id)
     selected = _get_resource_browser_selection(project_name, story_id)
@@ -525,6 +524,6 @@ def render_resource_management_page(project_name: str):
     with left_col:
         visible_items = _render_resource_browser_sidebar(project_name, story_id, browser_items, selected)
     with right_col:
-        st.markdown("### 资源详情")
+        st.markdown("#### 资源详情")
         selected = _resolve_browser_selection(project_name, story_id, selected, browser_items, visible_items)
         _render_resource_browser_detail(project_name, selected)

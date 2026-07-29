@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import html
 
 import streamlit as st
 
@@ -30,22 +31,22 @@ from ui.streaming import run_with_stream as _run_with_stream
 
 LONG_REFERENCE_PRESET_INFO = {
     "fanfic_foundation": {
-        "label": "同人创作地基（推荐）",
-        "button": "使用同人创作地基",
+        "label": "同人资料准备（推荐）",
+        "button": "使用同人资料准备方案",
         "summary": "第一次导入整本原作时优先选。它会尽量整理后续写作反复要用的角色、关系、时间线、世界观、能力道具和硬约束。",
-        "effect": "适合：搭完整资料库 / 范围=原作资料 / 可信度=官方资料 / 提取=平衡总管+深度提取 / 会自动整理散知识",
+        "effect": "按官方原作资料处理，进行较完整的深度整理，并自动合并重复或零散内容。",
     },
     "canon_foundation": {
         "label": "严格原作校验",
         "button": "使用严格原作校验",
         "summary": "只想补一层“不能错、不能改”的原作硬事实时选。它更保守，尽量少推测，适合防止后续写作违背原作。",
-        "effect": "适合：补硬事实和防错 / 范围=原作资料 / 可信度=官方资料 / 提取=原作审计+严格原作 / 不自动整理散知识",
+        "effect": "只整理有明确证据的原作事实，减少推测，适合补充不能写错的内容。",
     },
     "style_reference": {
         "label": "文风参考",
         "button": "使用文风参考",
         "summary": "导入样本文本或只想学原作表达方式时选。它关注叙事节奏、对白、氛围和描写习惯，不适合拿来补全世界观资料。",
-        "effect": "适合：学文风 / 范围=参考资料 / 可信度=人工整理 / 提取=文风专家+文风专用 / 不自动整理散知识",
+        "effect": "按参考文本处理，重点学习叙事节奏、对白、氛围和描写习惯。",
     },
 }
 
@@ -95,30 +96,38 @@ def apply_long_reference_fanfic_preset(preset: str, state_scope: StateScope):
 
 def _render_long_reference_preset_selector(state_scope: StateScope):
     with st.expander("1. 选择处理方案", expanded=True):
-        st.caption("先选资料用途。第一次整理整本原作，通常直接选“同人创作地基”。系统会自动设置资料范围、可信度、自动处理方式和提取模式，之后仍可手动调整。")
+        st.caption("先说明这批资料准备用来做什么。第一次整理整本原作，通常直接选“同人资料准备”。系统会自动设置资料范围、可信度和整理方式，之后仍可手动调整。")
         active_preset = st.session_state.get(_long_reference_key("long_reference_active_preset", state_scope), "")
         if active_preset in LONG_REFERENCE_PRESET_INFO:
             active_info = LONG_REFERENCE_PRESET_INFO[active_preset]
             st.success(st.session_state.get(_long_reference_key("long_reference_preset_notice", state_scope), f"当前方案：{active_info['label']}"))
             st.caption(active_info["effect"])
         else:
-            st.info("当前还没有套用处理方案。第一次整理整本原作，建议选“同人创作地基（推荐）”。")
+            st.info("当前还没有选择处理方案。第一次整理整本原作，建议选“同人资料准备（推荐）”。")
         preset_cols = st.columns(3)
         for column, preset_key in zip(preset_cols, LONG_REFERENCE_PRESET_INFO):
             preset_info = LONG_REFERENCE_PRESET_INFO[preset_key]
             with column:
                 is_active = active_preset == preset_key
-                st.markdown(f"**{preset_info['label']}{'（当前）' if is_active else ''}**")
-                st.caption(preset_info["summary"])
-                st.caption(preset_info["effect"])
-                if st.button(
-                    "已应用" if is_active else preset_info["button"],
-                    key=_long_reference_key("long_reference_preset", state_scope, preset_key),
-                    use_container_width=True,
-                    type="primary" if is_active else "secondary",
-                ):
-                    apply_long_reference_fanfic_preset(preset_key, state_scope)
-                    st.rerun()
+                with st.container(border=True):
+                    st.markdown(
+                        f"""
+                        <div class="nf-preset-card">
+                            <div class="nf-preset-card-title">{html.escape(preset_info['label'])}{'（当前）' if is_active else ''}</div>
+                            <div class="nf-preset-card-copy">{html.escape(preset_info['summary'])}</div>
+                            <div class="nf-preset-card-effect">{html.escape(preset_info['effect'])}</div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    if st.button(
+                        "已使用此方案" if is_active else preset_info["button"],
+                        key=_long_reference_key("long_reference_preset", state_scope, preset_key),
+                        use_container_width=True,
+                        type="primary" if is_active else "secondary",
+                    ):
+                        apply_long_reference_fanfic_preset(preset_key, state_scope)
+                        st.rerun()
 
 
 def _render_long_reference_flow_notes():
@@ -126,9 +135,9 @@ def _render_long_reference_flow_notes():
         st.markdown(
             """
 1. **预览切分**：只把文本临时拆成章节/片段，方便检查切分是否合理，还不会写入资料库。
-2. **保存为处理批次**：把这次切分结果保存下来。之后可以在“长篇批次”里继续导入、提取、重试或重新提取。
-3. **导入资料索引**：把片段作为原文资料加入检索库。后续写作、规划、审阅可以匹配原文证据，但不会生成结构化角色/设定卡。
-4. **提取知识库条目**：让模型从片段中提取角色、关系、时间线、设定、文风等候选知识，结果先进入“待确认知识”，需要审核后才会成为正式知识库。
+2. **保存为处理批次**：保存这次切分结果，之后可以在“长篇批次”中继续处理或重试失败片段。
+3. **保存为可匹配原文**：让后续规划、写作和审阅能找到相关原文证据；这一步不会自动生成角色卡或世界设定卡。
+4. **整理为知识条目**：从原文中整理角色、关系、时间线、世界观和文风等内容。结果会先进入“待审核设定”，确认后才成为正式知识。
             """.strip()
         )
 
@@ -368,7 +377,7 @@ def _render_long_reference_extraction_options(
             index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(shared_preset["mode"]) if shared_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
             format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
             key=_long_reference_key("long_reference_shared_mode", state_scope, shared_expert_preset),
-            help="模式决定模型看资料时的优先级。通用更稳，深度更适合正式搭同人资料地基。",
+            help="模式决定模型整理资料时的细致程度。通用模式更稳，深度模式更适合建立完整的同人创作资料库。",
         )
         st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(shared_extraction_mode, "当前模式暂无说明。"))
         shared_custom_instructions = st.text_area(
@@ -393,7 +402,7 @@ def _render_long_reference_quick_processing(
     knowledge_category_options: list[str],
 ) -> dict:
     st.markdown("#### 4. 自动处理")
-    st.caption("会自动保存批次、导入资料索引、提取知识库条目，并保存低风险条目；有冲突或证据不足的条目会留在“待确认知识”。")
+    st.caption("系统会依次保存批次、保存可匹配原文、整理知识条目，并自动确认低风险内容；有冲突或证据不足的内容会留在“待审核设定”。")
     quick_extract_limit = st.number_input(
         "本次最多处理片段数",
         min_value=1,
@@ -416,16 +425,16 @@ def _render_long_reference_quick_processing(
     )
     with st.expander("自动处理选项", expanded=False):
         quick_import_to_index = st.checkbox(
-            "同时导入资料索引",
+            "同时保存为可匹配原文",
             value=True,
             key=_long_reference_key("long_reference_quick_import_index", state_scope),
-            help="开启后，原文片段会进入检索库，后续写作可以匹配原文证据。",
+            help="开启后，原文片段会成为可匹配资料，后续写作可以找到相关原文证据。",
         )
         quick_auto_confirm = st.checkbox(
             "自动审核并保存低风险知识",
             value=True,
             key=_long_reference_key("long_reference_quick_auto_confirm", state_scope),
-            help="只自动确认没有冲突、证据存在、置信度尚可的条目；风险条目会留在待确认队列。",
+            help="只自动确认没有冲突、有证据且可信度较高的内容；风险内容会留在待审核设定中。",
         )
         quick_consolidate = st.checkbox(
             "提取后自动整理散知识",
@@ -473,9 +482,9 @@ def _render_long_reference_quick_processing(
             st.success(
                 f"自动处理完成：导入 {quick_summary.get('imported_count', 0)} 段，"
                 f"提取 {quick_summary.get('processed_count', 0)} 段，"
-                f"新增待确认 {quick_summary.get('new_pending_count', 0)} 条，"
+                f"新增待审核设定 {quick_summary.get('new_pending_count', 0)} 条，"
                 f"自动保存 {quick_summary.get('auto_confirmed_count', 0)} 条，"
-                f"保留待确认 {quick_summary.get('blocked_count', 0)} 条。"
+                f"保留待审核 {quick_summary.get('blocked_count', 0)} 条。"
             )
             for failure in quick_summary.get("failed_titles", [])[:5]:
                 st.warning(f"处理失败：{failure}")
@@ -500,7 +509,7 @@ def _render_long_reference_quick_result(state_scope: StateScope):
             "新增候选": quick_result.get("new_pending_count", 0),
             "自动保存": quick_result.get("auto_confirmed_count", 0),
             "自动审核记录": quick_result.get("auto_confirm", {}).get("run_id", ""),
-            "保留待确认": quick_result.get("blocked_count", 0),
+            "保留待审核": quick_result.get("blocked_count", 0),
             "失败": quick_result.get("failed_titles", []),
             "保留原因": quick_result.get("auto_confirm", {}).get("blocked_reasons", {}),
         })
@@ -527,7 +536,7 @@ def _render_long_reference_stepwise_processing(
             st.rerun()
 
         if st.button(
-            "导入资料索引",
+            "保存为可匹配原文",
             help="把所选片段作为可检索原文资料保存。适合让后续写作引用原文，但不会自动生成角色/设定知识。",
             key=_long_reference_key("long_reference_import_segments", state_scope),
         ):
@@ -626,7 +635,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
     current_story_id = str(st.session_state.get("active_story_id") or "default")
     state_scope = (project_name, current_story_id)
     with st.expander("长篇文本导入", expanded=expanded):
-        st.info("推荐顺序：选择处理方案 / 上传或粘贴文本 / 检查切分结果 / 自动处理。处理完成后，风险条目会留在“待确认知识”里。")
+        st.info("推荐顺序：选择处理方案 → 上传或粘贴文本 → 检查切分结果 → 自动处理。有冲突或证据不足的内容会留在“待审核设定”中。")
         _render_long_reference_preset_selector(state_scope)
         _render_long_reference_flow_notes()
 

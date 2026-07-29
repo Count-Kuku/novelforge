@@ -223,7 +223,7 @@ def _render_retrieval_debug_payload(project_name: str, current_story_id: str):
         return
     with st.expander("检索调试信息", expanded=False):
         st.caption(
-            f"策略={debug_payload.get('retrieval_profile') or '通用'} / 世界线={debug_payload.get('worldline_id') or '不限定'} / 模式={debug_payload.get('worldline_mode') or 'prefer'} / 检索词={', '.join(debug_payload.get('query_terms', [])) or '-'} / 候选片段={debug_payload.get('candidate_chunk_count', 0)} / 语义向量={'已启用' if debug_payload.get('semantic_enabled', False) else '未启用'}"
+            f"匹配策略={debug_payload.get('retrieval_profile') or '通用'} / 资料版本={debug_payload.get('worldline_id') or '不限定'} / 版本处理={debug_payload.get('worldline_mode') or 'prefer'} / 匹配词={', '.join(debug_payload.get('query_terms', [])) or '-'} / 候选片段={debug_payload.get('candidate_chunk_count', 0)} / 语义向量={'已启用' if debug_payload.get('semantic_enabled', False) else '未启用'}"
         )
         expanded_terms = debug_payload.get("expanded_terms", [])
         if expanded_terms:
@@ -330,7 +330,7 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
         )
         retrieval_profile_options = [""] + list(RETRIEVAL_TASK_PROFILES.keys())
         retrieval_profile = st.selectbox(
-            "任务策略",
+            "使用场景",
             options=retrieval_profile_options,
             index=0,
             format_func=retrieval_profile_label,
@@ -358,25 +358,25 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             if isinstance(chunk.metadata, dict) and str(chunk.metadata.get("worldline_id") or "").strip()
         }) if manifest else []
         worldline_filter = st.selectbox(
-            "世界线偏好（可选）",
+            "优先使用的资料版本（可选）",
             options=[""] + worldline_options,
             format_func=lambda value: "不限定" if not value else value,
             key=scoped_widget_key("retrieval_worldline_filter", *state_scope),
-            help="选择后会优先匹配同世界线资料；通用资料仍会保留。",
+            help="选择后会优先匹配同一主线、平行世界或剧情分支的资料；通用资料仍会保留。",
         )
         worldline_mode = st.selectbox(
-            "世界线模式",
+            "跨版本资料处理",
             options=["prefer", "strict"],
-            format_func=lambda value: {"prefer": "偏好匹配", "strict": "严格过滤"}.get(value, value),
+            format_func=lambda value: {"prefer": "优先当前版本（推荐）", "strict": "只用当前版本"}.get(value, value),
             key=scoped_widget_key("retrieval_worldline_mode", *state_scope),
-            help="偏好匹配会给同世界线资料加权、给其他世界线轻微降权；严格过滤会排除明确属于其他世界线的资料。",
+            help="“优先当前版本”仍允许使用通用资料；“只用当前版本”会排除明确属于其他版本的内容。",
         )
         include_debug = st.checkbox(
-            "生成检索调试信息",
+            "显示详细匹配信息",
             value=False,
             key=scoped_widget_key("retrieval_include_debug", *state_scope),
         )
-        if st.button("执行检索", key=scoped_widget_key("run_retrieval", *state_scope)):
+        if st.button("查找匹配资料", key=scoped_widget_key("run_retrieval", *state_scope), type="primary", use_container_width=True):
             try:
                 hits = retrieve_context(
                     project_name,

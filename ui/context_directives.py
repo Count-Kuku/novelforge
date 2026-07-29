@@ -18,12 +18,12 @@ SCOPE_LABELS = {
     "project": "整个项目",
 }
 PLACEMENT_LABELS = {
-    "hard_constraints": "硬约束",
-    "story_state": "故事状态",
-    "chapter_direction": "章节方向",
-    "character_voice": "人物口吻",
-    "style": "文风",
-    "reference": "参考资料",
+    "hard_constraints": "必须遵守",
+    "story_state": "当前剧情状态",
+    "chapter_direction": "本章写作方向",
+    "character_voice": "人物说话方式",
+    "style": "文风与表达",
+    "reference": "资料使用重点",
 }
 
 
@@ -42,7 +42,7 @@ def _directive_summary(directive: dict) -> str:
 def _render_existing_directives(project_name: str, story_id: str, capability: str, chapter_no: int | None) -> None:
     directives = load_context_directives(project_name, story_id)
     if not directives:
-        st.caption("当前还没有导演注。")
+        st.caption("当前没有创作提醒。需要临时强调视角、节奏或禁写内容时，可以在下方添加。")
         return
 
     for directive in directives:
@@ -57,7 +57,7 @@ def _render_existing_directives(project_name: str, story_id: str, capability: st
             if (start is not None and chapter_no < int(start)) or (end is not None and chapter_no > int(end)):
                 continue
         with st.container(border=True):
-            st.markdown(f"**{directive.get('name') or '未命名导演注'}**")
+            st.markdown(f"**{directive.get('name') or '未命名创作提醒'}**")
             st.caption(_directive_summary(directive))
             st.write(str(directive.get("content") or ""))
             toggle_col, delete_col = st.columns(2)
@@ -93,11 +93,14 @@ def render_context_directive_tools(
     capability: str,
     chapter_no: int | None = None,
 ) -> None:
-    with st.expander("导演注", expanded=False):
-        st.caption("导演注用于临时控制生成方向，不会写入世界事实或检索知识。单次导演注只在正文成功保存后消耗。")
+    with st.expander("创作提醒（临时要求）", expanded=False):
+        st.caption(
+            "用于临时告诉模型这一轮该怎么写，例如限定视角、节奏或禁写内容。"
+            "它不会自动变成世界观设定；选择“仅下一次”时，只在内容成功生成并保存后使用一次。"
+        )
         _render_existing_directives(project_name, story_id, capability, chapter_no)
 
-        st.markdown("#### 新增导演注")
+        st.markdown("#### 新增创作提醒")
         form_key = scoped_widget_key(
             "directive_create",
             project_name,
@@ -106,34 +109,35 @@ def render_context_directive_tools(
             chapter_no if chapter_no is not None else "none",
         )
         with st.form(form_key, clear_on_submit=True):
-            name = st.text_input("名称", placeholder="例如：本章保持克制视角")
+            name = st.text_input("提醒名称", placeholder="例如：本章保持克制视角")
             content = st.text_area(
-                "内容",
+                "具体要求",
                 height=110,
                 placeholder="例如：本章只使用林黛玉视角，不进入其他人物内心。",
             )
-            scope = st.selectbox(
-                "生效范围",
+            scope_col, type_col = st.columns(2)
+            scope = scope_col.selectbox(
+                "在哪些生成中生效",
                 options=list(SCOPE_LABELS),
                 format_func=lambda value: SCOPE_LABELS[value],
             )
-            placement = st.selectbox(
-                "注入位置",
+            placement = type_col.selectbox(
+                "提醒类型",
                 options=list(PLACEMENT_LABELS),
                 index=list(PLACEMENT_LABELS).index("chapter_direction"),
                 format_func=lambda value: PLACEMENT_LABELS[value],
             )
             priority = st.slider("优先级", min_value=0, max_value=100, value=70)
             remaining_uses = st.number_input(
-                "剩余成功使用次数（0 表示不限）",
+                "最多生效几次（0 表示不限）",
                 min_value=0,
                 max_value=100,
                 value=1 if scope == "run" else 0,
             )
-            submitted = st.form_submit_button("保存导演注", use_container_width=True)
+            submitted = st.form_submit_button("保存创作提醒", use_container_width=True)
         if submitted:
             if not content.strip():
-                st.error("请填写导演注内容。")
+                st.error("请填写具体要求。")
                 return
             resolved_scope = str(scope)
             payload = {
@@ -155,7 +159,7 @@ def render_context_directive_tools(
                     payload,
                     story_id=None if resolved_scope == "project" else story_id,
                 )
-                st.success("导演注已保存。")
+                st.success("创作提醒已保存。")
                 st.rerun()
             except Exception as exc:
-                st.error(f"导演注保存失败：{exc}")
+                st.error(f"创作提醒保存失败：{exc}")
