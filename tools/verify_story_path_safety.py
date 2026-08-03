@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 
 from tools.verify_utils import isolated_workspace
 
-from memory import (
+from novelforge.services.memory import (
     create_project,
     create_story,
     load_stories_index,

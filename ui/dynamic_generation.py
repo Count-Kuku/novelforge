@@ -5,7 +5,7 @@ import json
 
 import streamlit as st
 
-from interactive_writing import (
+from novelforge.workflows.interactive_writing import (
     accept_writing_fragment,
     active_fragment_chain,
     compile_session_text,
@@ -17,12 +17,12 @@ from interactive_writing import (
     save_writing_session_as_chapter,
     select_writing_fragment_variant,
 )
-from knowledge_quality import (
+from novelforge.domain.knowledge_quality import (
     build_pending_issue_map,
     build_pending_knowledge_quality_issues,
 )
-from knowledge_workflows import parse_comma_tags, update_pending_knowledge_item
-from memory import (
+from novelforge.domain.knowledge_workflows import parse_comma_tags, update_pending_knowledge_item
+from novelforge.services.memory import (
     KNOWLEDGE_CATEGORIES,
     confirm_pending_knowledge_items,
     discard_pending_knowledge_items,
@@ -31,7 +31,7 @@ from memory import (
     load_creative_session_bundle,
     update_creative_session,
 )
-from setting_knowledge import list_setting_items
+from novelforge.domain.setting_knowledge import list_setting_items
 from ui.common import confirmed_button, scoped_session_key, scoped_widget_key
 from ui.context_directives import render_context_directive_tools
 from ui.labels import label_knowledge_category

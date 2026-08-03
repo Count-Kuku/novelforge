@@ -5,7 +5,7 @@ import json
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     confirm_pending_knowledge_items,
     discard_pending_knowledge_items,
     load_auto_review_policy,
@@ -29,8 +29,8 @@ from memory import (
     save_setting_entities,
     save_source_package_report,
 )
-from retrieval import rebuild_retrieval_assets
-from source_workflows import (
+from novelforge.services.retrieval import rebuild_retrieval_assets
+from novelforge.workflows.source_workflows import (
     auto_confirm_pending_items_without_risk,
     build_ingestion_health_report,
     build_ingestion_source_ledger,
@@ -38,20 +38,20 @@ from source_workflows import (
     get_segment_related_knowledge_items,
     read_retrieval_source_payload,
 )
-from knowledge_entities import (
+from novelforge.domain.knowledge_entities import (
     SETTING_ENTITY_CATEGORY_GROUPS,
     build_character_entity_cards,
     build_merged_knowledge_item,
     build_setting_entity_cards,
 )
-from knowledge_quality import (
+from novelforge.domain.knowledge_quality import (
     build_pending_issue_map,
     build_pending_knowledge_quality_issues,
     find_duplicate_knowledge_groups,
     merge_list_values,
     upsert_entity_alias_group,
 )
-from knowledge_workflows import (
+from novelforge.domain.knowledge_workflows import (
     build_pending_auto_review_preview,
     build_pending_clear_plan,
     build_pending_triage_summary,

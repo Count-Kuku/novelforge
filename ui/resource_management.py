@@ -6,20 +6,20 @@ import logging
 
 import streamlit as st
 
-from memory import delete_retrieval_source_file, list_arcs, list_volumes
-from project_manager import (
+from novelforge.services.memory import delete_retrieval_source_file, list_arcs, list_volumes
+from novelforge.services.project_manager import (
     delete_chapter_bundle,
     delete_pipeline_run,
     list_chapter_inventory,
     list_project_runs,
     list_retrieval_sources,
 )
-from resource_browser import (
+from novelforge.services.resource_browser import (
     _build_resource_browser_items,
     _delete_browser_resource,
     _save_browser_resource,
 )
-from retrieval import rebuild_retrieval_assets
+from novelforge.services.retrieval import rebuild_retrieval_assets
 from ui.common import confirmed_button, navigate_to, scoped_widget_key
 from ui.labels import label_status
 from ui.resource_browser_state import (

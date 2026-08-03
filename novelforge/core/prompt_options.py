@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from schemas import PromptOption
+from novelforge.core.schemas import PromptOption
 
 
 PROMPT_OPTION_CAPABILITIES = {

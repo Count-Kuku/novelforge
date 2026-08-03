@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     delete_context_directive,
     load_context_directives,
     save_context_directive,

@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import llm  # noqa: E402
-import skills  # noqa: E402
+from novelforge.core import llm  # noqa: E402
+from novelforge.workflows import skills  # noqa: E402
 
 
 CHECKS: list[str] = []

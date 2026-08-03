@@ -5,7 +5,7 @@ import json
 
 import streamlit as st
 
-from extraction_presets import (
+from novelforge.domain.extraction_presets import (
     KNOWLEDGE_CONSOLIDATION_MODE_LABELS,
     KNOWLEDGE_EXTRACTION_EXPERT_PRESETS,
     KNOWLEDGE_EXTRACTION_MODE_HELP,
@@ -13,7 +13,7 @@ from extraction_presets import (
     KNOWLEDGE_EXTRACTION_PLAN_PRESETS,
     default_extraction_categories,
 )
-from memory import (
+from novelforge.services.memory import (
     delete_long_reference_batch,
     discard_pending_knowledge_items,
     list_long_reference_batches,
@@ -22,7 +22,7 @@ from memory import (
     save_extraction_plan_templates,
     save_long_reference_batch,
 )
-from source_workflows import (
+from novelforge.workflows.source_workflows import (
     build_extraction_coverage_report,
     consolidate_batch_pending_items,
     delete_extraction_plan_template,
@@ -34,7 +34,7 @@ from source_workflows import (
     summarize_long_reference_resume_state,
     upsert_extraction_plan_template,
 )
-from knowledge_workflows import safe_confidence
+from novelforge.domain.knowledge_workflows import safe_confidence
 from ui.common import (
     confirmed_button,
     create_batch_progress_callback,

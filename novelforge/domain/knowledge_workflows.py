@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from memory import (
+from novelforge.services.memory import (
     KNOWLEDGE_CATEGORIES,
     confirm_pending_knowledge_items_with_records,
     delete_confirmed_knowledge_item_records,
@@ -581,7 +581,7 @@ def execute_pending_clear_plan(project_name: str, plan: dict, *, note: str = "")
     archive_snapshots = list(run.get("archived_snapshots", []))
     manual_snapshots = list(run.get("manual_review_snapshots", []))
     if int(confirm_result.get("saved_count", 0)):
-        from retrieval import rebuild_retrieval_assets
+        from novelforge.services.retrieval import rebuild_retrieval_assets
 
         try:
             rebuild_retrieval_assets(project_name, build_vectors=True)

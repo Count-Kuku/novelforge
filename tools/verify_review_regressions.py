@@ -17,13 +17,12 @@ if str(ROOT) not in sys.path:
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
-import knowledge_entities
-import knowledge_quality
-import memory as memory_module
-import project_manager as project_manager_module
-import retrieval as retrieval_module
+from novelforge.domain import knowledge_entities, knowledge_quality
+import novelforge.services.memory as memory_module
+import novelforge.services.project_manager as project_manager_module
+import novelforge.services.retrieval as retrieval_module
 import storage.schema as storage_schema
-from memory import (
+from novelforge.services.memory import (
     copy_story,
     create_project,
     create_story,
@@ -54,9 +53,9 @@ from memory import (
     save_story_prompt_options,
     upsert_knowledge_category_item_record,
 )
-from project_manager import rename_project
-from retrieval import build_retrieval_index
-from source_workflows import split_long_reference_text
+from novelforge.services.project_manager import rename_project
+from novelforge.services.retrieval import build_retrieval_index
+from novelforge.workflows.source_workflows import split_long_reference_text
 from storage import open_project_db
 from storage.repositories import (
     load_knowledge_category_rows,
@@ -557,8 +556,8 @@ def _verify_retrieval_guards(failures: list[str]) -> None:
     _expect(chunk_id not in load_retrieval_vectors(project_name), "edited_chunk_invalidates_vector", failures)
 
     old_manifest = load_retrieval_manifest(project_name)
-    with patch("retrieval.list_stories", return_value=[{"story_id": "a"}, {"story_id": "b"}]), patch(
-        "retrieval._documents_from_project_files",
+    with patch("novelforge.services.retrieval.list_stories", return_value=[{"story_id": "a"}, {"story_id": "b"}]), patch(
+        "novelforge.services.retrieval._documents_from_project_files",
         side_effect=lambda _project, story_id: [] if story_id == "a" else (_ for _ in ()).throw(OSError("story b failed")),
     ):
         _expect_raises(lambda: build_retrieval_index(project_name), OSError, "partial_manifest_build_raises", failures)

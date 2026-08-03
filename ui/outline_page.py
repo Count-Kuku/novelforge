@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import load_outline, load_outline_discussion_artifact, save_outline
-from skills import (
+from novelforge.services.memory import load_outline, load_outline_discussion_artifact, save_outline
+from novelforge.workflows.skills import (
     approve_outline_discussion,
     clear_outline_discussion_approval,
     discuss_outline,

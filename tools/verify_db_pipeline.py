@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 
 from tools.verify_utils import isolated_workspace
 
-from memory import (
+from novelforge.services.memory import (
     append_auto_review_run,
     append_retrieval_eval_run,
     append_retrieval_feedback,

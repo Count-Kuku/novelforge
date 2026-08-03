@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from memory import inspect_project_database, sync_project_database_from_files
+from novelforge.services.memory import inspect_project_database, sync_project_database_from_files
 
 
 def main() -> int:

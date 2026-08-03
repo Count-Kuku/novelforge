@@ -14,13 +14,13 @@ if str(ROOT) not in sys.path:
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
-import memory as memory_module
-from knowledge_workflows import (
+import novelforge.services.memory as memory_module
+from novelforge.domain.knowledge_workflows import (
     delete_confirmed_knowledge_items,
     merge_confirmed_knowledge_items,
     save_confirmed_knowledge_item,
 )
-from memory import (
+from novelforge.services.memory import (
     create_project,
     load_knowledge_category,
     save_knowledge_category,

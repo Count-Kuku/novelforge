@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     delete_arc,
     list_arcs,
     list_volumes,
@@ -14,8 +14,8 @@ from memory import (
     save_arc_metadata,
     save_arc_outline,
 )
-from project_manager import list_chapter_inventory
-from skills import (
+from novelforge.services.project_manager import list_chapter_inventory
+from novelforge.workflows.skills import (
     approve_arc_discussion,
     clear_arc_discussion_approval,
     discuss_arc,

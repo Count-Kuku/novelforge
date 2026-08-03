@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from memory import (
+from novelforge.services.memory import (
     load_creative_profile,
     load_effective_context_directives,
     load_effective_rule_conflict_resolutions,
@@ -19,11 +19,11 @@ from memory import (
     load_story_prompt_options,
     load_story_rules,
 )
-from prompt_options import format_prompt_options_for_prompt, merge_prompt_option_layers
-from prompts import format_rules_for_prompt
-from retrieval import retrieve_context
-from schemas import ChapterWritingGuidance, ContextAssembly, ContextBlock, RetrievalHit
-from setting_knowledge import (
+from novelforge.core.prompt_options import format_prompt_options_for_prompt, merge_prompt_option_layers
+from novelforge.core.prompts import format_rules_for_prompt
+from novelforge.services.retrieval import retrieve_context
+from novelforge.core.schemas import ChapterWritingGuidance, ContextAssembly, ContextBlock, RetrievalHit
+from novelforge.domain.setting_knowledge import (
     GLOBAL_WORLDLINE_IDS,
     SETTING_FIELD_SPECS,
     build_generation_setting_context,

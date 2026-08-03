@@ -5,13 +5,13 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from context_assembly import (
+from novelforge.workflows.context_assembly import (
     assemble_generation_context,
     ensure_context_budget,
     render_context_for_prompt,
 )
-from llm import call_llm
-from memory import (
+from novelforge.core.llm import call_llm
+from novelforge.services.memory import (
     accept_creative_fragment,
     begin_creative_turn,
     complete_creative_turn,
@@ -30,12 +30,12 @@ from memory import (
     update_creative_fragment,
     update_creative_session,
 )
-from prompts import (
+from novelforge.core.prompts import (
     compile_creative_fragments_prompt,
     creative_fragment_prompt,
     creative_session_summary_prompt,
 )
-from schemas import ChapterWritingGuidance
+from novelforge.core.schemas import ChapterWritingGuidance
 
 
 LOGGER = logging.getLogger("novelforge.interactive_writing")
@@ -715,7 +715,7 @@ def extract_fragment_knowledge(
         story_id=story_id,
     )
     try:
-        from skills import extract_reference_knowledge
+        from novelforge.workflows.skills import extract_reference_knowledge
 
         extraction_step = extract_reference_knowledge(
             project_name,

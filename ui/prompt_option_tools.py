@@ -6,15 +6,15 @@ import json
 
 import streamlit as st
 
-from context_assembly import assemble_generation_context
-from memory import (
+from novelforge.workflows.context_assembly import assemble_generation_context
+from novelforge.services.memory import (
     load_global_prompt_options,
     load_project_prompt_options,
     load_story_prompt_options,
     upsert_prompt_option,
     delete_prompt_option,
 )
-from prompt_options import (
+from novelforge.core.prompt_options import (
     PROMPT_OPTION_CAPABILITIES,
     PROMPT_OPTION_CATEGORIES,
     PROMPT_OPTION_SLOTS,

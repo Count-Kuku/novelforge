@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from context_assembly import build_chapter_context_query
-from memory import (
+from novelforge.workflows.context_assembly import build_chapter_context_query
+from novelforge.services.memory import (
     load_chapter,
     load_chapter_discussion_artifact,
     load_chapter_outline,
@@ -14,9 +14,9 @@ from memory import (
     load_story_prompt_options,
     save_chapter,
 )
-from prompt_options import filter_prompt_options, merge_prompt_option_layers
-from setting_knowledge import list_setting_items
-from skills import (
+from novelforge.core.prompt_options import filter_prompt_options, merge_prompt_option_layers
+from novelforge.domain.setting_knowledge import list_setting_items
+from novelforge.workflows.skills import (
     extract_setting_candidates_from_chapter,
     generate_chapter_outline,
     get_retrieval_trace,

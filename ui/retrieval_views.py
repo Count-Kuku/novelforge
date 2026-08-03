@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import append_retrieval_feedback
-from skills import detect_potential_conflicts
+from novelforge.services.memory import append_retrieval_feedback
+from novelforge.workflows.skills import detect_potential_conflicts
 from ui.common import scoped_widget_key
 from ui.labels import label_authority, label_retrieval_mode, label_scope, label_source_type
 

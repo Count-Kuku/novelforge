@@ -5,15 +5,15 @@ import html
 
 import streamlit as st
 
-from creative_profile_workflows import (
+from novelforge.domain.creative_profile_workflows import (
     CUSTOM_OPTION_LABEL,
     build_creative_profile_from_form_values,
     build_profile_from_task_wizard,
     normalize_creative_form_state,
     recommended_workflow_for_profile,
 )
-from memory import list_stories, load_creative_profile, save_creative_profile
-from skills import (
+from novelforge.services.memory import list_stories, load_creative_profile, save_creative_profile
+from novelforge.workflows.skills import (
     discuss_creative_profile,
     discuss_creative_profile_turn,
 )

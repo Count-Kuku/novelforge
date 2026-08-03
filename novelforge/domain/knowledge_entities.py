@@ -1,8 +1,8 @@
 from hashlib import sha256
 
-from knowledge_quality import merge_list_values, merge_text_values, normalize_knowledge_match_name
-from knowledge_workflows import safe_confidence
-from memory import load_entity_aliases, load_knowledge_base
+from novelforge.domain.knowledge_quality import merge_list_values, merge_text_values, normalize_knowledge_match_name
+from novelforge.domain.knowledge_workflows import safe_confidence
+from novelforge.services.memory import load_entity_aliases, load_knowledge_base
 
 
 DEFAULT_WORLDLINE_ID = "main"

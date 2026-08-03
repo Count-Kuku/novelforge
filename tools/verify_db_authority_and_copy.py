@@ -13,7 +13,7 @@ from tools.verify_utils import isolated_workspace
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
-from memory import (  # noqa: E402
+from novelforge.services.memory import (  # noqa: E402
     auto_review_runs_path,
     conflict_resolutions_path,
     copy_story_settings,

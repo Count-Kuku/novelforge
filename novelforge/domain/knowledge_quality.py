@@ -2,8 +2,8 @@ import hashlib
 import json
 import re
 
-from knowledge_workflows import knowledge_category_label, safe_confidence
-from memory import (
+from novelforge.domain.knowledge_workflows import knowledge_category_label, safe_confidence
+from novelforge.services.memory import (
     load_entity_aliases,
     load_knowledge_base,
     save_entity_aliases,

@@ -5,13 +5,13 @@ import json
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     delete_retrieval_source_file,
     list_retrieval_source_files,
     load_conflict_resolutions,
     retrieval_sources_path,
 )
-from retrieval import (
+from novelforge.services.retrieval import (
     RETRIEVAL_TASK_PROFILES,
     debug_retrieve_context,
     inspect_retrieval_health,
@@ -19,8 +19,8 @@ from retrieval import (
     rebuild_retrieval_assets,
     retrieve_context,
 )
-from retrieval_eval import retrieval_profile_label
-from skills import detect_potential_conflicts, save_retrieval_conflict_resolution
+from novelforge.services.retrieval_eval import retrieval_profile_label
+from novelforge.workflows.skills import detect_potential_conflicts, save_retrieval_conflict_resolution
 from ui.common import confirmed_button, scoped_session_key, scoped_widget_key
 from ui.labels import (
     label_knowledge_category,

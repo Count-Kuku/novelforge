@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     list_stories,
     load_global_prompt_options,
     load_project_prompt_options,
     load_story_prompt_options,
     upsert_prompt_option,
 )
-from prompt_options import (
+from novelforge.core.prompt_options import (
     PROMPT_OPTION_CAPABILITIES,
     PROMPT_OPTION_CATEGORIES,
     builtin_prompt_options,

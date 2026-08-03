@@ -5,11 +5,11 @@ import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from extraction_presets import (
+from novelforge.domain.extraction_presets import (
     KNOWLEDGE_CONSOLIDATION_MODE_LABELS,
     KNOWLEDGE_EXTRACTION_EXPERT_PRESETS,
 )
-from knowledge_quality import (
+from novelforge.domain.knowledge_quality import (
     build_pending_issue_map,
     build_pending_knowledge_quality_issues,
     details_conflicts,
@@ -17,12 +17,12 @@ from knowledge_quality import (
     merge_list_values,
     normalize_knowledge_match_name,
 )
-from knowledge_workflows import (
+from novelforge.domain.knowledge_workflows import (
     evaluate_pending_auto_review_decision,
     safe_confidence,
     summarize_item_evidence,
 )
-from memory import (
+from novelforge.services.memory import (
     confirm_pending_knowledge_items_with_records,
     list_long_reference_batches,
     list_retrieval_source_files,
@@ -38,13 +38,13 @@ from memory import (
     save_extraction_plan_templates,
     save_long_reference_batch,
 )
-from retrieval import (
+from novelforge.services.retrieval import (
     build_structured_external_source_payload,
     ingest_external_source_file,
     rebuild_retrieval_assets,
 )
-from schemas import KNOWLEDGE_CATEGORY_LABELS, label_knowledge_category
-from skills import consolidate_extracted_knowledge, extract_reference_knowledge
+from novelforge.core.schemas import KNOWLEDGE_CATEGORY_LABELS, label_knowledge_category
+from novelforge.workflows.skills import consolidate_extracted_knowledge, extract_reference_knowledge
 
 
 LOGGER = logging.getLogger("novelforge.source_workflows")

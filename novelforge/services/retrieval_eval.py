@@ -1,5 +1,5 @@
-from memory import append_retrieval_eval_run
-from retrieval import build_retrieval_briefing, retrieve_context
+from novelforge.services.memory import append_retrieval_eval_run
+from novelforge.services.retrieval import build_retrieval_briefing, retrieve_context
 
 
 def parse_multiline_or_comma_values(value: str) -> list[str]:

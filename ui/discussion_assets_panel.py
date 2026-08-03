@@ -7,13 +7,13 @@ import logging
 
 import streamlit as st
 
-from asset_guardrails import (
+from novelforge.core.asset_guardrails import (
     analyze_prompt_option_candidate,
     analyze_rule_candidate,
     analyze_setting_candidate,
 )
-from discussion_assets import build_discussion_asset_candidates
-from memory import (
+from novelforge.domain.discussion_assets import build_discussion_asset_candidates
+from novelforge.services.memory import (
     load_global_prompt_options,
     load_global_rules,
     load_project_prompt_options,
@@ -22,9 +22,9 @@ from memory import (
     load_story_rules,
     upsert_prompt_option,
 )
-from prompt_options import merge_prompt_option_layers
-from setting_knowledge import SETTING_FIELD_SPECS, list_setting_items, upsert_setting_item
-from skills import save_rule_text
+from novelforge.core.prompt_options import merge_prompt_option_layers
+from novelforge.domain.setting_knowledge import SETTING_FIELD_SPECS, list_setting_items, upsert_setting_item
+from novelforge.workflows.skills import save_rule_text
 from ui.common import scoped_widget_key
 from ui.labels import label_knowledge_category
 from ui.prompt_option_tools import _prompt_option_label

@@ -2,13 +2,13 @@ import importlib
 
 import streamlit as st
 
-import memory as memory_module
+import novelforge.services.memory as memory_module
 memory_module = importlib.reload(memory_module)
 list_projects = memory_module.list_projects
-import project_manager as project_manager_module
+import novelforge.services.project_manager as project_manager_module
 project_manager_module = importlib.reload(project_manager_module)
-import skills as skills_module
-from setting_knowledge import build_generation_setting_context
+import novelforge.workflows.skills as skills_module
+from novelforge.domain.setting_knowledge import build_generation_setting_context
 from ui.evaluation import render_evaluation_page
 from ui.dynamic_generation import render_dynamic_generation_page
 from ui.discussion_assets_panel import render_discussion_asset_candidates
@@ -51,10 +51,10 @@ from ui.rules_page import render_rules_page
 
 def _reload_live_ui_modules() -> dict[str, object]:
     global list_projects
-    memory_helpers = importlib.reload(memory_module)
+    memory_helpers = memory_module.reload_implementation_modules()
     list_projects = memory_helpers.list_projects
     importlib.reload(project_manager_module)
-    importlib.reload(skills_module)
+    skills_module.reload_implementation_modules()
     importlib.reload(ui_streaming)
     importlib.reload(ui_resource_browser_state)
     layout_helpers = importlib.reload(ui_layout)

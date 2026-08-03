@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from memory import (
+from novelforge.services.memory import (
     GENERATION_CONTEXT_SNAPSHOT_ASSET_TYPE,
     delete_arc,
     delete_arc_chapter_plan,
@@ -34,7 +34,7 @@ from memory import (
     save_volume_metadata,
     save_volume_outline,
 )
-from project_manager import (
+from novelforge.services.project_manager import (
     delete_analysis_report,
     delete_chapter_content as delete_chapter_content_resource,
     delete_chapter_outline,
@@ -52,9 +52,9 @@ from project_manager import (
     save_retrieval_source_content,
     save_review_resources,
 )
-from retrieval import rebuild_retrieval_assets
-from schemas import label_knowledge_category
-from skills import (
+from novelforge.services.retrieval import rebuild_retrieval_assets
+from novelforge.core.schemas import label_knowledge_category
+from novelforge.workflows.skills import (
     clear_arc_discussion_approval,
     clear_chapter_discussion_approval,
     clear_creative_profile_discussion_approval,

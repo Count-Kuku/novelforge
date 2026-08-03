@@ -120,28 +120,6 @@ New-Item -ItemType Directory -Path $PortableRoot | Out-Null
 
 $filesToCopy = @(
     "app.py",
-    "asset_guardrails.py",
-    "creative_profile_workflows.py",
-    "context_assembly.py",
-    "interactive_writing.py",
-    "discussion_assets.py",
-    "extraction_presets.py",
-    "knowledge_entities.py",
-    "knowledge_quality.py",
-    "knowledge_workflows.py",
-    "llm.py",
-    "memory.py",
-    "merge.py",
-    "retrieval.py",
-    "retrieval_eval.py",
-    "resource_browser.py",
-    "schemas.py",
-    "setting_knowledge.py",
-    "prompts.py",
-    "prompt_options.py",
-    "skills.py",
-    "source_workflows.py",
-    "project_manager.py",
     "launcher.py",
     "NovelForge.spec",
     "requirements.txt",
@@ -160,6 +138,7 @@ foreach ($relativePath in $filesToCopy) {
 
 $directoriesToCopy = @(
     "docs",
+    "novelforge",
     "storage",
     "tools",
     "ui"

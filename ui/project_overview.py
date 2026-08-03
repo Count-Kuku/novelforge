@@ -5,8 +5,8 @@ import html
 
 import streamlit as st
 
-from project_manager import delete_project, get_project_summary, rename_project
-from memory import set_active_project_name
+from novelforge.services.project_manager import delete_project, get_project_summary, rename_project
+from novelforge.services.memory import set_active_project_name
 from ui.common import render_quick_action
 from ui.layout import render_section_heading
 from ui.resource_browser_state import render_resource_metric_link

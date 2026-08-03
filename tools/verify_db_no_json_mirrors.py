@@ -27,8 +27,8 @@ def main() -> int:
     os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
     try:
         os.chdir(workspace)
-        import memory as memory_module
-        from memory import (
+        from novelforge.services import memory as memory_module
+        from novelforge.services.memory import (
             GLOBAL_PROMPT_OPTIONS_PATH,
             GLOBAL_RULE_CONFLICT_RESOLUTIONS_PATH,
             GLOBAL_RULES_PATH,

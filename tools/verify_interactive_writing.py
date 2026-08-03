@@ -13,9 +13,9 @@ if str(ROOT) not in sys.path:
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
-import interactive_writing
-from context_assembly import render_context_for_prompt
-from memory import (
+from novelforge.workflows import interactive_writing
+from novelforge.workflows.context_assembly import render_context_for_prompt
+from novelforge.services.memory import (
     begin_creative_turn,
     confirm_pending_knowledge_items,
     copy_story,
@@ -32,9 +32,9 @@ from memory import (
     save_context_directive,
     update_creative_session,
 )
-from setting_knowledge import upsert_setting_item
+from novelforge.domain.setting_knowledge import upsert_setting_item
 from storage import open_project_db
-from memory import project_path
+from novelforge.services.memory import project_path
 from tools.verify_utils import isolated_workspace
 
 
@@ -197,7 +197,7 @@ def verify() -> None:
         check("创作前沿" in str(exc), "会话内禁止回退已确认事实建立污染知识的旧节点分支")
     else:
         raise AssertionError("会话允许从旧已接受节点创建分支")
-    with patch("skills.extract_reference_knowledge", return_value=_extraction_result()):
+    with patch("novelforge.workflows.skills.extract_reference_knowledge", return_value=_extraction_result()):
         extraction = interactive_writing.extract_fragment_knowledge(
             project_name,
             story_id,

@@ -15,7 +15,7 @@ from tools.verify_utils import isolated_workspace, retry_unlink
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "1"
 
-from memory import (
+from novelforge.services.memory import (
     _project_prompt_options_path,
     _story_chapter_summaries_path,
     _story_prompt_options_path,
@@ -112,8 +112,8 @@ from memory import (
     stories_index_path,
     upsert_retrieval_eval_case,
 )
-from project_manager import list_chapter_inventory, list_project_runs
-from retrieval import rebuild_retrieval_assets
+from novelforge.services.project_manager import list_chapter_inventory, list_project_runs
+from novelforge.services.retrieval import rebuild_retrieval_assets
 
 
 def _project_name_from_args() -> str:

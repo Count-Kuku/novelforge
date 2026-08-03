@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     list_arcs,
     list_volumes,
     load_arc_discussion_artifact,
@@ -16,7 +16,7 @@ from memory import (
     save_chapter_outline,
     save_chapter_outline_metadata,
 )
-from skills import (
+from novelforge.workflows.skills import (
     approve_chapter_discussion,
     clear_chapter_discussion_approval,
     discuss_chapter,

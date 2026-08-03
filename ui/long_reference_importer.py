@@ -6,14 +6,14 @@ import html
 
 import streamlit as st
 
-from extraction_presets import (
+from novelforge.domain.extraction_presets import (
     KNOWLEDGE_EXTRACTION_EXPERT_PRESETS,
     KNOWLEDGE_EXTRACTION_MODE_HELP,
     KNOWLEDGE_EXTRACTION_MODE_LABELS,
     default_extraction_categories,
 )
-from memory import create_long_reference_batch, load_long_reference_batch
-from source_workflows import (
+from novelforge.services.memory import create_long_reference_batch, load_long_reference_batch
+from novelforge.workflows.source_workflows import (
     calculate_text_fingerprint,
     consolidate_batch_pending_items,
     decode_uploaded_text,

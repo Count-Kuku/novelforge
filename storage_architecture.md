@@ -191,7 +191,7 @@ storage/
 * `storage/db.py`：连接、事务、路径、PRAGMA 设置。
 * `storage/schema.py`：当前 schema 版本、初始化、迁移入口。
 * `repositories/*.py`：封装 SQL，不让 UI 和 workflow 模块直接拼 SQL。
-* `memory.py`：短期内保留为兼容 facade，逐步改为调用 repository。
+* `novelforge/services/memory/`：作为兼容 facade，按领域切片调用 repository。
 
 推荐 SQLite PRAGMA：
 
@@ -752,7 +752,7 @@ format prompt context
 * 项目 metadata 入库。
 * story index 入库。
 * outline/chapter/review/analysis 等文件通过 `asset_files` 登记。
-* `memory.py` 暂时提供兼容返回格式。
+* `novelforge/services/memory/` 暂时提供兼容返回格式。
 
 验收：
 
@@ -786,7 +786,7 @@ format prompt context
 当前落地状态：
 
 * confirmed structured knowledge、pending knowledge、entity aliases 已支持写入 `project.db`。
-* `memory.py` 的 confirmed knowledge、pending knowledge、entity aliases 读取入口已改为 DB-first。
+* `novelforge/services/memory/` 的 confirmed knowledge、pending knowledge、entity aliases 读取入口已改为 DB-first。
 * 如果旧项目数据库为空但 JSON 文件里仍有数据，读取入口会回退 JSON 并尝试回填数据库，避免旧项目突然读空。
 * `sync_project_db.py` 仍明确从 JSON / Markdown 文件回填数据库，可作为修复或一次性迁移工具。
 
@@ -869,9 +869,9 @@ format prompt context
 当前落地状态：
 
 * workflow run snapshots 已支持写入 `workflow_runs/workflow_steps` 并 DB-first 读取、列出。
-* `project_manager.py` 的 workflow run 列表、章节清单中的 review/evaluation JSON 状态、以及对应删除操作已切到 DB-first；删除兼容 JSON 镜像后仍能从 `workflow_runs` 和 `asset_payloads` 恢复项目管理视图。
-* `retrieval.py` 重建检索 manifest 时已从 `asset_payloads` 读取 review/evaluation payload 和 chapter discussion payload；删除兼容 JSON 镜像后，这些结构化工件仍会进入 RAG 文档。
-* `resource_browser.py` 依赖的 retrieval source 列表已通过 `project_manager.py` 改为 `source_documents` DB-first，文件资产仍负责保存外部源正文。
+* `novelforge/services/project_manager.py` 的 workflow run 列表、章节清单中的 review/evaluation JSON 状态、以及对应删除操作已切到 DB-first；删除兼容 JSON 镜像后仍能从 `workflow_runs` 和 `asset_payloads` 恢复项目管理视图。
+* `novelforge/services/retrieval/` 重建检索 manifest 时已从 `asset_payloads` 读取 review/evaluation payload 和 chapter discussion payload；删除兼容 JSON 镜像后，这些结构化工件仍会进入 RAG 文档。
+* `novelforge/services/resource_browser.py` 依赖的 retrieval source 列表已通过 `novelforge/services/project_manager.py` 改为 `source_documents` DB-first，文件资产仍负责保存外部源正文。
 * `list_volumes/list_arcs/list_chapter_inventory` 已能从 `asset_files/asset_payloads` 发现 volume、arc、chapter 元数据记录，不再要求对应 JSON 镜像文件存在。
 * `verify_db_first_reads.py` 已覆盖 discussion artifacts、volume/arc/chapter metadata、arc chapter plan、project/story rule conflict resolutions 等小型 JSON 工件的 DB-first 读取。
 * discussion artifacts、arc chapter plan、long reference batches、retrieval source registry 的删除函数已支持 DB-only 软删除；`verify_db_delete_semantics.py` 用于验证删除 JSON/文件镜像后仍能删除数据库记录。
@@ -1031,7 +1031,7 @@ $env:NOVELFORGE_WRITE_JSON_MIRRORS='1'
 .\.venv\Scripts\python.exe tools\verify_db_first_reads.py
 ```
 
-该脚本会创建 `_db_first_verify_*` 验证项目，先写入数据库和 JSON 镜像，再删除该验证项目内的兼容 JSON 镜像，最后从公开读取函数和 `project_manager.py` 列表函数读回数据。它只允许操作 `_db_first_verify_` 前缀项目，避免误删真实项目文件。
+该脚本会创建 `_db_first_verify_*` 验证项目，先写入数据库和 JSON 镜像，再删除该验证项目内的兼容 JSON 镜像，最后从公开读取函数和 `novelforge/services/project_manager.py` 列表函数读回数据。它只允许操作 `_db_first_verify_` 前缀项目，避免误删真实项目文件。
 
 如果需要验证 DB-only 删除语义，可以运行：
 

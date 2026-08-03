@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     delete_volume,
     list_volumes,
     load_volume_discussion_artifact,
@@ -12,7 +12,7 @@ from memory import (
     save_volume_metadata,
     save_volume_outline,
 )
-from skills import (
+from novelforge.workflows.skills import (
     approve_volume_discussion,
     clear_volume_discussion_approval,
     discuss_volume,

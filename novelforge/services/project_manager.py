@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from memory import (
+from novelforge.services.memory import (
     BASE_DIR,
     DELETED_PROJECTS_DIR,
     list_arcs,
@@ -381,7 +381,7 @@ def save_review_resources(project_name: str, chapter_no: int, markdown: str, jso
 
 def save_analysis_resource(project_name: str, analysis_type: str, chapter_no: int, markdown: str, story_id: str = "default"):
     if analysis_type == "source_package" and chapter_no <= 0:
-        from memory import save_source_package_report
+        from novelforge.services.memory import save_source_package_report
 
         save_source_package_report(project_name, markdown)
     else:
@@ -462,7 +462,7 @@ def delete_chapter_bundle(project_name: str, chapter_no: int, *, remove_summary:
     }
 
     if remove_summary:
-        from memory import load_story_chapter_summaries, save_story_chapter_summaries
+        from novelforge.services.memory import load_story_chapter_summaries, save_story_chapter_summaries
 
         original = load_story_chapter_summaries(project_name, story_id)
         summaries = [
@@ -723,8 +723,8 @@ def load_text_file(path: Path, fallback: str = "") -> str:
 
 def get_project_summary(project_name: str, story_id: str = "default") -> dict:
     base = _project_dir(project_name)
-    from memory import load_story_chapter_summaries
-    from setting_knowledge import build_generation_setting_context
+    from novelforge.services.memory import load_story_chapter_summaries
+    from novelforge.domain.setting_knowledge import build_generation_setting_context
 
     memory = build_generation_setting_context(project_name, story_id)
     knowledge_base = load_knowledge_base(project_name)

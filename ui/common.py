@@ -6,7 +6,7 @@ import html
 
 import streamlit as st
 
-from creative_profile_workflows import CUSTOM_OPTION_LABEL
+from novelforge.domain.creative_profile_workflows import CUSTOM_OPTION_LABEL
 
 def create_batch_progress_callback(title: str):
     progress_bar = st.progress(0)

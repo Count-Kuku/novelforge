@@ -214,45 +214,25 @@ Streamlit Entrypoint / Router
 UI Page and Component Layer
 (ui/*)
 |
-Creative Profile Workflow Layer
-(creative_profile_workflows.py)
+Application Workflow Layer
+(novelforge/workflows/*)
 |
-Source Workflow Layer
-(source_workflows.py)
+Domain Layer
+(novelforge/domain/*)
 |
-Resource Browser Data Layer
-(resource_browser.py)
+Service Layer
+(novelforge/services/*)
 |
-Knowledge Workflow Layer
-(knowledge_workflows.py)
-|
-Knowledge Quality Layer
-(knowledge_quality.py)
-|
-Knowledge Entity Layer
-(knowledge_entities.py)
-|
-Skill Layer
-(skills.py)
-|
-Prompt Layer
-(prompts.py)
-|
-LLM Interface
-(llm.py)
+Core Models / Prompts / LLM
+(novelforge/core/*)
 |
 OpenAI-compatible API endpoint
 |
-Memory Layer
-(memory.py)
-|
 Project Storage
+(`storage/*` through `novelforge.services.memory`)
 |
 Prompt Rules
 (global + project scoped)
-|
-Retrieval Layer
-(retrieval.py)
 ```
 
 ---
@@ -262,6 +242,28 @@ Retrieval Layer
 ```text
 novelforge/
 |-- app.py
+|-- launcher.py
+|-- novelforge/
+|   |-- core/
+|   |   |-- llm.py
+|   |   |-- prompts.py
+|   |   |-- schemas.py
+|   |   `-- prompt_options.py
+|   |-- domain/
+|   |   |-- setting_knowledge.py
+|   |   |-- knowledge_workflows.py
+|   |   |-- knowledge_quality.py
+|   |   `-- knowledge_entities.py
+|   |-- services/
+|   |   |-- memory/
+|   |   |-- retrieval/
+|   |   |-- project_manager.py
+|   |   `-- resource_browser.py
+|   `-- workflows/
+|       |-- skills/
+|       |-- context_assembly.py
+|       |-- interactive_writing.py
+|       `-- source_workflows.py
 |-- ui/
 |   |-- app_shell.py
 |   |-- navigation.py
@@ -274,29 +276,11 @@ novelforge/
 |   |-- retrieval_views.py
 |   |-- *_page.py
 |   `-- resource_browser_state.py
-|-- llm.py
-|-- memory.py
-|-- retrieval.py
-|-- context_assembly.py
-|-- interactive_writing.py
-|-- merge.py
-|-- schemas.py
-|-- setting_knowledge.py
-|-- prompts.py
-|-- prompt_options.py
-|-- discussion_assets.py
-|-- asset_guardrails.py
-|-- skills.py
-|-- knowledge_workflows.py
-|-- knowledge_quality.py
-|-- knowledge_entities.py
-|-- source_workflows.py
-|-- resource_browser.py
-|-- extraction_presets.py
-|-- creative_profile_workflows.py
-|-- retrieval_eval.py
+|-- storage/
+|-- tools/
 |-- docs/
 |   |-- app_decomposition_plan.md
+|   |-- package_refactor.md
 |   `-- sillytavern_reference_update_plan.md
 |-- requirements.txt
 |-- .env
@@ -305,7 +289,6 @@ novelforge/
 |-- README.en.md
 |-- project.md
 |-- VERSION
-|-- launcher.py
 |-- NovelForge.spec
 |-- build_release.ps1
 |-- data/
@@ -369,7 +352,7 @@ Current status after the UI split:
 * `app.py` is roughly a routing shell and imports page renderers from `ui/`
 * Major page families now live under `ui/`: app shell/navigation, layout, labels, common widgets, step views, discussion helpers, planning pages, creative profile, chapter/content generation, free writing, evaluation, retrieval center, retrieval ingestion, long-reference import/batch management, knowledge review/organization, settings, resource management, rules, prompt options, and project overview
 * Streamlit widget keys were preserved where practical during extraction to avoid avoidable session-state churn
-* Non-UI workflow decisions remain in existing workflow/domain modules such as `knowledge_workflows.py`, `knowledge_quality.py`, `knowledge_entities.py`, `source_workflows.py`, `resource_browser.py`, `creative_profile_workflows.py`, `setting_knowledge.py`, and `retrieval_eval.py`
+* Non-UI workflow decisions remain in existing workflow/domain modules such as `novelforge/domain/knowledge_workflows.py`, `novelforge/domain/knowledge_quality.py`, `novelforge/domain/knowledge_entities.py`, `novelforge/workflows/source_workflows.py`, `novelforge/services/resource_browser.py`, `novelforge/domain/creative_profile_workflows.py`, `novelforge/domain/setting_knowledge.py`, and `novelforge/services/retrieval_eval.py`
 
 ---
 
@@ -401,7 +384,7 @@ Current split highlights:
 
 ---
 
-## knowledge_workflows.py
+## novelforge/domain/knowledge_workflows.py
 
 Pending structured-knowledge workflow logic.
 
@@ -424,7 +407,7 @@ Design purpose:
 
 ---
 
-## knowledge_quality.py
+## novelforge/domain/knowledge_quality.py
 
 Structured-knowledge quality and matching logic.
 
@@ -443,7 +426,7 @@ Design purpose:
 
 ---
 
-## knowledge_entities.py
+## novelforge/domain/knowledge_entities.py
 
 Structured-knowledge entity-card aggregation.
 
@@ -462,7 +445,7 @@ Design purpose:
 
 ---
 
-## source_workflows.py
+## novelforge/workflows/source_workflows.py
 
 Source ingestion and long-reference processing logic.
 
@@ -483,7 +466,7 @@ Design purpose:
 
 ---
 
-## resource_browser.py
+## novelforge/services/resource_browser.py
 
 Resource browser data and persistence support.
 
@@ -501,7 +484,7 @@ Design purpose:
 
 ---
 
-## extraction_presets.py
+## novelforge/domain/extraction_presets.py
 
 Source extraction presets.
 
@@ -518,7 +501,7 @@ Design purpose:
 
 ---
 
-## prompt_options.py
+## novelforge/core/prompt_options.py
 
 User-editable prompt option engine.
 
@@ -539,7 +522,7 @@ Design purpose:
 
 ---
 
-## creative_profile_workflows.py
+## novelforge/domain/creative_profile_workflows.py
 
 Creative-profile configuration rules.
 
@@ -557,7 +540,7 @@ Design purpose:
 
 ---
 
-## setting_knowledge.py
+## novelforge/domain/setting_knowledge.py
 
 Unified core-setting knowledge helpers.
 
@@ -576,7 +559,7 @@ Design purpose:
 
 ---
 
-## discussion_assets.py
+## novelforge/domain/discussion_assets.py
 
 Discussion-to-asset candidate builder.
 
@@ -594,7 +577,7 @@ Design purpose:
 
 ---
 
-## asset_guardrails.py
+## novelforge/core/asset_guardrails.py
 
 Reusable candidate safety checks for discussion-derived assets.
 
@@ -611,7 +594,7 @@ Design purpose:
 
 ---
 
-## retrieval_eval.py
+## novelforge/services/retrieval_eval.py
 
 Retrieval evaluation execution logic.
 
@@ -676,7 +659,7 @@ Related packaging note:
 
 ---
 
-## llm.py
+## novelforge/core/llm.py
 
 Model abstraction layer.
 
@@ -726,7 +709,7 @@ Only this file should need modification when switching models.
 
 ---
 
-## memory.py
+## novelforge/services/memory/
 
 Persistence layer.
 
@@ -789,7 +772,7 @@ Responsibilities:
 Current storage note:
 
 * `memory.json` is no longer the primary storage layer for stable settings. It is intentionally slimmed to project metadata such as title and genre.
-* Stable settings are managed as structured knowledge through `setting_knowledge.py`, with legacy memory-shaped dictionaries assembled only as compatibility views for prompt builders.
+* Stable settings are managed as structured knowledge through `novelforge/domain/setting_knowledge.py`, with legacy memory-shaped dictionaries assembled only as compatibility views for prompt builders.
 * Structured data is SQLite-first as of schema version 7: project-local data is read from `project.db` first, including stories, story profiles, project/story rules, prompt options, structured knowledge, pending knowledge, aliases, source batches, retrieval source registry, retrieval manifest/chunks/vectors, retrieval feedback/evals, conflict resolutions, workflow run snapshots, free-writing sessions/turns/fragments, project-manager run/inventory listings, RAG rebuild inputs for review/evaluation/discussion payloads, volume/arc/chapter metadata discovery, DB-only deletion for small JSON artifacts, and small JSON artifacts in `asset_payloads`; global data is read from `global.db` first, including LLM profiles, global rules, global prompt options, and global rule conflict resolutions. Schema version 5 adds active asset uniqueness indexes for both project-level and story-level assets; schema version 6 separates a prompt option's user-facing logical ID from its scope/story-specific storage ID so intentional overrides cannot move rows across stories; schema version 7 adds the persistent free-writing state model. Legacy JSON files are compatibility mirrors and backfill sources.
 * Structured JSON compatibility mirrors are disabled by default. Set `NOVELFORGE_WRITE_JSON_MIRRORS=1` before launching the app or tools only when temporary legacy JSON mirror output is needed. SQLite remains authoritative; old JSON can still be read as fallback/backfill until the corresponding structured resource is saved again, at which point that stale mirror is removed. Markdown/TXT long-text assets remain file-backed.
 * In the default no-JSON-mirror mode, SQLite is required rather than best-effort: database read/write/delete failures raise errors so structured data is not silently lost.
@@ -798,7 +781,7 @@ No LLM logic should exist here.
 
 ---
 
-## merge.py
+## novelforge/core/merge.py
 
 Settings merge engine.
 
@@ -815,13 +798,13 @@ Design purpose:
 
 Current merge usage:
 
-* `build_merge_plan()` is called from `memory.py` and `app.py` for settings copy/import workflows
+* `build_merge_plan()` is called from `novelforge/services/memory/` and `app.py` for settings copy/import workflows
 * The merge plan is rendered as an interactive preview in the settings UI, allowing per-field resolution before applying
 * `merge_story_to_project_memory()` and `merge_project_to_story_memory()` both use `build_merge_plan` for consistent conflict detection, with dedup-aware list merging via `_merge_list_values()`
 
 ---
 
-## schemas.py
+## novelforge/core/schemas.py
 
 Pydantic schema layer.
 
@@ -851,7 +834,7 @@ Design purpose:
 
 ---
 
-## context_assembly.py
+## novelforge/workflows/context_assembly.py
 
 Generation-context orchestration layer.
 
@@ -864,29 +847,29 @@ Responsibilities:
 * Produce a stable fingerprint for preview comparison, saved-generation auditing, and future candidate variants
 * Render the exact included context blocks used by chapter drafting
 
-Persistence remains in `memory.py`: director notes use `context_directive` asset payloads, and successful saved drafts create `generation_context_snapshot` payloads.
+Persistence remains in `novelforge/services/memory/`: director notes use `context_directive` asset payloads, and successful saved drafts create `generation_context_snapshot` payloads.
 
 ---
 
-## interactive_writing.py
+## novelforge/workflows/interactive_writing.py
 
 Iterative free-writing service layer.
 
 Responsibilities:
 
 * Preserve the one-prompt quick-generation path while allowing later continuation, rewrite, and current-frontier candidate branching
-* Build the active fragment chain and inject recent fragments plus rolling session summaries through `context_assembly.py`
+* Build the active fragment chain and inject recent fragments plus rolling session summaries through `novelforge/workflows/context_assembly.py`
 * Keep model calls outside storage transactions while recording running, completed, failed, and stale-interrupted turns
 * Accept or switch same-parent candidate fragments without letting abandoned candidates enter the active branch
 * Extract structured knowledge only from accepted/finalized fragments and enqueue it through the existing pending-knowledge workflow
 * Compile only newly accepted active-branch fragments into chapters, protect existing chapter content from implicit overwrite, and finalize session state
 * Keep retrieval and extraction implementations behind existing public interfaces so later vector-store or extraction-policy changes do not require session migrations
 
-Persistence stays behind `memory.py` and `storage/repositories/creative_sessions.py`; Streamlit code only orchestrates user actions and renders results.
+Persistence stays behind `novelforge/services/memory/` and `storage/repositories/creative_sessions.py`; Streamlit code only orchestrates user actions and renders results.
 
 ---
 
-## retrieval.py
+## novelforge/services/retrieval/
 
 Retrieval and indexing layer.
 
@@ -937,7 +920,7 @@ Current retrieval design notes:
 
 ---
 
-## prompts.py
+## novelforge/core/prompts.py
 
 Prompt template layer.
 
@@ -976,7 +959,7 @@ Prompt engineering should be isolated here.
 
 ---
 
-## skills.py
+## novelforge/workflows/skills/
 
 Skill execution layer.
 
@@ -1133,7 +1116,7 @@ If JSON validation fails:
 ↓
 return rejected result without modifying confirmed knowledge
 
-Validation is performed through `schemas.py`.
+Validation is performed through `novelforge/core/schemas.py`.
 
 The step now returns a structured result object:
 
@@ -1164,7 +1147,7 @@ reviews/chapter_xxx.md
 ↓
 reviews/chapter_xxx.json
 
-Validation is performed through `schemas.py` before save.
+Validation is performed through `novelforge/core/schemas.py` before save.
 
 The step now returns a structured result object:
 
@@ -1454,7 +1437,7 @@ Current prompt option schema:
 Usage notes:
 
 * Prompt options are stored at three editable levels: `data/prompt_options.json`, `data/projects/{project_name}/prompt_options.json`, and `data/projects/{project_name}/stories/{story_id}/prompt_options.json`
-* Built-in options are defined in `prompt_options.py`; they are visible in the UI but disabled by default until copied or explicitly selected
+* Built-in options are defined in `novelforge/core/prompt_options.py`; they are visible in the UI but disabled by default until copied or explicitly selected
 * Merge order is built-in → global → project → story, with later layers overriding earlier entries by `id`
 * Active options are injected after layered rules and creative-profile context, but before fixed output-format requirements in the concrete prompt templates
 * Discussion pages can derive candidate prompt options from the structured discussion result; candidates only become active after the user saves them
@@ -1471,7 +1454,7 @@ Current `memory.json` storage is intentionally small:
 "genre": ""
 }
 
-Compatibility views returned by `load_memory()` / `load_story_memory()` still include legacy fields such as `world`, `characters`, `timeline`, and `active_constraints` so older prompt builders and migration helpers do not break. New stable settings should be written as structured knowledge items through `setting_knowledge.py`.
+Compatibility views returned by `load_memory()` / `load_story_memory()` still include legacy fields such as `world`, `characters`, `timeline`, and `active_constraints` so older prompt builders and migration helpers do not break. New stable settings should be written as structured knowledge items through `novelforge/domain/setting_knowledge.py`.
 
 Structured core settings use a strict scope contract:
 
@@ -1586,7 +1569,7 @@ Current implementation status:
 * Implemented: chapter-level consistency / character / timeline / foreshadowing analysis
 * Implemented: persistent Markdown analysis reports under project storage
 * Implemented: review page result refresh fix for Streamlit session state behavior
-* Implemented: `schemas.py` Pydantic schema layer for review, setting extraction, and analysis outputs
+* Implemented: `novelforge/core/schemas.py` Pydantic schema layer for review, setting extraction, and analysis outputs
 * Implemented: schema-validated JSON-to-Markdown rendering pipeline for analysis results
 * Implemented: unified workflow step result contract for outline / chapter outline / writing / review / setting extraction / pipeline
 * Implemented: unified workflow step result contract for consistency / character / timeline / foreshadowing analysis
@@ -1636,7 +1619,7 @@ Current implementation status:
 * Implemented: lexical scoped retrieval with prompt injection across major skills
 * Implemented: in-app source ingestion page for importing and structuring external material
 * Implemented: in-app retrieval center for index rebuild, source management, retrieval preview, debug inspection, and conflict handling
-* Implemented: project-scoped embedding generation via `llm.py`
+* Implemented: project-scoped embedding generation via `novelforge/core/llm.py`
 * Implemented: embedding-backed `vectors.json` storage for semantic retrieval
 * Implemented: lexical / semantic / hybrid retrieval modes with score breakdown in UI
 * Implemented: keyword-only and full-index rebuild controls in the retrieval center
@@ -1826,17 +1809,17 @@ Metrics:
 
 1. Do not place complex business logic inside app.py
 
-2. New writing abilities should be added as Skills
+2. New writing abilities should be added under `novelforge/workflows/skills/`
 
-3. New prompts belong in prompts.py
+3. New prompts belong in `novelforge/core/prompts.py`
 
-4. New persistence logic belongs in memory.py
+4. New persistence logic belongs in `novelforge/services/` or `storage/`; keep the `memory` facade stable
 
-5. Model changes should happen only in llm.py
+5. Model changes should happen only in `novelforge/core/llm.py`
 
 6. All generated content should be persistable
 
-6.5. Structured LLM outputs should be defined in `schemas.py` before adding custom parsing logic
+6.5. Structured LLM outputs should be defined in `novelforge/core/schemas.py` before adding custom parsing logic
 
 7. Maintain backward compatibility with existing project data
 
@@ -1864,6 +1847,8 @@ Metrics:
 
 19. Project- or story-specific Streamlit state must use scoped widget/session keys, such as `scoped_widget_key` or `scoped_session_key`, so switching projects or stories cannot leak prompts, discussion messages, generation results, or editor state across contexts.
 
+20. Do not add business modules to the repository root. Follow the package boundaries documented in `docs/package_refactor.md`.
+
 ---
 
 # Known Technical Debt
@@ -1874,9 +1859,9 @@ The following items are acknowledged departures from the design philosophy and a
 
 2. **Duplicate code patterns exist across discussion/render functions.** Outline, volume, arc, and chapter discussion pages share ~70% of their structure. A shared discussion render helper would reduce maintenance cost.
 
-3. **Legacy creative-task-wizard compatibility UI remains available from `ui.creative_profile_page`.** The separate user-facing wizard has been superseded by the consolidated creative profile page. The payload builder lives in `creative_profile_workflows.py`, but the compatibility renderer should eventually be removed or folded fully into the current discussion-assisted profile flow.
+3. **Legacy creative-task-wizard compatibility UI remains available from `ui.creative_profile_page`.** The separate user-facing wizard has been superseded by the consolidated creative profile page. The payload builder lives in `novelforge/domain/creative_profile_workflows.py`, but the compatibility renderer should eventually be removed or folded fully into the current discussion-assisted profile flow.
 
-4. **Entity save functions in memory.py are structurally identical** (`save_character_entities`, `save_setting_entities`, `save_entity_aliases`, `save_extraction_plan_templates`). A parametrized `_save_entity_list(path, items)` helper would eliminate the duplication.
+4. **Some entity save functions in the memory service remain structurally similar** (`save_character_entities`, `save_setting_entities`, `save_entity_aliases`, `save_extraction_plan_templates`). They now live in `novelforge/services/memory/knowledge.py`; a parametrized helper can remove the remaining duplication later.
 
 5. **launcher.py currently has limited cross-platform support.** The Python executable resolution defaults to Windows paths; Linux/macOS fall back to `sys.executable`. A proper multi-platform venv resolution is pending.
 
@@ -1912,35 +1897,35 @@ Read files in the following order:
 
 8. The specific `ui/*` page module relevant to the change
 
-9. knowledge_workflows.py
+9. novelforge/domain/knowledge_workflows.py
 
-10. knowledge_quality.py
+10. novelforge/domain/knowledge_quality.py
 
-11. knowledge_entities.py
+11. novelforge/domain/knowledge_entities.py
 
-12. source_workflows.py
+12. novelforge/workflows/source_workflows.py
 
-13. resource_browser.py
+13. novelforge/services/resource_browser.py
 
-14. extraction_presets.py
+14. novelforge/domain/extraction_presets.py
 
-15. creative_profile_workflows.py
+15. novelforge/domain/creative_profile_workflows.py
 
-16. setting_knowledge.py
+16. novelforge/domain/setting_knowledge.py
 
-17. retrieval_eval.py
+17. novelforge/services/retrieval_eval.py
 
-18. skills.py
+18. novelforge/workflows/skills/
 
-19. memory.py
+19. novelforge/services/memory/
 
-20. prompts.py
+20. novelforge/core/prompts.py
 
-21. prompt_options.py
+21. novelforge/core/prompt_options.py
 
-22. asset_guardrails.py
+22. novelforge/core/asset_guardrails.py
 
-23. llm.py
+23. novelforge/core/llm.py
 
 
 When implementing new features:

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     add_rule_conflict_resolution,
     delete_rule_conflict_resolution,
     load_global_rules,
@@ -21,7 +21,7 @@ from memory import (
     save_project_rules,
     save_story_rules,
 )
-from skills import save_rule_text
+from novelforge.workflows.skills import save_rule_text
 
 RULE_SCOPE_OPTIONS = {
     "all": "通用",

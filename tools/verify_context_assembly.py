@@ -12,15 +12,15 @@ if str(ROOT) not in sys.path:
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
-import skills
-from context_assembly import (
+from novelforge.workflows import skills
+from novelforge.workflows.context_assembly import (
     _apply_context_budget,
     assemble_generation_context,
     build_chapter_context_query,
     ensure_context_budget,
     render_context_for_prompt,
 )
-from memory import (
+from novelforge.services.memory import (
     GENERATION_CONTEXT_SNAPSHOT_ASSET_TYPE,
     consume_context_directives,
     copy_story,
@@ -34,9 +34,9 @@ from memory import (
     save_project_prompt_options,
     upsert_knowledge_category_item_record,
 )
-from retrieval import debug_retrieve_context, resolve_retrieval_params
-from schemas import ContextBlock
-from setting_knowledge import build_generation_setting_context, upsert_setting_item
+from novelforge.services.retrieval import debug_retrieve_context, resolve_retrieval_params
+from novelforge.core.schemas import ContextBlock
+from novelforge.domain.setting_knowledge import build_generation_setting_context, upsert_setting_item
 from tools.verify_utils import isolated_workspace
 
 

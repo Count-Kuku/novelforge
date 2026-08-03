@@ -5,7 +5,7 @@ import logging
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     copy_story_settings,
     create_project,
     create_story,
@@ -20,7 +20,7 @@ from memory import (
     set_active_project_name,
     set_active_story,
 )
-from project_manager import get_project_summary
+from novelforge.services.project_manager import get_project_summary
 from ui.common import scoped_widget_key
 from ui.navigation import (
     ADVANCED_PAGE_GROUPS,

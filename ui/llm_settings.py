@@ -7,8 +7,8 @@ from urllib.parse import urlparse
 
 import streamlit as st
 
-from llm import PROVIDER_PRESETS, test_llm_connection
-from memory import (
+from novelforge.core.llm import PROVIDER_PRESETS, test_llm_connection
+from novelforge.services.memory import (
     delete_llm_profile,
     get_active_llm_profile,
     load_llm_profiles,

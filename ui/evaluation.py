@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import load_chapter, load_evaluation_json, load_evaluation_report
-from skills import evaluate_chapter_comprehensive, get_retrieval_trace
+from novelforge.services.memory import load_chapter, load_evaluation_json, load_evaluation_report
+from novelforge.workflows.skills import evaluate_chapter_comprehensive, get_retrieval_trace
 from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_status
 from ui.step_views import render_step_json_expander, render_step_retrieval, render_step_validation

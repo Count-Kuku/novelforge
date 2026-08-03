@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from prompt_options import build_discussion_prompt_option_candidates
+from novelforge.core.prompt_options import build_discussion_prompt_option_candidates
 
 
 def _now() -> str:

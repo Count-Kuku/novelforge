@@ -3,20 +3,20 @@ from __future__ import annotations
 
 import streamlit as st
 
-from extraction_presets import (
+from novelforge.domain.extraction_presets import (
     KNOWLEDGE_EXTRACTION_EXPERT_PRESETS,
     KNOWLEDGE_EXTRACTION_MODE_HELP,
     KNOWLEDGE_EXTRACTION_MODE_LABELS,
     default_extraction_categories,
 )
-from memory import (
+from novelforge.services.memory import (
     list_long_reference_batches,
     list_retrieval_source_files,
     load_knowledge_base,
     load_pending_knowledge_items,
 )
-from skills import organize_reference_text
-from source_workflows import (
+from novelforge.workflows.skills import organize_reference_text
+from novelforge.workflows.source_workflows import (
     extract_pasted_reference_to_pending,
     import_organized_reference_entries,
     save_manual_retrieval_source_card,

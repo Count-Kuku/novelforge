@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     delete_retrieval_eval_case,
     load_retrieval_eval_cases,
     load_retrieval_eval_runs,
     load_retrieval_feedback,
     upsert_retrieval_eval_case,
 )
-from retrieval import RETRIEVAL_TASK_PROFILES
-from retrieval_eval import (
+from novelforge.services.retrieval import RETRIEVAL_TASK_PROFILES
+from novelforge.services.retrieval_eval import (
     parse_multiline_or_comma_values,
     retrieval_profile_label,
     run_retrieval_eval_cases,

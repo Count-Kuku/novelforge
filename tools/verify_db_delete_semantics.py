@@ -14,7 +14,7 @@ from tools.verify_utils import isolated_workspace, retry_unlink
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "1"
 
-from memory import (
+from novelforge.services.memory import (
     create_project,
     create_long_reference_batch,
     delete_long_reference_batch,
@@ -51,7 +51,7 @@ from memory import (
     save_volume_discussion_artifact,
     sync_retrieval_source_file_record,
 )
-from project_manager import (
+from novelforge.services.project_manager import (
     delete_analysis_report,
     delete_chapter_content,
     delete_chapter_outline,

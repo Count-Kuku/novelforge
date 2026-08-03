@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from memory import (
+from novelforge.services.memory import (
     delete_knowledge_category_item_record,
     KNOWLEDGE_CATEGORIES,
     list_stories,

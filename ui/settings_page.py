@@ -5,7 +5,7 @@ import html
 
 import streamlit as st
 
-from memory import (
+from novelforge.services.memory import (
     KNOWLEDGE_CATEGORIES,
     confirm_pending_knowledge_items,
     copy_story,
@@ -18,8 +18,8 @@ from memory import (
     rename_story,
     save_memory,
 )
-from retrieval import rebuild_retrieval_assets
-from setting_knowledge import (
+from novelforge.services.retrieval import rebuild_retrieval_assets
+from novelforge.domain.setting_knowledge import (
     SETTING_FIELD_SPECS,
     build_generation_setting_context,
     copy_project_core_settings_to_story,
@@ -30,7 +30,7 @@ from setting_knowledge import (
     migrate_core_settings_to_knowledge,
     upsert_setting_item,
 )
-from knowledge_workflows import (
+from novelforge.domain.knowledge_workflows import (
     parse_comma_tags,
     safe_confidence,
     summarize_item_evidence,

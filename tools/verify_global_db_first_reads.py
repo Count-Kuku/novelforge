@@ -26,7 +26,7 @@ def main() -> int:
     os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "1"
     try:
         with isolated_workspace("novelforge_global_db_verify_") as workspace:
-            from memory import (
+            from novelforge.services.memory import (
                 GLOBAL_PROMPT_OPTIONS_PATH,
                 GLOBAL_RULE_CONFLICT_RESOLUTIONS_PATH,
                 GLOBAL_RULES_PATH,

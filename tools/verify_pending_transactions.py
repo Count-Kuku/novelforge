@@ -15,9 +15,9 @@ if str(ROOT) not in sys.path:
 
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
-import memory
-from knowledge_workflows import execute_pending_clear_plan
-from memory import (
+from novelforge.services import memory
+from novelforge.domain.knowledge_workflows import execute_pending_clear_plan
+from novelforge.services.memory import (
     create_project,
     create_story,
     list_stories,
@@ -111,7 +111,7 @@ def _run_clear_plan(project_name: str, suffix: str) -> dict:
     }
     with (
         patch.object(memory, "sync_project_retrieval_assets", return_value=None),
-        patch("retrieval.rebuild_retrieval_assets", return_value={}),
+        patch("novelforge.services.retrieval.rebuild_retrieval_assets", return_value={}),
     ):
         return execute_pending_clear_plan(project_name, plan, note="transaction verification")
 

@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import httpx
 from dotenv import load_dotenv
 
-from memory import load_llm_settings
+from novelforge.services.memory import load_llm_settings
 
 load_dotenv()
 

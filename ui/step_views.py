@@ -5,7 +5,7 @@ import json
 
 import streamlit as st
 
-from retrieval_eval import build_retrieval_usage_report_from_payload
+from novelforge.services.retrieval_eval import build_retrieval_usage_report_from_payload
 from ui.labels import label_authority, label_schema, label_scope, label_source_type
 from ui.retrieval_views import render_retrieval_hits_block
 
