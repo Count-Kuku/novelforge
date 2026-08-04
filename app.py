@@ -10,7 +10,6 @@ project_manager_module = importlib.reload(project_manager_module)
 import novelforge.workflows.skills as skills_module
 from novelforge.domain.setting_knowledge import build_generation_setting_context
 from ui.evaluation import render_evaluation_page
-from ui.dynamic_generation import render_dynamic_generation_page
 from ui.discussion_assets_panel import render_discussion_asset_candidates
 from ui.knowledge_management import (
     render_auto_review_policy_panel,
@@ -31,8 +30,10 @@ from ui import (
     chapter_page as ui_chapter_page,
     creative_profile_page as ui_creative_profile_page,
     discussion as ui_discussion,
+    free_writing as ui_free_writing,
     layout as ui_layout,
     outline_page as ui_outline_page,
+    prompt_option_tools as ui_prompt_option_tools,
     project_overview as ui_project_overview,
     resource_browser_state as ui_resource_browser_state,
     resource_management as ui_resource_management,
@@ -44,7 +45,6 @@ from ui.llm_settings import render_llm_settings_page
 from ui.long_reference_batch import render_long_reference_batch_manager
 from ui.long_reference_importer import render_long_reference_importer
 from ui.prompt_options_page import render_prompt_options_page
-from ui.prompt_option_tools import _render_prompt_option_capability_tools
 from ui.retrieval_center_page import render_retrieval_center_page
 from ui.retrieval_ingestion_page import render_retrieval_ingestion_page
 from ui.rules_page import render_rules_page
@@ -58,6 +58,7 @@ def _reload_live_ui_modules() -> dict[str, object]:
     importlib.reload(ui_streaming)
     importlib.reload(ui_resource_browser_state)
     layout_helpers = importlib.reload(ui_layout)
+    prompt_option_helpers = importlib.reload(ui_prompt_option_tools)
     importlib.reload(ui_discussion)
     return {
         "app_shell": importlib.reload(ui_app_shell),
@@ -66,7 +67,9 @@ def _reload_live_ui_modules() -> dict[str, object]:
         "settings": importlib.reload(ui_settings_page),
         "chapter": importlib.reload(ui_chapter_page),
         "creative_profile": importlib.reload(ui_creative_profile_page),
+        "free_writing": ui_free_writing.reload_components(),
         "outline": importlib.reload(ui_outline_page),
+        "prompt_option_tools": prompt_option_helpers,
         "project_overview": importlib.reload(ui_project_overview),
         "volume_outline": importlib.reload(ui_volume_outline_page),
         "arc_outline": importlib.reload(ui_arc_outline_page),
@@ -157,7 +160,10 @@ def main():
     elif page == "核心设定":
         ui_modules["settings"].render_settings_page(project_name, render_memory_page=render_memory_page)
     elif page == "自由创作":
-        render_dynamic_generation_page(project_name, _render_prompt_option_capability_tools)
+        ui_modules["free_writing"].render_dynamic_generation_page(
+            project_name,
+            ui_modules["prompt_option_tools"]._render_prompt_option_capability_tools,
+        )
     elif page == "项目资源":
         ui_modules["resource_management"].render_resource_management_page(project_name)
     elif page == "资料导入":
@@ -179,7 +185,10 @@ def main():
     elif page == "正文生成":
         ui_modules["chapter"].render_chapter_page(project_name)
     elif page == "章节评价":
-        render_evaluation_page(project_name, _render_prompt_option_capability_tools)
+        render_evaluation_page(
+            project_name,
+            ui_modules["prompt_option_tools"]._render_prompt_option_capability_tools,
+        )
 
 
 if __name__ == "__main__":

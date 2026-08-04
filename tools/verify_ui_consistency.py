@@ -22,7 +22,7 @@ def check(condition: bool, label: str) -> None:
 
 
 def verify() -> None:
-    ui_files = sorted((ROOT / "ui").glob("*.py"))
+    ui_files = sorted((ROOT / "ui").rglob("*.py"))
     ui_text = "\n".join(path.read_text(encoding="utf-8") for path in ui_files)
     layout_text = (ROOT / "ui" / "layout.py").read_text(encoding="utf-8")
     common_text = (ROOT / "ui" / "common.py").read_text(encoding="utf-8")

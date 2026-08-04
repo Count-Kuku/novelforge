@@ -311,11 +311,19 @@ def _render_prompt_option_capability_tools(
     key_prefix: str,
     *,
     select_for_run: bool = False,
+    compact: bool = False,
+    show_inline_tools: bool = True,
 ) -> list[str] | None:
     capability_label = PROMPT_OPTION_CAPABILITIES.get(capability, capability)
     prompt_options, error = _load_prompt_options_for_capability(project_name, story_id, capability)
-    st.markdown(f"#### {capability_label}提示词选项")
-    if select_for_run:
+    st.markdown(
+        f"##### {capability_label}偏好"
+        if compact
+        else f"#### {capability_label}提示词选项"
+    )
+    if select_for_run and compact:
+        st.caption("只影响本次生成；完整管理请前往“配置 → 提示词选项”。")
+    elif select_for_run:
         st.caption("这里可以临时选择本次生成使用哪些提示词，也可以直接新增或修改正文写作提示词。")
     else:
         st.caption("这里管理该能力默认生效的提示词。保存并启用后，会影响后续同类生成。")
@@ -328,7 +336,9 @@ def _render_prompt_option_capability_tools(
         option_labels = {option.get("id", ""): _prompt_option_label(option) for option in prompt_options}
         default_option_ids = [option.get("id", "") for option in prompt_options if option.get("enabled", True)]
         selected_prompt_option_ids = st.multiselect(
-            f"本次使用{capability_label}提示词选项",
+            "本次使用的写作偏好"
+            if compact
+            else f"本次使用{capability_label}提示词选项",
             options=option_ids,
             default=default_option_ids,
             format_func=lambda option_id: option_labels.get(option_id, option_id),
@@ -338,16 +348,19 @@ def _render_prompt_option_capability_tools(
     elif prompt_options:
         enabled_count = len([option for option in prompt_options if option.get("enabled", True)])
         st.caption(f"当前可用 {len(prompt_options)} 个，其中已启用 {enabled_count} 个。")
+    elif compact:
+        st.caption("当前没有额外写作偏好；需要时可到配置页面添加。")
     else:
         st.info(f"还没有{capability_label}提示词选项。可以在下面新增，或复制内置预设后修改。")
 
-    _render_prompt_option_inline_tools(
-        project_name,
-        story_id,
-        prompt_options,
-        capability=capability,
-        key_prefix=scoped_widget_key("prompt_option_tools", key_prefix, project_name, story_id, capability),
-    )
+    if show_inline_tools:
+        _render_prompt_option_inline_tools(
+            project_name,
+            story_id,
+            prompt_options,
+            capability=capability,
+            key_prefix=scoped_widget_key("prompt_option_tools", key_prefix, project_name, story_id, capability),
+        )
     return selected_prompt_option_ids
 
 

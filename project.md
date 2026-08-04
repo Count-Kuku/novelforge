@@ -378,7 +378,8 @@ Current split highlights:
 * `ui.app_shell` owns project initialization, project/story switching, new-project/new-story controls, grouped sidebar navigation, and project summary captions
 * `ui.layout`, `ui.common`, `ui.labels`, `ui.step_views`, and `ui.retrieval_views` provide shared display infrastructure
 * `ui.outline_page`, `ui.volume_outline_page`, `ui.arc_outline_page`, and `ui.chapter_outline_page` own planning pages
-* `ui.creative_profile_page`, `ui.dynamic_generation`, `ui.chapter_page`, and `ui.evaluation` own profile, free-writing, content-generation, and evaluation surfaces
+* `ui.creative_profile_page`, `ui.free_writing`, `ui.chapter_page`, and `ui.evaluation` own profile, free-writing, content-generation, and evaluation surfaces
+* `ui.free_writing` keeps the primary prompt and fragment loop visible while session management, knowledge review, chapter compilation, and technical context live in focused progressive-disclosure components
 * `ui.retrieval_ingestion_page`, `ui.retrieval_center_page`, `ui.long_reference_importer`, `ui.long_reference_batch`, `ui.knowledge_management`, and `ui.retrieval_eval_panel` own source/RAG/knowledge-review workspaces
 * `ui.resource_management`, `ui.settings_page`, `ui.rules_page`, `ui.prompt_options_page`, and `ui.project_overview` own operational workbench pages
 
