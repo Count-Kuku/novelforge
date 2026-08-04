@@ -6,7 +6,7 @@ For user-facing feature introductions, setup steps, and workflow guidance, see `
 
 For the planned SQLite-first long-term storage architecture, see `storage_architecture.md`.
 
-Current release marker: `v0.7.0`
+Current release marker: `v0.7.1`
 
 ## Project Overview
 
@@ -647,8 +647,10 @@ Responsibilities:
 * Assemble a portable release directory
 * Require and validate a self-contained Python distribution (a copied virtual environment is rejected), then copy it as `.runtime` together with the entrypoint, split workflow modules, `ui/` page package, `storage/` package, verification/maintenance tools, development docs, `VERSION`, Chinese/English README files, and baseline data structure
 * Copy optional `.streamlit` runtime configuration when present
+* Use the checked-in `VERSION` file as the release version source and reject mismatched explicit versions
+* Remove Python caches and temporary files after the runtime has been copied
 * Save a build transcript under `release/` for local diagnostics
-* Produce a zip archive suitable for GitHub Releases
+* Produce a zip archive and SHA-256 checksum suitable for GitHub Releases
 
 Design purpose:
 

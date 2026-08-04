@@ -119,7 +119,11 @@ def _check_stale_and_exception_lock_cleanup(root: Path) -> None:
     assert time.monotonic() - started < 2, "exception left the launch lock held"
 
 
-def _run_rejected_build(runtime_root: Path) -> str:
+def _declared_version() -> str:
+    return (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def _run_rejected_build(runtime_root: Path, *, version: str | None = None) -> str:
     command = [
         "powershell.exe",
         "-NoProfile",
@@ -130,7 +134,7 @@ def _run_rejected_build(runtime_root: Path) -> str:
         "-RuntimeRoot",
         str(runtime_root),
         "-Version",
-        "guard-check",
+        version or _declared_version(),
     ]
     completed = subprocess.run(
         command,
@@ -159,6 +163,11 @@ def _check_build_path_guards() -> None:
     assert "must not contain PortableRoot" in release_ancestor_output
 
 
+def _check_build_version_guard() -> None:
+    output = _run_rejected_build(PROJECT_ROOT / ".missing-release-runtime", version="v999.0.0")
+    assert "does not match VERSION" in output
+
+
 def main() -> int:
     checks = 0
     with tempfile.TemporaryDirectory(prefix="novelforge-launcher-check-") as temp_dir:
@@ -172,6 +181,8 @@ def main() -> int:
         _check_stale_and_exception_lock_cleanup(root)
         checks += 1
     _check_build_path_guards()
+    checks += 1
+    _check_build_version_guard()
     checks += 1
     print(f"Launcher/release guard verification passed: {checks} checks")
     return 0

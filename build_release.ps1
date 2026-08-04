@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "dev",
+    [string]$Version = "",
     [Parameter(Mandatory = $true)]
     [string]$RuntimeRoot
 )
@@ -38,7 +38,21 @@ function Test-PathIsEqualOrDescendant {
 $ProjectRoot = ConvertTo-NormalizedFullPath -LiteralPath (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $PortableRoot = Join-Path $ReleaseRoot "NovelForge-Portable"
+$VersionPath = Join-Path $ProjectRoot "VERSION"
+if (-not (Test-Path -LiteralPath $VersionPath)) {
+    throw "Missing VERSION file."
+}
+$DeclaredVersion = (Get-Content -LiteralPath $VersionPath -Raw -Encoding UTF8).Trim()
+if ($DeclaredVersion -notmatch '^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$') {
+    throw "VERSION must contain a semantic version such as v0.7.1; found '$DeclaredVersion'."
+}
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $Version = $DeclaredVersion
+} elseif (-not [string]::Equals($Version, $DeclaredVersion, [System.StringComparison]::Ordinal)) {
+    throw "Requested version '$Version' does not match VERSION '$DeclaredVersion'."
+}
 $ZipPath = Join-Path $ReleaseRoot ("NovelForge-windows-portable-{0}.zip" -f $Version)
+$HashPath = "$ZipPath.sha256"
 $BuildLogPath = Join-Path $ReleaseRoot ("build_release-{0}.log" -f $Version)
 $LauncherSpecRoot = Join-Path $ProjectRoot "dist"
 $LauncherSpecPath = Join-Path $ProjectRoot "NovelForge.spec"
@@ -68,6 +82,9 @@ if (-not (Test-Path -LiteralPath $ReleaseRoot)) {
 
 if (Test-Path -LiteralPath $BuildLogPath) {
     Remove-Item -LiteralPath $BuildLogPath -Force
+}
+if (Test-Path -LiteralPath $HashPath) {
+    Remove-Item -LiteralPath $HashPath -Force
 }
 
 Start-Transcript -LiteralPath $BuildLogPath | Out-Null
@@ -127,7 +144,8 @@ $filesToCopy = @(
     "VERSION",
     "README.md",
     "README.en.md",
-    "project.md"
+    "project.md",
+    "storage_architecture.md"
 )
 
 foreach ($relativePath in $filesToCopy) {
@@ -150,18 +168,24 @@ foreach ($relativePath in $directoriesToCopy) {
     Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $PortableRoot $relativePath) -Recurse
 }
 
-Get-ChildItem -LiteralPath $PortableRoot -Recurse -Force -File |
-    Where-Object { $_.Name -like "*~*" -or $_.Name -like "*.bak" -or $_.Name -like "*.tmp" } |
-    Remove-Item -Force
-Get-ChildItem -LiteralPath $PortableRoot -Recurse -Force -Directory -Filter "__pycache__" |
-    Remove-Item -Recurse -Force
-
 Copy-Item -LiteralPath (Join-Path $LauncherSpecRoot "NovelForge.exe") -Destination (Join-Path $PortableRoot "NovelForge.exe")
 Copy-Item -LiteralPath $ResolvedRuntimeRoot -Destination (Join-Path $PortableRoot ".runtime") -Recurse
 
 if (Test-Path -LiteralPath $StreamlitConfigRoot) {
     Copy-Item -LiteralPath $StreamlitConfigRoot -Destination (Join-Path $PortableRoot ".streamlit") -Recurse
 }
+
+Get-ChildItem -LiteralPath $PortableRoot -Recurse -Force -File |
+    Where-Object {
+        $_.Name -like "*~*" -or
+        $_.Name -like "*.bak" -or
+        $_.Name -like "*.tmp" -or
+        $_.Name -like "*.pyc" -or
+        $_.Name -like "*.pyo"
+    } |
+    Remove-Item -Force
+Get-ChildItem -LiteralPath $PortableRoot -Recurse -Force -Directory -Filter "__pycache__" |
+    Remove-Item -Recurse -Force
 
 $dataRoot = Join-Path $PortableRoot "data"
 New-Item -ItemType Directory -Path $dataRoot | Out-Null
@@ -185,8 +209,11 @@ $usageNote = @(
 Set-Content -LiteralPath (Join-Path $PortableRoot "USAGE.txt") -Value $usageNote -Encoding UTF8
 
 Compress-Archive -LiteralPath $PortableRoot -DestinationPath $ZipPath -Force
+$ArchiveHash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath $HashPath -Value ("{0}  {1}" -f $ArchiveHash, (Split-Path -Leaf $ZipPath)) -Encoding ASCII
 
 "Portable release created: $ZipPath"
+"SHA-256 checksum created: $HashPath"
 "Build log saved to: $BuildLogPath"
 }
 finally {

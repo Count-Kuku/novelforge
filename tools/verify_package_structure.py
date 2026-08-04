@@ -46,6 +46,14 @@ def verify() -> None:
 
     release_script = (ROOT / "build_release.ps1").read_text(encoding="utf-8")
     check('"novelforge"' in release_script, "发布脚本复制 novelforge 业务包")
+    check('"storage_architecture.md"' in release_script, "发布脚本包含存储架构文档")
+    check("does not match VERSION" in release_script, "发布版本与 VERSION 文件保持一致")
+    check("Get-FileHash" in release_script and '"$ZipPath.sha256"' in release_script, "发布包生成 SHA-256 校验文件")
+    check(
+        release_script.index('Copy-Item -LiteralPath $ResolvedRuntimeRoot')
+        < release_script.index('Directory -Filter "__pycache__"'),
+        "发布脚本会清理运行时缓存",
+    )
     check(
         all(f'"{legacy_name}.py"' not in release_script for legacy_name in ("memory", "retrieval", "skills")),
         "发布脚本不再依赖旧根目录业务文件",

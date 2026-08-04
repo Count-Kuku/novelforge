@@ -2,7 +2,7 @@
 
 # NovelForge
 
-Current version: `v0.7.0`
+Current version: `v0.7.1`
 
 NovelForge is an LLM-powered writing workspace for long-form fiction, built around persistent project storage, retrieval-augmented generation, structured workflows, and future multi-agent collaboration.
 
@@ -311,8 +311,10 @@ python -m venv .venv
 3. Run the packaging script from PowerShell and pass that distribution via `RuntimeRoot`:
 
 ```powershell
-.\build_release.ps1 -Version v0.7.0 -RuntimeRoot D:\Runtimes\python-standalone
+.\build_release.ps1 -Version v0.7.1 -RuntimeRoot D:\Runtimes\python-standalone
 ```
+
+`-Version` is optional. The script reads the repository `VERSION` file and stops if an explicitly supplied version does not match it.
 
 4. The script will automatically:
 
@@ -320,7 +322,8 @@ python -m venv .venv
 - validate the self-contained runtime and copy it as `.runtime`
 - build `NovelForge.exe` from `launcher.py`
 - assemble `release/NovelForge-Portable/`
-- create `release/NovelForge-windows-portable-v0.7.0.zip`
+- create `release/NovelForge-windows-portable-v0.7.1.zip`
+- create `release/NovelForge-windows-portable-v0.7.1.zip.sha256` for integrity verification
 - save a local build log under `release/`
 
 ### Notes

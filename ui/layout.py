@@ -1930,6 +1930,36 @@ def apply_app_style():
             stroke: var(--nf-muted) !important;
         }
 
+        /* A disabled primary action should look unavailable, not like a faded active action. */
+        html body .stApp button[data-testid^="stBaseButton"][kind="primary"]:disabled,
+        html body .stApp button[data-testid^="stBaseButton"][kind="primary"][disabled],
+        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:disabled,
+        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"][disabled],
+        html body .stApp [data-testid="stButton"] button[kind="primary"]:disabled,
+        html body .stApp [data-testid="stButton"] button[kind="primary"][disabled],
+        html body .stApp [data-testid="stButton"] button[data-kind="primary"]:disabled,
+        html body .stApp [data-testid="stButton"] button[data-kind="primary"][disabled],
+        html body .stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:disabled,
+        html body .stApp [data-testid="stFormSubmitButton"] button[kind="primary"][disabled],
+        html body .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"]:disabled,
+        html body .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"][disabled] {
+            background: #eef1f5 !important;
+            border-color: #d9e0e8 !important;
+            color: #7a8494 !important;
+            box-shadow: none !important;
+            cursor: not-allowed !important;
+        }
+
+        html body .stApp button[data-testid^="stBaseButton"][kind="primary"]:disabled *,
+        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:disabled *,
+        html body .stApp [data-testid="stButton"] button[kind="primary"]:disabled *,
+        html body .stApp [data-testid="stButton"] button[data-kind="primary"]:disabled *,
+        html body .stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:disabled *,
+        html body .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"]:disabled * {
+            color: #7a8494 !important;
+            -webkit-text-fill-color: #7a8494 !important;
+        }
+
         @media (max-width: 760px) {
             .block-container {
                 padding-top: 0.65rem;

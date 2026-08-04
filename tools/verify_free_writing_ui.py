@@ -77,6 +77,16 @@ def verify() -> None:
         < composer_source.index("config = _render_advanced_settings"),
         "主输入框显示在高级设置之前",
     )
+    check(
+        'type="primary"' in composer_source,
+        "生成片段保留明确的主操作样式",
+    )
+    layout_source = (ROOT / "ui" / "layout.py").read_text(encoding="utf-8")
+    check(
+        'button[kind="primary"]:disabled' in layout_source
+        and 'background: #eef1f5 !important;' in layout_source,
+        "不可用的主按钮使用中性禁用态",
+    )
     settings_source = _function_source(
         PACKAGE / "composer.py",
         "_render_advanced_settings",
