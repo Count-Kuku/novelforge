@@ -279,9 +279,9 @@ novelforge/
 |-- storage/
 |-- tools/
 |-- docs/
-|   |-- app_decomposition_plan.md
 |   |-- package_refactor.md
-|   `-- sillytavern_reference_update_plan.md
+|   `-- releases/
+|       `-- v0.7.1.md
 |-- requirements.txt
 |-- .env
 |-- .env.example
@@ -371,7 +371,7 @@ Design purpose:
 
 * Keep UI composition modular while preserving the existing Streamlit user flow
 * Make individual pages importable and reviewable without loading one giant `app.py`
-* Support continued incremental refactoring through the plan in `docs/app_decomposition_plan.md`
+* Support continued incremental refactoring through shared UI helpers and the known technical debt tracked in this document
 
 Current split highlights:
 
@@ -1690,6 +1690,7 @@ Current implementation status:
 * Implemented: source package report generation from confirmed structured knowledge, saved under `analysis/source_package.md`
 * Pending: dedicated external vector database backend
 * Pending: richer worldline management UI for defining, listing, and merging project branches
+* Pending: user-maintained character profile overlays and safe Character Card JSON import/export
 
 Possible technologies:
 
