@@ -44,17 +44,24 @@ from ui import (
 from ui.llm_settings import render_llm_settings_page
 from ui.long_reference_batch import render_long_reference_batch_manager
 from ui.long_reference_importer import render_long_reference_importer
+from ui.ingestion_tasks import render_ingestion_task_manager
 from ui.prompt_options_page import render_prompt_options_page
 from ui.retrieval_center_page import render_retrieval_center_page
 from ui.retrieval_ingestion_page import render_retrieval_ingestion_page
 from ui.rules_page import render_rules_page
+from novelforge.workflows.ingestion_task_dispatcher import (
+    ensure_ingestion_task_dispatcher,
+    get_ingestion_task_dispatcher_status,
+)
 
 def _reload_live_ui_modules() -> dict[str, object]:
     global list_projects
-    memory_helpers = memory_module.reload_implementation_modules()
+    background_runtime_active = bool(get_ingestion_task_dispatcher_status().get("running"))
+    memory_helpers = memory_module if background_runtime_active else memory_module.reload_implementation_modules()
     list_projects = memory_helpers.list_projects
     importlib.reload(project_manager_module)
-    skills_module.reload_implementation_modules()
+    if not background_runtime_active:
+        skills_module.reload_implementation_modules()
     importlib.reload(ui_streaming)
     importlib.reload(ui_resource_browser_state)
     layout_helpers = importlib.reload(ui_layout)
@@ -103,6 +110,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
             source_type_options,
             knowledge_category_options,
             render_long_reference_importer=render_long_reference_importer,
+            render_ingestion_task_manager=render_ingestion_task_manager,
             render_ingestion_health_panel=render_ingestion_health_panel,
             render_source_ledger_page=render_source_ledger_page,
             render_auto_review_policy_panel=render_auto_review_policy_panel,
@@ -120,6 +128,7 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
 def main():
     st.set_page_config(page_title="NovelForge", layout="wide")
     ui_modules = _reload_live_ui_modules()
+    ensure_ingestion_task_dispatcher()
     layout_helpers = ui_modules["layout"]
     layout_helpers.apply_app_style()
 

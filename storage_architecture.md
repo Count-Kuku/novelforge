@@ -1,199 +1,57 @@
-# NovelForge Storage Architecture
+# NovelForge 存储架构
 
-本文档用于固定 NovelForge 的长期存储方向，目标是在项目尚未积累正式数据前，尽早确定稳定的存储边界，减少未来兼容和迁移成本。
+本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前结论：
+当前代码期望的 SQLite schema version：`9`
 
-* SQLite 作为结构化数据的权威存储。
-* Markdown / TXT / JSON 导出文件作为长文本资产和可读产物。
-* 检索、证据、结构化知识、图谱、工作流运行记录都以稳定 ID 串联。
-* 从第一版数据库开始保留 `schema_version` 和 migrations，不依赖一次性硬编码建表。
-* 当前代码期望的数据库 schema version 是 `7`。
+## 权威存储边界
 
----
+NovelForge 采用 SQLite 与文件资产组合存储：
 
-# 目标结构
+| 数据类型 | 权威来源 | 说明 |
+|---|---|---|
+| 全局模型档案、全局规则、全局提示词选项 | `data/global.db` | 全局结构化配置 |
+| 项目、故事、知识、来源、检索、运行记录 | `data/projects/{project_name}/project.db` | 每个项目独立数据库 |
+| 大纲、章节、审阅、分析、评价、导入原文 | 项目目录内 Markdown/TXT 等文件 | 正文由文件保存，生命周期登记在 `asset_files` |
+| 结构化 JSON | 非权威兼容层 | 默认不写；只用于旧项目导入或显式兼容镜像 |
 
-推荐最终目录结构：
+结构化数据写入失败必须向上抛错，不能在 DB-only 模式下静默退回文件并假装成功。
+
+## 实际目录
 
 ```text
 data/
-  global.db
-  projects/
-    {project_id}/
-      project.db
-      project_manifest.json
-      assets/
-        outlines/
-        chapters/
-        reviews/
-        analysis/
-        sources/
-        exports/
-      backups/
+├── global.db
+├── deleted_projects/                  # 删除隔离目录；保留维护锁，当前无内置恢复入口
+└── projects/
+    ├── index.json                     # 启动/界面兼容索引，不是项目业务事实源
+    └── {project_name}/
+        ├── project.db                 # 项目结构化事实源
+        ├── knowledge/                 # 旧项目兼容文件与知识相关资产
+        ├── analysis/                  # 项目级 Markdown 报告
+        ├── long_reference_batches/    # 旧长篇批次 JSON 兼容目录
+        ├── retrieval/sources/         # 导入的外部资料正文
+        └── stories/
+            └── {story_id}/
+                ├── outline.md
+                ├── volumes/
+                ├── arcs/
+                ├── chapter_outlines/
+                ├── chapters/
+                ├── reviews/
+                ├── analysis/
+                ├── evaluation/
+                ├── runs/
+                └── retrieval/
 ```
 
-说明：
+具体文件目录会随资产类型演进；业务发现和删除不应依赖扫描目录，而应优先查询 `asset_files` / `asset_payloads`。
 
-* `global.db` 保存跨项目配置，例如 LLM profiles、全局规则、全局 prompt options。
-* `project.db` 保存单个项目的结构化数据，是项目资料库、RAG、图谱、运行记录的权威来源。
-* `assets/` 保存长文本资产，例如章节正文、大纲、评审 Markdown、分析报告、原始资料。
-* `project_manifest.json` 只保存少量便于人工识别的信息，例如项目显示名、创建时间、数据库版本摘要。它不应成为业务数据权威来源。
+## 连接与迁移
 
----
+### SQLite 设置
 
-# 存储边界
-
-进入数据库的数据：
-
-* project / story metadata
-* creative profile
-* rules
-* prompt options
-* LLM profiles
-* global settings
-* structured knowledge
-* pending knowledge
-* auto-review policy and runs
-* source document metadata
-* source segments
-* evidence records
-* retrieval documents
-* retrieval chunks
-* retrieval vectors metadata or blobs
-* retrieval feedback
-* retrieval eval cases and runs
-* workflow runs and steps
-* graph nodes and edges
-* asset file registry
-
-保留为文件的数据：
-
-* outline body
-* volume outline body
-* arc outline body
-* chapter outline body
-* chapter body
-* review Markdown
-* analysis Markdown
-* imported raw source text
-* exported packages
-
-文件资产必须在数据库中登记路径、hash、类型、所属 story、更新时间和生成来源。业务查询不应直接扫描目录作为主要数据来源。
-
----
-
-# 核心设计原则
-
-1. 所有长期记录使用稳定 ID。
-
-不要使用中文名称、文件路径、列表下标作为长期身份。推荐 ID：
-
-```text
-project_id
-story_id
-asset_id
-source_id
-segment_id
-knowledge_id
-pending_id
-evidence_id
-document_id
-chunk_id
-node_id
-edge_id
-run_id
-step_id
-```
-
-2. 所有主表保留时间字段。
-
-```text
-created_at
-updated_at
-deleted_at
-```
-
-`deleted_at` 用于软删除。只有缓存、临时索引、可重建数据可以硬删除。
-
-3. JSON 字段只用于灵活低频数据。
-
-适合放入 `metadata_json` 或 `content_json` 的内容：
-
-* 类别差异很大的知识字段
-* UI 展示配置
-* 原始 LLM payload
-* 不常作为查询条件的扩展字段
-
-经常用于过滤、排序、关联的数据必须提升为独立列，例如：
-
-```text
-category
-canon_status
-worldline_id
-story_id
-source_type
-authority
-confidence
-evidence_strength
-embedding_model
-status
-```
-
-4. 数据库是结构化权威来源，文件是正文资产来源。
-
-章节正文可以继续在 Markdown 文件中，但章节的 ID、标题、状态、路径、hash、所属 story、所属 volume / arc 必须在数据库中。
-
-5. 检索资产可重建，但检索反馈不可丢。
-
-可重建：
-
-* retrieval documents
-* retrieval chunks
-* lexical FTS index
-* embedding vectors
-
-不可随意丢弃：
-
-* user feedback
-* eval cases
-* eval runs
-* conflict resolutions
-
----
-
-# 数据库模块边界
-
-推荐新增：
-
-```text
-storage/
-  __init__.py
-  db.py
-  schema.py
-  repositories/
-    projects.py
-    stories.py
-    assets.py
-    rules.py
-    prompt_options.py
-    knowledge.py
-    sources.py
-    retrieval.py
-    workflows.py
-    graph.py
-  migrations/
-    001_initial.sql
-```
-
-职责：
-
-* `storage/db.py`：连接、事务、路径、PRAGMA 设置。
-* `storage/schema.py`：当前 schema 版本、初始化、迁移入口。
-* `repositories/*.py`：封装 SQL，不让 UI 和 workflow 模块直接拼 SQL。
-* `novelforge/services/memory/`：作为兼容 facade，按领域切片调用 repository。
-
-推荐 SQLite PRAGMA：
+`storage/db.py` 为全局库和项目库统一设置：
 
 ```sql
 PRAGMA foreign_keys = ON;
@@ -202,849 +60,247 @@ PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
 ```
 
----
+连接在 `with` 块结束后显式关闭，避免 Windows 上未释放句柄阻止项目重命名、归档或删除。
+`novelforge/services/memory/runtime_storage.py` 统一承载运行记录的既有数据库访问：旧项目首次导入完成后，
+调度、心跳和任务控制只能通过 `open_existing_project_db` 打开现有文件；项目目录已移动或删除时直接停止，
+不得创建同名空目录或“幽灵”数据库。数据库曾被标记为不可用时，恢复同样使用既有文件模式，避免绕过
+DB-only 错误语义并提前删除待迁移镜像。
 
-# Schema 草案
+### schema 规则
 
-以下是第一版 `001_initial.sql` 应覆盖的长期核心表。字段可以在实现时细化，但表边界建议保持稳定。
+- `storage/schema.py` 的 `CURRENT_SCHEMA_VERSION` 是代码支持的唯一版本声明。
+- 迁移文件必须从 `001` 连续到当前版本；缺号会拒绝启动迁移。
+- 迁移在 `BEGIN IMMEDIATE` 中执行，并在取得写锁后再次检查版本，避免多个应用实例重复执行非幂等 `ALTER TABLE`。
+- 已发布 migration 不修改；任何 schema 变化新增下一编号文件。
+- 数据库版本高于当前代码时拒绝打开，避免旧程序损坏新数据。
+- 只对零字节、无法初始化的 SQLite 文件执行隔离恢复：原文件及 `-wal/-shm/-journal` 会改名为带 UTC 时间戳的 `.corrupt-*` 文件；非空损坏库不会被自动覆盖。
 
-## 元信息
+### 迁移历史
 
-```text
-schema_migrations
-- version
-- applied_at
+| 版本 | 主要内容 |
+|---|---|
+| `001_initial` | 项目、故事、资产、规则、知识、来源、检索、图谱、审核和工作流基础表 |
+| `002_runtime_payloads` | 检索反馈和冲突裁决无损 payload |
+| `003_asset_payloads` | 小型结构化工件进入数据库 |
+| `004_global_settings` | 全局模型档案和其它全局设置 |
+| `005_asset_file_active_uniqueness` | 项目/故事范围的活动资产唯一性 |
+| `006_prompt_option_logical_ids` | 提示词选项逻辑 ID 与存储 ID 分离 |
+| `007_creative_sessions` | 自由创作会话、轮次和片段版本 |
+| `008_workflow_runtime` | 后台任务 worker、租约、心跳、控制、估算、优先级和归档 |
+| `009_runtime_hardening` | 项目维护锁、向量构建统计，以及旧任务残留租约清理 |
 
-project_meta
-- project_id
-- name
-- title
-- genre
-- description
-- created_at
-- updated_at
+## 表分组
 
-stories
-- story_id
-- name
-- description
-- status
-- is_active
-- created_at
-- updated_at
-- deleted_at
+本节只固定表职责。列定义以 `storage/migrations/*.sql` 为准，避免文档复制完整 SQL 后失真。
 
-story_profiles
-- story_id
-- profile_json
-- worldline_id
-- worldline_name
-- retrieval_mode
-- created_at
-- updated_at
-```
+### 项目与故事
 
-## 资产文件
+- `project_meta`：项目稳定 ID、名称、基础元数据和目录移动期间的维护锁。
+- `stories`：故事空间、活动状态和软删除生命周期。
+- `story_profiles`：故事创作配置、世界线和检索模式。
 
-```text
-asset_files
-- asset_id
-- story_id nullable
-- asset_type
-- logical_key
-- title
-- relative_path
-- content_hash
-- mime_type
-- source_kind
-- source_ref
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-```
+### 文件资产与结构化工件
 
-典型 `asset_type`：
+- `asset_files`：长文本/文件资产的逻辑键、相对路径、hash、作用域和软删除状态。
+- `asset_payloads`：讨论结论、章节元数据、审阅/评价 JSON、摘要、实体卡、模板和上下文快照等小型结构化工件。
 
-```text
-outline
-volume_outline
-arc_outline
-chapter_outline
-chapter
-review_markdown
-analysis_markdown
-evaluation_markdown
-raw_source
-export
-```
+同一活动资产由 `(scope, story_id, asset_type, logical_key)` 唯一确定。SQLite 对 `NULL` 的唯一约束不能直接覆盖项目级资产，因此 migration 005 使用项目级和故事级两个部分唯一索引。
 
-## 规则和 prompt options
+### 规则与配置
 
-```text
-rules
-- rule_id
-- scope
-- story_id nullable
-- capability
-- content
-- enabled
-- priority
-- source
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
+- `global_settings`：全局模型档案等键值 payload，只在 `global.db` 使用。
+- `rules`：global/project/story 三层规则。
+- `prompt_options`：global/project/story 三层提示词选项和覆盖关系。
 
-prompt_options
-- option_id
-- scope
-- story_id nullable
-- capability
-- category
-- slot
-- name
-- content
-- enabled
-- built_in
-- priority
-- source
-- source_kind
-- source_ref
-- tags_json
-- created_at
-- updated_at
-- deleted_at
-```
+### 来源与知识
 
-`scope` 推荐固定为：
+- `source_documents`：资料来源、权威、类型、hash 和来源资产。
+- `source_segments`：长篇分段、导入/提取状态和片段元数据。
+- `knowledge_items`：已确认结构化知识。
+- `pending_knowledge_items`：待审核知识和质量状态。
+- `knowledge_evidence`：知识到来源、片段和检索 chunk 的证据关系。
+- `entity_alias_groups`：主名称、别名和实体类型。
+- `auto_review_policy`、`auto_review_runs`：自动审核策略、批处理记录和回退快照。
+
+### 检索
+
+- `retrieval_documents`：可检索文档的来源、作用域、权威和世界线元数据。
+- `retrieval_chunks`：稳定 chunk、正文、内容 hash 和顺序。
+- `retrieval_vectors`：embedding 模型、维度、向量 blob 和内容 hash。
+- `retrieval_vector_store_meta`：最近一次向量构建模式、复用/生成/删除数量。
+- `retrieval_feedback`：有用、优先、无关、错误等用户反馈。
+- `retrieval_eval_cases`、`retrieval_eval_runs`：固定评测用例和运行结果。
+- `retrieval_conflict_resolutions`：项目资料与原作/参考资料冲突的持久裁决。
+- `retrieval_chunks_fts`：schema 中预留的 FTS5 表；当前应用层词法检索尚未以它作为主要查询后端。
+
+检索文档、chunk 和向量可以从权威资料重建；用户反馈、评测用例/结果和冲突裁决不可当作缓存清除。
+
+向量构建元数据与具体向量行独立持久化：即使当前没有 chunk 或生成零个向量，模型、构建模式和构建计数仍可读取。空向量、零向量、非有限数值或内容 hash 过期的旧向量不会被复用；重建时只重新生成对应片段，检测到模型或向量维度变化时改为完整重建。同一次构建若返回互不一致的维度，则整次构建失败且不保存新向量。
+
+### 工作流与自由创作
+
+- `workflow_runs`：运行级输入、输出、错误、状态和运行时所有权。
+- `workflow_steps`：步骤/资料片段检查点，随 run 级联删除。
+- `creative_sessions`：自由创作会话。
+- `creative_turns`：会话轮次和操作。
+- `creative_fragments`：片段版本、父子关系、接受状态和审计信息。
+
+### 图谱预留
+
+- `graph_nodes`
+- `graph_edges`
+
+表结构已经存在，但当前产品尚未建立正式 GraphRAG 构建和查询链路。它们不能被文档或 UI 表述为已完成能力。
+
+## 持久资料任务
+
+长篇资料任务复用通用 `workflow_runs/workflow_steps`，不创建第二套任务数据库。
+
+### 记录映射
+
+`workflow_runs` 中 `workflow_type='source_ingestion'` 的记录表示资料任务：
+
+- `input_json`：创建时输入。
+- `output_json`：任务配置、估算、总体进度、导入/提取/整理/自动审核阶段游标、最近结果和兼容字段。
+- `error_json`：运行级错误。
+- `workflow_steps`：以稳定片段 ID 保存分段状态、尝试次数、输入、输出和错误。
+- `worker_id`、`lease_expires_at`、`heartbeat_at`：运行时所有权。
+- `control_requested`：pause/resume/cancel 控制请求。
+- `priority`：队列顺序。
+- `estimated_*`：创建时 Token/费用估算快照。
+- `archived_at`：历史归档，不等同业务状态。
+
+### 原子领取
+
+领取逻辑位于 `storage/repositories/ingestion_task_leases.py`，必须在同一写事务中完成“选择候选 + 更新 owner/租约 + 读回任务”：
 
 ```text
-global
-project
-story
+BEGIN IMMEDIATE
+  -> 查找 queued，或租约已过期的 running 任务
+  -> 按 priority DESC, created_at ASC 选择
+  -> 写入 worker_id、lease_expires_at、heartbeat_at、status=running
+  -> 返回已领取记录
+COMMIT
 ```
 
-## 结构化知识
+正常心跳只有当前 `worker_id` 且租约尚未过期时可以续租。worker 检查点同时校验 `running` 状态、owner 和有效租约；终态快照与清理 worker/心跳/租约必须在同一事务提交。失去租约的旧 worker 不得继续覆盖任务状态；真正恢复前还要用 long reference batch 的已落盘分段结果对账。
+
+未处理的 `pause/cancel` 也是终态提交围栏的一部分：普通完成不能清掉并发控制请求。若所有阶段已在控制请求到达前落盘，worker 会显式确认该请求并按真实结果原子完成；否则转入暂停或取消。任务结果由批次与阶段检查点重建，因此跨重启统计不会退回为零。
+
+同一长篇资料批次只允许一个未归档的未完成任务。创建与归档恢复都在写事务中检查批次唯一性；任务创建还会对数据库中的批次修订时间和所选 `segment_id` 做 CAS 校验，拒绝界面旧快照。批次保存、删除与任务创建统一由 `BEGIN IMMEDIATE` 串行，人工写入不能越过占用任务；运行中任务只有同时匹配 `task_id`、`worker_id` 和有效租约才能写检查点。数据库事务成功后才尽力同步非权威 JSON 镜像，拒绝或回滚不得先改镜像。项目重命名或删除前先写入 `project_meta.maintenance_mode`，阻止人工批次修改以及任务创建、重新入队和领取；持有有效租约的 worker 仍可完成检查点，生命周期操作会因 running 任务而中止并解除维护锁。调度器对旧项目名只读写既有数据库，不会在目录移动后重建空项目。
+
+### 控制与归档
+
+- 运行中的暂停/取消请求在下一个分段或阶段检查点生效。
+- `failed` 和 `completed_with_errors` 保留已完成片段与阶段；重试只重置失败阶段，提取或整理重试会同时使依赖它的下游阶段失效。
+- 只有 `failed/completed_with_errors/completed/cancelled` 可以归档。
+- 恢复归档的未完成任务时会重新检查批次及所选片段；批次已删除或片段已替换时拒绝恢复。
+- 永久删除要求任务已经归档，删除 run 时由外键级联删除 steps。
+- 批量清理只删除早于指定时间的归档任务，不操作活动任务。
+
+## 文件资产契约
+
+长文本不重复塞入 JSON payload。保存文件资产时至少登记：
+
+- 稳定 `asset_id`。
+- `asset_type` 和作用域内稳定 `logical_key`。
+- 可变标题与不可越界的相对路径。
+- 内容 hash、MIME 类型、来源类型和来源引用。
+- `story_id`（项目级资产为空）。
+- 创建、更新和软删除时间。
+
+文件删除流程应先通过服务层确定数据库记录和实际路径，执行路径安全校验，再更新数据库生命周期。不能根据用户标题拼接任意路径。
+
+## JSON 兼容策略
+
+默认值：
 
 ```text
-knowledge_items
-- knowledge_id
-- story_id nullable
-- category
-- name
-- title
-- summary
-- content_json
-- canon_status
-- worldline_id
-- worldline_name
-- confidence
-- importance
-- evidence_strength
-- source_id nullable
-- segment_id nullable
-- extraction_mode
-- setting_scope nullable
-- setting_role nullable
-- injection_policy nullable
-- created_at
-- updated_at
-- deleted_at
-
-pending_knowledge_items
-- pending_id
-- story_id nullable
-- category
-- name
-- title
-- summary
-- content_json
-- canon_status
-- worldline_id
-- confidence
-- importance
-- evidence_strength
-- source_id nullable
-- segment_id nullable
-- extraction_mode
-- quality_json
-- status
-- created_at
-- updated_at
-- deleted_at
-
-knowledge_evidence
-- evidence_id
-- knowledge_id nullable
-- pending_id nullable
-- source_id nullable
-- segment_id nullable
-- chunk_id nullable
-- quote
-- location_json
-- confidence
-- evidence_strength
-- created_at
+NOVELFORGE_WRITE_JSON_MIRRORS=0
 ```
 
-`category` 推荐继续沿用当前分类：
+默认 DB-only 模式下：
 
-```text
-characters
-items
-abilities
-world_rules
-locations
-organizations
-timeline_events
-relationships
-writing_style
-dialogue_style
-narrative_techniques
-constraints
-```
+- LLM profiles、规则、提示词选项、故事配置、知识、运行快照、检索 manifest/vector/eval/feedback 等结构化数据只写 SQLite。
+- 如果首次打开的是旧项目且数据库尚未建立，bootstrap 会先从已有 JSON/Markdown 导入，再创建数据库事实源。
+- 某类结构化资源成功保存后，其旧 JSON 镜像可以被移除，避免空列表或空规则被旧文件“复活”。
+- Markdown/TXT 正文和外部资料不受镜像开关影响。
 
-## 别名
-
-```text
-entity_alias_groups
-- alias_group_id
-- canonical_name
-- aliases_json
-- entity_type
-- story_id nullable
-- worldline_id nullable
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-```
-
-## 来源和分段
-
-```text
-source_documents
-- source_id
-- story_id nullable
-- title
-- source_type
-- authority
-- canon_status
-- original_asset_id nullable
-- content_hash
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-
-source_segments
-- segment_id
-- source_id
-- segment_index
-- title
-- asset_id nullable
-- text_hash
-- summary
-- import_status
-- extraction_status
-- last_extraction_mode
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-```
-
-`source_type` 示例：
-
-```text
-canon
-reference
-project
-user_note
-long_form_source
-knowledge_only
-```
-
-## 检索
-
-```text
-retrieval_documents
-- document_id
-- story_id nullable
-- source_id nullable
-- asset_id nullable
-- knowledge_id nullable
-- document_type
-- scope
-- title
-- summary
-- authority
-- canon_status
-- worldline_id
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-
-retrieval_chunks
-- chunk_id
-- document_id
-- chunk_index
-- text
-- token_count
-- content_hash
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-
-retrieval_vectors
-- chunk_id
-- embedding_model
-- vector_dim
-- vector_blob
-- content_hash
-- created_at
-- updated_at
-
-retrieval_feedback
-- feedback_id
-- chunk_id
-- story_id nullable
-- task_type
-- feedback_type
-- reason
-- weight
-- created_at
-
-retrieval_eval_cases
-- case_id
-- story_id nullable
-- name
-- query
-- task_type
-- expected_json
-- enabled
-- created_at
-- updated_at
-- deleted_at
-
-retrieval_eval_runs
-- run_id
-- case_id nullable
-- story_id nullable
-- status
-- result_json
-- created_at
-```
-
-推荐使用 SQLite FTS5 建立全文索引：
-
-```text
-retrieval_chunks_fts
-- title
-- text
-- entity_names
-- source_terms
-```
-
-FTS 表可以作为可重建索引，不作为权威存储。
-
-## 检索冲突
-
-```text
-retrieval_conflict_resolutions
-- resolution_id
-- story_id nullable
-- conflict_key
-- preferred_scope
-- preferred_source_id nullable
-- decision
-- rationale
-- created_at
-- updated_at
-```
-
-## 图谱
-
-```text
-graph_nodes
-- node_id
-- story_id nullable
-- node_type
-- canonical_name
-- display_name
-- knowledge_id nullable
-- alias_group_id nullable
-- canon_status
-- worldline_id
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-
-graph_edges
-- edge_id
-- story_id nullable
-- source_node_id
-- target_node_id
-- relation_type
-- direction
-- confidence
-- evidence_id nullable
-- metadata_json
-- created_at
-- updated_at
-- deleted_at
-```
-
-`node_type` 示例：
-
-```text
-character
-location
-organization
-event
-item
-ability
-world_rule
-constraint
-style
-```
-
-`relation_type` 示例：
-
-```text
-member_of
-located_in
-participates_in
-owns
-uses_ability
-teacher_of
-ally_of
-enemy_of
-causes
-precedes
-constrains
-conflicts_with
-alias_of
-```
-
-第一版 GraphRAG 不需要复杂图数据库。先支持：
-
-* 实体识别到节点。
-* 一跳 / 两跳扩展。
-* 根据边找到相关 knowledge / evidence / chunks。
-* 按 story、worldline、canon_status 过滤。
-
-## 工作流
-
-```text
-workflow_runs
-- run_id
-- story_id nullable
-- workflow_type
-- status
-- parent_run_id nullable
-- input_json
-- output_json
-- error_json
-- started_at
-- finished_at
-- created_at
-
-workflow_steps
-- step_id
-- run_id
-- step_name
-- step_order
-- status
-- input_json
-- output_json
-- error_json
-- artifact_asset_id nullable
-- started_at
-- finished_at
-```
-
----
-
-# GraphRAG 接入方式
-
-NovelForge 的图谱不应替代现有 RAG，而应成为 retrieval 的一个证据扩展器。
-
-推荐流程：
-
-```text
-user task
-↓
-build retrieval plan
-↓
-lexical / semantic retrieval
-↓
-entity extraction from query and top hits
-↓
-graph node lookup
-↓
-graph expansion
-↓
-related knowledge / evidence / chunks
-↓
-rerank and diversify
-↓
-format prompt context
-```
-
-图谱检索适合解决：
-
-* 角色关系链。
-* 事件前后因果。
-* 角色持有物、能力、组织归属。
-* worldline / canon 分支过滤。
-* 章节写作前的设定约束召回。
-* 冲突检测时寻找相关证据。
-
-不适合第一版就做：
-
-* 自动全局推理。
-* 复杂路径搜索 UI。
-* 独立 Neo4j 部署。
-* 完全替代 chunk retrieval。
-
----
-
-# 分阶段实施路线
-
-## Phase 0：冻结设计
-
-目标：
-
-* 确认本文档的存储边界。
-* 决定每项目一个 `project.db`，全局一个 `global.db`。
-* 决定长文本资产继续存文件。
-* 决定所有结构化记录使用稳定 ID。
-
-产物：
-
-* `storage_architecture.md`
-* 后续同步更新 `project.md` 的 Roadmap / Storage 章节。
-
-## Phase 1：新增 storage 层
-
-目标：
-
-* 新增 `storage/` 包。
-* 新增 SQLite 连接、事务、schema migration 机制。
-* 新增 `001_initial.sql`。
-* 暂不替换业务功能。
-
-验收：
-
-* 启动时可以为新项目创建 `project.db`。
-* 可以读取当前 schema version。
-* 重复初始化幂等。
-
-## Phase 2：项目、故事、资产登记入库
-
-目标：
-
-* 项目 metadata 入库。
-* story index 入库。
-* outline/chapter/review/analysis 等文件通过 `asset_files` 登记。
-* `novelforge/services/memory/` 暂时提供兼容返回格式。
-
-验收：
-
-* UI 仍可正常创建项目和 story。
-* 文件资产仍保存在原路径或新 `assets/` 路径。
-* 数据库能列出项目下所有 story 和资产。
-
-当前落地状态：
-
-* story index 已支持 DB-first 读取，并在 DB 为空时从旧 `stories.json` 回填。
-* creative profile、project/story rules、project/story prompt options 已支持写入和 DB-first 读取。
-* outline/chapter/review/analysis/evaluation/workflow/retrieval 等文件资产已登记到 `asset_files`。
-* 小型 JSON 工件通过 `asset_payloads` 保存结构化 payload，包括 discussion artifacts、outline/chapter metadata、review/evaluation JSON、chapter summaries、entity cards、extraction templates、rule conflict resolutions。
-
-## Phase 3：结构化知识入库
-
-目标：
-
-* `knowledge_items`
-* `pending_knowledge_items`
-* `knowledge_evidence`
-* `entity_alias_groups`
-* auto-review records
-
-验收：
-
-* pending review、confirmed knowledge 编辑、批量确认、回滚逻辑使用 repository。
-* 旧 JSON 写入路径停止作为新数据权威来源。
-* 检索重建能从数据库读取 confirmed knowledge。
-
-当前落地状态：
-
-* confirmed structured knowledge、pending knowledge、entity aliases 已支持写入 `project.db`。
-* `novelforge/services/memory/` 的 confirmed knowledge、pending knowledge、entity aliases 读取入口已改为 DB-first。
-* 如果旧项目数据库为空但 JSON 文件里仍有数据，读取入口会回退 JSON 并尝试回填数据库，避免旧项目突然读空。
-* `sync_project_db.py` 仍明确从 JSON / Markdown 文件回填数据库，可作为修复或一次性迁移工具。
-
-## Phase 4：来源、分段、证据入库
-
-目标：
-
-* `source_documents`
-* `source_segments`
-* `knowledge_evidence`
-* long-form batch metadata 替换 JSON。
-
-验收：
-
-* 长文导入、重复检测、分段、继续处理、失败重试都能从数据库恢复。
-* 原始资料正文仍保存为文件资产。
-* 每条知识可以追溯到来源、分段、证据片段。
-
-当前落地状态：
-
-* long reference batches 已支持写入 `source_documents/source_segments` 并 DB-first 读取。
-* retrieval source files 已支持通过数据库列出；原文仍作为文件资产保留。
-
-## Phase 5：检索索引入库
-
-目标：
-
-* `retrieval_documents`
-* `retrieval_chunks`
-* `retrieval_vectors`
-* `retrieval_feedback`
-* eval cases / runs
-* conflict resolutions
-
-验收：
-
-* `retrieval/manifest.json` 不再是权威索引。
-* FTS5 支持关键词检索。
-* hybrid retrieval 可以从 DB 读取 chunks 和 vectors。
-* 用户反馈和 evaluation run 保持持久。
-
-当前落地状态：
-
-* retrieval manifest、chunks、vectors、eval cases/runs、feedback、conflict resolutions 已支持 DB-first 读取。
-* schema version 2 为 `retrieval_feedback` 和 `retrieval_conflict_resolutions` 增加 `payload_json`，用于无损替代旧 JSON。
-* schema version 3 增加 `asset_payloads`，用于让小型 JSON 工件 DB-first。
-* schema version 4 增加 `global_settings`，用于让 LLM profiles 和全局规则冲突记录进入 `global.db`。
-* schema version 5 增加项目级/故事级 active asset 唯一索引，并在迁移时软删除同键重复 active asset，避免 SQLite `NULL` 唯一约束放过项目级重复资产。
-* schema version 6 将提示词选项的用户逻辑 ID 与作用域/故事相关的存储 ID 分离，避免覆盖项跨故事移动。
-* schema version 7 增加自由创作会话、轮次和片段版本表，使迭代写作、接受/重写/分支、失败审计与章节汇编拥有稳定事务边界。
-
-## Phase 6：图谱层
-
-目标：
-
-* `graph_nodes`
-* `graph_edges`
-* 从 confirmed knowledge 构建图谱。
-* retrieval 中支持 graph expansion。
-
-验收：
-
-* 输入角色名可以找到相关角色、事件、地点、约束。
-* 支持 worldline / canon_status 过滤。
-* GraphRAG 结果能进入 retrieval debug preview 和 prompt context。
-
-## Phase 7：工作流运行记录入库
-
-目标：
-
-* `workflow_runs`
-* `workflow_steps`
-* pipeline snapshots、transition logs、resume metadata 入库。
-
-验收：
-
-* 可以列出、检查、恢复失败 run。
-* 可以对比不同 run 的输入、输出、错误和评估。
-
-当前落地状态：
-
-* workflow run snapshots 已支持写入 `workflow_runs/workflow_steps` 并 DB-first 读取、列出。
-* `novelforge/services/project_manager.py` 的 workflow run 列表、章节清单中的 review/evaluation JSON 状态、以及对应删除操作已切到 DB-first；删除兼容 JSON 镜像后仍能从 `workflow_runs` 和 `asset_payloads` 恢复项目管理视图。
-* `novelforge/services/retrieval/` 重建检索 manifest 时已从 `asset_payloads` 读取 review/evaluation payload 和 chapter discussion payload；删除兼容 JSON 镜像后，这些结构化工件仍会进入 RAG 文档。
-* `novelforge/services/resource_browser.py` 依赖的 retrieval source 列表已通过 `novelforge/services/project_manager.py` 改为 `source_documents` DB-first，文件资产仍负责保存外部源正文。
-* `list_volumes/list_arcs/list_chapter_inventory` 已能从 `asset_files/asset_payloads` 发现 volume、arc、chapter 元数据记录，不再要求对应 JSON 镜像文件存在。
-* `verify_db_first_reads.py` 已覆盖 discussion artifacts、volume/arc/chapter metadata、arc chapter plan、project/story rule conflict resolutions 等小型 JSON 工件的 DB-first 读取。
-* discussion artifacts、arc chapter plan、long reference batches、retrieval source registry 的删除函数已支持 DB-only 软删除；`verify_db_delete_semantics.py` 用于验证删除 JSON/文件镜像后仍能删除数据库记录。
-* outline、chapter outline、chapter body、review Markdown、analysis Markdown、evaluation Markdown 等长文本资产仍由文件保存正文，但 `project_manager.py` 的列表发现和删除语义已接入 `asset_files`；删除文件镜像后仍能通过 DB 记录发现并软删除生命周期记录。
-* global rules 保存已修正为只写入 `global.db` 的 global scope；project rules 不再误同步到 global scope。`verify_global_db_first_reads.py` 在隔离临时目录中验证全局 LLM profiles、global rules、global prompt options、global rule conflict resolutions 删除 JSON 镜像后仍能从 `global.db` 读回。
-* 结构化 JSON 兼容镜像默认不再写入；只有显式设置 `NOVELFORGE_WRITE_JSON_MIRRORS=1` 时才会写 JSON 镜像。默认模式下，LLM profiles、rules、prompt options、story profiles、memory metadata、knowledge payloads、discussion artifacts、metadata JSON、review/evaluation JSON、workflow snapshots、retrieval manifest/vectors/eval/feedback 等结构化数据写入 SQLite 并从 SQLite 读回；保存函数触达的旧结构化 JSON 镜像会被删除，以避免旧 JSON 在空列表/空规则场景中作为 fallback 复活；Markdown 正文、分析/评估报告、外部资料正文等长文本资产仍保留文件形态。
-* 默认 DB-only 模式下，SQLite 不再是 best-effort 辅助层，而是必需存储层；数据库初始化、读取、写入、软删除失败会直接抛错，避免无 JSON 镜像时静默丢失结构化数据。
-* `verify_db_no_json_mirrors.py` 在隔离临时目录中验证 DB-only 保存模式：写入代表性全局和项目数据，确认没有生成结构化 JSON 镜像，且所有公开读取函数仍能从 `global.db` / `project.db` 读回。
-
-## Phase 8：清理旧 JSON 存储
-
-目标：
-
-* 删除或降级旧 JSON 写入路径。
-* 保留必要导出功能。
-* 文档更新为 DB-first 架构。
-
-验收：
-
-* 新项目不再依赖旧 JSON 作为主存储。
-* 测试覆盖关键 repository、retrieval rebuild、knowledge confirmation、source ingestion。
-
----
-
-# 不推荐的路线
-
-暂不推荐：
-
-* 直接上 Neo4j。它适合重图谱系统，但会增加本地部署和打包复杂度。
-* 直接上 Postgres。NovelForge 当前是本地桌面式应用，SQLite 更合适。
-* 把 Chroma / FAISS 当主数据库。向量库适合做检索索引，不适合作为项目权威资料库。
-* 把所有正文塞进数据库。长篇小说正文和导入原文更适合作为文件资产。
-* 使用中文标题作为主键。标题可以改，ID 不应该改。
-* 没有 migration 机制就写表。即使现在没有数据，也必须从第一天保留迁移路径。
-
----
-
-# 第一批代码任务建议
-
-如果从本文档开始实现，建议先做以下任务：
-
-1. 新增 `storage/` 包。
-2. 新增 `storage/migrations/001_initial.sql`。
-3. 新增 `storage/db.py`，提供 `get_project_db(project_id)`、`transaction()`、`initialize_project_db()`。
-4. 新增 `storage/schema.py`，提供 `ensure_schema()` 和 `get_schema_version()`。
-5. 新增 repository 基类或轻量工具函数。
-6. 为 project/story metadata 写最小 repository。
-7. 在不改变 UI 行为的前提下，让新项目创建时同时创建 `project.db`。
-8. 添加最小测试：初始化幂等、schema version 正确、外键启用、WAL 设置生效。
-
-完成以上步骤后，再开始迁移 knowledge，而不是一开始就大面积改 `app.py`。
-
----
-
-# 数据库健康检查
-
-可以用以下命令检查某个项目的 `project.db` 是否可写、schema version 是否正确，以及核心表中已有多少记录：
-
-```powershell
-.\.venv\Scripts\python.exe tools\inspect_project_db.py <project_name>
-```
-
-返回字段：
-
-* `ok`: 数据库是否成功打开、迁移并完成写入探针
-* `db_path`: 项目数据库路径
-* `schema_version`: 当前数据库 schema version
-* `expected_schema_version`: 当前代码期望的 schema version
-* `writable`: 是否能写入健康检查记录
-* `journal_mode`: SQLite journal 模式
-* `foreign_keys`: 外键是否启用
-* `table_counts`: 核心表记录数
-* `error`: 失败原因
-
-如果需要把现有 JSON / Markdown 项目文件全量回填同步到 `project.db`，可以运行：
-
-```powershell
-.\.venv\Scripts\python.exe tools\sync_project_db.py <project_name>
-```
-
-该命令会同步：
-
-* story index
-* confirmed structured knowledge
-* pending knowledge
-* entity aliases
-* auto-review policy and runs
-* RAG eval cases / runs / feedback
-* retrieval conflict resolutions
-* long reference batches
-* retrieval source files
-* retrieval manifest / chunks
-* retrieval vectors
-* workflow run snapshots
-* story profiles
-* project/story rules
-* project/story prompt options
-* small JSON artifact payloads
-
-同步命令不会删除 JSON / Markdown 原文件；当前阶段项目内结构化数据读取已经优先使用数据库，旧 JSON 主要作为兼容回填来源和人工可读镜像。
-
-可以用以下命令检查全局数据库 `data/global.db`：
-
-```powershell
-.\.venv\Scripts\python.exe tools\inspect_global_db.py
-```
-
-如果需要把现有全局 JSON 配置回填到 `global.db`，可以运行：
-
-```powershell
-.\.venv\Scripts\python.exe tools\sync_global_db.py
-```
-
-该命令会同步：
-
-* LLM profiles
-* global rules
-* global prompt options
-* global rule conflict resolutions
-
-同步命令不会删除旧全局 JSON 文件；当前阶段全局结构化配置读取已经优先使用 `global.db`，旧 JSON 主要作为兼容回填来源和人工可读镜像。
-
-也可以运行端到端验证脚本，创建一个验证项目并依次写入知识、来源、检索索引、向量、评估反馈和工作流快照：
-
-```powershell
-.\.venv\Scripts\python.exe tools\verify_db_pipeline.py
-```
-
-也可以指定项目名：
-
-```powershell
-.\.venv\Scripts\python.exe tools\verify_db_pipeline.py _db_verify_manual
-```
-
-该脚本会写入验证数据，适合开发阶段确认数据库链路是否真正可写。验证项目仍位于 `data/projects/` 下。
-
-如果需要验证结构化数据已经真正 DB-first，并同时覆盖 DB-only 删除语义，可以运行总验证：
-
-```powershell
-.\.venv\Scripts\python.exe tools\verify_db_storage.py
-```
-
-总验证会依次运行 `verify_global_db_first_reads.py`、`verify_db_first_reads.py`、`verify_db_delete_semantics.py` 和 `verify_db_no_json_mirrors.py`。
-
-结构化数据现在默认不生成 JSON 兼容镜像。如果临时需要恢复旧式镜像写入，可以在启动应用或运行脚本前设置：
+只有明确验证旧式集成时才临时开启：
 
 ```powershell
 $env:NOVELFORGE_WRITE_JSON_MIRRORS='1'
-.\.venv\Scripts\python.exe app.py
+streamlit run app.py
 ```
 
-该开关只影响结构化 JSON 镜像写入；默认 DB-only 模式下，旧 JSON 在尚未被对应保存函数触达前仍可作为兼容回填来源读取，一旦该结构化资源被重新保存，对应旧镜像会被删除。Markdown / TXT 正文类资产仍按文件保存。
+这不是长期双写方案。新功能不得依赖镜像存在，也不得把 JSON 恢复为权威来源。
 
-如果只需要单独验证 DB-first 读取，可以运行：
+## 备份与恢复
+
+### 常规备份
+
+最安全的做法是停止 NovelForge 后备份整个 `data/`：
+
+- `global.db` 与所有项目 `project.db`。
+- 项目 Markdown/TXT 文件资产。
+- SQLite 的 `-wal`/`-shm` 文件如果备份时应用仍在运行，也必须与主库保持同一时点；因此推荐停应用后复制。
+- `.env` 包含密钥，应单独安全保存，不要提交到版本库。
+
+### 健康检查
 
 ```powershell
-.\.venv\Scripts\python.exe tools\verify_db_first_reads.py
+# 项目数据库
+.\.venv\Scripts\python.exe tools\inspect_project_db.py <project_name>
+
+# 全局数据库
+.\.venv\Scripts\python.exe tools\inspect_global_db.py
 ```
 
-该脚本会创建 `_db_first_verify_*` 验证项目，先写入数据库和 JSON 镜像，再删除该验证项目内的兼容 JSON 镜像，最后从公开读取函数和 `novelforge/services/project_manager.py` 列表函数读回数据。它只允许操作 `_db_first_verify_` 前缀项目，避免误删真实项目文件。
+检查结果包括 schema version、可写性、journal mode、foreign key 状态和核心表记录数。
 
-如果需要验证 DB-only 删除语义，可以运行：
+### 旧项目导入或手动修复
 
 ```powershell
-.\.venv\Scripts\python.exe tools\verify_db_delete_semantics.py
+.\.venv\Scripts\python.exe tools\sync_project_db.py <project_name>
+.\.venv\Scripts\python.exe tools\sync_global_db.py
 ```
 
-该脚本会创建 `_db_delete_verify_*` 验证项目，写入 discussion artifacts / arc chapter plan / long reference batch / retrieval source registry，删除对应 JSON 或文件镜像，再调用公开删除函数确认数据库记录可以被软删除。
+同步工具用于从旧 JSON/Markdown 回填 SQLite，不会把 SQLite 新数据反向覆盖为旧文件权威。执行前应先备份对应项目。
 
-如果需要单独验证关闭 JSON 镜像后的 DB-only 保存模式，可以运行：
+删除项目会把目录隔离到 `data/deleted_projects/`，并在归档数据库中保留维护锁，防止后台任务误领取。当前没有一键恢复入口；只把目录移回 `data/projects/` 并不构成完整恢复，还必须通过受控操作清除 `project_meta.maintenance_mode` 并重新登记项目。人工恢复前应先备份目录和数据库。
+
+## 验证
 
 ```powershell
-.\.venv\Scripts\python.exe tools\verify_db_no_json_mirrors.py
+# DB-first 读取、删除语义、无 JSON 镜像和全局配置
+.\.venv\Scripts\python.exe tools\verify_db_storage.py
+
+# 代表性端到端数据库链路
+.\.venv\Scripts\python.exe tools\verify_db_pipeline.py
+
+# 资料任务基础状态、后台租约、维护锁与跨重启结果恢复
+.\.venv\Scripts\python.exe tools\verify_ingestion_tasks.py
+.\.venv\Scripts\python.exe tools\verify_ingestion_task_runtime.py
+.\.venv\Scripts\python.exe tools\verify_ingestion_task_hardening.py
+.\.venv\Scripts\python.exe tools\verify_ingestion_task_recovery.py
+.\.venv\Scripts\python.exe tools\verify_ingestion_batch_mutation_guard.py
+
+# 向量异常处理、增量构建与零向量行时的元数据持久化
+.\.venv\Scripts\python.exe tools\verify_retrieval_hardening.py
+.\.venv\Scripts\python.exe tools\verify_vector_metadata_persistence.py
 ```
 
-该脚本会在 `.tmp_db_no_json_mirrors/` 下创建隔离工作区，写入代表性全局和项目结构化数据，确认没有生成结构化 JSON 镜像，并从 SQLite 读回所有数据。
+验证脚本创建的项目使用专用 `_verify_*` 前缀。脚本和人工清理都必须校验目标在工作区和允许前缀内。
+
+## 不变量
+
+1. SQLite 是结构化权威来源，JSON 不是第二权威来源。
+2. 长文本文件与 `asset_files` 登记必须保持一致。
+3. 所有长期关系使用稳定 ID，不使用中文标题、路径或列表下标作主键。
+4. 高频过滤、排序和关联字段使用独立列；低频扩展信息才进入 JSON payload。
+5. UI 和 workflow 不直接拼 SQL；所有 SQL 进入 repository。
+6. 多记录变更要在一个事务中完成，失败时不得留下半套状态。
+7. 检索缓存可以重建，反馈、评测、冲突裁决和运行检查点不可随意删除。
+8. schema 迁移连续、可重复检查、不可回写历史。
+9. 软删除记录默认不出现在活动查询中；永久删除必须经过显式业务条件。
+10. 数据库不可用时明确失败，不以静默 fallback 掩盖数据丢失。

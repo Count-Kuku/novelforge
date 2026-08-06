@@ -777,6 +777,10 @@ class RetrievalVectorStore(NovelForgeSchema):
     # stable chunk id alone is not sufficient because users can edit a chunk
     # without changing its position in the document.
     content_hashes: dict[str, str] = Field(default_factory=dict)
+    build_mode: Literal["full", "incremental"] = "full"
+    reused_vector_count: int = Field(default=0, ge=0)
+    generated_vector_count: int = Field(default=0, ge=0)
+    removed_vector_count: int = Field(default=0, ge=0)
 
 
 class RetrievalConflict(NovelForgeSchema):

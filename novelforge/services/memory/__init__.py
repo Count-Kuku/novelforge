@@ -44,6 +44,9 @@ _export_module(_content)
 from . import references as _references
 _export_module(_references)
 
+from . import ingestion_tasks as _ingestion_tasks
+_export_module(_ingestion_tasks)
+
 class _FacadeModule(ModuleType):
     """Propagate compatibility patches to implementation modules.
 

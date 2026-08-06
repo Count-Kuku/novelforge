@@ -7,6 +7,7 @@ from novelforge.services import memory as _memory_api
 import json
 import hashlib
 import logging
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -31,8 +32,25 @@ from novelforge.core.schemas import (
     VolumeOutlineMetadata,
 )
 from novelforge.core.prompt_options import normalize_prompt_options_payload
-from storage import initialize_global_db, initialize_project_db, inspect_global_db, inspect_project_db, open_global_db, open_project_db
+from .runtime_storage import (
+    _load_runtime_from_db_best_effort,
+    _mutate_workflow_in_db,
+    _recover_existing_project_db_if_needed,
+    _sync_runtime_to_db_best_effort,
+)
+from storage import (
+    initialize_global_db,
+    initialize_project_db,
+    inspect_global_db,
+    inspect_project_db,
+    open_existing_project_db,
+    open_global_db,
+    open_project_db,
+)
 from storage.repositories import (
+    claim_next_source_ingestion_task_row,
+    claim_source_ingestion_task_row,
+    cleanup_archived_source_ingestion_task_rows,
     append_retrieval_feedback_row,
     begin_creative_turn_row,
     complete_creative_turn_row,
@@ -41,6 +59,7 @@ from storage.repositories import (
     delete_knowledge_category_item,
     delete_pending_knowledge_items,
     delete_workflow_run_snapshot,
+    delete_archived_source_ingestion_task_row,
     fail_creative_turn_row,
     finalize_creative_session_rows,
     get_project_meta,
@@ -72,10 +91,14 @@ from storage.repositories import (
     load_long_reference_batch_rows,
     list_workflow_run_ids,
     list_workflow_run_summaries,
+    list_source_ingestion_task_rows,
     load_workflow_run_snapshot,
+    load_source_ingestion_task_control_row,
+    load_source_ingestion_task_row,
     list_story_rows,
     clone_story_storage_rows,
     purge_story_scoped_rows,
+    project_maintenance_mode,
     rename_project_meta,
     mark_asset_deleted,
     mark_long_reference_batch_deleted,
@@ -99,6 +122,13 @@ from storage.repositories import (
     sync_retrieval_vector_store_payload,
     sync_stories_index,
     sync_workflow_run_snapshot,
+    heartbeat_source_ingestion_task_row,
+    release_source_ingestion_task_lease_row,
+    request_source_ingestion_task_control_row,
+    set_source_ingestion_task_archived_row,
+    set_project_maintenance_mode,
+    settle_stale_source_ingestion_controls_row,
+    sync_source_ingestion_task_row,
     upsert_asset_payload,
     upsert_knowledge_category_item,
     upsert_pending_knowledge_items,
@@ -293,6 +323,13 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
     raw = profile if isinstance(profile, dict) else {}
     profile_id = str(raw.get("id") or fallback_id).strip() or fallback_id
     name = str(raw.get("name") or "").strip() or DEFAULT_LLM_PROFILE_NAME
+    def safe_rate(value: object) -> float:
+        try:
+            parsed = float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        return parsed if math.isfinite(parsed) and parsed >= 0 else 0.0
+
     return {
         "id": profile_id,
         "name": name,
@@ -300,6 +337,9 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
         "api_key": str(raw.get("api_key") or ""),
         "model_name": str(raw.get("model_name") or DEFAULT_LLM_MODEL),
         "embedding_model_name": str(raw.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+        "input_price_per_million": safe_rate(raw.get("input_price_per_million")),
+        "output_price_per_million": safe_rate(raw.get("output_price_per_million")),
+        "embedding_price_per_million": safe_rate(raw.get("embedding_price_per_million")),
     }
 
 
@@ -354,6 +394,9 @@ def _load_env_llm_profile() -> dict:
             "api_key": api_key,
             "model_name": model_name,
             "embedding_model_name": embedding_model_name,
+            "input_price_per_million": os.getenv("LLM_INPUT_PRICE_PER_MILLION") or file_values.get("LLM_INPUT_PRICE_PER_MILLION") or 0,
+            "output_price_per_million": os.getenv("LLM_OUTPUT_PRICE_PER_MILLION") or file_values.get("LLM_OUTPUT_PRICE_PER_MILLION") or 0,
+            "embedding_price_per_million": os.getenv("LLM_EMBEDDING_PRICE_PER_MILLION") or file_values.get("LLM_EMBEDDING_PRICE_PER_MILLION") or 0,
         },
         "default",
     )
@@ -418,6 +461,9 @@ def load_llm_settings() -> dict:
         "base_url": str(active_profile.get("base_url") or DEFAULT_LLM_BASE_URL),
         "model_name": str(active_profile.get("model_name") or DEFAULT_LLM_MODEL),
         "embedding_model_name": str(active_profile.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+        "input_price_per_million": float(active_profile.get("input_price_per_million") or 0),
+        "output_price_per_million": float(active_profile.get("output_price_per_million") or 0),
+        "embedding_price_per_million": float(active_profile.get("embedding_price_per_million") or 0),
         "env_path": str(ENV_PATH.resolve()),
         "profiles_path": str(LLM_PROFILES_PATH.resolve()),
     }
@@ -850,6 +896,30 @@ def rename_project_database_record(project_name: str, old_name: str, new_name: s
         result = rename_project_meta(conn, normalized_old_name, normalized_new_name)
         conn.commit()
     return result
+
+
+def set_project_maintenance(project_name: str, enabled: bool) -> bool:
+    """Atomically fence or reopen background work for a project."""
+    normalized_name = normalize_project_name(project_name)
+    root = project_path(normalized_name).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Project does not exist: {normalized_name}")
+    _bootstrap_project_database_if_needed(normalized_name)
+    with open_existing_project_db(root) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        changed = set_project_maintenance_mode(conn, normalized_name, enabled)
+        conn.commit()
+    return changed
+
+
+def is_project_in_maintenance(project_name: str) -> bool:
+    normalized_name = normalize_project_name(project_name)
+    root = project_path(normalized_name).resolve()
+    if not root.is_dir():
+        return False
+    _bootstrap_project_database_if_needed(normalized_name)
+    with open_existing_project_db(root) as conn:
+        return project_maintenance_mode(conn, normalized_name)
 
 
 def _db_only_storage_required() -> bool:
@@ -1745,43 +1815,6 @@ def _load_entity_aliases_from_db_best_effort(project_name: str) -> list[dict] | 
         )
         _raise_if_db_only(f"Failed to load entity aliases from project database for {project_name}.", exc)
         return None
-
-
-def _load_runtime_from_db_best_effort(project_name: str, loader, description: str):
-    if _project_db_marked_unavailable(project_name):
-        return None
-    try:
-        with open_project_db(project_path(project_name).resolve()) as conn:
-            return loader(conn)
-    except Exception as exc:
-        _DB_UNAVAILABLE_PROJECTS.add(project_name)
-        logging.getLogger("novelforge.storage").warning(
-            "Failed to load %s from project database for %s: %s",
-            description,
-            project_name,
-            exc,
-        )
-        _raise_if_db_only(f"Failed to load {description} from project database for {project_name}.", exc)
-        return None
-
-
-def _sync_runtime_to_db_best_effort(project_name: str, callback) -> None:
-    if _project_db_marked_unavailable(project_name):
-        return
-    try:
-        with open_project_db(project_path(project_name).resolve()) as conn:
-            callback(conn)
-            conn.commit()
-    except Exception as exc:
-        _DB_UNAVAILABLE_PROJECTS.add(project_name)
-        logging.getLogger("novelforge.storage").warning(
-            "Failed to sync runtime record to project database for %s: %s",
-            project_name,
-            exc,
-        )
-        _raise_if_db_only(f"Failed to sync runtime record to project database for {project_name}.", exc)
-    else:
-        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
 
 
 def _sync_source_to_db_best_effort(project_name: str, callback) -> None:

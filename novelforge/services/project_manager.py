@@ -24,6 +24,7 @@ from novelforge.services.memory import (
     load_project_registry,
     list_pipeline_run_summaries,
     list_retrieval_source_files,
+    list_source_ingestion_tasks,
     load_review,
     load_review_json,
     load_source_package_report,
@@ -44,6 +45,7 @@ from novelforge.services.memory import (
     save_evaluation_report,
     save_review,
     save_review_json,
+    set_project_maintenance,
     delete_pipeline_run_record,
     sync_retrieval_source_file_record,
     sync_project_retrieval_assets,
@@ -57,6 +59,7 @@ REVIEW_JSON_PATTERN = re.compile(r"chapter_(\d+)\.json$")
 ANALYSIS_PATTERN = re.compile(r"(.+)_chapter_(\d+)\.md$")
 SOURCE_PACKAGE_REPORT_NAME = "source_package.md"
 EVALUATION_PATTERN = re.compile(r"chapter_(\d+)\.md$")
+PROJECT_MUTATION_BLOCKING_TASK_STATUSES = {"queued", "running"}
 
 
 def _project_dir(project_name: str) -> Path:
@@ -97,6 +100,30 @@ def _timestamp_or_empty(timestamp: float | None) -> str:
     return datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
 
 
+def _blocking_source_ingestion_tasks(project_name: str) -> list[dict]:
+    """Return durable tasks that make moving the project directory unsafe."""
+    return [
+        task
+        for task in list_source_ingestion_tasks(
+            project_name,
+            statuses=sorted(PROJECT_MUTATION_BLOCKING_TASK_STATUSES),
+        )
+        if str(task.get("status") or "") in PROJECT_MUTATION_BLOCKING_TASK_STATUSES
+    ]
+
+
+def _ensure_project_mutation_is_safe(project_name: str, action_label: str) -> None:
+    blocking_tasks = _blocking_source_ingestion_tasks(project_name)
+    if not blocking_tasks:
+        return
+    running_count = sum(1 for task in blocking_tasks if task.get("status") == "running")
+    queued_count = sum(1 for task in blocking_tasks if task.get("status") == "queued")
+    raise RuntimeError(
+        f"项目仍有 {running_count} 个运行中、{queued_count} 个等待中的资料任务，"
+        f"暂不能{action_label}。请先到“资料导入 → 资料任务”暂停或取消这些任务。"
+    )
+
+
 def _latest_mtime(paths: list[Path]) -> float | None:
     values = [item.stat().st_mtime for item in paths if item.exists()]
     return max(values) if values else None
@@ -133,9 +160,21 @@ def delete_project(project_name: str) -> bool:
     archived = False
 
     if target.exists() and target.is_dir():
-        archive_target = _unique_deleted_project_path(target.name)
-        target.rename(archive_target)
-        archived = True
+        maintenance_enabled = set_project_maintenance(project_name, True)
+        if not maintenance_enabled:
+            raise RuntimeError("无法锁定项目，已取消删除操作。")
+        try:
+            _ensure_project_mutation_is_safe(project_name, "删除项目")
+            archive_target = _unique_deleted_project_path(target.name)
+            target.rename(archive_target)
+            archived = True
+        except Exception:
+            if target.exists() and target.is_dir():
+                try:
+                    set_project_maintenance(project_name, False)
+                except Exception as rollback_exc:
+                    LOGGER.error("Failed to clear project maintenance mode for %s: %s", project_name, rollback_exc)
+            raise
 
     unregistered = unregister_project(project_name)
     return bool(archived or discoverable or unregistered)
@@ -149,6 +188,14 @@ def rename_project(old_name: str, new_name: str) -> str:
         raise FileNotFoundError("Source project does not exist.")
     if target.exists() or project_is_discoverable(normalized_name):
         raise FileExistsError("Target project already exists.")
+    maintenance_enabled = set_project_maintenance(old_name, True)
+    if not maintenance_enabled:
+        raise RuntimeError("无法锁定项目，已取消重命名操作。")
+    try:
+        _ensure_project_mutation_is_safe(old_name, "重命名项目")
+    except Exception:
+        set_project_maintenance(old_name, False)
+        raise
     registry_snapshot = load_project_registry()
     source.rename(target)
     database_renamed = False
@@ -156,6 +203,9 @@ def rename_project(old_name: str, new_name: str) -> str:
         rename_project_database_record(normalized_name, old_name, normalized_name)
         database_renamed = True
         rename_registered_project(old_name, normalized_name)
+        if not set_project_maintenance(normalized_name, False):
+            raise RuntimeError("项目已移动，但未能解除维护锁。")
+        maintenance_enabled = False
     except Exception:
         if database_renamed:
             try:
@@ -178,6 +228,15 @@ def rename_project(old_name: str, new_name: str) -> str:
                 normalized_name,
                 rollback_exc,
             )
+        if maintenance_enabled and source.exists() and source.is_dir():
+            try:
+                set_project_maintenance(old_name, False)
+            except Exception as rollback_exc:
+                LOGGER.error(
+                    "Failed to clear project maintenance mode after rename rollback %s: %s",
+                    old_name,
+                    rollback_exc,
+                )
         raise
     try:
         sync_project_retrieval_assets(normalized_name)

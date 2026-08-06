@@ -80,9 +80,17 @@ def _quarantine_empty_db_artifacts(db_path: Path, exc: Exception) -> bool:
     return True
 
 
-def _connect(db_path: Path) -> sqlite3.Connection:
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), factory=ClosingConnection)
+def _connect(db_path: Path, *, create: bool = True) -> sqlite3.Connection:
+    if create:
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        target = str(db_path)
+        uri = False
+    else:
+        if not db_path.parent.is_dir() or not db_path.is_file():
+            raise FileNotFoundError(f"Project database does not exist: {db_path}")
+        target = f"{db_path.resolve().as_uri()}?mode=rw"
+        uri = True
+    conn = sqlite3.connect(target, factory=ClosingConnection, uri=uri)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:
@@ -112,6 +120,20 @@ def open_project_db(project_path: Path) -> sqlite3.Connection:
                 conn.close()
                 raise
             return conn
+        raise
+
+
+def open_existing_project_db(project_path: Path) -> sqlite3.Connection:
+    """Open an existing project database without creating paths or files."""
+    db_path = get_project_db_path(project_path)
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = _connect(db_path, create=False)
+        ensure_schema(conn)
+        return conn
+    except Exception:
+        if conn is not None:
+            conn.close()
         raise
 
 
@@ -148,9 +170,15 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         conn.commit()
 
 
-def initialize_project_db(project_path: Path, project_name: str) -> Path:
+def initialize_project_db(
+    project_path: Path,
+    project_name: str,
+    *,
+    require_existing: bool = False,
+) -> Path:
     db_path = get_project_db_path(project_path)
-    with open_project_db(project_path) as conn:
+    opener = open_existing_project_db if require_existing else open_project_db
+    with opener(project_path) as conn:
         upsert_project_meta(conn, project_name=project_name)
         conn.commit()
     return db_path
@@ -181,6 +209,7 @@ def inspect_project_db(project_path: Path) -> dict:
         "retrieval_documents",
         "retrieval_chunks",
         "retrieval_vectors",
+        "retrieval_vector_store_meta",
         "graph_nodes",
         "graph_edges",
         "workflow_runs",

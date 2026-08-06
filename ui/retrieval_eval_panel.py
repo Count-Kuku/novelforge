@@ -221,7 +221,10 @@ def _render_eval_case_actions(project_name: str, story_id: str, cases: list[dict
             scoped_case = {**selected_case, "story_id": str(selected_case.get("story_id") or story_id)}
             run = run_retrieval_eval_cases(project_name, [scoped_case], note="手动运行单个评测用例")
             st.session_state[last_run_key] = run
-            st.success(f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}")
+            st.success(
+                f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}，"
+                f"Recall@K {run.get('mean_recall_at_k', 0):.0%}，MRR {run.get('mean_mrr', 0):.2f}"
+            )
     if confirmed_button(
         action_col_c,
         "删除所选用例",
@@ -238,7 +241,11 @@ def _render_eval_case_actions(project_name: str, story_id: str, cases: list[dict
         ]
         run = run_retrieval_eval_cases(project_name, scoped_cases, note="手动运行全部启用评测用例")
         st.session_state[last_run_key] = run
-        st.success(f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}，通过率 {run.get('pass_rate', 0):.0%}")
+        st.success(
+            f"评测完成：通过 {run.get('passed_count', 0)} / {run.get('case_count', 0)}，"
+            f"通过率 {run.get('pass_rate', 0):.0%}，Recall@K {run.get('mean_recall_at_k', 0):.0%}，"
+            f"MRR {run.get('mean_mrr', 0):.2f}"
+        )
 
 
 def _render_eval_cases(project_name: str, story_id: str, cases: list[dict]) -> None:
@@ -252,10 +259,18 @@ def _eval_result_rows(last_run: dict) -> list[dict]:
     rows = []
     for result in last_run.get("results", []):
         top_hit = result.get("top_hit", {}).get("chunk", {}) if isinstance(result.get("top_hit", {}), dict) else {}
+        has_metrics = not result.get("error") and all(
+            key in result
+            for key in ("recall_at_k", "first_relevant_rank", "mrr", "ndcg_at_k")
+        )
         rows.append({
-            "结果": "通过" if result.get("passed") else "未通过",
+            "结果": "执行错误" if result.get("error") else ("通过" if result.get("passed") else "未通过"),
             "用例": result.get("name", ""),
             "命中": f"{result.get('matched_count', 0)} / {result.get('expectation_count', 0)}",
+            "Recall@K": f"{result.get('recall_at_k', 0):.0%}" if has_metrics else "未记录",
+            "首个相关排名": (result.get("first_relevant_rank") or "-") if has_metrics else "未记录",
+            "MRR": f"{result.get('mrr', 0):.2f}" if has_metrics else "未记录",
+            "nDCG@K": f"{result.get('ndcg_at_k', 0):.2f}" if has_metrics else "未记录",
             "Top1": f"{label_source_type(top_hit.get('source_type', ''))} / {top_hit.get('title', '')}" if top_hit else "-",
             "错误": result.get("error", ""),
         })
@@ -271,6 +286,34 @@ def _render_last_eval_run(project_name: str, story_id: str, runs: list[dict]) ->
             f"处理记录 ID={last_run.get('run_id', '')} / 通过 {last_run.get('passed_count', 0)} / "
             f"总数 {last_run.get('case_count', 0)} / 通过率 {last_run.get('pass_rate', 0):.0%}"
         )
+        has_run_metrics = all(
+            key in last_run
+            for key in ("mean_recall_at_k", "mean_mrr", "mean_ndcg_at_k", "zero_recall_count")
+        )
+        if has_run_metrics:
+            error_count = int(last_run.get("error_count") or 0)
+            metric_case_count = int(last_run.get("metric_case_count", last_run.get("case_count", 0)) or 0)
+            metric_cols = st.columns(5)
+            metric_cols[0].metric(
+                "平均 Recall@K",
+                f"{last_run.get('mean_recall_at_k', 0):.0%}" if metric_case_count else "未计算",
+            )
+            metric_cols[1].metric(
+                "平均 MRR",
+                f"{last_run.get('mean_mrr', 0):.2f}" if metric_case_count else "未计算",
+            )
+            metric_cols[2].metric(
+                "平均 nDCG@K",
+                f"{last_run.get('mean_ndcg_at_k', 0):.2f}" if metric_case_count else "未计算",
+            )
+            metric_cols[3].metric("零召回用例", last_run.get("zero_recall_count", 0))
+            metric_cols[4].metric("执行错误", error_count)
+            st.caption(
+                "Recall@K 衡量期望项覆盖率；MRR 衡量首个相关结果是否靠前；"
+                "nDCG@K 衡量相关结果的排序质量。执行错误不会计入这三项质量均值。"
+            )
+        else:
+            st.info("这条历史运行创建于排名指标升级前，Recall@K、MRR 和 nDCG@K 未记录。")
         result_rows = _eval_result_rows(last_run)
         if result_rows:
             st.dataframe(result_rows, use_container_width=True, hide_index=True)

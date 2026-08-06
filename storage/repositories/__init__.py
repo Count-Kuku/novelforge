@@ -44,7 +44,13 @@ from .knowledge import (
     upsert_pending_knowledge_items,
     sync_pending_knowledge,
 )
-from .projects import get_project_meta, rename_project_meta, upsert_project_meta
+from .projects import (
+    get_project_meta,
+    project_maintenance_mode,
+    rename_project_meta,
+    set_project_maintenance_mode,
+    upsert_project_meta,
+)
 from .runtime import (
     append_retrieval_feedback_row,
     load_auto_review_policy_row,
@@ -74,6 +80,31 @@ from .sources import (
     sync_long_reference_batch,
     sync_retrieval_source_file,
 )
+from .ingestion_tasks import (
+    finalize_source_ingestion_task_row,
+    list_source_ingestion_task_rows,
+    load_source_ingestion_task_row,
+    persist_source_ingestion_task_row,
+    sync_source_ingestion_task_row,
+)
+from .ingestion_batch_mutations import (
+    delete_long_reference_batch_row,
+    persist_long_reference_batch_row,
+)
+from .ingestion_task_leases import (
+    claim_next_source_ingestion_task_row,
+    claim_source_ingestion_task_row,
+    heartbeat_source_ingestion_task_row,
+)
+from .ingestion_task_controls import (
+    cleanup_archived_source_ingestion_task_rows,
+    delete_archived_source_ingestion_task_row,
+    load_source_ingestion_task_control_row,
+    release_source_ingestion_task_lease_row,
+    request_source_ingestion_task_control_row,
+    set_source_ingestion_task_archived_row,
+    settle_stale_source_ingestion_controls_row,
+)
 from .workflows import (
     delete_workflow_run_snapshot,
     list_workflow_run_ids,
@@ -86,6 +117,7 @@ from .story_copy import clone_story_storage_rows
 
 __all__ = [
     "get_project_meta",
+    "project_maintenance_mode",
     "begin_creative_turn_row",
     "clone_creative_session_rows",
     "complete_creative_turn_row",
@@ -101,6 +133,7 @@ __all__ = [
     "update_creative_fragment_row",
     "update_creative_session_row",
     "rename_project_meta",
+    "set_project_maintenance_mode",
     "delete_workflow_run_snapshot",
     "delete_knowledge_category_item",
     "delete_pending_knowledge_items",
@@ -123,6 +156,23 @@ __all__ = [
     "list_asset_file_rows",
     "list_asset_payload_rows",
     "list_retrieval_source_file_rows",
+    "claim_next_source_ingestion_task_row",
+    "claim_source_ingestion_task_row",
+    "cleanup_archived_source_ingestion_task_rows",
+    "delete_archived_source_ingestion_task_row",
+    "finalize_source_ingestion_task_row",
+    "heartbeat_source_ingestion_task_row",
+    "list_source_ingestion_task_rows",
+    "load_source_ingestion_task_control_row",
+    "load_source_ingestion_task_row",
+    "persist_source_ingestion_task_row",
+    "release_source_ingestion_task_lease_row",
+    "request_source_ingestion_task_control_row",
+    "set_source_ingestion_task_archived_row",
+    "settle_stale_source_ingestion_controls_row",
+    "sync_source_ingestion_task_row",
+    "delete_long_reference_batch_row",
+    "persist_long_reference_batch_row",
     "load_long_reference_batch_row",
     "load_long_reference_batch_rows",
     "list_workflow_run_ids",

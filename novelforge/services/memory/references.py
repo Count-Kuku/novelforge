@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from novelforge.services import memory as _memory_api
+from storage.repositories.ingestion_batch_mutations import (
+    delete_long_reference_batch_row,
+    persist_long_reference_batch_row,
+)
 
 def long_reference_batches_path(project_name: str) -> _memory_api.Path:
     path = _memory_api.project_path(project_name) / "long_reference_batches"
@@ -110,21 +116,48 @@ def create_long_reference_batch(
         "content_char_count": content_char_count,
         "segments": segments,
     })
-    save_long_reference_batch(project_name, batch)
-    return batch
+    return save_long_reference_batch(project_name, batch)
 
 
-def save_long_reference_batch(project_name: str, batch: dict) -> dict:
+def save_long_reference_batch(
+    project_name: str,
+    batch: dict,
+    *,
+    task_id: str = "",
+    worker_id: str = "",
+) -> dict:
     normalized = normalize_long_reference_batch({
         **(batch or {}),
         "updated_at": _now_iso(),
     })
-    path = long_reference_batch_path(project_name, normalized["batch_id"])
-    _memory_api._write_json_mirror(path, normalized)
-    _memory_api._sync_source_to_db_best_effort(
+    persisted = _memory_api._mutate_workflow_in_db(
         project_name,
-        lambda conn: _memory_api.sync_long_reference_batch(conn, normalized),
+        lambda conn: persist_long_reference_batch_row(
+            conn,
+            batch=normalized,
+            task_id=str(task_id or ""),
+            worker_id=str(worker_id or ""),
+        ),
+        "long reference batch",
     )
+    if not isinstance(persisted, dict):
+        if not _memory_api.project_is_discoverable(project_name):
+            raise FileNotFoundError(f"项目不存在或已被移动：{project_name}")
+        raise RuntimeError("资料批次未能写入项目数据库。")
+    normalized = normalize_long_reference_batch(persisted)
+    path = long_reference_batch_path(project_name, normalized["batch_id"])
+    try:
+        _memory_api._write_json_mirror(path, normalized)
+    except Exception as exc:
+        logging.getLogger("novelforge.storage").warning(
+            "Long-reference batch committed to DB but JSON mirror write failed for %s/%s: %s",
+            project_name,
+            normalized["batch_id"],
+            exc,
+        )
+    if not _memory_api._write_json_mirrors_enabled():
+        pending = _memory_api._take_project_pending_mirror_deletions(project_name)
+        _memory_api._delete_pending_mirrors(pending)
     return normalized
 
 
@@ -187,19 +220,34 @@ def list_long_reference_batches(project_name: str) -> list[dict]:
 
 
 def delete_long_reference_batch(project_name: str, batch_id: str) -> bool:
-    path = long_reference_batch_path(project_name, batch_id)
     clean_batch_id = str(batch_id or "").strip()
-    file_existed = path.exists()
-    db_exists = bool(load_long_reference_batch(project_name, clean_batch_id))
-    if not file_existed and not db_exists:
-        return False
-    if file_existed:
-        path.unlink()
-    _memory_api._sync_source_to_db_best_effort(
+    deleted = _memory_api._mutate_workflow_in_db(
         project_name,
-        lambda conn: _memory_api.mark_long_reference_batch_deleted(conn, batch_id=clean_batch_id),
+        lambda conn: delete_long_reference_batch_row(conn, batch_id=clean_batch_id),
+        "long reference batch deletion",
     )
-    return True
+    if deleted is None:
+        if not _memory_api.project_is_discoverable(project_name):
+            return False
+        raise RuntimeError("资料批次未能从项目数据库删除。")
+    path = long_reference_batch_path(project_name, clean_batch_id)
+    file_existed = path.exists()
+    if file_existed:
+        try:
+            path.unlink()
+        except OSError as exc:
+            _memory_api._queue_mirror_deletion(path)
+            logging.getLogger("novelforge.storage").warning(
+                "Long-reference batch deleted from DB but JSON mirror cleanup failed for %s/%s: %s",
+                project_name,
+                clean_batch_id,
+                exc,
+            )
+        else:
+            _memory_api._discard_pending_mirror_deletion(path)
+    else:
+        _memory_api._discard_pending_mirror_deletion(path)
+    return bool(deleted or file_existed)
 
 
 def retrieval_path(project_name: str) -> _memory_api.Path:
@@ -285,12 +333,22 @@ def save_conflict_resolution(project_name: str, resolution: dict) -> dict:
     return normalized
 
 
-def _normalize_string_list_field(value) -> list[str]:
+def _normalize_string_list_field(value, *, case_insensitive: bool = False) -> list[str]:
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    if isinstance(value, str):
-        return [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
-    return []
+        values = [str(item).strip() for item in value if str(item).strip()]
+    elif isinstance(value, str):
+        values = [item.strip() for item in value.replace("，", ",").split(",") if item.strip()]
+    else:
+        values = []
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        key = item.casefold() if case_insensitive else item
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def normalize_retrieval_eval_case(case: dict) -> dict:
@@ -313,14 +371,20 @@ def normalize_retrieval_eval_case(case: dict) -> dict:
     worldline_mode = str(payload.get("worldline_mode") or "prefer").strip()
     if worldline_mode not in {"prefer", "strict"}:
         worldline_mode = "prefer"
+    expected_terms = _normalize_string_list_field(payload.get("expected_terms", []), case_insensitive=True)
+    expected_chunk_ids = _normalize_string_list_field(payload.get("expected_chunk_ids", []))
+    expected_source_types = _normalize_string_list_field(payload.get("expected_source_types", []))
+    expectation_count = len(expected_terms) + len(expected_chunk_ids) + len(expected_source_types)
+    if expectation_count:
+        min_expected_matches = min(min_expected_matches, expectation_count)
     return {
         "case_id": case_id,
         "story_id": str(payload.get("story_id") or "").strip(),
         "name": str(payload.get("name") or payload.get("query") or "未命名评测用例").strip(),
         "query": str(payload.get("query") or "").strip(),
-        "expected_terms": _normalize_string_list_field(payload.get("expected_terms", [])),
-        "expected_chunk_ids": _normalize_string_list_field(payload.get("expected_chunk_ids", [])),
-        "expected_source_types": _normalize_string_list_field(payload.get("expected_source_types", [])),
+        "expected_terms": expected_terms,
+        "expected_chunk_ids": expected_chunk_ids,
+        "expected_source_types": expected_source_types,
         "allowed_scopes": _normalize_string_list_field(payload.get("allowed_scopes", [])),
         "allowed_source_types": _normalize_string_list_field(payload.get("allowed_source_types", [])),
         "retrieval_profile": str(payload.get("retrieval_profile") or "").strip(),

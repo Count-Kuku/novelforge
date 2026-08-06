@@ -22,9 +22,14 @@ from novelforge.domain.knowledge_workflows import (
     safe_confidence,
     summarize_item_evidence,
 )
+from novelforge.domain.ingestion_workbench import (
+    build_ingestion_workbench_summary,
+    summarize_long_reference_resume_state,
+)
 from novelforge.services.memory import (
     confirm_pending_knowledge_items_with_records,
     list_long_reference_batches,
+    list_source_ingestion_tasks,
     list_retrieval_source_files,
     load_auto_review_policy,
     load_character_entities,
@@ -89,38 +94,6 @@ def label_scope(value: str) -> str:
 
 def label_authority(value: str) -> str:
     return AUTHORITY_LABELS.get(str(value or ""), str(value or "未标明"))
-
-
-def summarize_long_reference_resume_state(segments: list[dict]) -> dict:
-    pending_import_indices = []
-    pending_extract_indices = []
-    imported_not_extracted_indices = []
-    failed_indices = []
-    completed_indices = []
-    for index, segment in enumerate(segments):
-        if not isinstance(segment, dict):
-            continue
-        import_status = str(segment.get("import_status") or "pending")
-        extract_status = str(segment.get("extract_status") or "pending")
-        if import_status != "imported":
-            pending_import_indices.append(index)
-        if extract_status in {"pending", ""}:
-            pending_extract_indices.append(index)
-            if import_status == "imported":
-                imported_not_extracted_indices.append(index)
-        if extract_status == "failed":
-            failed_indices.append(index)
-        if extract_status in {"queued", "extracted"}:
-            completed_indices.append(index)
-    unfinished_indices = sorted(set(pending_import_indices + pending_extract_indices + failed_indices))
-    return {
-        "pending_import_indices": pending_import_indices,
-        "pending_extract_indices": pending_extract_indices,
-        "imported_not_extracted_indices": imported_not_extracted_indices,
-        "failed_indices": failed_indices,
-        "completed_indices": completed_indices,
-        "unfinished_indices": unfinished_indices,
-    }
 
 
 def format_knowledge_item_for_report(item: dict) -> list[str]:
@@ -374,16 +347,39 @@ def import_long_reference_segments(
     project_name: str,
     batch: dict,
     segment_indices: list[int],
+    progress_callback=None,
+    *,
+    task_id: str = "",
+    worker_id: str = "",
 ) -> tuple[dict, int]:
     imported = 0
     segments = batch.get("segments", [])
     base_title = str(batch.get("title") or "长篇资料")
-    total_selected = len(segment_indices)
-    for order, index in enumerate(segment_indices, start=1):
-        if index < 0 or index >= len(segments):
-            continue
+    target_indices = [index for index in segment_indices if 0 <= index < len(segments)]
+    total_selected = len(target_indices)
+    for order, index in enumerate(target_indices, start=1):
         segment = segments[index]
+        segment_title = str(segment.get("title") or f"{base_title} 片段 {order:03d}")
+        if progress_callback:
+            progress_callback({
+                "current": order - 1,
+                "total": total_selected or 1,
+                "message": f"正在导入：{segment_title}",
+                "stage": "import",
+                "stage_status": "running",
+                "segment_index": index,
+                "segment_id": str(segment.get("segment_id") or ""),
+            })
         if segment.get("import_status") == "imported":
+            if progress_callback:
+                progress_callback({
+                    "current": order,
+                    "total": total_selected or 1,
+                    "message": f"已跳过已导入片段：{segment_title}",
+                    "stage": "import",
+                    "segment_index": index,
+                    "segment_id": str(segment.get("segment_id") or ""),
+                })
             continue
         payload = build_structured_external_source_payload(
             source_type=batch.get("source_type", "external_source"),
@@ -423,8 +419,36 @@ def import_long_reference_segments(
             segment["import_error"] = str(exc)
         # Persist progress after every segment so a crash or page reload can
         # resume exactly where the import stopped.
-        batch = save_long_reference_batch(project_name, batch)
-    if imported:
+        batch = save_long_reference_batch(
+            project_name,
+            batch,
+            task_id=task_id,
+            worker_id=worker_id,
+        )
+        if progress_callback:
+            progress_callback({
+                "current": order,
+                "total": total_selected or 1,
+                "message": (
+                    f"已导入：{segment_title}"
+                    if segment.get("import_status") == "imported"
+                    else f"导入失败：{segment_title}"
+                ),
+                "stage": "import",
+                "segment_index": index,
+                "segment_id": str(segment.get("segment_id") or ""),
+            })
+    # Rebuild even when every selected source had already been imported. A
+    # previous attempt may have committed source files and crashed during the
+    # derived-index rebuild; retries must repair that state.
+    if target_indices:
+        if progress_callback:
+            progress_callback({
+                "current": total_selected,
+                "total": total_selected or 1,
+                "message": "正在重建资料索引",
+                "stage": "import",
+            })
         rebuild_retrieval_assets(project_name, build_vectors=True)
     return batch, imported
 
@@ -562,6 +586,8 @@ def extract_long_reference_segments_to_queue(
     custom_instructions: str = "",
     progress_callback=None,
     stream_callback=None,
+    task_id: str = "",
+    worker_id: str = "",
 ) -> tuple[dict, int, int, list[str]]:
     queued_total = 0
     processed = 0
@@ -577,6 +603,8 @@ def extract_long_reference_segments_to_queue(
             "current": 0,
             "total": total_targets or 1,
             "message": "准备提取片段",
+            "stage": "extraction",
+            "stage_status": "running",
         })
     for position, index in enumerate(target_indices, start=1):
         if index < 0 or index >= len(segments):
@@ -588,6 +616,10 @@ def extract_long_reference_segments_to_queue(
                 "current": position - 1,
                 "total": total_targets or 1,
                 "message": f"正在提取：{segment_title}",
+                "stage": "extraction",
+                "stage_status": "running",
+                "segment_index": index,
+                "segment_id": str(segment.get("segment_id") or ""),
         })
         try:
             _safe_stream_emit(stream_callback, f"\n\n## {segment_title}\n\n")
@@ -641,32 +673,58 @@ def extract_long_reference_segments_to_queue(
             segment["last_extract_mode"] = extraction_mode
             segment["last_extract_diff"] = comparison
             segment["extract_error"] = ""
-            save_long_reference_batch(project_name, batch)
+            save_long_reference_batch(
+                project_name,
+                batch,
+                task_id=task_id,
+                worker_id=worker_id,
+            )
             queued_total += queued_count
             processed += 1
-            if progress_callback:
-                progress_callback({
-                    "current": position,
-                    "total": total_targets or 1,
-                    "message": f"已完成：{segment_title}，新增 {queued_count} 条",
-                })
         except Exception as exc:
             segment["extract_status"] = "failed"
             segment["extract_error"] = str(exc)
-            save_long_reference_batch(project_name, batch)
+            save_long_reference_batch(
+                project_name,
+                batch,
+                task_id=task_id,
+                worker_id=worker_id,
+            )
             failed_titles.append(f"{segment.get('title', '未命名片段')}：{exc}")
             if progress_callback:
                 progress_callback({
                     "current": position,
                     "total": total_targets or 1,
                     "message": f"提取失败：{segment_title}",
+                    "stage": "extraction",
+                    "segment_index": index,
+                    "segment_id": str(segment.get("segment_id") or ""),
                 })
-    batch = save_long_reference_batch(project_name, batch)
+        else:
+            # Keep task-control and lease-loss signals outside the extraction
+            # exception boundary. A pause after a successful durable save must
+            # never rewrite that segment as failed.
+            if progress_callback:
+                progress_callback({
+                    "current": position,
+                    "total": total_targets or 1,
+                    "message": f"已完成：{segment_title}，新增 {queued_count} 条",
+                    "stage": "extraction",
+                    "segment_index": index,
+                    "segment_id": str(segment.get("segment_id") or ""),
+                })
+    batch = save_long_reference_batch(
+        project_name,
+        batch,
+        task_id=task_id,
+        worker_id=worker_id,
+    )
     if progress_callback:
         progress_callback({
             "current": total_targets or 1,
             "total": total_targets or 1,
             "message": f"提取完成：成功 {processed} 段，失败 {len(failed_titles)} 段",
+            "stage": "extraction",
         })
     return batch, processed, queued_total, failed_titles
 
@@ -1139,6 +1197,17 @@ def build_ingestion_health_report(project_name: str) -> dict:
     }
 
 
+def build_ingestion_workbench(project_name: str) -> dict:
+    """Load ingestion state and build the user-oriented workbench summary."""
+    batches = list_long_reference_batches(project_name)
+    return build_ingestion_workbench_summary(
+        batches,
+        source_count=len(list_retrieval_source_files(project_name)),
+        health=build_ingestion_health_report(project_name),
+        tasks=list_source_ingestion_tasks(project_name),
+    )
+
+
 def get_segment_related_knowledge_items(project_name: str, segment: dict, *, include_confirmed: bool = True) -> dict[str, list[dict]]:
     segment_id = str(segment.get("segment_id") or "")
     segment_title = str(segment.get("title") or "")
@@ -1489,20 +1558,6 @@ def auto_confirm_pending_items_without_risk(
     }
 
 
-def append_long_reference_quick_run(batch: dict, summary: dict) -> dict:
-    history = batch.get("quick_process_runs", [])
-    if not isinstance(history, list):
-        history = []
-    run = {
-        **summary,
-        "run_at": datetime.now(timezone.utc).isoformat(),
-    }
-    history.append(run)
-    batch["quick_process_runs"] = history[-20:]
-    batch["last_quick_process_run"] = run
-    return batch
-
-
 def run_long_reference_quick_process(
     project_name: str,
     batch: dict,
@@ -1517,106 +1572,30 @@ def run_long_reference_quick_process(
     custom_instructions: str = "",
     progress_callback=None,
     stream_callback=None,
+    execution_state: dict | None = None,
+    run_key: str = "",
+    task_id: str = "",
+    worker_id: str = "",
 ) -> tuple[dict, dict]:
-    selected_indices = list(segment_indices)
-    extract_indices = selected_indices[: int(extract_limit)]
-    before_pending_ids = {str(item.get("pending_id") or "") for item in load_pending_knowledge_items(project_name)}
-    imported = 0
-    processed = 0
-    queued_total = 0
-    failed_titles: list[str] = []
-    consolidation_summary: dict = {}
-    auto_confirm_summary: dict = {}
+    from novelforge.workflows.long_reference_quick_process import (
+        run_long_reference_quick_process as _run_long_reference_quick_process,
+    )
 
-    progress_total = max(1, len(extract_indices))
-    if progress_callback:
-        progress_callback({
-            "current": 0,
-            "total": progress_total,
-            "message": "准备自动处理",
-        })
-    if import_to_index:
-        if progress_callback:
-            progress_callback({
-                "current": 0,
-                "total": progress_total,
-                "message": "正在导入资料索引",
-            })
-        batch, imported = import_long_reference_segments(project_name, batch, selected_indices)
-    if extract_indices:
-        batch, processed, queued_total, failed_titles = extract_long_reference_segments_to_queue(
-            project_name,
-            batch,
-            extract_indices,
-            enabled_categories,
-            extraction_mode=extraction_mode,
-            custom_instructions=custom_instructions,
-            progress_callback=progress_callback,
-            stream_callback=stream_callback,
-        )
-    if consolidate_after_extract and queued_total:
-        if progress_callback:
-            progress_callback({
-                "current": progress_total,
-                "total": progress_total,
-                "message": "正在整理散知识",
-            })
-        consolidation_summary = consolidate_batch_pending_items(
-            project_name,
-            batch,
-            categories=enabled_categories,
-            consolidation_mode="balanced",
-            limit=max(20, min(120, queued_total)),
-            stream_callback=stream_callback,
-        )
-
-    after_pending_items = load_pending_knowledge_items(project_name)
-    new_pending_ids = [
-        str(item.get("pending_id") or "")
-        for item in after_pending_items
-        if str(item.get("pending_id") or "") and str(item.get("pending_id") or "") not in before_pending_ids
-    ]
-    if auto_confirm_safe_items:
-        if progress_callback:
-            progress_callback({
-                "current": progress_total,
-                "total": progress_total,
-                "message": "正在自动审核低风险知识",
-            })
-        auto_confirm_summary = auto_confirm_pending_items_without_risk(
-            project_name,
-            new_pending_ids,
-            source_type="long_reference_quick_process",
-            source_title=batch.get("title", ""),
-            batch_id=batch.get("batch_id", ""),
-            note="长篇资料自动处理审核",
-        )
-
-    summary = {
-        "selected_segment_count": len(selected_indices),
-        "extract_segment_count": len(extract_indices),
-        "imported_count": imported,
-        "processed_count": processed,
-        "queued_count": queued_total,
-        "new_pending_count": len(new_pending_ids),
-        "auto_confirmed_count": len(auto_confirm_summary.get("confirmed_ids", [])) if auto_confirm_summary else 0,
-        "blocked_count": len(auto_confirm_summary.get("blocked_ids", [])) if auto_confirm_summary else len(new_pending_ids),
-        "failed_titles": failed_titles,
-        "extraction_mode": extraction_mode,
-        "categories": enabled_categories,
-        "import_to_index": import_to_index,
-        "consolidate_after_extract": consolidate_after_extract,
-        "auto_confirm_safe_items": auto_confirm_safe_items,
-        "custom_instructions": custom_instructions,
-        "auto_confirm": auto_confirm_summary,
-        "consolidation": consolidation_summary,
-    }
-    batch = append_long_reference_quick_run(batch, summary)
-    batch = save_long_reference_batch(project_name, batch)
-    if progress_callback:
-        progress_callback({
-            "current": progress_total,
-            "total": progress_total,
-            "message": f"自动处理完成：提取 {processed} 段，新增候选 {len(new_pending_ids)} 条",
-        })
-    return batch, summary
+    return _run_long_reference_quick_process(
+        project_name,
+        batch,
+        segment_indices,
+        enabled_categories=enabled_categories,
+        extraction_mode=extraction_mode,
+        extract_limit=extract_limit,
+        import_to_index=import_to_index,
+        consolidate_after_extract=consolidate_after_extract,
+        auto_confirm_safe_items=auto_confirm_safe_items,
+        custom_instructions=custom_instructions,
+        progress_callback=progress_callback,
+        stream_callback=stream_callback,
+        execution_state=execution_state,
+        run_key=run_key,
+        task_id=task_id,
+        worker_id=worker_id,
+    )

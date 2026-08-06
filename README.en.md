@@ -2,365 +2,158 @@
 
 # NovelForge
 
-Current version: `v0.7.1`
+Repository version: `v0.7.1`
 
-NovelForge is an LLM-powered writing workspace for long-form fiction, built around persistent project storage, retrieval-augmented generation, structured workflows, and future multi-agent collaboration.
-
-It is designed for long-running writing scenarios such as fan fiction, web novels, and original long-form projects, where consistency, memory, planning, and iterative revision matter more than one-shot chat output.
-
-## Overview
-
-Most LLM writing tools are optimized for short conversations and single-pass generation.
-NovelForge focuses on a different problem space:
-
-- long-term project-based writing
-- persistent world and story memory
-- end-to-end workflow from story outline to chapter drafting
-- retrieval-augmented context injection
-- structured review and validation
-- architecture that can evolve toward workflow runtimes and agent systems
-
-The project is both:
-
-- a practical writing tool for long-form fiction
-- an experimental platform for learning LLM apps, RAG, workflows, and agent design
-
-## Current Status
-
-NovelForge is already beyond an early prototype.
-
-Current maturity can be summarized as:
-
-- V1 writing workspace: implemented
-- V1.1 persistence, validation, and UX hardening: implemented
-- V2 retrieval foundation: largely implemented
-- V3 workflow and state foundation: partially implemented, with failed-run resume support
-- V4 multi-agent architecture: planned
-- V5 evaluation system: initial chapter-level foundation implemented
+NovelForge is a local LLM writing workspace for long-form fiction and fan fiction. It keeps projects, stories, source material, structured knowledge, retrieval evidence, and writing history on disk, making it better suited to sustained worldbuilding and chapter development than one-off chat generation.
 
 ## Core Capabilities
 
-- project-based story storage
-- story spaces: one project can hold multiple independent stories that share project-level canon/reference knowledge while keeping story assets separate
-- story management: stories can be renamed, described, and copied into newly registered story spaces
-- Streamlit web UI
-- full-story outline generation
-- chapter outline generation
-- chapter writing
-- chapter review
-- memory updates from written chapters
-- form-based story memory editing
-- configurable chapter target word count
-- memory compaction for long-running projects
-- layered global and project rules
-- project resources page for browsing, editing, and cleaning project files
-- core story state page for short, high-priority settings injected into generation
-- core-setting-to-knowledge conversion for turning stable settings into pending structured knowledge before project-wide reuse
-- source ingestion page for importing canon/reference/sample text and extracting structured knowledge
-- source ledger for summarizing long-form batches, retrieval sources, knowledge-only sources, processing status, and segment-level provenance
-- duplicate source-name protection so long-form segments, organized references, and manual source cards receive unique filenames instead of silently overwriting existing retrieval sources
-- long-form source importer for splitting uploaded or pasted novels by chapter/title or length before batch indexing, with strict-canon, fanfic-foundation, and style-reference initialization presets plus clearer guidance for saving batches, indexing source text, and extracting knowledge
-- long-form source batch manager for tracking whole-txt splitting, indexing, extraction, re-extraction, failures, and resume progress, with per-segment batch persistence after each extraction for terminal-interruption recovery
-- guided source auto-processing for saving batches, indexing source text, extracting knowledge, auto-confirming low-risk items, and showing batch progress; pages refresh automatically after long-running batch actions complete
-- pending-queue batch processing plan for auto-saving low-risk items, archiving weak-evidence items, and moving conflicts/duplicates into a manual review box; processing records support full rollback and restoring manual-review snapshots back into the pending queue
-- deep source-extraction modes for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction
-- specialist extraction presets for balanced, character, relationship, timeline, worldbuilding, style, canon-audit, and fanfic-research passes with matching categories and modes
-- extraction category default strategies for starting from specialist presets, all categories, or no preselected categories
-- advanced custom extraction instructions for pasted sources, long-form quick processing, and manual extraction
-- multi-specialist extraction plans for long-form batches, including fanfic foundation, character/relationship, world/timeline, style reference, and strict-canon audit pipelines, with optional post-plan consolidation
-- batch-level knowledge consolidation for turning scattered pending items into more stable character cards, relationships, timelines, and setting records
-- character entity cards generated from confirmed character, relationship, ability, dialogue, timeline, and constraint knowledge
-- long-form source fingerprinting to detect repeated uploads and continue existing batches
-- pending structured-knowledge queue for reviewing extracted items before persistence
-- pending extraction quality panel for same-name duplicates, field conflicts, fact-level conflicts with resolution suggestions, alias candidates, and overlap with confirmed knowledge
-- pending review workspace with filters for category, source, keyword, and risk type, plus sorting by risk, evidence strength, confidence, importance, recency, or category
-- pending knowledge form editor for correcting category, name, summary, details, evidence, tags, quality scores, provenance, and canon status without raw JSON editing
-- confirmed knowledge form editor for maintaining persisted knowledge, moving categories, deleting incorrect items, and rebuilding retrieval indexes
-- version/worldline metadata for separating canon, project-main, AU, branch, and mixed knowledge scopes
-- unified context assembly for outline generation, chapter planning, drafting, free writing, and chapter review, covering rules, always-on settings, director notes, retrieval hits, prompt options, and run-specific guidance
-- on-demand context preview with final order, provenance, activation reasons, budget usage, omissions, and a reproducibility fingerprint
-- director notes scoped to the project, story, chapter, or next successful saved generation
-- strict `always`, `retrieval`, and `manual_only` injection semantics
-- persisted generation-context snapshots for auditing saved chapters and copying story workspaces
-- ingestion health overview for imported-but-unextracted material, failed extraction, quality risks, category gaps, and worldline distribution
-- project-level extraction plan templates with save, inspect, delete, and JSON-edit support for reusing multi-specialist pipelines across batches
-- setting entity cards generated from world rules, locations, organizations, abilities, items, and constraints
-- entity alias library for preserving canonical names and aliases from quality-review hints, expanding aliases at query time, improving retrieval, character-card aggregation, and later extraction name normalization
-- structured-knowledge organizer for duplicate detection, merging, deletion, and raw editing
-- source package report generated from confirmed structured knowledge
-- retrieval center for index rebuilds, RAG health inspection, recall tests, debug inspection, and conflict handling
-- project creative profile for task nature, target length, workflow depth, and reference strength, with custom values supported
-- story-level worldline settings in the creative profile, including worldline ID/name and RAG worldline mode for later discussions and generation
-- creative-profile discussion assist for turning natural-language goals into structured story creative settings
-- a free-writing workspace that starts from one prompt, then supports continuation, rewrites, accepted-fragment branches, knowledge extraction, and chapter compilation
-- structured knowledge ingestion from source material into characters, items, abilities, world rules, events, relationships, style, and constraints
-- lexical, semantic, and hybrid retrieval
-- task-aware retrieval profiles for creative-profile discussion, outline discussion, volume discussion, arc discussion, chapter discussion, outline generation, chapter planning, drafting, and review/evaluation
-- authority-aware and conflict-aware evidence presentation
-- retrieval debug preview with selectable task profiles, query terms, candidate chunks, semantic status, and reranked hits
-- persisted retrieval conflict resolutions
-- character, timeline, foreshadowing, and consistency analysis
-- chapter quality evaluation with structured scoring reports
-- structured planning discussions for outline, volume, arc, and chapter direction
-- approval-based planning artifacts
-- one-click chapter pipeline with run snapshots and failed-run resume
-- volume and arc planning hierarchy
-- arc-level chapter allocation plans
-- lightweight writing guidance controls
-- in-app model endpoint and key configuration
-- grouped navigation ordered by workbench, sources, planning, and writing; source ingestion is the first item in the sources group
-- project overview metrics can jump directly into the resource browser for matching resource types
+### Writing And Planning
 
-## Documentation Scope
+- Multiple isolated story spaces per project, with shared project sources and knowledge.
+- Full outline, volume, arc, chapter outline, drafting, review, and chapter evaluation.
+- Iterative free writing with continuation, rewrite candidates, branching, accepted fragments, knowledge extraction, and chapter compilation.
+- Story creative profiles for task type, length, workflow depth, reference strength, and source version/worldline.
+- Global, project, and story-level generation rules and prompt options.
+- Project/story/chapter/run-scoped writing reminders (context directives) and auditable generation-context snapshots.
 
-This README is user-facing. It focuses on what NovelForge does, how to start using it, and how the source-ingestion, retrieval, planning, and writing flows work.
+### Sources And Knowledge
 
-For deeper architecture, module responsibilities, storage layout, implementation notes, and roadmap details, see [project.md](./project.md).
+- Pasted sources, manual source cards, and long-form TXT/Markdown ingestion.
+- Chapter-heading or length-based splitting with batch and segment checkpoints.
+- General, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction modes.
+- Multi-specialist plans, pending review, automatic review policy, conflict/duplicate checks, and batch rollback.
+- Confirmed knowledge, character/setting entity cards, alias groups, and source-package reports.
+- A source ledger that traces knowledge back to source documents, segments, and evidence locations.
 
-## Typical Workflow
+### RAG
 
-NovelForge supports both direct generation and discussion-first planning.
+- Lexical, semantic, and hybrid retrieval; lexical retrieval remains available when embeddings fail.
+- Story, source-version/worldline, source-type, and authority filtering or weighting.
+- Chinese phrase matching, entity-alias expansion, user feedback, conflict decisions, and result diversification.
+- Retrieval health checks, debug views, source-usage reports, and explainable prompt evidence.
+- Fixed evaluation cases with Recall@K, MRR, nDCG@K, and zero-recall counts.
+- Incremental vector rebuilds normally reuse unchanged vectors; unusable vectors are regenerated per chunk, while model or vector-dimension changes safely switch to a full rebuild.
 
-Typical chapter workflow:
+### Durable Source Tasks
 
-1. discuss story or chapter direction
-2. generate the full-story outline or chapter outline
-3. write chapter content
-4. review quality and consistency
-5. update story memory
-6. inspect analysis or retrieval evidence when needed
-7. run chapter evaluation or resume a failed pipeline run when needed
+Long-form automatic processing now creates a SQLite-backed task and returns control to the UI immediately:
 
-The system also supports a combined pipeline:
+- Work continues in the application process after a browser page is refreshed or closed.
+- Atomic claims, worker leases, and heartbeats prevent duplicate processing across windows or app instances.
+- Task creation and batch save/delete operations share an atomic database fence; stale UI snapshots, cross-task writes, and workers without a live lease are rejected.
+- After an abnormal exit, a restarted app takes over once the old lease expires.
+- Pause, resume, cancel, failed-segment-only retry, and completed-segment skipping are supported.
+- The UI estimates model calls, input/output tokens, embedding tokens, and cost before creation.
+- Tasks can be filtered, archived, restored, permanently deleted, or cleaned up by archive age.
 
-```text
-Plan -> Write -> Review -> Update Memory
-```
+“Background” does not mean an independent system service. Exiting NovelForge, terminating Python, or shutting down the machine interrupts the current call; the next app launch resumes from SQLite checkpoints.
 
-## Sources, Core State, And Retrieval
+## Navigation
 
-NovelForge includes a project-scoped retrieval layer that works across both internal writing assets and external reference material.
+- `工作台` (Workbench): project overview and project resources.
+- `资料` (Sources): source ingestion, core state, and retrieval center.
+- `规划` (Planning): creative profile and the outline/volume/arc/chapter planning pages enabled by the active story.
+- `写作` (Writing): free writing, content generation, and chapter evaluation.
+- `配置` (Configuration): model settings, generation rules, and prompt options.
 
-The app separates three related concepts:
+The source-ingestion page contains workspaces for durable tasks, source ledger, pending review, processing records, long-form batches, knowledge organization, and source packages. In normal use, follow the workbench's recommended next action instead of working from internal storage concepts.
 
-- `Resource Browser`: file-level management for outlines, chapters, reports, run snapshots, and source files, plus read-only inspection for structured knowledge, pending knowledge, and long-form batches.
-- `Core State`: compact story settings that are injected with high priority, such as key canon mode, relationships, timeline items, and hard constraints.
-- `Structured Knowledge Base`: long-lived project knowledge such as character cards, world rules, locations, organizations, power systems, relationships, timelines, and hard constraints, shared across stories and retrieval.
-- `Source Ingestion` / `Retrieval Center`: ingestion imports and structures material; retrieval rebuilds indexes, tests recall, inspects debug output, and stores conflict decisions.
-- `Long-Form Source Batches`: after a full txt upload, each segment records whether it has been indexed, extracted, failed, or is still pending.
-- `Source Fingerprint`: stores content hash, file name, total length, and segment count to detect repeated full-source uploads.
-- `Pending Structured Knowledge`: extracted items can be staged for review before they become indexed structured knowledge.
-- `Structured Knowledge Organizer`: after long-form extraction, duplicate characters, abilities, locations, and other repeated entries can be merged or removed.
-- `Source Package Report`: confirmed structured knowledge can be rendered into a saved and searchable project reference report.
+## Recommended Workflow
 
-Current retrieval capabilities include:
+### First Run
 
-- project knowledge retrieval
-- canon and reference retrieval
-- long-form text splitting by chapter title or length before batch import
-- long-form batch progress tracking with continue-indexing, continue-extraction, retry-failed, and re-extract-completed actions
-- batch-level pending-knowledge consolidation with balanced, character-card, timeline, strict-canon, and style-focused modes
-- repeated-upload detection with an option to bind to an existing batch
-- document chunk indexing
-- improved Chinese phrase recall through short ngram tokenization for names, items, abilities, and setting phrases
-- entity-alias query expansion so canonical names, aliases, translated names, and short names can recall the same knowledge group
-- semantic embedding retrieval
-- hybrid lexical + semantic ranking
-- worldline-aware retrieval with optional preference weighting or strict filtering; once a story creative profile saves a worldline, discussions, outline generation, chapter planning, drafting, and review use it automatically
-- lightweight result diversification so one document or source type does not dominate all top hits
-- retrieval feedback weighting: current hits can be marked helpful, priority, irrelevant, or wrong; later reranking uses those signals and exposes the adjustment in score breakdowns
-- RAG evaluation workbench for saving fixed test queries, expected terms/chunks/source types, running single or full suites, and storing run results
-- pre-generation retrieval briefing that summarizes source distribution, priority references, constraints/settings, and conflict resolutions before detailed evidence chunks
-- post-generation source-usage reports on discussion, outline, planning, drafting, review, and evaluation pages, showing retrieved source distribution, priority references, hard constraints, and conflict resolutions
-- explainable retrieval evidence in previews, workflow traces, and prompt context through matched terms, expanded aliases, recall reasons, score breakdowns, and evidence_meta
-- RAG health inspection for index document/chunk counts, current source chunks, vector counts, missing vectors, stale chunks, source distribution, scope distribution, active embedding model, and embedding-model mismatch warnings
-- retrieval center can rebuild keyword-only indexes or full indexes; keyword RAG remains usable when embeddings are unavailable
-- discussion-first planning now uses RAG: creative-profile, outline, volume, arc, and chapter discussions can retrieve relevant settings, structured knowledge, imported sources, and approved discussion artifacts
-- source authority weighting
-- scope-grouped evidence display
-- conflict warnings when project evidence and external evidence overlap
-- persisted conflict resolutions that can be recalled as project knowledge
-- optional retrieval debug output for inspecting recall and ranking behavior
-- structured knowledge extraction from pasted material with human confirmation before persistence
-- pasted-material extraction can use the same general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference strategies as long-form batches
-- source ledger aggregates long-form batches, imported retrieval sources, and knowledge-only sources with import, extraction, failure, pending, and confirmed counts
-- long-form source details can inspect segment text and trace related pending or confirmed knowledge items
-- pending review queue for accepting, discarding, or editing extracted knowledge before indexing
-- pending review includes extraction-quality checks for same-name duplicates, same-name field conflicts, fact-level conflicts, alias candidates, and existing confirmed-knowledge overlap, with suggestions and merge actions for same-name groups
-- automatic review policy and processing records for source auto-processing, pasted-source extraction, and pending-queue batch actions, including configurable thresholds, grade-B handling, manual-review categories, confirm/archive/manual-review decisions, pending snapshots, write targets, run-level rollback, single-item return, and manual-review snapshot restore
-- alias-candidate hints can be saved into `knowledge/entities/aliases.json`; alias groups are indexed as `entity_alias_group`
-- pending review supports category, source, keyword, and quality-risk filtering, plus risk-first, low-evidence, low-confidence, high-importance, newest-first, and category/name sorting
-- pending review and confirmed-knowledge organization support worldline filtering for separating canon, project-main, and AU branch material
-- individual pending items can be edited through a form, saved back to the pending queue, or saved and confirmed into the indexed knowledge base
-- confirmed knowledge items can be edited through a form after persistence, including category, name, summary, details, evidence, quality scores, provenance, and tags
-- core settings can be queued as pending structured knowledge, then confirmed into the project knowledge base for retrieval and cross-story reuse
-- category-level structured-knowledge organization with duplicate detection, merge preview, deletion, and raw editing
-- batched structured-knowledge extraction from selected long-form source segments
-- selectable extraction strategies for general, deep, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference passes
-- long-form batches include an extraction coverage report for category coverage, missing/weak categories, low-evidence items, low-confidence items, no-evidence items, and segment progress
-- re-extraction stores detailed comparisons against existing pending knowledge for that segment, including added, matched, possibly missing, changed fields, and old/new item snapshots
-- re-extraction updates pending items that reuse the same internal ID instead of creating duplicate same-ID candidates
-- re-extraction diff details can accept the new pass or keep the old pass by deleting the corresponding pending items
-- multi-specialist extraction plans record per-step processed segment counts, queued knowledge counts, failures, and the latest plan summary on the batch; plans can optionally consolidate batch pending knowledge after extraction
-- multi-specialist extraction plans can be saved as project templates and reused by later long-form batches
-- extracted items preserve confidence, importance, evidence strength, canon status, extraction mode, and source-segment trace metadata
-- extracted evidence can preserve and edit paragraph index, segment character offset, and a short context window for source review
-- consolidation reads pending items linked to the current batch, merges duplicate entities and representative evidence, then replaces scattered pending items with consolidated pending records
-- character entity cards are saved to `knowledge/entities/characters.json` and indexed as `entity_character_card`
-- setting entity cards are saved to `knowledge/entities/settings.json` and indexed as `entity_setting_card`
-- entity alias groups are saved to `knowledge/entities/aliases.json`, indexed as `entity_alias_group`, used when generating character entity cards, and injected into later extraction prompts as canonical-name context
-- source package report generation from confirmed knowledge, saved into the retrieval index
-- confirmed structured knowledge is indexed for later generation, review, analysis, and evaluation
+1. Add an OpenAI-compatible endpoint, API key, chat model, and optional embedding model under model settings.
+2. Test the connection and save the profile.
+3. Create a project and story, then set task type, target length, and reference strength in the creative profile.
+4. If the story depends on canon or reference material, ingest sources before writing.
 
-## Creative Profile
+### Source Processing
 
-Each project can store a creative profile describing the intended generation path:
+1. Upload or paste TXT/Markdown, inspect the split preview, and save a long-form batch.
+2. Select indexing, knowledge extraction, and optional automatic-review behavior.
+3. Review segment, call, token, and cost estimates.
+4. Create the background task and monitor it in `资料任务` (Source Tasks); the browser page may be closed.
+5. Resolve `待审核设定` (Pending Knowledge), inspect retrieval health, and run fixed evaluation cases.
 
-- task nature: main story, side story, continuation, prequel, transmigration/AU, completion, scene fragment, or a custom value
-- target length and optional word count, both customizable
-- workflow depth, from direct prose generation to full long-form outline hierarchy
-- reference strength: light, medium, strong, strict canon, or style-focused
-- reference focus such as characters, worldbuilding, events, abilities, timeline, writing style, dialogue style, techniques, and hard constraints, with custom tags supported
+### Chapter Writing
 
-This profile is injected into major generation, discussion, review, and analysis prompts so model behavior can adapt to length, workflow depth, and reference strength.
-
-If the user is not sure how to configure the profile, the in-app creative-profile discussion assist can turn natural-language goals into recommended settings, backfill the form, and save an approved discussion artifact.
-
-The in-app `自由创作` (free writing) page extends the old quick-generation playground into an iterative fragment workspace:
-
-- The first fragment still works from a single prompt with no creative profile required
-- Later turns can continue, rewrite, create and switch sibling candidates at the current accepted frontier; accepting one retires the remaining unaccepted siblings, while forks from older canon points use story copying
-- Every turn reuses the unified context assembly, confirmed knowledge, entity cards, director notes, and retrieval
-- Only accepted fragments can produce pending knowledge candidates; candidates become reusable knowledge only after confirmation
-- Accepted fragments on the active branch can be compiled into a new chapter or explicitly appended to an existing chapter
-- Sessions, turns, fragment versions, and context snapshots remain auditable in project storage
-
-Full automatic orchestration for long-form volume/arc/chapter pipelines is still planned.
-
-## Data And Backups
-
-NovelForge stores project data locally under `data/`, including project settings, story spaces, chapters, reviews, source materials, structured knowledge, retrieval indexes, and run history.
-
-Recommendations:
-
-- Back up the whole `data/` directory regularly.
-- For the portable build, back up the app folder's `data/` directory and `.env`.
-- For the full file layout and storage responsibilities, see the project storage section in [project.md](./project.md).
+1. Discuss and save the outline or chapter direction.
+2. Generate a chapter outline and prose, or iterate directly in free writing.
+3. Open the context preview before generation to inspect rules, core state, retrieved evidence, and budget omissions.
+4. Review or evaluate the chapter, then extract stable new facts into pending knowledge.
+5. Confirm knowledge so later chapters can retrieve it.
 
 ## Setup And Run
 
-### 1. Install dependencies
+NovelForge requires Python 3 and the packages in `requirements.txt`.
 
-```bash
-pip install -r requirements.txt
+Windows PowerShell:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+.\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-### 2. Configure model access
+Editing `.env` is optional; model profiles can also be configured and tested in the application.
 
-You can configure model settings in either of these ways:
-
-- edit `.env` manually
-- use the in-app `模型配置` page to create and switch between multiple profiles
-
-Typical environment values:
+Common environment values:
 
 ```env
 LLM_API_KEY=
 DEEPSEEK_API_KEY=
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-flash
-LLM_EMBEDDING_MODEL=text-embedding-3-small
+LLM_MODEL=deepseek-chat
+LLM_EMBEDDING_MODEL=
+
+# Used only for local task estimates, in USD per 1M tokens
+LLM_INPUT_PRICE_PER_MILLION=0
+LLM_OUTPUT_PRICE_PER_MILLION=0
+LLM_EMBEDDING_PRICE_PER_MILLION=0
 ```
 
-### 3. Start the app
+When prices are empty or `0`, token estimates remain available but NovelForge does not guess a cost. Estimates are not provider invoices.
 
-```bash
-streamlit run app.py
-```
+`.env` bootstraps the default model profile on first launch. After model profiles have been written to `data/global.db`, the database is authoritative; update models and rates in `模型配置` (Model Settings), because editing `.env` alone does not override a saved profile.
 
-## Local Windows Portable Build
+## Data And Backups
 
-NovelForge can also be packaged as a local Windows portable app that automatically starts the Streamlit server and opens the browser.
+- Global structured settings are stored in `data/global.db`.
+- Each project's structured data is stored in `data/projects/{project_name}/project.db`.
+- Long-form outlines, chapters, reviews, analyses, and imported sources remain Markdown/TXT assets registered in the database.
+- Structured JSON mirrors are disabled by default; legacy files are compatibility import sources only.
 
-### Distribution shape
+Back up the entire `data/` directory regularly. Stop NovelForge before copying it for the most consistent snapshot. `.env` contains secrets and should be backed up securely without committing it. See [storage_architecture.md](./storage_architecture.md) for the complete storage contract.
 
-The intended local distribution is:
+## Windows Portable Build
 
-- `NovelForge.exe` as a lightweight launcher
-- bundled self-contained `.runtime` Python distribution (not a copied, machine-bound `.venv`)
-- project source files
-- local `data/` directory for project storage
+The portable package contains a lightweight `NovelForge.exe` launcher, a self-contained `.runtime` Python distribution, project source, and a local `data/` directory. It starts Streamlit on `127.0.0.1`, prefers port `8501`, and opens the browser.
 
-When the user launches `NovelForge.exe`, it will:
-
-1. start a local Streamlit server on `127.0.0.1`, preferring `8501`
-2. wait until the app is reachable
-3. open the browser automatically
-
-### Build steps
-
-1. Create and prepare the local virtual environment:
-
-```bash
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-```
-
-2. Prepare a self-contained Windows Python distribution with the dependencies from `requirements.txt` installed. Its root must contain `python.exe` and must not contain `pyvenv.cfg`.
-
-3. Run the packaging script from PowerShell and pass that distribution via `RuntimeRoot`:
+After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, run:
 
 ```powershell
 .\build_release.ps1 -Version v0.7.1 -RuntimeRoot D:\Runtimes\python-standalone
 ```
 
-`-Version` is optional. The script reads the repository `VERSION` file and stops if an explicitly supplied version does not match it.
+`-Version` must match `VERSION`. The build produces a ZIP, SHA-256 checksum, and local log. Extract it to a writable directory such as `D:\Apps\NovelForge\`, not `C:\Program Files\`.
 
-4. The script will automatically:
+## Current Limits And Priorities
 
-- install `pyinstaller` into `.venv`
-- validate the self-contained runtime and copy it as `.runtime`
-- build `NovelForge.exe` from `launcher.py`
-- assemble `release/NovelForge-Portable/`
-- create `release/NovelForge-windows-portable-v0.7.1.zip`
-- create `release/NovelForge-windows-portable-v0.7.1.zip.sha256` for integrity verification
-- save a local build log under `release/`
+- Parent/child chunks, type-specific splitters, multi-query planning, and RRF-style rank fusion remain the next RAG priorities.
+- Stable ingestion currently focuses on pasted text, TXT, and Markdown; EPUB, DOCX, PDF, and folder ingestion are not yet provided.
+- Durable source tasks depend on the NovelForge application process; they are not a resident service or distributed queue.
+- A dedicated vector database and GraphRAG will be evaluated only after the current local SQLite/retrieval path shows a measured scale bottleneck.
+- Autonomous multi-agent orchestration is still planned; current workflows are explicit, recoverable, and testable.
 
-### Notes
+## Development Documentation
 
-- extract the portable build into a writable folder such as `D:\Apps\NovelForge\`
-- avoid protected folders such as `C:\Program Files\`
-- user data will remain in the local `data/` folder and `.env`
-- the launcher prefers `8501` and automatically falls back to nearby ports when needed
-- if startup fails, check `launcher.log` in the app directory
-- if one candidate port is occupied by another app, the launcher tries the next port instead of opening the wrong page
-- build-time logs are written to `release/build_release-<version>.log`
+- [project.md](./project.md): current architecture, module responsibilities, development boundaries, technical debt, and priorities.
+- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v9, migrations, task leases, and recovery.
+- [docs/releases](./docs/releases): immutable release history.
 
-## Model Strategy
-
-The project is designed around an OpenAI-compatible API layer.
-
-Current default direction:
-
-- DeepSeek
-
-Planned or compatible directions:
-
-- GPT
-- Claude
-- Qwen
-- local or self-hosted OpenAI-compatible models
-
-## Development And Architecture Notes
-
-README keeps to usage-level guidance. The following content is maintained in [project.md](./project.md):
-
-- architecture and module responsibilities
-- project storage layout
-- RAG, source extraction, workflow, and evaluation implementation notes
-- business-module extraction status, including pending-knowledge workflow, quality logic, entity-card aggregation, source processing, resource-browser data operations, settings-to-knowledge conversion, and RAG evaluation execution moved into dedicated modules
-- roadmap
-- development boundaries and extension guidance
+Completed one-off plans are not kept as permanent documentation. Their lasting results belong in the fact documents above so the repository has one current source of truth.
 
 ## License
 

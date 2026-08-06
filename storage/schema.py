@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 9
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 MIGRATION_NAME_PATTERN = re.compile(r"^(\d+)_.*\.sql$")
 

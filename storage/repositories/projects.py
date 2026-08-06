@@ -50,6 +50,34 @@ def get_project_meta(conn: sqlite3.Connection, project_name: str) -> dict | None
     return dict(row) if row else None
 
 
+def set_project_maintenance_mode(
+    conn: sqlite3.Connection,
+    project_name: str,
+    enabled: bool,
+) -> bool:
+    """Fence new background claims while a project directory is moved."""
+    cursor = conn.execute(
+        """
+        UPDATE project_meta
+        SET maintenance_mode = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE name = ?
+        """,
+        (int(bool(enabled)), str(project_name or "").strip()),
+    )
+    return int(cursor.rowcount or 0) == 1
+
+
+def project_maintenance_mode(conn: sqlite3.Connection, project_name: str) -> bool:
+    row = conn.execute(
+        "SELECT maintenance_mode FROM project_meta WHERE name = ?",
+        (str(project_name or "").strip(),),
+    ).fetchone()
+    if not row:
+        return False
+    value = row["maintenance_mode"] if isinstance(row, sqlite3.Row) else row[0]
+    return bool(value)
+
+
 def rename_project_meta(conn: sqlite3.Connection, old_name: str, new_name: str) -> dict:
     clean_old_name = str(old_name or "").strip()
     clean_new_name = str(new_name or "").strip()

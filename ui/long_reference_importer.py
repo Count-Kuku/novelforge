@@ -21,11 +21,17 @@ from novelforge.workflows.source_workflows import (
     find_matching_long_reference_batches,
     import_long_reference_segments,
     normalize_text_for_fingerprint,
-    run_long_reference_quick_process,
     split_long_reference_text,
 )
+from novelforge.workflows.ingestion_tasks import (
+    build_long_reference_ingestion_estimate,
+    create_long_reference_ingestion_task,
+)
+from novelforge.workflows.ingestion_task_dispatcher import wake_ingestion_task_dispatcher
 from ui.common import create_batch_progress_callback, scoped_widget_key
 from ui.labels import label_authority, label_knowledge_category, label_scope, label_source_type
+from ui.ingestion_task_estimate import render_ingestion_task_estimate
+from ui.ingestion_batch_guard import render_batch_write_guard
 from ui.streaming import run_with_stream as _run_with_stream
 
 
@@ -447,6 +453,17 @@ def _render_long_reference_quick_processing(
     shared_categories = extraction_options["categories"]
     shared_extraction_mode = extraction_options["mode"]
     shared_custom_instructions = extraction_options["custom_instructions"]
+    planned_indices = selected_indices[: int(quick_extract_limit)]
+    estimate = build_long_reference_ingestion_estimate(
+        {"segments": segments},
+        planned_indices,
+        enabled_categories=shared_categories,
+        extraction_mode=shared_extraction_mode,
+        import_to_index=quick_import_to_index,
+        consolidate_after_extract=quick_consolidate,
+        custom_instructions=shared_custom_instructions,
+    )
+    render_ingestion_task_estimate(estimate, expanded=planned_quick_count > 20)
 
     if st.button(
         "开始处理所选片段",
@@ -461,33 +478,33 @@ def _render_long_reference_quick_processing(
         elif not quick_quick_high_ok:
             st.error("处理数量超过 50 段，请先勾选确认框。")
         else:
-            progress_callback = create_batch_progress_callback("自动处理")
-            batch = _get_or_create_long_reference_preview_batch(batch_context)
-            updated_batch, quick_summary = _run_with_stream(
-                "正在保存批次、导入索引、提取并自动审核低风险知识...",
-                run_long_reference_quick_process,
-                project_name,
-                batch,
-                selected_indices[: int(quick_extract_limit)],
-                enabled_categories=shared_categories,
-                extraction_mode=shared_extraction_mode,
-                extract_limit=int(quick_extract_limit),
-                import_to_index=quick_import_to_index,
-                consolidate_after_extract=quick_consolidate,
-                auto_confirm_safe_items=quick_auto_confirm,
-                custom_instructions=shared_custom_instructions,
-                progress_callback=progress_callback,
-            )
-            st.session_state[_long_reference_key("long_reference_quick_result", state_scope)] = quick_summary
-            st.success(
-                f"自动处理完成：导入 {quick_summary.get('imported_count', 0)} 段，"
-                f"提取 {quick_summary.get('processed_count', 0)} 段，"
-                f"新增待审核设定 {quick_summary.get('new_pending_count', 0)} 条，"
-                f"自动保存 {quick_summary.get('auto_confirmed_count', 0)} 条，"
-                f"保留待审核 {quick_summary.get('blocked_count', 0)} 条。"
-            )
-            for failure in quick_summary.get("failed_titles", [])[:5]:
-                st.warning(f"处理失败：{failure}")
+            try:
+                batch = _get_or_create_long_reference_preview_batch(batch_context)
+                task = create_long_reference_ingestion_task(
+                    project_name,
+                    batch,
+                    planned_indices,
+                    enabled_categories=shared_categories,
+                    extraction_mode=shared_extraction_mode,
+                    extract_limit=int(quick_extract_limit),
+                    import_to_index=quick_import_to_index,
+                    consolidate_after_extract=quick_consolidate,
+                    auto_confirm_safe_items=quick_auto_confirm,
+                    custom_instructions=shared_custom_instructions,
+                    story_id=str(st.session_state.get("active_story_id") or "default"),
+                )
+            except Exception as exc:
+                st.error(f"无法创建资料任务：{exc}")
+                return extraction_options
+            st.session_state[_long_reference_key("long_reference_quick_result", state_scope)] = {
+                "task_id": task.get("task_id", ""),
+                "queued": True,
+                "estimate": task.get("estimate", {}),
+            }
+            story_id = str(st.session_state.get("active_story_id") or "default")
+            st.session_state[scoped_widget_key("source_ingestion_task_select", project_name, story_id)] = task["task_id"]
+            st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "资料任务"
+            wake_ingestion_task_dispatcher()
             st.rerun()
 
     _render_long_reference_quick_result(state_scope)
@@ -499,11 +516,15 @@ def _render_long_reference_quick_result(state_scope: StateScope):
     if not quick_result:
         return
     with st.expander("上次自动处理结果", expanded=bool(quick_result.get("blocked_count"))):
+        if quick_result.get("queued"):
+            st.info(f"后台任务已创建：{quick_result.get('task_id', '')}。请在“资料任务”中查看实时状态。")
+            return
         st.caption(
             f"模式={KNOWLEDGE_EXTRACTION_MODE_LABELS.get(quick_result.get('extraction_mode', ''), quick_result.get('extraction_mode', ''))} / "
             f"分类={'、'.join(label_knowledge_category(category) for category in quick_result.get('categories', []))}"
         )
         st.json({
+            "任务 ID": quick_result.get("task_id", ""),
             "导入片段": quick_result.get("imported_count", 0),
             "提取片段": quick_result.get("processed_count", 0),
             "新增候选": quick_result.get("new_pending_count", 0),
@@ -684,6 +705,17 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             "segments": segments,
             "state_scope": state_scope,
         }
+
+        bound_batch_id = str(
+            st.session_state.get(_long_reference_key("long_reference_batch_id", state_scope)) or ""
+        )
+        if bound_batch_id and load_long_reference_batch(project_name, bound_batch_id):
+            if render_batch_write_guard(
+                project_name,
+                bound_batch_id,
+                widget_scope="importer",
+            ):
+                return
 
         extraction_options = _render_long_reference_quick_processing(
             project_name,

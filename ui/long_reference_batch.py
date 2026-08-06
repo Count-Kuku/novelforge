@@ -30,10 +30,14 @@ from novelforge.workflows.source_workflows import (
     get_batch_pending_knowledge_items,
     import_long_reference_segments,
     run_long_reference_extraction_plan,
-    run_long_reference_quick_process,
     summarize_long_reference_resume_state,
     upsert_extraction_plan_template,
 )
+from novelforge.workflows.ingestion_tasks import (
+    build_long_reference_ingestion_estimate,
+    create_long_reference_ingestion_task,
+)
+from novelforge.workflows.ingestion_task_dispatcher import wake_ingestion_task_dispatcher
 from novelforge.domain.knowledge_workflows import safe_confidence
 from ui.common import (
     confirmed_button,
@@ -47,8 +51,22 @@ from ui.labels import (
     label_knowledge_category,
     label_scope,
 )
+from ui.ingestion_task_estimate import render_ingestion_task_estimate
+from ui.ingestion_batch_guard import (
+    find_batch_write_conflicts as _find_batch_write_conflicts,
+    render_batch_mutation_error,
+    render_batch_write_guard,
+)
 from ui.step_views import render_step_json_expander, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
+
+
+def _render_batch_write_guard(project_name: str, selected_batch_id: str) -> bool:
+    return render_batch_write_guard(
+        project_name,
+        selected_batch_id,
+        widget_scope="batch_manager",
+    )
 
 
 def render_knowledge_diff_item(item: dict, prefix: str):
@@ -162,7 +180,7 @@ def _load_selected_long_reference_batch(project_name: str) -> tuple[str | None, 
             ),
             batch_id,
         ),
-        key="long_reference_batch_select",
+        key=scoped_widget_key("long_reference_batch_select", project_name),
     )
     batch = load_long_reference_batch(project_name, selected_batch_id)
     if not batch:
@@ -346,7 +364,11 @@ def _render_batch_quick_result(selected_batch_id: str):
     if not batch_quick_result:
         return
     with st.expander("上次批次自动处理结果", expanded=bool(batch_quick_result.get("blocked_count"))):
+        if batch_quick_result.get("queued"):
+            st.info(f"后台任务已创建：{batch_quick_result.get('task_id', '')}。请在“资料任务”中查看实时状态。")
+            return
         st.json({
+            "任务 ID": batch_quick_result.get("task_id", ""),
             "导入片段": batch_quick_result.get("imported_count", 0),
             "提取片段": batch_quick_result.get("processed_count", 0),
             "新增候选": batch_quick_result.get("new_pending_count", 0),
@@ -402,6 +424,17 @@ def _render_batch_quick_continue(
         pending_import_indices,
         knowledge_category_options,
     )
+    planned_indices = selected_indices[: int(quick_continue_limit)]
+    estimate = build_long_reference_ingestion_estimate(
+        batch,
+        planned_indices,
+        enabled_categories=quick_continue_categories,
+        extraction_mode=quick_continue_mode,
+        import_to_index=quick_continue_import,
+        consolidate_after_extract=False,
+        custom_instructions=quick_continue_custom_instructions,
+    )
+    render_ingestion_task_estimate(estimate, expanded=planned_quick_count > 20)
     if st.button("继续处理所选片段", key=f"batch_quick_process_{selected_batch_id}", use_container_width=True, type="primary" if unfinished_indices else "secondary"):
         if not selected_indices:
             st.error("请先选择片段。")
@@ -410,29 +443,32 @@ def _render_batch_quick_continue(
         elif not quick_continue_high_ok:
             st.error("处理数量超过 50 段，请先勾选确认框。")
         else:
-            progress_callback = create_batch_progress_callback("批次自动处理")
-            batch, quick_summary = _run_with_stream(
-                "正在继续处理批次...",
-                run_long_reference_quick_process,
-                project_name,
-                batch,
-                selected_indices[: int(quick_continue_limit)],
-                enabled_categories=quick_continue_categories,
-                extraction_mode=quick_continue_mode,
-                extract_limit=int(quick_continue_limit),
-                import_to_index=quick_continue_import,
-                consolidate_after_extract=False,
-                auto_confirm_safe_items=quick_continue_auto_confirm,
-                custom_instructions=quick_continue_custom_instructions,
-                progress_callback=progress_callback,
-            )
-            st.session_state[f"batch_quick_result_{selected_batch_id}"] = quick_summary
-            st.success(
-                f"已处理：导入 {quick_summary.get('imported_count', 0)} 段，"
-                f"提取 {quick_summary.get('processed_count', 0)} 段，"
-                f"自动保存 {quick_summary.get('auto_confirmed_count', 0)} 条，"
-                f"保留待审核 {quick_summary.get('blocked_count', 0)} 条。"
-            )
+            try:
+                task = create_long_reference_ingestion_task(
+                    project_name,
+                    batch,
+                    planned_indices,
+                    enabled_categories=quick_continue_categories,
+                    extraction_mode=quick_continue_mode,
+                    extract_limit=int(quick_continue_limit),
+                    import_to_index=quick_continue_import,
+                    consolidate_after_extract=False,
+                    auto_confirm_safe_items=quick_continue_auto_confirm,
+                    custom_instructions=quick_continue_custom_instructions,
+                    story_id=str(st.session_state.get("active_story_id") or "default"),
+                )
+            except Exception as exc:
+                st.error(f"无法创建资料任务：{exc}")
+                return
+            st.session_state[f"batch_quick_result_{selected_batch_id}"] = {
+                "task_id": task.get("task_id", ""),
+                "queued": True,
+                "estimate": task.get("estimate", {}),
+            }
+            story_id = str(st.session_state.get("active_story_id") or "default")
+            st.session_state[scoped_widget_key("source_ingestion_task_select", project_name, story_id)] = task["task_id"]
+            st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "资料任务"
+            wake_ingestion_task_dispatcher()
             st.rerun()
     _render_batch_quick_result(selected_batch_id)
 
@@ -1028,9 +1064,13 @@ def _render_batch_advanced_actions(project_name: str, batch: dict, selected_batc
             "确认删除当前批次记录",
             scoped_widget_key("batch_delete", project_name, selected_batch_id),
         ):
-            delete_long_reference_batch(project_name, selected_batch_id)
-            st.success("已删除批次记录。已导入的资料文件和知识库条目不会被删除。")
-            st.rerun()
+            try:
+                delete_long_reference_batch(project_name, selected_batch_id)
+            except (ValueError, RuntimeError, OSError) as exc:
+                render_batch_mutation_error("删除批次", exc)
+            else:
+                st.success("已删除批次记录。已导入的资料文件和知识库条目不会被删除。")
+                st.rerun()
         raw_batch_json = st.text_area(
             "批次原始数据",
             value=json.dumps(batch, ensure_ascii=False, indent=2),
@@ -1048,10 +1088,17 @@ def _render_batch_advanced_actions(project_name: str, batch: dict, selected_batc
                     st.rerun()
             except json.JSONDecodeError as exc:
                 st.error(f"详细数据格式错误：{exc}")
+            except (ValueError, RuntimeError, OSError) as exc:
+                render_batch_mutation_error("保存批次", exc)
 
 
-def render_long_reference_batch_manager(project_name: str, knowledge_category_options: list[str]):
-    with st.expander("长篇资料批次管理", expanded=False):
+def render_long_reference_batch_manager(
+    project_name: str,
+    knowledge_category_options: list[str],
+    *,
+    expanded: bool = False,
+):
+    with st.expander("长篇资料批次管理", expanded=expanded):
         selected_batch_id, batch = _load_selected_long_reference_batch(project_name)
         if not selected_batch_id or not batch:
             return
@@ -1063,6 +1110,8 @@ def render_long_reference_batch_manager(project_name: str, knowledge_category_op
             segments,
             resume_state,
         )
+        if _render_batch_write_guard(project_name, selected_batch_id):
+            return
         _render_batch_quick_continue(
             project_name,
             batch,

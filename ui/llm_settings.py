@@ -155,7 +155,10 @@ def _clean_llm_profile_form_values(
     api_key: str,
     model_name: str,
     embedding_model_name: str,
-) -> dict[str, str]:
+    input_price_per_million: float,
+    output_price_per_million: float,
+    embedding_price_per_million: float,
+) -> dict:
     return {
         "id": profile_id_value.strip(),
         "name": profile_name.strip(),
@@ -163,10 +166,13 @@ def _clean_llm_profile_form_values(
         "api_key": api_key.strip(),
         "model_name": model_name.strip(),
         "embedding_model_name": embedding_model_name.strip(),
+        "input_price_per_million": max(float(input_price_per_million), 0.0),
+        "output_price_per_million": max(float(output_price_per_million), 0.0),
+        "embedding_price_per_million": max(float(embedding_price_per_million), 0.0),
     }
 
 
-def _validate_llm_profile_payload(payload: dict[str, str], *, require_api_key: bool, auto_activate: bool) -> bool:
+def _validate_llm_profile_payload(payload: dict, *, require_api_key: bool, auto_activate: bool) -> bool:
     if not payload["id"]:
         st.error("方案标识不能为空。")
         return False
@@ -189,13 +195,13 @@ def _validate_llm_profile_payload(payload: dict[str, str], *, require_api_key: b
     return True
 
 
-def _save_llm_profile(payload: dict[str, str], *, auto_activate: bool) -> None:
+def _save_llm_profile(payload: dict, *, auto_activate: bool) -> None:
     saved_profile = upsert_llm_profile(payload)
     if auto_activate:
         set_active_llm_profile(saved_profile.get("id", ""))
 
 
-def _handle_test_and_save_profile(payload: dict[str, str], *, auto_activate: bool) -> None:
+def _handle_test_and_save_profile(payload: dict, *, auto_activate: bool) -> None:
     if not _validate_llm_profile_payload(payload, require_api_key=True, auto_activate=auto_activate):
         return
     try:
@@ -208,7 +214,7 @@ def _handle_test_and_save_profile(payload: dict[str, str], *, auto_activate: boo
         st.error(str(exc))
 
 
-def _handle_direct_save_profile(payload: dict[str, str], *, auto_activate: bool) -> None:
+def _handle_direct_save_profile(payload: dict, *, auto_activate: bool) -> None:
     if not _validate_llm_profile_payload(payload, require_api_key=False, auto_activate=auto_activate):
         return
     if not payload["api_key"]:
@@ -264,6 +270,33 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             placeholder="text-embedding-3-small",
             key=_profile_widget_key("llm_embedding_model_name", selected_profile_id),
         )
+        with st.expander("Token 费用估算设置", expanded=False):
+            st.caption("填写服务商当前的每百万 Token 美元价格。留空或填 0 时，资料任务只显示 Token 估算，不猜测费用。")
+            price_cols = st.columns(3)
+            input_price_per_million = price_cols[0].number_input(
+                "输入价格 / 百万 Token",
+                min_value=0.0,
+                value=float(selected_profile.get("input_price_per_million") or 0.0),
+                step=0.01,
+                format="%.4f",
+                key=_profile_widget_key("llm_input_price", selected_profile_id),
+            )
+            output_price_per_million = price_cols[1].number_input(
+                "输出价格 / 百万 Token",
+                min_value=0.0,
+                value=float(selected_profile.get("output_price_per_million") or 0.0),
+                step=0.01,
+                format="%.4f",
+                key=_profile_widget_key("llm_output_price", selected_profile_id),
+            )
+            embedding_price_per_million = price_cols[2].number_input(
+                "Embedding 价格 / 百万 Token",
+                min_value=0.0,
+                value=float(selected_profile.get("embedding_price_per_million") or 0.0),
+                step=0.01,
+                format="%.4f",
+                key=_profile_widget_key("llm_embedding_price", selected_profile_id),
+            )
         auto_activate = st.checkbox(
             "保存后立即启用这个方案",
             value=selected_profile.get("id") == active_profile.get("id"),
@@ -278,6 +311,9 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             api_key,
             model_name,
             embedding_model_name,
+            input_price_per_million,
+            output_price_per_million,
+            embedding_price_per_million,
         )
         if test_col.form_submit_button("测试并保存", use_container_width=True):
             _handle_test_and_save_profile(payload, auto_activate=auto_activate)

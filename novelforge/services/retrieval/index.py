@@ -54,20 +54,139 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def _is_reusable_vector(vector: object, *, expected_dimension: int | None = None) -> bool:
+    if not isinstance(vector, list) or not vector:
+        return False
+    if expected_dimension is not None and len(vector) != expected_dimension:
+        return False
+    try:
+        numeric_values = []
+        for value in vector:
+            if isinstance(value, bool):
+                return False
+            numeric_value = float(value)
+            if not _retrieval_api.math.isfinite(numeric_value):
+                return False
+            numeric_values.append(numeric_value)
+        return any(value != 0.0 for value in numeric_values)
+    except (TypeError, ValueError):
+        return False
+
+
+def _generate_chunk_vector(chunk: _retrieval_api.RetrievalChunk) -> list[float]:
+    vector = _retrieval_api.get_embedding(f"{chunk.title}\n{chunk.content}")
+    if not _is_reusable_vector(vector):
+        raise RuntimeError(f"向量模型为片段 {chunk.chunk_id} 返回了空向量、零向量或异常数值。")
+    return [float(value) for value in vector]
+
+
+def _vector_health_summary(
+    manifest: _retrieval_api.RetrievalIndexManifest,
+    store: _retrieval_api.RetrievalVectorStore | None,
+) -> dict:
+    chunks_by_id = {chunk.chunk_id: chunk for chunk in manifest.chunks}
+    manifest_chunk_ids = set(chunks_by_id)
+    vector_ids = set(store.vectors) if store else set()
+    raw_missing_vector_count = len(manifest_chunk_ids - vector_ids)
+    invalid_vector_ids: set[str] = set()
+    stale_content_vector_ids: set[str] = set()
+    dimension_by_id: dict[str, int] = {}
+
+    if store:
+        for chunk_id in manifest_chunk_ids & vector_ids:
+            vector = store.vectors.get(chunk_id)
+            if not _is_reusable_vector(vector):
+                invalid_vector_ids.add(chunk_id)
+                continue
+            dimension_by_id[chunk_id] = len(vector)
+            if store.content_hashes.get(chunk_id) != _retrieval_api._retrieval_chunk_content_hash(chunks_by_id[chunk_id]):
+                stale_content_vector_ids.add(chunk_id)
+
+    dimension_counts = _retrieval_api.Counter(dimension_by_id.values())
+    canonical_dimension = 0
+    if dimension_counts:
+        canonical_dimension = min(
+            dimension_counts,
+            key=lambda dimension: (-dimension_counts[dimension], dimension),
+        )
+    inconsistent_dimension_ids = {
+        chunk_id
+        for chunk_id, dimension in dimension_by_id.items()
+        if canonical_dimension and dimension != canonical_dimension
+    }
+    unusable_vector_ids = invalid_vector_ids | stale_content_vector_ids | inconsistent_dimension_ids
+    usable_vector_ids = (manifest_chunk_ids & vector_ids) - unusable_vector_ids
+    return {
+        "vector_ids": vector_ids,
+        "vector_dimension": canonical_dimension,
+        "vector_dimension_counts": dict(sorted(dimension_counts.items())),
+        "raw_missing_vector_count": raw_missing_vector_count,
+        "missing_vector_count": len(manifest_chunk_ids - usable_vector_ids),
+        "invalid_vector_count": len(invalid_vector_ids),
+        "stale_content_vector_count": len(stale_content_vector_ids),
+        "inconsistent_vector_dimension_count": len(inconsistent_dimension_ids),
+        "usable_vector_count": len(usable_vector_ids),
+    }
+
+
 def build_vector_store(project_name: str, manifest: _retrieval_api.RetrievalIndexManifest | None = None) -> _retrieval_api.RetrievalVectorStore:
     manifest = manifest or load_retrieval_index(project_name)
+    embedding_model = _retrieval_api._active_embedding_model_name()
+    previous_store = load_vector_store(project_name)
+    can_reuse = bool(previous_store and previous_store.embedding_model == embedding_model)
     vectors = {}
     content_hashes = {}
+    generated_vectors: dict[str, list[float]] = {}
+    reused_vector_count = 0
+    generated_vector_count = 0
     for chunk in manifest.chunks:
-        vectors[chunk.chunk_id] = _retrieval_api.get_embedding(f"{chunk.title}\n{chunk.content}")
-        content_hashes[chunk.chunk_id] = _retrieval_api._retrieval_chunk_content_hash(chunk)
+        content_hash = _retrieval_api._retrieval_chunk_content_hash(chunk)
+        previous_vector = previous_store.vectors.get(chunk.chunk_id) if can_reuse and previous_store else None
+        previous_hash = previous_store.content_hashes.get(chunk.chunk_id) if can_reuse and previous_store else None
+        if previous_hash == content_hash and _is_reusable_vector(previous_vector):
+            vectors[chunk.chunk_id] = previous_vector
+            reused_vector_count += 1
+        else:
+            generated_vector = _generate_chunk_vector(chunk)
+            vectors[chunk.chunk_id] = generated_vector
+            generated_vectors[chunk.chunk_id] = generated_vector
+            generated_vector_count += 1
+        content_hashes[chunk.chunk_id] = content_hash
+
+    forced_full_build = len({len(vector) for vector in vectors.values()}) > 1
+    if forced_full_build:
+        # A provider can change an embedding model's dimension without changing
+        # its configured model name.  Reusing the old dimension would silently
+        # remove those chunks from semantic search, so rebuild a uniform store.
+        fresh_vectors: dict[str, list[float]] = {}
+        fresh_dimension = 0
+        for chunk in manifest.chunks:
+            vector = generated_vectors.get(chunk.chunk_id) or _generate_chunk_vector(chunk)
+            if not fresh_dimension:
+                fresh_dimension = len(vector)
+            elif len(vector) != fresh_dimension:
+                raise RuntimeError(
+                    "同一次向量构建返回了不一致的维度："
+                    f"期望 {fresh_dimension}，片段 {chunk.chunk_id} 返回 {len(vector)}。"
+                )
+            fresh_vectors[chunk.chunk_id] = vector
+        vectors = fresh_vectors
+        reused_vector_count = 0
+        generated_vector_count = len(fresh_vectors)
+
+    previous_vector_ids = set(previous_store.vectors) if previous_store else set()
+    removed_vector_count = len(previous_vector_ids - set(vectors))
 
     store = _retrieval_api.RetrievalVectorStore(
         project_name=project_name,
         built_at=_retrieval_api.datetime.now().isoformat(timespec="seconds"),
-        embedding_model=_retrieval_api._active_embedding_model_name(),
+        embedding_model=embedding_model,
         vectors=vectors,
         content_hashes=content_hashes,
+        build_mode="incremental" if can_reuse and not forced_full_build else "full",
+        reused_vector_count=reused_vector_count,
+        generated_vector_count=generated_vector_count,
+        removed_vector_count=removed_vector_count,
     )
     _retrieval_api.save_retrieval_vectors(project_name, store.model_dump_json(indent=2))
     return store
@@ -123,13 +242,11 @@ def inspect_retrieval_health(project_name: str) -> dict:
 
     store = load_vector_store(project_name)
     active_embedding_model = _retrieval_api._active_embedding_model_name()
-    vector_ids = set(store.vectors.keys()) if store else set()
-    missing_vector_count = len(manifest_chunk_ids - vector_ids)
+    vector_health = _vector_health_summary(manifest, store)
+    vector_ids = vector_health["vector_ids"]
+    missing_vector_count = vector_health["missing_vector_count"]
     stale_vector_count = len(vector_ids - manifest_chunk_ids)
-    vector_dimension = 0
-    if store and store.vectors:
-        first_vector = next(iter(store.vectors.values()), [])
-        vector_dimension = len(first_vector) if isinstance(first_vector, list) else 0
+    vector_dimension = vector_health["vector_dimension"]
 
     if manifest.chunk_count and not manifest.embedding_enabled:
         issues.append({
@@ -139,7 +256,29 @@ def inspect_retrieval_health(project_name: str) -> dict:
     elif manifest.embedding_enabled and missing_vector_count:
         issues.append({
             "severity": "medium",
-            "message": f"语义向量不完整：缺少 {missing_vector_count} 个片段向量。建议重建向量索引。",
+            "message": f"语义向量不完整或不可用：共 {missing_vector_count} 个片段。建议重建向量索引。",
+        })
+    if vector_health["invalid_vector_count"]:
+        issues.append({
+            "severity": "medium",
+            "message": f"发现 {vector_health['invalid_vector_count']} 个空向量、零向量或异常数值向量。",
+        })
+    if vector_health["inconsistent_vector_dimension_count"]:
+        dimensions = " / ".join(
+            f"{dimension} 维={count}"
+            for dimension, count in vector_health["vector_dimension_counts"].items()
+        )
+        issues.append({
+            "severity": "medium",
+            "message": (
+                f"发现 {vector_health['inconsistent_vector_dimension_count']} 个维度不一致的向量"
+                f"（{dimensions}）。这些向量不会参与语义检索。"
+            ),
+        })
+    if vector_health["stale_content_vector_count"]:
+        issues.append({
+            "severity": "medium",
+            "message": f"发现 {vector_health['stale_content_vector_count']} 个内容哈希已过期的向量。建议重建向量索引。",
         })
     if stale_vector_count:
         issues.append({
@@ -184,7 +323,13 @@ def inspect_retrieval_health(project_name: str) -> dict:
         "active_embedding_model": active_embedding_model,
         "vector_store_present": bool(store),
         "vector_count": len(vector_ids),
+        "usable_vector_count": vector_health["usable_vector_count"],
         "vector_dimension": vector_dimension,
+        "vector_dimension_counts": vector_health["vector_dimension_counts"],
+        "invalid_vector_count": vector_health["invalid_vector_count"],
+        "inconsistent_vector_dimension_count": vector_health["inconsistent_vector_dimension_count"],
+        "stale_content_vector_count": vector_health["stale_content_vector_count"],
+        "raw_missing_vector_count": vector_health["raw_missing_vector_count"],
         "missing_vector_count": missing_vector_count,
         "stale_vector_count": stale_vector_count,
         "stale_chunk_count": stale_chunk_count,
@@ -192,6 +337,10 @@ def inspect_retrieval_health(project_name: str) -> dict:
         "built_at": manifest.built_at,
         "vector_built_at": store.built_at if store else "",
         "vector_model": store.embedding_model if store else "",
+        "vector_build_mode": store.build_mode if store else "",
+        "reused_vector_count": store.reused_vector_count if store else 0,
+        "generated_vector_count": store.generated_vector_count if store else 0,
+        "removed_vector_count": store.removed_vector_count if store else 0,
         "source_type_counts": dict(source_type_counts.most_common()),
         "scope_counts": dict(scope_counts.most_common()),
         "issues": issues,

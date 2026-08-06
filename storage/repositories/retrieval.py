@@ -397,11 +397,47 @@ def sync_retrieval_vector_store_payload(conn: sqlite3.Connection, payload: dict)
             "DELETE FROM retrieval_vectors WHERE embedding_model = ?",
             (embedding_model,),
         )
+    build_mode = str(vector_store.get("build_mode") or "full")
+    if build_mode not in {"full", "incremental"}:
+        build_mode = "full"
+    conn.execute(
+        """
+        INSERT INTO retrieval_vector_store_meta (
+            embedding_model, build_mode, reused_vector_count,
+            generated_vector_count, removed_vector_count, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        ON CONFLICT(embedding_model) DO UPDATE SET
+            build_mode = excluded.build_mode,
+            reused_vector_count = excluded.reused_vector_count,
+            generated_vector_count = excluded.generated_vector_count,
+            removed_vector_count = excluded.removed_vector_count,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        """,
+        (
+            embedding_model,
+            build_mode,
+            max(int(vector_store.get("reused_vector_count") or 0), 0),
+            max(int(vector_store.get("generated_vector_count") or 0), 0),
+            max(int(vector_store.get("removed_vector_count") or 0), 0),
+        ),
+    )
     return vector_store
 
 
 def load_retrieval_vector_store_payload(conn: sqlite3.Connection, project_name: str, embedding_model: str | None = None) -> dict:
     clean_model = str(embedding_model or "").strip()
+    if not clean_model:
+        row = conn.execute(
+            """
+            SELECT embedding_model
+            FROM retrieval_vector_store_meta
+            ORDER BY updated_at DESC, embedding_model
+            LIMIT 1
+            """
+        ).fetchone()
+        if row:
+            clean_model = row["embedding_model"] if isinstance(row, sqlite3.Row) else row[0]
     if not clean_model:
         row = conn.execute(
             """
@@ -419,6 +455,25 @@ def load_retrieval_vector_store_payload(conn: sqlite3.Connection, project_name: 
             return {}
         clean_model = row["embedding_model"] if isinstance(row, sqlite3.Row) else row[0]
 
+    meta_row = conn.execute(
+        """
+        SELECT build_mode, reused_vector_count, generated_vector_count,
+               removed_vector_count, updated_at
+        FROM retrieval_vector_store_meta
+        WHERE embedding_model = ?
+        """,
+        (clean_model,),
+    ).fetchone()
+    meta = dict(meta_row) if isinstance(meta_row, sqlite3.Row) else {}
+    if meta_row and not meta:
+        meta = {
+            "build_mode": meta_row[0],
+            "reused_vector_count": meta_row[1],
+            "generated_vector_count": meta_row[2],
+            "removed_vector_count": meta_row[3],
+            "updated_at": meta_row[4],
+        }
+
     rows = conn.execute(
         """
         SELECT vector.chunk_id, vector.vector_blob, vector.content_hash, vector.updated_at
@@ -433,7 +488,7 @@ def load_retrieval_vector_store_payload(conn: sqlite3.Connection, project_name: 
         """,
         (clean_model,),
     ).fetchall()
-    if not rows:
+    if not rows and not meta_row:
         return {}
 
     vectors: dict[str, list[float]] = {}
@@ -458,10 +513,14 @@ def load_retrieval_vector_store_payload(conn: sqlite3.Connection, project_name: 
         updated_values.append(str(row["updated_at"] if isinstance(row, sqlite3.Row) else row[3]))
     return {
         "project_name": project_name,
-        "built_at": max([value for value in updated_values if value] or [""]),
+        "built_at": str(meta.get("updated_at") or max([value for value in updated_values if value] or [""])),
         "embedding_model": clean_model,
         "vectors": vectors,
         "content_hashes": content_hashes,
+        "build_mode": str(meta.get("build_mode") or "full"),
+        "reused_vector_count": int(meta.get("reused_vector_count") or 0),
+        "generated_vector_count": int(meta.get("generated_vector_count") or 0),
+        "removed_vector_count": int(meta.get("removed_vector_count") or 0),
     }
 
 

@@ -102,6 +102,11 @@ def _render_retrieval_health_panel(project_name: str):
 
             if health.get("embedding_enabled"):
                 st.success(f"语义向量已启用：{health.get('vector_model') or health.get('embedding_model') or '-'} / 维度 {health.get('vector_dimension') or '-'}")
+                build_mode_label = "增量复用" if health.get("vector_build_mode") == "incremental" else "完整生成"
+                st.caption(
+                    f"最近向量构建：{build_mode_label} / 复用 {health.get('reused_vector_count', 0)} / "
+                    f"新生成 {health.get('generated_vector_count', 0)} / 移除旧向量 {health.get('removed_vector_count', 0)}"
+                )
             else:
                 st.warning("语义向量未启用。混合检索会自动退回关键词检索；如需语义匹配，请配置可用的 Embedding 模型后重建完整索引。")
 

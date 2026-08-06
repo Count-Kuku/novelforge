@@ -111,19 +111,26 @@ def render_project_overview_page(project_name: str):
                 st.error(f"\u9879\u76ee\u91cd\u547d\u540d\u5931\u8d25\uff1a{exc}")
 
     with st.expander("\u5371\u9669\u64cd\u4f5c", expanded=False):
-        st.warning("\u5220\u9664\u9879\u76ee\u4f1a\u4ece\u9879\u76ee\u5217\u8868\u79fb\u9664\uff0c\u5e76\u628a\u9879\u76ee\u76ee\u5f55\u79fb\u52a8\u5230 data/deleted_projects \u4ee5\u4fbf\u9700\u8981\u65f6\u624b\u52a8\u6062\u590d\u3002")
+        st.warning(
+            "\u5220\u9664\u9879\u76ee\u4f1a\u4ece\u9879\u76ee\u5217\u79fb\u9664\uff0c\u5e76\u628a\u9879\u76ee\u76ee\u5f55\u9694\u79bb\u5230 "
+            "data/deleted_projects \u4f5c\u4e3a\u5907\u4efd\u3002\u5f53\u524d\u6ca1\u6709\u4e00\u952e\u6062\u590d\u5165\u53e3\uff1b\u6062\u590d\u65f6\u8fd8\u9700\u6e05\u9664"
+            "\u9879\u76ee\u7ef4\u62a4\u9501\u5e76\u91cd\u65b0\u767b\u8bb0\uff0c\u4e0d\u8981\u53ea\u5c06\u76ee\u5f55\u79fb\u56de\u3002"
+        )
         confirm_value = st.text_input("\u8f93\u5165\u9879\u76ee\u540d\u4ee5\u786e\u8ba4\u5220\u9664", key=f"delete_project_confirm_{project_name}")
         if st.button("\u5220\u9664\u5f53\u524d\u9879\u76ee", key=f"delete_project_{project_name}"):
             if confirm_value.strip() != project_name:
                 st.error("\u9879\u76ee\u540d\u786e\u8ba4\u4e0d\u5339\u914d\uff0c\u5df2\u53d6\u6d88\u5220\u9664\u3002")
             else:
-                deleted = delete_project(project_name)
-                if deleted:
-                    st.session_state.pop("project_name", None)
-                    st.session_state.pop("active_story_id", None)
-                    st.session_state["project_switcher"] = ""
-                    set_active_project_name(None)
-                    st.success(f"\u9879\u76ee `{project_name}` \u5df2\u79fb\u5165 data/deleted_projects\u3002")
-                    st.rerun()
-                else:
-                    st.error("\u9879\u76ee\u5220\u9664\u5931\u8d25\uff0c\u76ee\u6807\u9879\u76ee\u53ef\u80fd\u4e0d\u5b58\u5728\u3002")
+                try:
+                    deleted = delete_project(project_name)
+                    if deleted:
+                        st.session_state.pop("project_name", None)
+                        st.session_state.pop("active_story_id", None)
+                        st.session_state["project_switcher"] = ""
+                        set_active_project_name(None)
+                        st.success(f"\u9879\u76ee `{project_name}` \u5df2\u79fb\u5165 data/deleted_projects\u3002")
+                        st.rerun()
+                    else:
+                        st.error("\u9879\u76ee\u5220\u9664\u5931\u8d25\uff0c\u76ee\u6807\u9879\u76ee\u53ef\u80fd\u4e0d\u5b58\u5728\u3002")
+                except Exception as exc:
+                    st.error(f"\u9879\u76ee\u5220\u9664\u5931\u8d25\uff1a{exc}")
