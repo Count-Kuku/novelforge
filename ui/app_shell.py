@@ -22,6 +22,7 @@ from novelforge.services.memory import (
 )
 from novelforge.services.project_manager import get_project_summary
 from ui.common import scoped_widget_key
+from ui.llm_usage import render_sidebar_usage_summary
 from ui.navigation import (
     ADVANCED_PAGE_GROUPS,
     DEFAULT_PAGE,
@@ -425,6 +426,10 @@ def _render_sidebar_project_summary(project_name: str | None) -> None:
             )
             updated_at = str(summary.get("updated_at") or "-").replace("T", " ")[:16]
             st.sidebar.caption(f"最近更新：{updated_at}")
+            render_sidebar_usage_summary(
+                project_name,
+                str(st.session_state.get("active_story_id") or "default"),
+            )
         except Exception as exc:
             LOGGER.warning(
                 "Failed to load sidebar project summary for project=%s story=%s: %s",

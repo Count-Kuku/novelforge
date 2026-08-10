@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`9`
+当前代码期望的 SQLite schema version：`10`
 
 ## 权威存储边界
 
@@ -10,7 +10,7 @@ NovelForge 采用 SQLite 与文件资产组合存储：
 
 | 数据类型 | 权威来源 | 说明 |
 |---|---|---|
-| 全局模型档案、全局规则、全局提示词选项 | `data/global.db` | 全局结构化配置 |
+| 全局模型档案、全局规则、全局提示词选项、LLM 用量账本 | `data/global.db` | 全局结构化配置和跨项目计量 |
 | 项目、故事、知识、来源、检索、运行记录 | `data/projects/{project_name}/project.db` | 每个项目独立数据库 |
 | 大纲、章节、审阅、分析、评价、导入原文 | 项目目录内 Markdown/TXT 等文件 | 正文由文件保存，生命周期登记在 `asset_files` |
 | 结构化 JSON | 非权威兼容层 | 默认不写；只用于旧项目导入或显式兼容镜像 |
@@ -88,6 +88,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `007_creative_sessions` | 自由创作会话、轮次和片段版本 |
 | `008_workflow_runtime` | 后台任务 worker、租约、心跳、控制、估算、优先级和归档 |
 | `009_runtime_hardening` | 项目维护锁、向量构建统计，以及旧任务残留租约清理 |
+| `010_llm_usage` | 追加式 LLM 用量事件、价格快照，以及项目/故事/任务/操作索引 |
 
 ## 表分组
 
@@ -111,6 +112,16 @@ DB-only 错误语义并提前删除待迁移镜像。
 - `global_settings`：全局模型档案等键值 payload，只在 `global.db` 使用。
 - `rules`：global/project/story 三层规则。
 - `prompt_options`：global/project/story 三层提示词选项和覆盖关系。
+
+### LLM 用量账本
+
+- `llm_usage_events`：每次对话或 Embedding 请求一条追加式记录，保存标准化 Token、费用、费用来源、价格快照和供应商请求 ID。
+- 用量账本只在 `global.db` 作为权威数据使用，以便跨项目按日期和模型聚合；共享迁移也会在项目库创建同名空表，业务不得向项目库写入该账本。
+- 归因字段包括 `project_name/story_id/workflow_run_id/task_id/operation_id/operation/agent_role`。网络研究和资料导入的子 Agent 继承任务 ID，并细化操作和角色。
+- `provider_request_id` 在供应商范围内唯一，防止流式末尾 usage 或重试路径重复记账；业务事件 ID 同样幂等。
+- `price_snapshot_json` 保存调用发生时的单价和核对来源。费用展示不得用当前配置重算历史事件。
+- 账本不保存 prompt 和模型响应正文；`metadata_json` 只允许保存非正文的操作标签和诊断元数据。
+- 记录默认长期保留。删除接口必须提供项目、截止时间或明确事件 ID，禁止无范围清空。
 
 ### 来源与知识
 
@@ -306,6 +317,9 @@ streamlit run app.py
 # 网络研究 Agent、持久任务、证据与隔离区（离线 Mock）
 .\.venv\Scripts\python.exe tools\verify_web_research.py
 .\.venv\Scripts\python.exe tools\verify_web_research_tasks.py
+
+# LLM usage 标准化、费用、归因、聚合与调用接入
+.\.venv\Scripts\python.exe tools\verify_llm_usage.py
 ```
 
 验证脚本创建的项目使用专用 `_verify_*` 前缀。脚本和人工清理都必须校验目标在工作区和允许前缀内。

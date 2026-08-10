@@ -9,6 +9,7 @@ from novelforge.services.project_manager import delete_project, get_project_summ
 from novelforge.services.memory import set_active_project_name
 from ui.common import render_quick_action
 from ui.layout import render_section_heading
+from ui.llm_usage import render_usage_dashboard
 from ui.resource_browser_state import render_resource_metric_link
 
 
@@ -95,6 +96,14 @@ def render_project_overview_page(project_name: str):
         render_resource_metric_link(col10, project_name, story_id, "已保存分卷讨论", summary.get("approved_volume_count", 0), ["volume_discussion"])
         render_resource_metric_link(col11, project_name, story_id, "已保存剧情段讨论", summary.get("approved_arc_count", 0), ["arc_discussion"])
         st.caption(f"章节摘要：{summary.get('chapter_summary_count', 0)} · 资源文件：{summary.get('resource_file_count', 0)}")
+
+    render_section_heading("模型用量", "查看当前故事的 Token、费用趋势和 Agent 调用分布。")
+    with st.expander("查看用量详情", expanded=False):
+        render_usage_dashboard(
+            project_name=project_name,
+            story_id=story_id,
+            key_prefix=f"project_usage_{project_name}_{story_id}",
+        )
 
     render_section_heading("\u9879\u76ee\u7ef4\u62a4")
     with st.expander("\u9879\u76ee\u8bbe\u7f6e", expanded=False):

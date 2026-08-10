@@ -17,6 +17,25 @@ from novelforge.services.memory import (
     upsert_llm_profile,
 )
 from ui.common import confirmed_button, scoped_widget_key
+from ui.llm_usage import render_usage_dashboard
+
+
+PROVIDER_TYPE_OPTIONS = {
+    "auto": "自动识别",
+    "deepseek": "DeepSeek",
+    "openrouter": "OpenRouter",
+    "openai": "OpenAI",
+    "qwen": "通义千问",
+    "siliconflow": "硅基流动",
+    "ollama": "本地 Ollama",
+    "openai_compatible": "其它 OpenAI 兼容接口",
+}
+COST_TRACKING_MODE_OPTIONS = {
+    "auto": "自动选择",
+    "provider_reported": "使用供应商返回费用",
+    "manual": "按 Token 价格估算",
+    "tokens_only": "仅统计 Token",
+}
 
 
 def _load_llm_profile_state() -> tuple[list[dict], dict, dict, list[str], dict[str, str]]:
@@ -143,6 +162,15 @@ def _render_provider_quick_fill(profile_id: str) -> None:
                         _profile_widget_key("llm_base_url", pid): p["base_url"],
                         _profile_widget_key("llm_model_name", pid): p["model_name"],
                         _profile_widget_key("llm_embedding_model_name", pid): p["embedding_model_name"],
+                        _profile_widget_key("llm_provider_type", pid): p.get("provider_type", "auto"),
+                        _profile_widget_key("llm_cost_tracking_mode", pid): p.get("cost_tracking_mode", "auto"),
+                        _profile_widget_key("llm_input_price", pid): float(p.get("input_price_per_million", 0) or 0),
+                        _profile_widget_key("llm_cached_input_price", pid): float(p.get("cached_input_price_per_million", 0) or 0),
+                        _profile_widget_key("llm_cache_write_price", pid): float(p.get("cache_write_price_per_million", 0) or 0),
+                        _profile_widget_key("llm_output_price", pid): float(p.get("output_price_per_million", 0) or 0),
+                        _profile_widget_key("llm_embedding_price", pid): float(p.get("embedding_price_per_million", 0) or 0),
+                        _profile_widget_key("llm_pricing_updated_at", pid): p.get("pricing_updated_at", ""),
+                        _profile_widget_key("llm_pricing_source_url", pid): p.get("pricing_source_url", ""),
                     })
                 ) or None,
             )
@@ -155,9 +183,15 @@ def _clean_llm_profile_form_values(
     api_key: str,
     model_name: str,
     embedding_model_name: str,
+    provider_type: str,
+    cost_tracking_mode: str,
     input_price_per_million: float,
+    cached_input_price_per_million: float,
+    cache_write_price_per_million: float,
     output_price_per_million: float,
     embedding_price_per_million: float,
+    pricing_updated_at: str,
+    pricing_source_url: str,
 ) -> dict:
     return {
         "id": profile_id_value.strip(),
@@ -166,9 +200,15 @@ def _clean_llm_profile_form_values(
         "api_key": api_key.strip(),
         "model_name": model_name.strip(),
         "embedding_model_name": embedding_model_name.strip(),
+        "provider_type": provider_type.strip().lower() or "auto",
+        "cost_tracking_mode": cost_tracking_mode.strip().lower() or "auto",
         "input_price_per_million": max(float(input_price_per_million), 0.0),
+        "cached_input_price_per_million": max(float(cached_input_price_per_million), 0.0),
+        "cache_write_price_per_million": max(float(cache_write_price_per_million), 0.0),
         "output_price_per_million": max(float(output_price_per_million), 0.0),
         "embedding_price_per_million": max(float(embedding_price_per_million), 0.0),
+        "pricing_updated_at": pricing_updated_at.strip(),
+        "pricing_source_url": pricing_source_url.strip(),
     }
 
 
@@ -192,6 +232,18 @@ def _validate_llm_profile_payload(payload: dict, *, require_api_key: bool, auto_
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         st.error("模型服务网址格式无效，需要以 http:// 或 https:// 开头，并包含完整域名。")
         return False
+    if payload.get("provider_type") not in PROVIDER_TYPE_OPTIONS:
+        st.error("供应商类型无效，请重新选择。")
+        return False
+    if payload.get("cost_tracking_mode") not in COST_TRACKING_MODE_OPTIONS:
+        st.error("费用统计模式无效，请重新选择。")
+        return False
+    pricing_source_url = str(payload.get("pricing_source_url") or "")
+    if pricing_source_url:
+        parsed_source = urlparse(pricing_source_url)
+        if parsed_source.scheme not in {"http", "https"} or not parsed_source.netloc:
+            st.error("价格来源网址格式无效，需要以 http:// 或 https:// 开头。")
+            return False
     return True
 
 
@@ -270,8 +322,33 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             placeholder="text-embedding-3-small",
             key=_profile_widget_key("llm_embedding_model_name", selected_profile_id),
         )
+        provider_col, tracking_col = st.columns(2)
+        provider_values = list(PROVIDER_TYPE_OPTIONS)
+        selected_provider_type = str(selected_profile.get("provider_type") or "auto")
+        if selected_provider_type not in provider_values:
+            selected_provider_type = "auto"
+        provider_type = provider_col.selectbox(
+            "供应商类型",
+            options=provider_values,
+            index=provider_values.index(selected_provider_type),
+            format_func=lambda value: PROVIDER_TYPE_OPTIONS.get(value, value),
+            key=_profile_widget_key("llm_provider_type", selected_profile_id),
+            help="用于识别供应商特有的 usage 和费用字段；自动识别失败时可以手动指定。",
+        )
+        tracking_values = list(COST_TRACKING_MODE_OPTIONS)
+        selected_tracking_mode = str(selected_profile.get("cost_tracking_mode") or "auto")
+        if selected_tracking_mode not in tracking_values:
+            selected_tracking_mode = "auto"
+        cost_tracking_mode = tracking_col.selectbox(
+            "费用统计模式",
+            options=tracking_values,
+            index=tracking_values.index(selected_tracking_mode),
+            format_func=lambda value: COST_TRACKING_MODE_OPTIONS.get(value, value),
+            key=_profile_widget_key("llm_cost_tracking_mode", selected_profile_id),
+            help="自动模式优先采用 OpenRouter 等供应商直接返回的费用，否则按下方价格估算。",
+        )
         with st.expander("Token 费用估算设置", expanded=False):
-            st.caption("填写服务商当前的每百万 Token 美元价格。留空或填 0 时，资料任务只显示 Token 估算，不猜测费用。")
+            st.caption("价格单位为美元 / 百万 Token。费用按调用发生时的价格快照保存；缺少必要价格时只显示 Token，不会显示为 $0。")
             price_cols = st.columns(3)
             input_price_per_million = price_cols[0].number_input(
                 "输入价格 / 百万 Token",
@@ -281,7 +358,15 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
                 format="%.4f",
                 key=_profile_widget_key("llm_input_price", selected_profile_id),
             )
-            output_price_per_million = price_cols[1].number_input(
+            cached_input_price_per_million = price_cols[1].number_input(
+                "缓存输入价格 / 百万 Token",
+                min_value=0.0,
+                value=float(selected_profile.get("cached_input_price_per_million") or 0.0),
+                step=0.001,
+                format="%.6f",
+                key=_profile_widget_key("llm_cached_input_price", selected_profile_id),
+            )
+            output_price_per_million = price_cols[2].number_input(
                 "输出价格 / 百万 Token",
                 min_value=0.0,
                 value=float(selected_profile.get("output_price_per_million") or 0.0),
@@ -289,7 +374,16 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
                 format="%.4f",
                 key=_profile_widget_key("llm_output_price", selected_profile_id),
             )
-            embedding_price_per_million = price_cols[2].number_input(
+            secondary_price_cols = st.columns(2)
+            cache_write_price_per_million = secondary_price_cols[0].number_input(
+                "缓存写入价格 / 百万 Token",
+                min_value=0.0,
+                value=float(selected_profile.get("cache_write_price_per_million") or 0.0),
+                step=0.001,
+                format="%.6f",
+                key=_profile_widget_key("llm_cache_write_price", selected_profile_id),
+            )
+            embedding_price_per_million = secondary_price_cols[1].number_input(
                 "Embedding 价格 / 百万 Token",
                 min_value=0.0,
                 value=float(selected_profile.get("embedding_price_per_million") or 0.0),
@@ -297,6 +391,21 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
                 format="%.4f",
                 key=_profile_widget_key("llm_embedding_price", selected_profile_id),
             )
+            price_meta_cols = st.columns(2)
+            pricing_updated_at = price_meta_cols[0].text_input(
+                "价格核对日期",
+                value=str(selected_profile.get("pricing_updated_at") or ""),
+                placeholder="2026-08-10",
+                key=_profile_widget_key("llm_pricing_updated_at", selected_profile_id),
+            )
+            pricing_source_url = price_meta_cols[1].text_input(
+                "价格来源网址",
+                value=str(selected_profile.get("pricing_source_url") or ""),
+                placeholder="https://...",
+                key=_profile_widget_key("llm_pricing_source_url", selected_profile_id),
+            )
+            if provider_type == "deepseek":
+                st.info("DeepSeek 官方价格可能调整；快速填充只是一份带核对日期的预设，使用前请按价格来源网址复核。")
         auto_activate = st.checkbox(
             "保存后立即启用这个方案",
             value=selected_profile.get("id") == active_profile.get("id"),
@@ -311,9 +420,15 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             api_key,
             model_name,
             embedding_model_name,
+            provider_type,
+            cost_tracking_mode,
             input_price_per_million,
+            cached_input_price_per_million,
+            cache_write_price_per_million,
             output_price_per_million,
             embedding_price_per_million,
+            pricing_updated_at,
+            pricing_source_url,
         )
         if test_col.form_submit_button("测试并保存", use_container_width=True):
             _handle_test_and_save_profile(payload, auto_activate=auto_activate)
@@ -342,8 +457,11 @@ def _render_saved_llm_profiles(profiles: list[dict], active_profile: dict) -> No
                 <div class="nf-card-copy">
                     <b>标识：</b>{html.escape(profile.get("id", ""))}<br>
                     <b>服务地址：</b>{html.escape(profile.get("base_url", ""))}<br>
+                    <b>供应商：</b>{html.escape(PROVIDER_TYPE_OPTIONS.get(profile.get("provider_type", "auto"), profile.get("provider_type", "auto")))}<br>
+                    <b>计费方式：</b>{html.escape(COST_TRACKING_MODE_OPTIONS.get(profile.get("cost_tracking_mode", "auto"), profile.get("cost_tracking_mode", "auto")))}<br>
                     <b>聊天模型：</b>{html.escape(profile.get("model_name", ""))}<br>
                     <b>向量模型：</b>{html.escape(profile.get("embedding_model_name", ""))}<br>
+                    <b>价格核对：</b>{html.escape(str(profile.get("pricing_updated_at") or "未标记"))}<br>
                     <b>密钥：</b>{html.escape(preview_key) if preview_key else "未设置"}
                 </div>
             </div>
@@ -362,6 +480,14 @@ def _render_active_llm_settings(settings: dict) -> None:
         "接口密钥": masked_key,
         "聊天模型名": settings.get("model_name", ""),
         "语义向量模型名": settings.get("embedding_model_name", ""),
+        "供应商类型": settings.get("provider_type", "auto"),
+        "费用统计模式": settings.get("cost_tracking_mode", "auto"),
+        "输入价格/百万Token": settings.get("input_price_per_million", 0),
+        "缓存输入价格/百万Token": settings.get("cached_input_price_per_million", 0),
+        "缓存写入价格/百万Token": settings.get("cache_write_price_per_million", 0),
+        "输出价格/百万Token": settings.get("output_price_per_million", 0),
+        "Embedding价格/百万Token": settings.get("embedding_price_per_million", 0),
+        "价格核对日期": settings.get("pricing_updated_at", ""),
         "环境配置文件": settings.get("env_path", ""),
         "方案保存文件": settings.get("profiles_path", ""),
     }, ensure_ascii=False, indent=2), language="json")
@@ -376,3 +502,6 @@ def render_llm_settings_page():
     _render_llm_profile_form(selected_profile, active_profile)
     _render_saved_llm_profiles(profiles, active_profile)
     _render_active_llm_settings(settings)
+    st.markdown("### 全局模型用量")
+    with st.expander("查看所有项目的用量详情", expanded=False):
+        render_usage_dashboard(key_prefix="global_llm_usage")

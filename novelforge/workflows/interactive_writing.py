@@ -11,6 +11,7 @@ from novelforge.workflows.context_assembly import (
     render_context_for_prompt,
 )
 from novelforge.core.llm import call_llm
+from novelforge.core.llm_usage import llm_usage_scope
 from novelforge.services.memory import (
     accept_creative_fragment,
     begin_creative_turn,
@@ -409,7 +410,15 @@ def generate_writing_fragment(
             branch["action_type"],
             word_count,
         )
-        content = call_llm(prompt, stream_callback=stream_callback)
+        with llm_usage_scope(
+            project_name=project_name,
+            story_id=story_id,
+            task_id=session_id,
+            operation="creative.fragment",
+            agent_role="generator",
+            metadata={"turn_id": str(turn.get("turn_id") or "")},
+        ):
+            content = call_llm(prompt, stream_callback=stream_callback)
         if not str(content or "").strip():
             raise RuntimeError("模型没有返回创作片段。")
     except Exception as exc:
@@ -664,13 +673,20 @@ def maybe_refresh_session_summary(
     if not pending_text.strip():
         return ""
     try:
-        summary = call_llm(
-            creative_session_summary_prompt(
-                str(session.get("rolling_summary") or ""),
-                pending_text,
-            ),
-            temperature=0.2,
-        )
+        with llm_usage_scope(
+            project_name=project_name,
+            story_id=story_id,
+            task_id=session_id,
+            operation="creative.summary",
+            agent_role="summarizer",
+        ):
+            summary = call_llm(
+                creative_session_summary_prompt(
+                    str(session.get("rolling_summary") or ""),
+                    pending_text,
+                ),
+                temperature=0.2,
+            )
         update_creative_session(
             project_name,
             session_id,
@@ -908,10 +924,17 @@ def save_writing_session_as_chapter(
     )
     final_text = source_text
     if smooth_transitions:
-        final_text = call_llm(
-            compile_creative_fragments_prompt(source_text, target_word_count),
-            stream_callback=stream_callback,
-        )
+        with llm_usage_scope(
+            project_name=project_name,
+            story_id=story_id,
+            task_id=session_id,
+            operation="creative.compile",
+            agent_role="editor",
+        ):
+            final_text = call_llm(
+                compile_creative_fragments_prompt(source_text, target_word_count),
+                stream_callback=stream_callback,
+            )
         if not str(final_text or "").strip():
             raise RuntimeError("模型没有返回整理后的章节正文。")
     save_chapter(

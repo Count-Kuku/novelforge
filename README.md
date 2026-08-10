@@ -63,6 +63,14 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 写作工作�
 
 研究任务复用 SQLite `workflow_runs/workflow_steps`，支持后台执行、阶段检查点、暂停、继续、取消、失败阶段重试和归档。官方评级只依据重定向后的最终 HTTPS URL 与用户白名单；官方、社区和同人证据不会互相升级权威。每个任务拥有独立网页快照，原文默认处于隔离状态，不参与写作检索；只有用户明确点击启用后才会以“不可信外部数据”边界进入 RAG。界面同时保留较轻量的手动搜索、勾选和导入方式。
 
+### Token 与费用可观测性
+
+- 对话、流式响应和 Embedding 调用统一记录输入、缓存输入、缓存写入、输出、推理和向量 Token。
+- DeepSeek 等 OpenAI-compatible 服务可按用户配置的百万 Token 单价估算；OpenRouter 可优先采用响应中的供应商费用；也可选择只记录 Token。
+- 每次调用保存当时的价格快照，并按项目、故事、任务、操作和 Agent 角色归因。历史费用不会因后续修改单价而变化。
+- 侧边栏显示当前故事今日/本月摘要，每次界面操作结束显示本次用量；项目概览和模型配置提供按日趋势、拆分明细和 CSV 导出。
+- 用量事件默认长期保存在 `data/global.db`，只保存计量与归因元数据，不保存提示词或模型回复正文。缺少供应商 usage 时 Token 标记为估算；缺少价格时显示“未计价”，不会伪装成零费用。
+
 ## 界面导航
 
 - `工作台`：项目总览、项目资源。
@@ -119,19 +127,23 @@ Copy-Item .env.example .env
 LLM_API_KEY=
 DEEPSEEK_API_KEY=
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
+LLM_MODEL=deepseek-v4-flash
 LLM_EMBEDDING_MODEL=
+LLM_PROVIDER_TYPE=auto
+LLM_COST_TRACKING_MODE=auto
 
 # 可选：资料导入页的网络检索
 BRAVE_SEARCH_API_KEY=
 
-# 仅用于资料任务本地估算，单位：USD / 1M tokens
+# 可选本地费用估算，单位：USD / 1M tokens
 LLM_INPUT_PRICE_PER_MILLION=0
+LLM_CACHED_INPUT_PRICE_PER_MILLION=0
+LLM_CACHE_WRITE_PRICE_PER_MILLION=0
 LLM_OUTPUT_PRICE_PER_MILLION=0
 LLM_EMBEDDING_PRICE_PER_MILLION=0
 ```
 
-价格留空或填 `0` 时，任务仍显示 Token 估算，但不会猜测费用。估算不是供应商实际账单。
+价格留空或填 `0` 时，系统仍记录 Token，但不会猜测费用。供应商未直接返回费用时，本地金额只是按价格快照计算的估算，不是实际账单；价格变化后应在 `模型配置` 中更新并记录核对日期。
 
 `BRAVE_SEARCH_API_KEY` 只传给 Brave Search API。网络研究仅抓取公开的 HTTP/HTTPS 静态文本页面，不登录网站、不携带浏览器 Cookie、不绕过付费墙。自动研究任务可在后台恢复；手动搜索入口仍要求先勾选结果。
 
@@ -139,7 +151,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 
 ## 数据与备份
 
-- 全局结构化配置保存在 `data/global.db`。
+- 全局结构化配置和 LLM 用量账本保存在 `data/global.db`。
 - 每个项目的结构化数据保存在 `data/projects/{project_name}/project.db`。
 - 章节、大纲、审阅、分析和导入原文等长文本继续保存为 Markdown/TXT 文件，并由数据库登记。
 - 结构化 JSON 默认不再写入；旧文件只承担兼容导入职责。
@@ -169,7 +181,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 ## 开发文档
 
 - [project.md](./project.md)：当前架构、模块职责、开发边界、技术债和优先级。
-- [storage_architecture.md](./storage_architecture.md)：DB-first 权威边界、schema v9、迁移、任务租约和恢复。
+- [storage_architecture.md](./storage_architecture.md)：DB-first 权威边界、schema v10、迁移、任务租约和恢复。
 - [docs/releases](./docs/releases)：已发布版本历史。
 
 已完成的一次性计划不会长期保留；完成结果应合并进上述事实文档，避免出现多个相互矛盾的“当前状态”。

@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from novelforge.core.llm_usage import llm_usage_scope
 from novelforge.core.schemas import WebResearchPlan, WebResearchVerificationResult
 from novelforge.domain.web_research_tasks import (
     WEB_RESEARCH_STAGE_NAMES,
@@ -393,14 +394,22 @@ def run_web_research_task(
             active_stage = "plan"
             begin_stage("plan", "研究规划 Agent 正在拆分来源角色和查询。")
             if configuration.get("use_llm_planner", True):
-                plan = planner_func(
-                    task_holder["task"]["topic"],
-                    list(configuration.get("source_kinds") or []),
-                    int(configuration.get("max_results_per_branch") or 5),
-                    objective=task_holder["task"].get("objective", ""),
-                    official_domains=list(configuration.get("official_domains") or []),
-                    max_pages=int(configuration.get("max_pages") or 8),
-                )
+                with llm_usage_scope(
+                    project_name=project_name,
+                    story_id=str(task_holder["task"].get("story_id") or "default"),
+                    task_id=task_id,
+                    workflow_run_id=task_id,
+                    operation="web_research.plan",
+                    agent_role="planner",
+                ):
+                    plan = planner_func(
+                        task_holder["task"]["topic"],
+                        list(configuration.get("source_kinds") or []),
+                        int(configuration.get("max_results_per_branch") or 5),
+                        objective=task_holder["task"].get("objective", ""),
+                        official_domains=list(configuration.get("official_domains") or []),
+                        max_pages=int(configuration.get("max_pages") or 8),
+                    )
             else:
                 plan = build_default_web_research_plan(
                     task_holder["task"]["topic"],
@@ -551,7 +560,15 @@ def run_web_research_task(
                 checkpoint(f"已处理 {len(existing_urls)}/{len(result.get('selected_hits', []))} 个候选网页。")
             if not fetched_sources:
                 raise RuntimeError("所有候选网页均抓取失败。")
-            rebuild_func(project_name, build_vectors=True)
+            with llm_usage_scope(
+                project_name=project_name,
+                story_id=str(task_holder["task"].get("story_id") or "default"),
+                task_id=task_id,
+                workflow_run_id=task_id,
+                operation="web_research.index",
+                agent_role="indexer",
+            ):
+                rebuild_func(project_name, build_vectors=True)
             finish_stage(
                 "fetch",
                 {"source_count": len(fetched_sources), "errors": fetch_errors},
@@ -577,16 +594,24 @@ def run_web_research_task(
                     continue
                 try:
                     page = page_loader(project_name, str(source.get("relative_path") or ""))
-                    extraction = extractor(
-                        page,
-                        source_kind=str(source.get("source_kind") or "general"),
-                        authority=str(source.get("authority") or "unknown"),
-                        enabled_categories=list(configuration.get("enabled_categories") or DEFAULT_RESEARCH_CATEGORIES),
-                        topic=task_holder["task"]["topic"],
-                        objective=task_holder["task"].get("objective", ""),
-                        max_chars=int(configuration.get("max_chars_per_page") or 30000),
-                        max_claims=int(configuration.get("max_claims_per_page") or 20),
-                    )
+                    with llm_usage_scope(
+                        project_name=project_name,
+                        story_id=str(task_holder["task"].get("story_id") or "default"),
+                        task_id=task_id,
+                        workflow_run_id=task_id,
+                        operation="web_research.extract",
+                        agent_role="extractor",
+                    ):
+                        extraction = extractor(
+                            page,
+                            source_kind=str(source.get("source_kind") or "general"),
+                            authority=str(source.get("authority") or "unknown"),
+                            enabled_categories=list(configuration.get("enabled_categories") or DEFAULT_RESEARCH_CATEGORIES),
+                            topic=task_holder["task"]["topic"],
+                            objective=task_holder["task"].get("objective", ""),
+                            max_chars=int(configuration.get("max_chars_per_page") or 30000),
+                            max_claims=int(configuration.get("max_claims_per_page") or 20),
+                        )
                     claims.extend(item.model_dump() for item in extraction.claims)
                     page_extractions.append(
                         {
@@ -618,10 +643,18 @@ def run_web_research_task(
         if task_holder["task"]["steps"]["verify"]["status"] != "completed":
             active_stage = "verify"
             begin_stage("verify", "验证 Agent 正在合并同义事实并识别冲突。")
-            verification = verifier(
-                list(result.get("claims") or []),
-                use_llm=bool(configuration.get("use_llm_verifier", True)),
-            )
+            with llm_usage_scope(
+                project_name=project_name,
+                story_id=str(task_holder["task"].get("story_id") or "default"),
+                task_id=task_id,
+                workflow_run_id=task_id,
+                operation="web_research.verify",
+                agent_role="verifier",
+            ):
+                verification = verifier(
+                    list(result.get("claims") or []),
+                    use_llm=bool(configuration.get("use_llm_verifier", True)),
+                )
             if not isinstance(verification, WebResearchVerificationResult):
                 verification = WebResearchVerificationResult.model_validate(verification)
             verified_claims = build_verified_research_claims(

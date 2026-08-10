@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import html
 from collections.abc import Callable
+from uuid import uuid4
 
 import streamlit as st
 
+from novelforge.core.llm_usage import llm_usage_scope
+from ui.llm_usage import render_operation_usage_summary
 from ui.step_views import render_step_validation
 from ui.streaming import render_stream_preview
 
@@ -69,12 +72,23 @@ def _run_discussion_chat_stream(preview_container, user_message: str, label: str
             state["last_render_len"] = text_len
         render_stream_preview(preview_slot, state["text"], preview_language, cursor=True)
 
+    operation_id = f"discussion-{uuid4().hex}"
     try:
-        result = func(*args, stream_callback=stream_callback, **kwargs)
+        with llm_usage_scope(
+            project_name=str(st.session_state.get("project_name") or ""),
+            story_id=str(st.session_state.get("active_story_id") or "default"),
+            operation_id=operation_id,
+            operation=f"ui.{getattr(func, '__name__', 'discussion')}",
+            agent_role="ui_action",
+            metadata={"action_label": label},
+        ):
+            result = func(*args, stream_callback=stream_callback, **kwargs)
         render_stream_preview(preview_slot, state["text"], preview_language)
+        render_operation_usage_summary(operation_id, container=preview_container)
         return result
     except Exception as exc:
         preview_slot.error(f"{label}失败：{exc}")
+        render_operation_usage_summary(operation_id, container=preview_container)
         raise
 
 def _discussion_context_text(base_text: str, user_message: str, label: str = "讨论补充") -> str:

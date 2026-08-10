@@ -118,6 +118,18 @@ novelforge/
 项目运行记录的“只打开既有数据库”、故障恢复和目录生命周期围栏集中在
 `novelforge/services/memory/runtime_storage.py`；它不得在调度器持有旧项目名时重建目录或空数据库。
 
+### 模型用量与费用可观测性
+
+模型调用可观测性采用“核心标准化 + 全局追加账本 + 工作流上下文归因 + 分层 UI”结构：
+
+- `novelforge/core/llm_usage.py` 识别供应商，统一 DeepSeek/OpenAI/OpenRouter 等 usage 字段，在缺失 usage 时做明确标记的 Token 估算，并按事件价格快照计算费用。
+- `novelforge/core/llm.py` 是聊天、流式响应和 Embedding 的唯一采集边界。流式请求申请末尾 usage 分片；不支持该参数的兼容接口会安全重试。
+- `novelforge/services/llm_usage.py` 与 `storage/repositories/llm_usage.py` 负责全局账本、日期聚合、模型/操作/Agent 拆分和显式范围清理。
+- `llm_usage_scope` 通过 `ContextVar` 传递项目、故事、任务、操作和 Agent 角色。子 Agent 可以细化角色与操作，但继承同一任务和界面操作 ID。
+- `ui/llm_usage.py` 提供侧边栏今日/月度摘要、单次操作汇总、项目级与全局明细。UI 不使用悬浮窗，避免长期写作时遮挡正文。
+
+费用可信度按三档展示：供应商直接返回费用、按用户价格快照估算、仅 Token/未计价。任何缺少价格的调用都不能显示为零费用。账本默认长期保留，只记录计量和归因元数据，不记录 prompt 或响应正文。
+
 ### 网络研究与多 Agent 边界
 
 当前用户可用链路：

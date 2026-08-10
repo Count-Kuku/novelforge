@@ -632,6 +632,7 @@ def extract_long_reference_segments_to_queue(
                 extraction_mode=extraction_mode,
                 custom_instructions=custom_instructions,
                 stream_callback=stream_callback,
+                task_id=task_id,
             )
             payload = result.get("data", {}).get("knowledge_extraction", {})
             items = payload.get("items", []) if isinstance(payload, dict) else []
@@ -1408,6 +1409,7 @@ def consolidate_batch_pending_items(
     consolidation_mode: str,
     limit: int,
     stream_callback=None,
+    task_id: str = "",
 ) -> dict:
     batch_pending_items = get_batch_pending_knowledge_items(project_name, batch)
     target_items = [
@@ -1430,6 +1432,7 @@ def consolidate_batch_pending_items(
         enabled_categories=categories,
         consolidation_mode=consolidation_mode,
         stream_callback=stream_callback,
+        task_id=task_id,
     )
     payload = result.get("data", {}).get("knowledge_extraction", {})
     consolidated_items = payload.get("items", []) if isinstance(payload, dict) else []

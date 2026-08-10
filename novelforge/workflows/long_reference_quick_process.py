@@ -279,6 +279,7 @@ def run_long_reference_quick_process(
             consolidation_mode="balanced",
             limit=max(20, min(120, queued_total)),
             stream_callback=stream_callback,
+            task_id=task_id,
         )
         candidate_ids = list(dict.fromkeys([
             *candidate_ids,

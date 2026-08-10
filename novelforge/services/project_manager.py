@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from novelforge.services.llm_usage import rename_llm_usage_project
 from novelforge.services.memory import (
     BASE_DIR,
     DELETED_PROJECTS_DIR,
@@ -253,6 +254,18 @@ def rename_project(old_name: str, new_name: str) -> str:
                     rollback_exc,
                 )
         raise
+    try:
+        rename_llm_usage_project(old_name, normalized_name)
+    except Exception as exc:
+        # Usage data is observability metadata in a separate global database.
+        # A failed history relabel must not roll back an otherwise complete
+        # project rename, but should remain visible for diagnosis.
+        LOGGER.warning(
+            "Project %s was renamed to %s, but LLM usage history relabeling failed: %s",
+            old_name,
+            normalized_name,
+            exc,
+        )
     try:
         sync_project_retrieval_assets(normalized_name)
     except Exception as exc:

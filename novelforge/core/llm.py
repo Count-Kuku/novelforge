@@ -12,6 +12,7 @@ import httpx
 from dotenv import load_dotenv
 
 from novelforge.services.memory import load_llm_settings
+from novelforge.core.llm_usage import build_llm_usage_event, persist_llm_usage_event
 
 load_dotenv()
 
@@ -129,6 +130,35 @@ def _get_client():
         _should_trust_env_proxy(),
     )
 
+
+def _record_model_usage(
+    response_or_chunk,
+    *,
+    usage=None,
+    profile: dict,
+    endpoint_type: str,
+    requested_model: str,
+    input_text: str,
+    output_text: str = "",
+) -> None:
+    event = build_llm_usage_event(
+        usage=usage if usage is not None else getattr(response_or_chunk, "usage", None),
+        profile=profile,
+        endpoint_type=endpoint_type,
+        requested_model=requested_model,
+        reported_model=str(getattr(response_or_chunk, "model", "") or requested_model),
+        provider_request_id=str(getattr(response_or_chunk, "id", "") or ""),
+        input_text=input_text,
+        output_text=output_text,
+    )
+    persist_llm_usage_event(event)
+
+
+def _stream_usage_option_rejected(exc: Exception) -> bool:
+    message = str(exc or "").lower()
+    markers = ("stream_options", "include_usage", "unknown field", "extra inputs")
+    return any(marker in message for marker in markers)
+
 DEFAULT_TEMPERATURE = 0.7
 
 
@@ -228,9 +258,12 @@ def call_llm(
     temperature: float = DEFAULT_TEMPERATURE,
     stream_callback: Callable[[str], None] | None = None,
 ):
+    profile = load_llm_settings()
     if not _get_api_key():
         raise RuntimeError("模型请求失败：接口密钥为空。请先在“模型配置”里填写 API Key。")
     _require_openai()
+
+    requested_model = str(_get_model_name() or DEFAULT_MODEL)
 
     messages = []
     if system_message:
@@ -241,19 +274,37 @@ def call_llm(
     try:
         if stream_callback:
             try:
-                chunks = _get_client().chat.completions.create(
-                    model=_get_model_name(),
-                    messages=messages,
-                    temperature=temperature,
-                    stream=True,
-                )
+                try:
+                    chunks = _get_client().chat.completions.create(
+                        model=requested_model,
+                        messages=messages,
+                        temperature=temperature,
+                        stream=True,
+                        stream_options={"include_usage": True},
+                    )
+                except Exception as exc:
+                    if not _stream_usage_option_rejected(exc):
+                        raise
+                    LOGGER.info("Streaming usage option is unsupported; retrying without it: %s", exc)
+                    chunks = _get_client().chat.completions.create(
+                        model=requested_model,
+                        messages=messages,
+                        temperature=temperature,
+                        stream=True,
+                    )
             except BadRequestError as exc:
                 LOGGER.warning("Streaming request was rejected; falling back to non-streaming mode: %s", exc)
                 _emit_stream_delta(stream_callback, "\n\n> 当前模型服务未接受流式输出，已切换为普通生成模式。\n\n")
                 fallback_to_non_streaming = True
             else:
                 parts = []
+                usage_payload = None
+                final_chunk = None
                 for chunk in chunks:
+                    final_chunk = chunk
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        usage_payload = chunk_usage
                     choices = getattr(chunk, "choices", None)
                     if not choices:
                         continue
@@ -265,10 +316,22 @@ def call_llm(
                         raise _InvalidLLMResponseError("模型请求失败：模型服务返回了非文本流式内容。")
                     parts.append(content)
                     _emit_stream_delta(stream_callback, content)
-                return _validate_chat_content("".join(parts))
+                content = _validate_chat_content("".join(parts))
+                _record_model_usage(
+                    final_chunk,
+                    usage=usage_payload,
+                    profile=profile,
+                    endpoint_type="chat",
+                    requested_model=requested_model,
+                    input_text="\n".join(
+                        str(message.get("content") or "") for message in messages
+                    ),
+                    output_text=content,
+                )
+                return content
 
         response = _get_client().chat.completions.create(
-            model=_get_model_name(),
+            model=requested_model,
             messages=messages,
             temperature=temperature,
         )
@@ -280,15 +343,26 @@ def call_llm(
         raise RuntimeError(_format_llm_error(exc)) from exc
 
     content = _extract_chat_content(response)
+    _record_model_usage(
+        response,
+        profile=profile,
+        endpoint_type="chat",
+        requested_model=requested_model,
+        input_text="\n".join(str(message.get("content") or "") for message in messages),
+        output_text=content,
+    )
     if fallback_to_non_streaming and content:
         _emit_stream_delta(stream_callback, content)
     return content
 
 
 def get_embedding(text: str) -> list[float]:
+    profile = load_llm_settings()
     if not _get_api_key():
         raise RuntimeError("向量生成失败：接口密钥为空。请先在“模型配置”里填写 API Key。")
     _require_openai()
+
+    requested_model = str(_get_embedding_model_name() or DEFAULT_EMBEDDING_MODEL)
 
     cleaned = text.strip()
     if not cleaned:
@@ -296,12 +370,20 @@ def get_embedding(text: str) -> list[float]:
 
     try:
         response = _get_client().embeddings.create(
-            model=_get_embedding_model_name(),
+            model=requested_model,
             input=cleaned,
         )
     except Exception as exc:
         raise RuntimeError(_format_llm_error(exc, action="向量生成")) from exc
-    return _extract_embedding(response)
+    embedding = _extract_embedding(response)
+    _record_model_usage(
+        response,
+        profile=profile,
+        endpoint_type="embedding",
+        requested_model=requested_model,
+        input_text=cleaned,
+    )
+    return embedding
 
 
 PROVIDER_PRESETS = {
@@ -309,36 +391,57 @@ PROVIDER_PRESETS = {
         "base_url": "https://api.deepseek.com",
         "model_name": "deepseek-v4-flash",
         "embedding_model_name": "text-embedding-3-small",
+        "provider_type": "deepseek",
+        "cost_tracking_mode": "manual",
+        "input_price_per_million": 0.14,
+        "cached_input_price_per_million": 0.0028,
+        "cache_write_price_per_million": 0.0,
+        "output_price_per_million": 0.28,
+        "embedding_price_per_million": 0.0,
+        "pricing_updated_at": "2026-08-10",
+        "pricing_source_url": "https://api-docs.deepseek.com/quick_start/pricing/",
     },
     "OpenAI": {
         "base_url": "https://api.openai.com/v1",
         "model_name": "gpt-4o",
         "embedding_model_name": "text-embedding-3-small",
+        "provider_type": "openai",
+        "cost_tracking_mode": "manual",
     },
     "OpenRouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "model_name": "auto",
         "embedding_model_name": "text-embedding-3-small",
+        "provider_type": "openrouter",
+        "cost_tracking_mode": "provider_reported",
     },
     "阿里云通义千问 (Qwen)": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model_name": "qwen-plus",
         "embedding_model_name": "text-embedding-v3",
+        "provider_type": "qwen",
+        "cost_tracking_mode": "manual",
     },
     "硅基流动 (SiliconFlow)": {
         "base_url": "https://api.siliconflow.cn/v1",
         "model_name": "deepseek-v4-flash",
         "embedding_model_name": "BAAI/bge-m3",
+        "provider_type": "siliconflow",
+        "cost_tracking_mode": "manual",
     },
     "本地 Ollama": {
         "base_url": "http://localhost:11434/v1",
         "model_name": "llama3",
         "embedding_model_name": "nomic-embed-text",
+        "provider_type": "ollama",
+        "cost_tracking_mode": "auto",
     },
     "自定义": {
         "base_url": "",
         "model_name": "",
         "embedding_model_name": "",
+        "provider_type": "auto",
+        "cost_tracking_mode": "auto",
     },
 }
 

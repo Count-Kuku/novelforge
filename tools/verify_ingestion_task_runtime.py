@@ -115,7 +115,7 @@ def main() -> None:
         with open_project_db(project_path(project_name)) as conn:
             schema_version = conn.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
             workflow_columns = {row[1] for row in conn.execute("PRAGMA table_info(workflow_runs)").fetchall()}
-        check(CURRENT_SCHEMA_VERSION == 9 and schema_version == 9, "schema v9 is applied")
+        check(CURRENT_SCHEMA_VERSION == 10 and schema_version == 10, "schema v10 is applied")
         check({"worker_id", "lease_expires_at", "heartbeat_at", "control_requested", "archived_at"}.issubset(workflow_columns), "runtime columns exist")
 
         lease_task = ingestion_tasks.create_long_reference_ingestion_task(

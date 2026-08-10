@@ -4,6 +4,28 @@ from __future__ import annotations
 
 from novelforge.workflows import skills as _skills_api
 
+
+def _call_discussion_llm(
+    project_name: str,
+    story_id: str,
+    operation: str,
+    prompt: str,
+    empty_error: str,
+    *,
+    stream_callback=None,
+) -> dict:
+    return _skills_api._call_json_llm(
+        prompt,
+        empty_error,
+        stream_callback=stream_callback,
+        usage_context={
+            "project_name": project_name,
+            "story_id": story_id,
+            "operation": operation,
+            "agent_role": "discussion",
+        },
+    )
+
 def discuss_outline(project_name: str, user_idea: str, story_id: str = "default", stream_callback=None) -> dict:
     memory = _skills_api.build_generation_setting_context(project_name, story_id)
     trace_key = _skills_api._story_trace_key("outline_discuss", project_name, story_id)
@@ -15,7 +37,7 @@ def discuss_outline(project_name: str, user_idea: str, story_id: str = "default"
         retrieval_profile="outline_discussion",
     )
     prompt = _skills_api.discuss_outline_prompt(memory, user_idea, _skills_api._build_rules_text(project_name, "outline", story_id=story_id), retrieval_context=retrieval_context)
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回全书讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.outline", prompt, "模型没有返回全书讨论结果。", stream_callback=stream_callback)
     try:
         result = _skills_api.OutlineDiscussionResult.model_validate(payload)
     except _skills_api.ValidationError as exc:
@@ -55,7 +77,7 @@ def discuss_creative_profile(project_name: str, user_idea: str, story_id: str = 
         _skills_api._build_rules_text(project_name, "all", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回创作配置讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.creative_profile", prompt, "模型没有返回创作配置讨论结果。", stream_callback=stream_callback)
     try:
         result = _skills_api.CreativeProfileDiscussionResult.model_validate(payload)
     except _skills_api.ValidationError as exc:
@@ -121,7 +143,7 @@ def discuss_chapter(project_name: str, chapter_no: int, user_requirement: str, s
         _skills_api._build_rules_text(project_name, "chapter_outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回章节讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.chapter", prompt, "模型没有返回章节讨论结果。", stream_callback=stream_callback)
     try:
         result = _skills_api.ChapterDiscussionResult.model_validate(payload)
     except _skills_api.ValidationError as exc:
@@ -171,7 +193,7 @@ def discuss_outline_turn(
         _skills_api._build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回本轮全书讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.outline_turn", prompt, "模型没有返回本轮全书讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -253,7 +275,7 @@ def discuss_chapter_turn(
         _skills_api._build_rules_text(project_name, "chapter_outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回本轮章节讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.chapter_turn", prompt, "模型没有返回本轮章节讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -310,7 +332,7 @@ def discuss_creative_profile_turn(
         _skills_api._build_rules_text(project_name, "all", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回本轮创作配置讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.creative_profile_turn", prompt, "模型没有返回本轮创作配置讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -366,7 +388,7 @@ def discuss_volume(
         _skills_api._build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回分卷讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.volume", prompt, "模型没有返回分卷讨论结果。", stream_callback=stream_callback)
     try:
         result = _skills_api.VolumeDiscussionResult.model_validate(payload)
     except _skills_api.ValidationError as exc:
@@ -424,7 +446,7 @@ def discuss_volume_turn(
         _skills_api._build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回本轮分卷讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.volume_turn", prompt, "模型没有返回本轮分卷讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 
@@ -487,7 +509,7 @@ def discuss_arc(
         _skills_api._build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回剧情段讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.arc", prompt, "模型没有返回剧情段讨论结果。", stream_callback=stream_callback)
     try:
         result = _skills_api.ArcDiscussionResult.model_validate(payload)
     except _skills_api.ValidationError as exc:
@@ -552,7 +574,7 @@ def discuss_arc_turn(
         _skills_api._build_rules_text(project_name, "outline", story_id=story_id),
         retrieval_context=retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回本轮剧情段讨论结果。", stream_callback=stream_callback)
+    payload = _call_discussion_llm(project_name, story_id, "discussion.arc_turn", prompt, "模型没有返回本轮剧情段讨论结果。", stream_callback=stream_callback)
     assistant_message = str(payload.get("assistant_message", "") or "").strip()
     discussion_payload = payload.get("discussion", {}) if isinstance(payload, dict) else {}
 

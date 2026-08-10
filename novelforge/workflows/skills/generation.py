@@ -4,6 +4,23 @@ from __future__ import annotations
 
 from novelforge.workflows import skills as _skills_api
 
+
+def _call_generation_llm(
+    project_name: str,
+    story_id: str,
+    operation: str,
+    prompt: str,
+    *,
+    stream_callback=None,
+) -> str:
+    with _skills_api.llm_usage_scope(
+        project_name=project_name,
+        story_id=story_id,
+        operation=operation,
+        agent_role="generator",
+    ):
+        return _skills_api.call_llm(prompt, stream_callback=stream_callback)
+
 def generate_outline(project_name: str, user_idea: str, story_id: str = "default", stream_callback=None) -> dict:
     approved_discussion_context = _skills_api._format_discussion_context(
         _skills_api.load_outline_discussion_artifact(project_name, story_id=story_id),
@@ -26,7 +43,7 @@ def generate_outline(project_name: str, user_idea: str, story_id: str = "default
         f"{user_idea}\n\n已批准讨论结论：\n{approved_discussion_context}".strip(),
         _skills_api.render_context_for_prompt(context_assembly),
     )
-    outline = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    outline = _call_generation_llm(project_name, story_id, "outline.generate", prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回全书大纲。")
     _skills_api.save_outline(project_name, outline, story_id=story_id)
@@ -94,7 +111,7 @@ def generate_volume_outline(
         ),
         retrieval_context,
     )
-    outline = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    outline = _call_generation_llm(project_name, story_id, "volume_outline.generate", prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回分卷大纲。")
     _skills_api.save_volume_outline(project_name, volume_no, outline, story_id=story_id)
@@ -174,7 +191,7 @@ def generate_arc_outline(
         ),
         retrieval_context,
     )
-    outline = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    outline = _call_generation_llm(project_name, story_id, "arc_outline.generate", prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回剧情段大纲。")
     _skills_api.save_arc_outline(project_name, arc_no, outline, story_id=story_id)
@@ -329,7 +346,7 @@ def generate_creative_structure(
         ),
         retrieval_context,
     )
-    structure = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    structure = _call_generation_llm(project_name, story_id, "creative_structure.generate", prompt, stream_callback=stream_callback)
     if not structure.strip():
         raise RuntimeError("模型没有返回创作结构。")
 
@@ -410,7 +427,7 @@ def generate_chapter_outline(
         user_requirement,
         _skills_api.render_context_for_prompt(context_assembly),
     )
-    outline = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    outline = _call_generation_llm(project_name, story_id, "chapter_outline.generate", prompt, stream_callback=stream_callback)
     if not outline.strip():
         raise RuntimeError("模型没有返回章节细纲。")
     artifacts = {"saved": False}
@@ -475,7 +492,7 @@ def write_chapter(
         word_count,
         assembled_context=_skills_api.render_context_for_prompt(context_assembly),
     )
-    chapter = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    chapter = _call_generation_llm(project_name, story_id, "chapter.write", prompt, stream_callback=stream_callback)
     if not chapter.strip():
         raise RuntimeError("模型没有返回章节正文。")
     artifacts = {"saved": False}
@@ -761,7 +778,7 @@ def extract_setting_candidates_from_chapter(
         _skills_api.setting_extraction_prompt(memory, chapter, _skills_api._build_rules_text(project_name, "setting_extraction", story_id=story_id)),
         retrieval_context,
     )
-    result = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    result = _call_generation_llm(project_name, story_id, "setting.extract", prompt, stream_callback=stream_callback)
     if not result.strip():
         raise RuntimeError("设定提炼失败：模型返回了空响应。")
     retrieval_hits = _skills_api.get_retrieval_trace(trace_key)

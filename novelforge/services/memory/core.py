@@ -157,12 +157,24 @@ RULE_SCOPES = ["all", "outline", "chapter_outline", "write", "review", "setting_
 DEFAULT_LLM_BASE_URL = "https://api.deepseek.com"
 DEFAULT_LLM_MODEL = "deepseek-v4-flash"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+LLM_PROVIDER_TYPES = {
+    "auto", "deepseek", "openrouter", "openai", "qwen",
+    "siliconflow", "ollama", "openai_compatible",
+}
+LLM_COST_TRACKING_MODES = {"auto", "provider_reported", "manual", "tokens_only"}
 MANAGED_ENV_KEYS = [
     "LLM_API_KEY",
     "DEEPSEEK_API_KEY",
     "LLM_BASE_URL",
     "LLM_MODEL",
     "LLM_EMBEDDING_MODEL",
+    "LLM_PROVIDER_TYPE",
+    "LLM_COST_TRACKING_MODE",
+    "LLM_INPUT_PRICE_PER_MILLION",
+    "LLM_CACHED_INPUT_PRICE_PER_MILLION",
+    "LLM_CACHE_WRITE_PRICE_PER_MILLION",
+    "LLM_OUTPUT_PRICE_PER_MILLION",
+    "LLM_EMBEDDING_PRICE_PER_MILLION",
 ]
 DEFAULT_LLM_PROFILE_NAME = "默认配置"
 WINDOWS_RESERVED_PATH_NAMES = {
@@ -330,6 +342,13 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
             return 0.0
         return parsed if math.isfinite(parsed) and parsed >= 0 else 0.0
 
+    provider_type = str(raw.get("provider_type") or "auto").strip().lower() or "auto"
+    if provider_type not in LLM_PROVIDER_TYPES:
+        provider_type = "auto"
+    cost_tracking_mode = str(raw.get("cost_tracking_mode") or "auto").strip().lower() or "auto"
+    if cost_tracking_mode not in LLM_COST_TRACKING_MODES:
+        cost_tracking_mode = "auto"
+
     return {
         "id": profile_id,
         "name": name,
@@ -337,9 +356,15 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
         "api_key": str(raw.get("api_key") or ""),
         "model_name": str(raw.get("model_name") or DEFAULT_LLM_MODEL),
         "embedding_model_name": str(raw.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+        "provider_type": provider_type,
+        "cost_tracking_mode": cost_tracking_mode,
         "input_price_per_million": safe_rate(raw.get("input_price_per_million")),
+        "cached_input_price_per_million": safe_rate(raw.get("cached_input_price_per_million")),
+        "cache_write_price_per_million": safe_rate(raw.get("cache_write_price_per_million")),
         "output_price_per_million": safe_rate(raw.get("output_price_per_million")),
         "embedding_price_per_million": safe_rate(raw.get("embedding_price_per_million")),
+        "pricing_updated_at": str(raw.get("pricing_updated_at") or "").strip(),
+        "pricing_source_url": str(raw.get("pricing_source_url") or "").strip(),
     }
 
 
@@ -394,7 +419,11 @@ def _load_env_llm_profile() -> dict:
             "api_key": api_key,
             "model_name": model_name,
             "embedding_model_name": embedding_model_name,
+            "provider_type": os.getenv("LLM_PROVIDER_TYPE") or file_values.get("LLM_PROVIDER_TYPE") or "auto",
+            "cost_tracking_mode": os.getenv("LLM_COST_TRACKING_MODE") or file_values.get("LLM_COST_TRACKING_MODE") or "auto",
             "input_price_per_million": os.getenv("LLM_INPUT_PRICE_PER_MILLION") or file_values.get("LLM_INPUT_PRICE_PER_MILLION") or 0,
+            "cached_input_price_per_million": os.getenv("LLM_CACHED_INPUT_PRICE_PER_MILLION") or file_values.get("LLM_CACHED_INPUT_PRICE_PER_MILLION") or 0,
+            "cache_write_price_per_million": os.getenv("LLM_CACHE_WRITE_PRICE_PER_MILLION") or file_values.get("LLM_CACHE_WRITE_PRICE_PER_MILLION") or 0,
             "output_price_per_million": os.getenv("LLM_OUTPUT_PRICE_PER_MILLION") or file_values.get("LLM_OUTPUT_PRICE_PER_MILLION") or 0,
             "embedding_price_per_million": os.getenv("LLM_EMBEDDING_PRICE_PER_MILLION") or file_values.get("LLM_EMBEDDING_PRICE_PER_MILLION") or 0,
         },
@@ -461,9 +490,15 @@ def load_llm_settings() -> dict:
         "base_url": str(active_profile.get("base_url") or DEFAULT_LLM_BASE_URL),
         "model_name": str(active_profile.get("model_name") or DEFAULT_LLM_MODEL),
         "embedding_model_name": str(active_profile.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+        "provider_type": str(active_profile.get("provider_type") or "auto"),
+        "cost_tracking_mode": str(active_profile.get("cost_tracking_mode") or "auto"),
         "input_price_per_million": float(active_profile.get("input_price_per_million") or 0),
+        "cached_input_price_per_million": float(active_profile.get("cached_input_price_per_million") or 0),
+        "cache_write_price_per_million": float(active_profile.get("cache_write_price_per_million") or 0),
         "output_price_per_million": float(active_profile.get("output_price_per_million") or 0),
         "embedding_price_per_million": float(active_profile.get("embedding_price_per_million") or 0),
+        "pricing_updated_at": str(active_profile.get("pricing_updated_at") or ""),
+        "pricing_source_url": str(active_profile.get("pricing_source_url") or ""),
         "env_path": str(ENV_PATH.resolve()),
         "profiles_path": str(LLM_PROFILES_PATH.resolve()),
     }
@@ -485,6 +520,13 @@ def save_llm_settings(settings: dict):
         "LLM_BASE_URL": str(settings.get("base_url", "") or ""),
         "LLM_MODEL": str(settings.get("model_name", "") or ""),
         "LLM_EMBEDDING_MODEL": str(settings.get("embedding_model_name", "") or ""),
+        "LLM_PROVIDER_TYPE": str(settings.get("provider_type", "auto") or "auto"),
+        "LLM_COST_TRACKING_MODE": str(settings.get("cost_tracking_mode", "auto") or "auto"),
+        "LLM_INPUT_PRICE_PER_MILLION": str(settings.get("input_price_per_million", 0) or 0),
+        "LLM_CACHED_INPUT_PRICE_PER_MILLION": str(settings.get("cached_input_price_per_million", 0) or 0),
+        "LLM_CACHE_WRITE_PRICE_PER_MILLION": str(settings.get("cache_write_price_per_million", 0) or 0),
+        "LLM_OUTPUT_PRICE_PER_MILLION": str(settings.get("output_price_per_million", 0) or 0),
+        "LLM_EMBEDDING_PRICE_PER_MILLION": str(settings.get("embedding_price_per_million", 0) or 0),
     }
     env_lines = ENV_PATH.read_text(encoding="utf-8").splitlines() if ENV_PATH.exists() else []
     pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")

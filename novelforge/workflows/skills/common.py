@@ -12,6 +12,7 @@ from datetime import datetime
 from urllib.request import Request, urlopen
 from uuid import uuid4
 from novelforge.core.llm import call_llm
+from novelforge.core.llm_usage import llm_usage_scope
 from pydantic import ValidationError
 from novelforge.workflows.context_assembly import (
     assemble_generation_context,
@@ -984,8 +985,14 @@ def _build_discussion_retrieval_context(
     )
 
 
-def _call_json_llm(prompt: str, empty_error: str, stream_callback=None) -> dict:
-    result = call_llm(prompt, stream_callback=stream_callback)
+def _call_json_llm(
+    prompt: str,
+    empty_error: str,
+    stream_callback=None,
+    usage_context: dict | None = None,
+) -> dict:
+    with llm_usage_scope(**(usage_context or {})):
+        result = call_llm(prompt, stream_callback=stream_callback)
     if not result.strip():
         raise RuntimeError(empty_error)
     return _extract_json_object(result)
@@ -1078,7 +1085,17 @@ def organize_reference_text(project_name: str, source_title: str, raw_text: str,
         raw_text,
         _build_rules_text(project_name, "all", story_id=story_id),
     )
-    payload = _call_json_llm(prompt, "模型没有返回可整理的资料结果。", stream_callback=stream_callback)
+    payload = _call_json_llm(
+        prompt,
+        "模型没有返回可整理的资料结果。",
+        stream_callback=stream_callback,
+        usage_context={
+            "project_name": project_name,
+            "story_id": story_id,
+            "operation": "reference.organize",
+            "agent_role": "organizer",
+        },
+    )
     try:
         result = OrganizedReferenceResult.model_validate(payload)
     except ValidationError as exc:
@@ -1128,6 +1145,7 @@ def extract_reference_knowledge(
     story_id: str = "default",
     custom_instructions: str = "",
     stream_callback=None,
+    task_id: str = "",
 ) -> dict:
     prompt = extract_reference_knowledge_prompt(
         source_title.strip() or "未命名资料",
@@ -1138,7 +1156,19 @@ def extract_reference_knowledge(
         alias_context=_format_entity_alias_context(project_name),
         custom_instructions=custom_instructions,
     )
-    payload = _call_json_llm(prompt, "模型没有返回可提取的知识结果。", stream_callback=stream_callback)
+    payload = _call_json_llm(
+        prompt,
+        "模型没有返回可提取的知识结果。",
+        stream_callback=stream_callback,
+        usage_context={
+            "project_name": project_name,
+            "story_id": story_id,
+            "task_id": task_id,
+            "workflow_run_id": task_id,
+            "operation": "reference.extract",
+            "agent_role": "extractor",
+        },
+    )
     try:
         result = KnowledgeExtractionResult.model_validate(payload)
     except ValidationError as exc:
@@ -1169,6 +1199,7 @@ def consolidate_extracted_knowledge(
     consolidation_mode: str = "balanced",
     story_id: str = "default",
     stream_callback=None,
+    task_id: str = "",
 ) -> dict:
     compact_items = []
     for item in extracted_items:
@@ -1199,7 +1230,19 @@ def consolidate_extracted_knowledge(
         consolidation_mode=consolidation_mode,
         rules_text=_build_rules_text(project_name, "all", story_id=story_id),
     )
-    payload = _call_json_llm(prompt, "模型没有返回可整理的知识结果。", stream_callback=stream_callback)
+    payload = _call_json_llm(
+        prompt,
+        "模型没有返回可整理的知识结果。",
+        stream_callback=stream_callback,
+        usage_context={
+            "project_name": project_name,
+            "story_id": story_id,
+            "task_id": task_id,
+            "workflow_run_id": task_id,
+            "operation": "reference.consolidate",
+            "agent_role": "consolidator",
+        },
+    )
     try:
         result = KnowledgeExtractionResult.model_validate(payload)
     except ValidationError as exc:

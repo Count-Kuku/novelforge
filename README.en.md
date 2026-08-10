@@ -63,6 +63,14 @@ Long-form automatic processing now creates a SQLite-backed task and returns cont
 
 Research tasks reuse SQLite `workflow_runs/workflow_steps` and support background execution, stage checkpoints, pause, resume, cancel, failed-stage retry, and archive. Official authority is assessed from the final HTTPS URL after redirects and the user-owned whitelist; official, community, and fanon evidence cannot promote one another. Each task owns separate page snapshots. Raw pages are quarantined from writing retrieval by default and enter RAG as explicitly marked untrusted external data only after user activation. The smaller manual search/select/import path remains available.
 
+### Token And Cost Observability
+
+- Chat, streaming, and embedding calls share one ledger for input, cached input, cache write, output, reasoning, and embedding tokens.
+- OpenAI-compatible providers such as DeepSeek can use user-configured per-million-token rates; OpenRouter can prefer provider-reported cost; token-only mode is also supported.
+- Every event stores its price snapshot and project/story/task/operation/agent attribution, so later price edits do not rewrite history.
+- The sidebar shows today/month summaries, each UI action reports its own usage, and project/model pages provide daily trends, breakdowns, recent events, and CSV export.
+- Events are retained in `data/global.db` by default and contain metering metadata rather than prompt or response bodies. Missing provider usage is marked estimated; missing prices remain unpriced instead of becoming a false zero.
+
 ## Navigation
 
 - `工作台` (Workbench): project overview and project resources.
@@ -119,19 +127,23 @@ Common environment values:
 LLM_API_KEY=
 DEEPSEEK_API_KEY=
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
+LLM_MODEL=deepseek-v4-flash
 LLM_EMBEDDING_MODEL=
+LLM_PROVIDER_TYPE=auto
+LLM_COST_TRACKING_MODE=auto
 
 # Optional: web discovery on the source-ingestion page
 BRAVE_SEARCH_API_KEY=
 
-# Used only for local task estimates, in USD per 1M tokens
+# Optional local cost estimation, in USD per 1M tokens
 LLM_INPUT_PRICE_PER_MILLION=0
+LLM_CACHED_INPUT_PRICE_PER_MILLION=0
+LLM_CACHE_WRITE_PRICE_PER_MILLION=0
 LLM_OUTPUT_PRICE_PER_MILLION=0
 LLM_EMBEDDING_PRICE_PER_MILLION=0
 ```
 
-When prices are empty or `0`, token estimates remain available but NovelForge does not guess a cost. Estimates are not provider invoices.
+When prices are empty or `0`, NovelForge still records tokens but does not guess a cost. If the provider does not return cost directly, local amounts are estimates from the event's price snapshot rather than provider invoices. Update rates and their verification date in Model Settings when prices change.
 
 `BRAVE_SEARCH_API_KEY` is sent only to the Brave Search API. Web research fetches public HTTP/HTTPS static-text pages without website login, browser cookies, or paywall bypass. Automatic research is recoverable in the background; the manual path still requires result selection.
 
@@ -139,7 +151,7 @@ When prices are empty or `0`, token estimates remain available but NovelForge do
 
 ## Data And Backups
 
-- Global structured settings are stored in `data/global.db`.
+- Global structured settings and the LLM usage ledger are stored in `data/global.db`.
 - Each project's structured data is stored in `data/projects/{project_name}/project.db`.
 - Long-form outlines, chapters, reviews, analyses, and imported sources remain Markdown/TXT assets registered in the database.
 - Structured JSON mirrors are disabled by default; legacy files are compatibility import sources only.
@@ -169,7 +181,7 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 ## Development Documentation
 
 - [project.md](./project.md): current architecture, module responsibilities, development boundaries, technical debt, and priorities.
-- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v9, migrations, task leases, and recovery.
+- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v10, migrations, task leases, and recovery.
 - [docs/releases](./docs/releases): immutable release history.
 
 Completed one-off plans are not kept as permanent documentation. Their lasting results belong in the fact documents above so the repository has one current source of truth.

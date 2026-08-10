@@ -279,6 +279,7 @@ def inspect_global_db(data_path: Path = Path("data")) -> dict:
         "global_settings",
         "rules",
         "prompt_options",
+        "llm_usage_events",
     ]
     result = {
         "ok": False,

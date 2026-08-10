@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from novelforge.core.llm_usage import llm_usage_scope
 from novelforge.domain.ingestion_task_estimates import estimate_ingestion_task
 from novelforge.domain.ingestion_tasks import (
     create_ingestion_task,
@@ -377,24 +378,32 @@ def run_long_reference_ingestion_task(
     remaining_indices = [int(item.get("segment_index", -1)) for item in selected_items]
     configuration = dict(task.get("configuration") or {})
     try:
-        updated_batch, summary = run_long_reference_quick_process(
-            project_name,
-            batch,
-            remaining_indices,
-            enabled_categories=list(configuration.get("enabled_categories") or []),
-            extraction_mode=str(configuration.get("extraction_mode") or "general"),
-            extract_limit=len(remaining_indices),
-            import_to_index=bool(configuration.get("import_to_index", True)),
-            consolidate_after_extract=bool(configuration.get("consolidate_after_extract", False)),
-            auto_confirm_safe_items=bool(configuration.get("auto_confirm_safe_items", True)),
-            custom_instructions=str(configuration.get("custom_instructions") or ""),
-            progress_callback=checkpoint_progress,
-            stream_callback=stream_callback,
-            execution_state=dict(task.get("execution") or {}),
-            run_key=task_id,
+        with llm_usage_scope(
+            project_name=project_name,
+            story_id=str(task.get("story_id") or "default"),
             task_id=task_id,
-            worker_id=owner,
-        )
+            workflow_run_id=task_id,
+            operation="source_ingestion.run",
+            agent_role="ingestion",
+        ):
+            updated_batch, summary = run_long_reference_quick_process(
+                project_name,
+                batch,
+                remaining_indices,
+                enabled_categories=list(configuration.get("enabled_categories") or []),
+                extraction_mode=str(configuration.get("extraction_mode") or "general"),
+                extract_limit=len(remaining_indices),
+                import_to_index=bool(configuration.get("import_to_index", True)),
+                consolidate_after_extract=bool(configuration.get("consolidate_after_extract", False)),
+                auto_confirm_safe_items=bool(configuration.get("auto_confirm_safe_items", True)),
+                custom_instructions=str(configuration.get("custom_instructions") or ""),
+                progress_callback=checkpoint_progress,
+                stream_callback=stream_callback,
+                execution_state=dict(task.get("execution") or {}),
+                run_key=task_id,
+                task_id=task_id,
+                worker_id=owner,
+            )
     except _IngestionTaskControlSignal as signal:
         latest_batch = load_long_reference_batch(project_name, task.get("batch_id", "")) or batch
         task = reconcile_ingestion_task_with_batch(task_holder["task"], latest_batch)

@@ -34,7 +34,13 @@ def review_chapter(project_name: str, chapter_no: int, chapter: str, story_id: s
         chapter,
         _skills_api.render_context_for_prompt(context_assembly),
     )
-    result = _skills_api.call_llm(prompt, stream_callback=stream_callback)
+    with _skills_api.llm_usage_scope(
+        project_name=project_name,
+        story_id=story_id,
+        operation="review.chapter",
+        agent_role="reviewer",
+    ):
+        result = _skills_api.call_llm(prompt, stream_callback=stream_callback)
     if not result.strip():
         raise RuntimeError("审阅失败：模型返回了空响应。")
     retrieval_hits = _skills_api.get_retrieval_trace(trace_key)
@@ -165,8 +171,14 @@ def _run_analysis(
     schema,
     renderer,
     stream_callback=None,
+    usage_context: dict | None = None,
 ) -> tuple[object, str]:
-    payload = _skills_api._call_json_llm(prompt, empty_error, stream_callback=stream_callback)
+    payload = _skills_api._call_json_llm(
+        prompt,
+        empty_error,
+        stream_callback=stream_callback,
+        usage_context=usage_context,
+    )
     try:
         result = schema.model_validate(payload)
     except _skills_api.ValidationError as exc:
@@ -237,6 +249,7 @@ def analyze_characters(project_name: str, chapter_no: int, chapter: str, story_i
         _skills_api.CharacterAnalysisResult,
         _skills_api.render_character_analysis_markdown,
         stream_callback=stream_callback,
+        usage_context={"project_name": project_name, "story_id": story_id, "operation": "analysis.characters", "agent_role": "analyst"},
     )
     return _finalize_analysis_step(
         "analysis_characters",
@@ -271,6 +284,7 @@ def analyze_timeline(project_name: str, chapter_no: int, chapter: str, story_id:
         _skills_api.TimelineAnalysisResult,
         _skills_api.render_timeline_analysis_markdown,
         stream_callback=stream_callback,
+        usage_context={"project_name": project_name, "story_id": story_id, "operation": "analysis.timeline", "agent_role": "analyst"},
     )
     return _finalize_analysis_step(
         "analysis_timeline",
@@ -305,6 +319,7 @@ def analyze_foreshadowing(project_name: str, chapter_no: int, chapter: str, stor
         _skills_api.ForeshadowingAnalysisResult,
         _skills_api.render_foreshadowing_analysis_markdown,
         stream_callback=stream_callback,
+        usage_context={"project_name": project_name, "story_id": story_id, "operation": "analysis.foreshadowing", "agent_role": "analyst"},
     )
     return _finalize_analysis_step(
         "analysis_foreshadowing",
@@ -354,6 +369,7 @@ def run_consistency_check(project_name: str, chapter_no: int, chapter: str, stor
         _skills_api.ConsistencyAnalysisResult,
         _skills_api.render_consistency_analysis_markdown,
         stream_callback=stream_callback,
+        usage_context={"project_name": project_name, "story_id": story_id, "operation": "analysis.consistency", "agent_role": "analyst"},
     )
     return _finalize_analysis_step(
         "analysis_consistency",
@@ -406,7 +422,12 @@ def evaluate_chapter(project_name: str, chapter_no: int, chapter: str, story_id:
         _skills_api.evaluate_chapter_prompt(memory, chapter_outline, chapter, _skills_api._build_rules_text(project_name, "review", story_id=story_id)),
         retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回章节评估结果。", stream_callback=stream_callback)
+    payload = _skills_api._call_json_llm(
+        prompt,
+        "模型没有返回章节评估结果。",
+        stream_callback=stream_callback,
+        usage_context={"project_name": project_name, "story_id": story_id, "operation": "evaluation.chapter", "agent_role": "reviewer"},
+    )
     try:
         result = _skills_api.ChapterEvaluationResult.model_validate(payload)
     except _skills_api.ValidationError as exc:
@@ -489,7 +510,12 @@ def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: 
         ),
         retrieval_context,
     )
-    payload = _skills_api._call_json_llm(prompt, "模型没有返回章节综合评价结果。", stream_callback=stream_callback)
+    payload = _skills_api._call_json_llm(
+        prompt,
+        "模型没有返回章节综合评价结果。",
+        stream_callback=stream_callback,
+        usage_context={"project_name": project_name, "story_id": story_id, "operation": "evaluation.comprehensive", "agent_role": "reviewer"},
+    )
     try:
         result = _skills_api.ComprehensiveChapterEvaluationResult.model_validate(payload)
     except _skills_api.ValidationError as exc:

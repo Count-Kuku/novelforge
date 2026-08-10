@@ -125,6 +125,15 @@ from .workflows import (
     load_workflow_run_snapshot,
     sync_workflow_run_snapshot,
 )
+from .llm_usage import (
+    delete_llm_usage_event_rows,
+    insert_llm_usage_event_row,
+    list_daily_llm_usage_rows,
+    list_llm_usage_breakdown_rows,
+    list_recent_llm_usage_event_rows,
+    rename_llm_usage_project_rows,
+    summarize_llm_usage_rows,
+)
 from .stories import list_story_rows, purge_story_scoped_rows, set_active_story_row, sync_stories_index
 from .story_copy import clone_story_storage_rows
 
@@ -233,4 +242,11 @@ __all__ = [
     "upsert_knowledge_category_item",
     "upsert_pending_knowledge_items",
     "upsert_asset_payload",
+    "delete_llm_usage_event_rows",
+    "insert_llm_usage_event_row",
+    "list_daily_llm_usage_rows",
+    "list_llm_usage_breakdown_rows",
+    "list_recent_llm_usage_event_rows",
+    "rename_llm_usage_project_rows",
+    "summarize_llm_usage_rows",
 ]

@@ -5,9 +5,12 @@ import json
 import logging
 import re
 from typing import Any
+from uuid import uuid4
 
 import streamlit as st
 
+from novelforge.core.llm_usage import llm_usage_scope
+from ui.llm_usage import render_operation_usage_summary
 
 LOGGER = logging.getLogger("novelforge.ui.streaming")
 
@@ -484,13 +487,25 @@ def run_with_stream(label: str, func, *args, preview_language: str | None = None
         preview_language=preview_language,
         stream_container=stream_container,
     )
+    operation_id = f"ui-{uuid4().hex}"
+    usage_context = {
+        "project_name": str(st.session_state.get("project_name") or ""),
+        "story_id": str(st.session_state.get("active_story_id") or "default"),
+        "operation_id": operation_id,
+        "operation": f"ui.{getattr(func, '__name__', 'action')}",
+        "agent_role": "ui_action",
+        "metadata": {"action_label": label},
+    }
     try:
-        result = func(*args, stream_callback=stream_callback, **kwargs)
+        with llm_usage_scope(**usage_context):
+            result = func(*args, stream_callback=stream_callback, **kwargs)
         complete()
+        render_operation_usage_summary(operation_id, container=stream_container or st)
         return result
     except GenerationCancelled:
         cancel()
         st.stop()
     except Exception as exc:
         fail(f"{label}失败：{exc}")
+        render_operation_usage_summary(operation_id, container=stream_container or st)
         raise
