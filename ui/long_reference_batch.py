@@ -434,7 +434,11 @@ def _render_batch_quick_continue(
         consolidate_after_extract=False,
         custom_instructions=quick_continue_custom_instructions,
     )
-    render_ingestion_task_estimate(estimate, expanded=planned_quick_count > 20)
+    estimate_approved = render_ingestion_task_estimate(
+        estimate,
+        expanded=planned_quick_count > 20,
+        confirmation_key=f"batch_quick_budget_confirm_{selected_batch_id}",
+    )
     if st.button("继续处理所选片段", key=f"batch_quick_process_{selected_batch_id}", use_container_width=True, type="primary" if unfinished_indices else "secondary"):
         if not selected_indices:
             st.error("请先选择片段。")
@@ -442,6 +446,8 @@ def _render_batch_quick_continue(
             st.error("请至少选择一个提取分类。")
         elif not quick_continue_high_ok:
             st.error("处理数量超过 50 段，请先勾选确认框。")
+        elif not estimate_approved:
+            st.error("本次预估超过预算确认阈值，请先确认 Token 与费用上界。")
         else:
             try:
                 task = create_long_reference_ingestion_task(

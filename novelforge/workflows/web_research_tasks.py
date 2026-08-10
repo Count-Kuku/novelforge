@@ -10,12 +10,14 @@ from novelforge.core.llm_usage import llm_usage_scope
 from novelforge.core.schemas import WebResearchPlan, WebResearchVerificationResult
 from novelforge.domain.web_research_tasks import (
     WEB_RESEARCH_STAGE_NAMES,
+    build_web_research_estimate,
     create_web_research_task as create_task_state,
     normalize_web_research_task,
     retry_failed_web_research_task,
     set_web_research_task_status,
     update_web_research_stage,
 )
+from novelforge.services.llm_estimation import load_stage_calibration
 from novelforge.services.memory import (
     claim_web_research_task,
     delete_archived_web_research_task,
@@ -28,6 +30,7 @@ from novelforge.services.memory import (
     save_web_research_task,
     set_web_research_task_archived,
 )
+from novelforge.services.memory import get_active_llm_profile
 from novelforge.services.retrieval import rebuild_retrieval_assets
 from novelforge.services.web_research import (
     delete_imported_web_pages,
@@ -90,6 +93,32 @@ class _WebResearchControlSignal(RuntimeError):
         self.control = control
 
 
+def build_web_research_task_estimate(configuration: dict) -> dict:
+    """Build a priced, history-calibrated snapshot for a future research task."""
+
+    profile = get_active_llm_profile()
+    cohorts = {
+        "plan": ("web_research.plan", "planner", "chat"),
+        "extract": ("web_research.extract", "extractor", "chat"),
+        "verify": ("web_research.verify", "verifier", "chat"),
+        "index": ("web_research.index", "indexer", "embedding"),
+    }
+    calibrations = {
+        key: load_stage_calibration(
+            operation,
+            agent_role=agent_role,
+            endpoint_type=endpoint_type,
+            profile=profile,
+        )
+        for key, (operation, agent_role, endpoint_type) in cohorts.items()
+    }
+    return build_web_research_estimate(
+        configuration,
+        model_profile=profile,
+        calibrations=calibrations,
+    )
+
+
 def create_web_research_task(
     project_name: str,
     topic: str,
@@ -143,12 +172,14 @@ def create_web_research_task(
         "max_claims_per_page": 20,
         "max_concurrency": min(max(len(clean_kinds), 1), 5),
     }
+    estimate = build_web_research_task_estimate(configuration)
     task = create_task_state(
         topic,
         objective=objective,
         story_id=story_id,
         configuration=configuration,
         priority=priority,
+        estimate=estimate,
     )
     return save_web_research_task(project_name, task)
 

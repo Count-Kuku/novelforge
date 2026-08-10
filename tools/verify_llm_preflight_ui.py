@@ -12,17 +12,22 @@ from streamlit.testing.v1 import AppTest
 
 
 def main() -> int:
-    fixture = ROOT / "tools" / "fixtures" / "llm_usage_ui_app.py"
-    app = AppTest.from_file(fixture).run(timeout=30)
+    app = AppTest.from_file(
+        ROOT / "tools" / "fixtures" / "llm_preflight_ui_app.py"
+    ).run(timeout=30)
     if app.exception:
         print({"ok": False, "exceptions": [str(item.value) for item in app.exception]})
         return 1
-    assert len(app.metric) == 4
-    assert app.metric[0].label == "总 Token"
-    assert app.metric[0].value == "15"
-    assert app.metric[2].value == "≈¥0.007143"
-    assert len(app.selectbox) == 2
-    print({"ok": True, "checks": 5})
+    assert [metric.label for metric in app.metric] == [
+        "模型调用",
+        "输入 Token",
+        "输出 Token",
+        "总 Token",
+        "预计费用",
+    ]
+    assert app.metric[3].value == "300"
+    assert app.metric[4].value == "¥0.0143"
+    print({"ok": True, "checks": 3})
     return 0
 
 

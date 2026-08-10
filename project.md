@@ -123,12 +123,23 @@ novelforge/
 模型调用可观测性采用“核心标准化 + 全局追加账本 + 工作流上下文归因 + 分层 UI”结构：
 
 - `novelforge/core/llm_usage.py` 识别供应商，统一 DeepSeek/OpenAI/OpenRouter 等 usage 字段，在缺失 usage 时做明确标记的 Token 估算，并按事件价格快照计算费用。
+- `novelforge/core/cost_currency.py` 统一价格币种、人民币主显示和 USD/CNY 换算。模型方案可用人民币或美元录入单价；DeepSeek 预设使用官方人民币价格，账本仍标准化为微美元以兼容既有历史与其他供应商。
 - `novelforge/core/llm.py` 是聊天、流式响应和 Embedding 的唯一采集边界。流式请求申请末尾 usage 分片；不支持该参数的兼容接口会安全重试。
 - `novelforge/services/llm_usage.py` 与 `storage/repositories/llm_usage.py` 负责全局账本、日期聚合、模型/操作/Agent 拆分和显式范围清理。
 - `llm_usage_scope` 通过 `ContextVar` 传递项目、故事、任务、操作和 Agent 角色。子 Agent 可以细化角色与操作，但继承同一任务和界面操作 ID。
 - `ui/llm_usage.py` 提供侧边栏今日/月度摘要、单次操作汇总、项目级与全局明细。UI 不使用悬浮窗，避免长期写作时遮挡正文。
 
-费用可信度按三档展示：供应商直接返回费用、按用户价格快照估算、仅 Token/未计价。任何缺少价格的调用都不能显示为零费用。账本默认长期保留，只记录计量和归因元数据，不记录 prompt 或响应正文。
+费用可信度按三档展示：供应商直接返回费用、按用户价格快照估算、仅 Token/未计价。任何缺少价格的调用都不能显示为零费用。人民币默认主显示、美元作为核对值；价格币种、换算系数、核对日期和来源随事件快照保存。账本默认长期保留，只记录计量和归因元数据，不记录 prompt 或响应正文。
+
+执行前预估复用同一价格和归因语义，但不向用量账本写入虚假调用：
+
+- `novelforge/core/token_estimation.py` 提供无供应商依赖的中英文混合文本估算，供上下文装配、缺失 usage 回退和执行前预估共用。
+- `novelforge/domain/llm_preflight.py` 是纯领域层，统一调用阶段、低/预期/高 Token 区间、费用区间、置信度、价格缺失说明和预算状态。
+- `novelforge/services/llm_estimation.py` 从全局账本读取同方案、同模型、同操作和同 Agent 的精确样本；至少 5 条后使用 P50/P90 校准模板，但历史查询失败不得阻断业务 UI。
+- `ui/llm_preflight.py` 是统一展示与确认组件。阈值按主显示币种和预估上界判断；缺少必要价格时只显示 Token；缓存命中在执行前未知，因此费用按普通输入价格保守估算。
+- 长资料导入、自动网络研究和自由创作已经接入。网络研究按 Planner、Extractor、Verifier、Embedding 分阶段汇总，并把搜索 API、网页抓取等非 Token 调用列为未计入金额的外部项。
+
+预估不是账单，也不承诺模型一定生成到某个长度。输入在提示词已组装时通常更稳定；输出和未知网页正文必须保留较宽区间。持久任务在创建时保存完整估算与价格快照，后续价格修改不能重写该任务的历史判断依据。
 
 ### 网络研究与多 Agent 边界
 
@@ -169,6 +180,8 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 | `novelforge/domain/ingestion_workbench.py` | 汇总批次状态、风险和推荐下一步 |
 | `novelforge/domain/ingestion_tasks.py` | 任务/分段状态规范化、转换和检查点对账 |
 | `novelforge/domain/ingestion_task_estimates.py` | 调用数、Token 和费用的纯计算估算 |
+| `novelforge/domain/llm_preflight.py` | 通用阶段、区间、费用、置信度和预算纯计算模型 |
+| `novelforge/services/llm_estimation.py` | 当前模型价格装配与历史 P50/P90 校准 |
 | `novelforge/workflows/source_workflows.py` | 资料导入、提取、审核和批次原子操作 |
 | `novelforge/workflows/long_reference_quick_process.py` | 可恢复的导入/提取/整理/自动审核阶段编排 |
 | `novelforge/workflows/ingestion_tasks.py` | 持久任务创建、控制、恢复和执行 |
@@ -182,6 +195,7 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 | `ui/ingestion_batch_guard.py` | 导入向导与批次管理共用的冲突预检和任务中心入口 |
 | `ui/ingestion_tasks.py` | 任务筛选、进度、控制和历史管理 |
 | `ui/ingestion_task_estimate.py` | 导入入口共用的执行前估算展示 |
+| `ui/llm_preflight.py` | 写作、资料和研究入口共用的执行前区间展示与预算确认 |
 
 ### 检索
 

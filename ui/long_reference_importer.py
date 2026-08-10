@@ -463,7 +463,13 @@ def _render_long_reference_quick_processing(
         consolidate_after_extract=quick_consolidate,
         custom_instructions=shared_custom_instructions,
     )
-    render_ingestion_task_estimate(estimate, expanded=planned_quick_count > 20)
+    estimate_approved = render_ingestion_task_estimate(
+        estimate,
+        expanded=planned_quick_count > 20,
+        confirmation_key=_long_reference_key(
+            "long_reference_quick_budget_confirm", state_scope
+        ),
+    )
 
     if st.button(
         "开始处理所选片段",
@@ -477,6 +483,8 @@ def _render_long_reference_quick_processing(
             st.error("请至少选择一个提取分类。")
         elif not quick_quick_high_ok:
             st.error("处理数量超过 50 段，请先勾选确认框。")
+        elif not estimate_approved:
+            st.error("本次预估超过预算确认阈值，请先确认 Token 与费用上界。")
         else:
             try:
                 batch = _get_or_create_long_reference_preview_batch(batch_context)

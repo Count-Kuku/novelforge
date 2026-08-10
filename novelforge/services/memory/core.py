@@ -32,6 +32,7 @@ from novelforge.core.schemas import (
     VolumeOutlineMetadata,
 )
 from novelforge.core.prompt_options import normalize_prompt_options_payload
+from novelforge.core.cost_currency import cost_display_preferences
 from .runtime_storage import (
     _load_runtime_from_db_best_effort,
     _mutate_workflow_in_db,
@@ -175,6 +176,9 @@ MANAGED_ENV_KEYS = [
     "LLM_CACHE_WRITE_PRICE_PER_MILLION",
     "LLM_OUTPUT_PRICE_PER_MILLION",
     "LLM_EMBEDDING_PRICE_PER_MILLION",
+    "LLM_PRICING_CURRENCY",
+    "LLM_DISPLAY_CURRENCY",
+    "LLM_USD_TO_CNY_RATE",
 ]
 DEFAULT_LLM_PROFILE_NAME = "默认配置"
 WINDOWS_RESERVED_PATH_NAMES = {
@@ -348,6 +352,7 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
     cost_tracking_mode = str(raw.get("cost_tracking_mode") or "auto").strip().lower() or "auto"
     if cost_tracking_mode not in LLM_COST_TRACKING_MODES:
         cost_tracking_mode = "auto"
+    currency_preferences = cost_display_preferences(raw)
 
     return {
         "id": profile_id,
@@ -358,6 +363,7 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
         "embedding_model_name": str(raw.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
         "provider_type": provider_type,
         "cost_tracking_mode": cost_tracking_mode,
+        **currency_preferences,
         "input_price_per_million": safe_rate(raw.get("input_price_per_million")),
         "cached_input_price_per_million": safe_rate(raw.get("cached_input_price_per_million")),
         "cache_write_price_per_million": safe_rate(raw.get("cache_write_price_per_million")),
@@ -365,6 +371,18 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
         "embedding_price_per_million": safe_rate(raw.get("embedding_price_per_million")),
         "pricing_updated_at": str(raw.get("pricing_updated_at") or "").strip(),
         "pricing_source_url": str(raw.get("pricing_source_url") or "").strip(),
+        "preflight_enabled": bool(raw.get("preflight_enabled", True)),
+        "preflight_warning_tokens": int(safe_rate(raw.get("preflight_warning_tokens", 50000))),
+        "preflight_confirmation_tokens": int(
+            safe_rate(raw.get("preflight_confirmation_tokens", 150000))
+        ),
+        "preflight_warning_cost_usd": safe_rate(raw.get("preflight_warning_cost_usd", 0.05)),
+        "preflight_confirmation_cost_usd": safe_rate(raw.get("preflight_confirmation_cost_usd", 0.25)),
+        "preflight_warning_cost_cny": safe_rate(raw.get("preflight_warning_cost_cny", 0.5)),
+        "preflight_confirmation_cost_cny": safe_rate(raw.get("preflight_confirmation_cost_cny", 2.0)),
+        "preflight_require_confirmation": bool(
+            raw.get("preflight_require_confirmation", False)
+        ),
     }
 
 
@@ -421,6 +439,9 @@ def _load_env_llm_profile() -> dict:
             "embedding_model_name": embedding_model_name,
             "provider_type": os.getenv("LLM_PROVIDER_TYPE") or file_values.get("LLM_PROVIDER_TYPE") or "auto",
             "cost_tracking_mode": os.getenv("LLM_COST_TRACKING_MODE") or file_values.get("LLM_COST_TRACKING_MODE") or "auto",
+            "pricing_currency": os.getenv("LLM_PRICING_CURRENCY") or file_values.get("LLM_PRICING_CURRENCY") or "USD",
+            "display_currency": os.getenv("LLM_DISPLAY_CURRENCY") or file_values.get("LLM_DISPLAY_CURRENCY") or "CNY",
+            "usd_to_cny_rate": os.getenv("LLM_USD_TO_CNY_RATE") or file_values.get("LLM_USD_TO_CNY_RATE") or 7.142857,
             "input_price_per_million": os.getenv("LLM_INPUT_PRICE_PER_MILLION") or file_values.get("LLM_INPUT_PRICE_PER_MILLION") or 0,
             "cached_input_price_per_million": os.getenv("LLM_CACHED_INPUT_PRICE_PER_MILLION") or file_values.get("LLM_CACHED_INPUT_PRICE_PER_MILLION") or 0,
             "cache_write_price_per_million": os.getenv("LLM_CACHE_WRITE_PRICE_PER_MILLION") or file_values.get("LLM_CACHE_WRITE_PRICE_PER_MILLION") or 0,
@@ -492,6 +513,7 @@ def load_llm_settings() -> dict:
         "embedding_model_name": str(active_profile.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
         "provider_type": str(active_profile.get("provider_type") or "auto"),
         "cost_tracking_mode": str(active_profile.get("cost_tracking_mode") or "auto"),
+        **cost_display_preferences(active_profile),
         "input_price_per_million": float(active_profile.get("input_price_per_million") or 0),
         "cached_input_price_per_million": float(active_profile.get("cached_input_price_per_million") or 0),
         "cache_write_price_per_million": float(active_profile.get("cache_write_price_per_million") or 0),
@@ -499,6 +521,26 @@ def load_llm_settings() -> dict:
         "embedding_price_per_million": float(active_profile.get("embedding_price_per_million") or 0),
         "pricing_updated_at": str(active_profile.get("pricing_updated_at") or ""),
         "pricing_source_url": str(active_profile.get("pricing_source_url") or ""),
+        "preflight_enabled": bool(active_profile.get("preflight_enabled", True)),
+        "preflight_warning_tokens": int(active_profile.get("preflight_warning_tokens") or 0),
+        "preflight_confirmation_tokens": int(
+            active_profile.get("preflight_confirmation_tokens") or 0
+        ),
+        "preflight_warning_cost_usd": float(
+            active_profile.get("preflight_warning_cost_usd") or 0
+        ),
+        "preflight_confirmation_cost_usd": float(
+            active_profile.get("preflight_confirmation_cost_usd") or 0
+        ),
+        "preflight_warning_cost_cny": float(
+            active_profile.get("preflight_warning_cost_cny") or 0
+        ),
+        "preflight_confirmation_cost_cny": float(
+            active_profile.get("preflight_confirmation_cost_cny") or 0
+        ),
+        "preflight_require_confirmation": bool(
+            active_profile.get("preflight_require_confirmation", False)
+        ),
         "env_path": str(ENV_PATH.resolve()),
         "profiles_path": str(LLM_PROFILES_PATH.resolve()),
     }
@@ -522,6 +564,9 @@ def save_llm_settings(settings: dict):
         "LLM_EMBEDDING_MODEL": str(settings.get("embedding_model_name", "") or ""),
         "LLM_PROVIDER_TYPE": str(settings.get("provider_type", "auto") or "auto"),
         "LLM_COST_TRACKING_MODE": str(settings.get("cost_tracking_mode", "auto") or "auto"),
+        "LLM_PRICING_CURRENCY": str(settings.get("pricing_currency", "USD") or "USD"),
+        "LLM_DISPLAY_CURRENCY": str(settings.get("display_currency", "CNY") or "CNY"),
+        "LLM_USD_TO_CNY_RATE": str(settings.get("usd_to_cny_rate", 7.142857) or 7.142857),
         "LLM_INPUT_PRICE_PER_MILLION": str(settings.get("input_price_per_million", 0) or 0),
         "LLM_CACHED_INPUT_PRICE_PER_MILLION": str(settings.get("cached_input_price_per_million", 0) or 0),
         "LLM_CACHE_WRITE_PRICE_PER_MILLION": str(settings.get("cache_write_price_per_million", 0) or 0),

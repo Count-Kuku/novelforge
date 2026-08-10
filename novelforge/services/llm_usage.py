@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 
 from storage import open_global_db
 from storage.repositories import (
     delete_llm_usage_event_rows,
     insert_llm_usage_event_row,
+    list_llm_usage_calibration_rows,
     list_daily_llm_usage_rows,
     list_llm_usage_breakdown_rows,
     list_recent_llm_usage_event_rows,
@@ -81,6 +83,28 @@ def list_recent_llm_usage_events(**filters) -> list[dict]:
         value = row.get("cost_microusd")
         row["cost_usd"] = None if value is None else int(value) / 1_000_000
     return rows
+
+
+def _nearest_rank(values: list[int], percentile: float) -> int:
+    clean = sorted(max(int(value or 0), 0) for value in values if int(value or 0) > 0)
+    if not clean:
+        return 0
+    rank = max(1, math.ceil(len(clean) * percentile))
+    return clean[min(rank - 1, len(clean) - 1)]
+
+
+def get_llm_usage_calibration(*, limit: int = 500, **filters) -> dict:
+    """Return P50/P90 per-call usage for one model/operation/agent cohort."""
+
+    with open_global_db() as conn:
+        rows = list_llm_usage_calibration_rows(conn, limit=limit, **filters)
+    result = {"sample_count": len(rows)}
+    for column in ("input_tokens", "output_tokens", "embedding_tokens", "total_tokens"):
+        values = [int(row.get(column) or 0) for row in rows]
+        prefix = column.removesuffix("_tokens")
+        result[f"{prefix}_p50"] = _nearest_rank(values, 0.50)
+        result[f"{prefix}_p90"] = _nearest_rank(values, 0.90)
+    return result
 
 
 def delete_llm_usage_history(

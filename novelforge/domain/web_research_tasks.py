@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 from uuid import uuid4
+
+from novelforge.domain.llm_preflight import build_preflight_estimate, build_stage_estimate
 
 
 WEB_RESEARCH_WORKFLOW_TYPE = "web_research"
@@ -119,21 +122,149 @@ def normalize_web_research_task(task: dict | None) -> dict:
     }
 
 
-def build_web_research_estimate(configuration: dict) -> dict:
+def build_web_research_estimate(
+    configuration: dict,
+    *,
+    model_profile: dict | None = None,
+    calibrations: dict | None = None,
+) -> dict:
     max_pages = max(1, min(int(configuration.get("max_pages") or 8), 50))
     branch_count = max(1, len(configuration.get("source_kinds") or ["general"]))
     planner_calls = 1 if configuration.get("use_llm_planner", True) else 0
     extraction_calls = max_pages
     verifier_calls = 1 if configuration.get("use_llm_verifier", True) else 0
-    return {
-        "estimated_model_calls": planner_calls + extraction_calls + verifier_calls,
-        "estimated_search_calls": branch_count,
-        "estimated_fetch_calls": max_pages,
-        "estimated_input_tokens": planner_calls * 1200 + extraction_calls * 8500 + verifier_calls * 6000,
-        "estimated_output_tokens": planner_calls * 800 + extraction_calls * 1800 + verifier_calls * 2500,
-        "estimated_embedding_tokens": 0,
-        "estimated_cost_usd": 0.0,
-    }
+    max_chars_per_page = max(
+        2000, min(int(configuration.get("max_chars_per_page") or 30000), 60000)
+    )
+    max_claims_per_page = max(
+        1, min(int(configuration.get("max_claims_per_page") or 20), 100)
+    )
+    category_count = max(len(configuration.get("enabled_categories") or []), 1)
+    history = dict(calibrations or {})
+    stages: list[dict] = []
+    if planner_calls:
+        stages.append(
+            build_stage_estimate(
+                "研究规划 Agent",
+                operation="web_research.plan",
+                agent_role="planner",
+                call_count=planner_calls,
+                input_tokens_per_call={"low": 700, "expected": 1200, "high": 2000},
+                output_tokens_per_call={"low": 350, "expected": 800, "high": 1400},
+                calibration=history.get("plan"),
+                calibrate_input=True,
+                calibrate_output=True,
+                confidence="medium",
+            )
+        )
+
+    extraction_input = max(1500, math.ceil(max_chars_per_page * 0.25) + 1000)
+    extraction_output = max(
+        900,
+        min(3200, 500 + max_claims_per_page * 55 + category_count * 35),
+    )
+    stages.append(
+        build_stage_estimate(
+            "网页事实提取 Agent",
+            operation="web_research.extract",
+            agent_role="extractor",
+            call_count=extraction_calls,
+            input_tokens_per_call={
+                "low": max(900, math.ceil(extraction_input * 0.35)),
+                "expected": extraction_input,
+                "high": math.ceil(max_chars_per_page / 1.6) + 1500,
+            },
+            output_tokens_per_call={
+                "low": math.ceil(extraction_output * 0.45),
+                "expected": extraction_output,
+                "high": math.ceil(extraction_output * 1.6),
+            },
+            calibration=history.get("extract"),
+            calibrate_input=True,
+            calibrate_output=True,
+            confidence="low",
+            assumptions=["网页实际正文长度和抓取成功数未知，提取阶段区间较宽。"],
+        )
+    )
+    if verifier_calls:
+        verifier_input = max(
+            2500,
+            min(24000, max_pages * max_claims_per_page * 30 + 1000),
+        )
+        verifier_output = max(1000, min(5000, max_pages * max_claims_per_page * 12 + 600))
+        stages.append(
+            build_stage_estimate(
+                "冲突验证 Agent",
+                operation="web_research.verify",
+                agent_role="verifier",
+                call_count=verifier_calls,
+                input_tokens_per_call={
+                    "low": math.ceil(verifier_input * 0.4),
+                    "expected": verifier_input,
+                    "high": math.ceil(verifier_input * 1.45),
+                },
+                output_tokens_per_call={
+                    "low": math.ceil(verifier_output * 0.45),
+                    "expected": verifier_output,
+                    "high": math.ceil(verifier_output * 1.6),
+                },
+                calibration=history.get("verify"),
+                calibrate_input=True,
+                calibrate_output=True,
+                confidence="low",
+            )
+        )
+
+    embedding_per_page = max(500, math.ceil(max_chars_per_page * 0.18))
+    stages.append(
+        build_stage_estimate(
+            "网页原文向量索引",
+            operation="web_research.index",
+            agent_role="indexer",
+            endpoint_type="embedding",
+            call_count=max_pages,
+            embedding_tokens_per_call={
+                "low": math.ceil(embedding_per_page * 0.35),
+                "expected": embedding_per_page,
+                "high": math.ceil(max_chars_per_page / 1.6),
+            },
+            calibration=history.get("index"),
+            calibrate_output=False,
+            confidence="low",
+            assumptions=["向量索引按最多抓取页数估算，增量复用会降低实际消耗。"],
+        )
+    )
+    result = build_preflight_estimate(
+        stages,
+        profile=model_profile,
+        estimate_kind="web_research",
+        external_calls=[
+            {
+                "kind": "search",
+                "label": "搜索 API",
+                "count": branch_count,
+                "cost_included": False,
+            },
+            {
+                "kind": "fetch",
+                "label": "公开网页抓取",
+                "count": max_pages,
+                "cost_included": False,
+            },
+        ],
+        assumptions=[
+            "模型费用不包含 Brave Search、代理或其它外部工具可能产生的独立费用。",
+            "未成功抓取的网页不会进入事实提取，实际模型调用可能低于上界。",
+        ],
+    )
+    result.update(
+        {
+            "estimated_search_calls": branch_count,
+            "estimated_fetch_calls": max_pages,
+            "estimated_cost_usd": float(result.get("estimated_cost_usd") or 0.0),
+        }
+    )
+    return result
 
 
 def create_web_research_task(
@@ -143,6 +274,7 @@ def create_web_research_task(
     story_id: str = "",
     configuration: dict | None = None,
     priority: int = 0,
+    estimate: dict | None = None,
 ) -> dict:
     cleaned_topic = " ".join(str(topic or "").split())
     if not cleaned_topic:
@@ -164,7 +296,7 @@ def create_web_research_task(
             "objective": cleaned_objective,
             "status": "queued",
             "configuration": normalized_configuration,
-            "estimate": build_web_research_estimate(normalized_configuration),
+            "estimate": dict(estimate or build_web_research_estimate(normalized_configuration)),
             "priority": int(priority),
             "steps": {},
             "result": {},

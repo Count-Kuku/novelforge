@@ -1,7 +1,10 @@
-"""Explainable call, token, and cost estimates for source-ingestion tasks."""
+"""Explainable call, Token, and cost estimates for source-ingestion tasks."""
 from __future__ import annotations
 
 import math
+
+from novelforge.core.token_estimation import estimate_text_tokens
+from novelforge.domain.llm_preflight import build_preflight_estimate, build_stage_estimate
 
 
 MODE_OUTPUT_FACTORS = {
@@ -17,23 +20,6 @@ MODE_OUTPUT_FACTORS = {
 }
 
 
-def _safe_float(value: object) -> float:
-    try:
-        number = float(value or 0)
-    except (TypeError, ValueError):
-        return 0.0
-    if not math.isfinite(number):
-        return 0.0
-    return max(number, 0.0)
-
-
-def _token_estimate(char_count: int) -> int:
-    # Mixed Chinese/English source text commonly falls around 1.6-2.0
-    # characters per token. 1.8 is deliberately conservative without a
-    # model-specific tokenizer.
-    return max(1, math.ceil(max(int(char_count), 0) / 1.8))
-
-
 def estimate_ingestion_task(
     batch: dict,
     segment_indices: list[int],
@@ -44,9 +30,12 @@ def estimate_ingestion_task(
     consolidate_after_extract: bool,
     custom_instructions: str = "",
     model_profile: dict | None = None,
+    calibrations: dict | None = None,
 ) -> dict:
+    """Estimate a durable ingestion workflow without performing any model call."""
+
     segments = batch.get("segments", []) if isinstance(batch.get("segments", []), list) else []
-    valid_indices = []
+    valid_indices: list[int] = []
     for raw_index in segment_indices:
         try:
             index = int(raw_index)
@@ -56,64 +45,106 @@ def estimate_ingestion_task(
             valid_indices.append(index)
 
     source_chars = sum(len(str(segments[index].get("content") or "")) for index in valid_indices)
+    source_tokens = estimate_text_tokens(
+        "\n".join(str(segments[index].get("content") or "") for index in valid_indices)
+    )
     category_count = max(len(enabled_categories), 1)
     segment_count = len(valid_indices)
     mode_factor = MODE_OUTPUT_FACTORS.get(str(extraction_mode or "general"), 1.0)
-    instruction_tokens = _token_estimate(len(str(custom_instructions or ""))) if custom_instructions else 0
+    instruction_tokens = estimate_text_tokens(custom_instructions)
     prompt_overhead_per_call = 850 + category_count * 65 + instruction_tokens
-    estimated_input_tokens = _token_estimate(source_chars) + segment_count * prompt_overhead_per_call
-    estimated_output_tokens = math.ceil(segment_count * (360 + category_count * 105) * mode_factor)
-    llm_call_count = segment_count
+    average_source_tokens = math.ceil(source_tokens / segment_count) if segment_count else 0
+    output_per_call = math.ceil((360 + category_count * 105) * mode_factor)
+    history = dict(calibrations or {})
 
+    stages = [
+        build_stage_estimate(
+            "知识提取",
+            operation="source_ingestion.run",
+            agent_role="ingestion",
+            call_count=segment_count,
+            input_tokens_per_call={
+                "low": math.ceil((average_source_tokens + prompt_overhead_per_call) * 0.85),
+                "expected": average_source_tokens + prompt_overhead_per_call,
+                "high": math.ceil((average_source_tokens + prompt_overhead_per_call) * 1.2),
+            },
+            output_tokens_per_call={
+                "low": math.ceil(output_per_call * 0.65),
+                "expected": output_per_call,
+                "high": math.ceil(output_per_call * 1.55),
+            },
+            calibration=history.get("chat"),
+            calibrate_input=False,
+            calibrate_output=True,
+            confidence="medium",
+            assumptions=["每个所选资料片段预计触发一次知识提取调用。"],
+        )
+    ]
+
+    expected_extraction_output = segment_count * output_per_call
     if consolidate_after_extract and segment_count:
-        llm_call_count += 1
-        estimated_input_tokens += min(math.ceil(estimated_output_tokens * 0.75), 24000) + 700
-        estimated_output_tokens += min(800 + category_count * 100, 3000)
+        consolidation_input = min(math.ceil(expected_extraction_output * 0.75), 24000) + 700
+        consolidation_output = min(800 + category_count * 100, 3000)
+        stages.append(
+            build_stage_estimate(
+                "知识整理",
+                operation="source_ingestion.run",
+                agent_role="ingestion",
+                call_count=1,
+                input_tokens_per_call={
+                    "low": math.ceil(consolidation_input * 0.75),
+                    "expected": consolidation_input,
+                    "high": math.ceil(consolidation_input * 1.3),
+                },
+                output_tokens_per_call={
+                    "low": math.ceil(consolidation_output * 0.65),
+                    "expected": consolidation_output,
+                    "high": math.ceil(consolidation_output * 1.5),
+                },
+                calibration=history.get("chat"),
+                calibrate_input=False,
+                calibrate_output=True,
+                confidence="medium",
+                assumptions=["开启提取后整理时，额外预计一次汇总调用。"],
+            )
+        )
 
-    estimated_embedding_tokens = _token_estimate(source_chars) if import_to_index and source_chars else 0
-    profile = dict(model_profile or {})
-    input_rate = _safe_float(profile.get("input_price_per_million"))
-    output_rate = _safe_float(profile.get("output_price_per_million"))
-    embedding_rate = _safe_float(profile.get("embedding_price_per_million"))
-    missing_price_components = []
-    if estimated_input_tokens and not input_rate:
-        missing_price_components.append("输入 Token")
-    if estimated_output_tokens and not output_rate:
-        missing_price_components.append("输出 Token")
-    if estimated_embedding_tokens and not embedding_rate:
-        missing_price_components.append("Embedding Token")
-    pricing_configured = not missing_price_components
-    estimated_cost_usd = (
-        estimated_input_tokens * input_rate
-        + estimated_output_tokens * output_rate
-        + estimated_embedding_tokens * embedding_rate
-    ) / 1_000_000
+    if import_to_index and source_tokens:
+        stages.append(
+            build_stage_estimate(
+                "原文向量索引",
+                operation="source_ingestion.run",
+                agent_role="ingestion",
+                endpoint_type="embedding",
+                call_count=1,
+                embedding_tokens_per_call={
+                    "low": math.ceil(source_tokens * 0.9),
+                    "expected": source_tokens,
+                    "high": math.ceil(source_tokens * 1.15),
+                },
+                calibration=history.get("embedding"),
+                calibrate_output=False,
+                confidence="high",
+                assumptions=["Embedding Token 按所选原文长度估算。"],
+            )
+        )
 
-    return {
-        "segment_count": segment_count,
-        "source_char_count": source_chars,
-        "llm_call_count": llm_call_count,
-        "estimated_input_tokens": int(estimated_input_tokens),
-        "estimated_output_tokens": int(estimated_output_tokens),
-        "estimated_embedding_tokens": int(estimated_embedding_tokens),
-        "estimated_total_tokens": int(
-            estimated_input_tokens + estimated_output_tokens + estimated_embedding_tokens
-        ),
-        "estimated_cost_usd": round(estimated_cost_usd, 6),
-        "pricing_configured": pricing_configured,
-        "missing_price_components": missing_price_components,
-        "model_profile_id": str(profile.get("id") or ""),
-        "model_name": str(profile.get("model_name") or ""),
-        "embedding_model_name": str(profile.get("embedding_model_name") or ""),
-        "price_snapshot": {
-            "input_price_per_million": input_rate,
-            "output_price_per_million": output_rate,
-            "embedding_price_per_million": embedding_rate,
-        },
-        "assumptions": [
-            "按平均 1.8 字符/Token 估算，实际值受模型 tokenizer 影响。",
-            "每个资料片段估算一次知识提取调用。",
-            "知识整理开启时额外估算一次整理调用。",
-            "这是执行前估算，不是供应商实际账单。",
+    result = build_preflight_estimate(
+        stages,
+        profile=model_profile,
+        estimate_kind="source_ingestion",
+        assumptions=[
+            "Token 按中英文混合文本启发式估算，实际值受模型 tokenizer 影响。",
+            "输出量以所选分类和提取模式为基线，并以区间表达不确定性。",
+            "费用使用当前模型配置快照，不代表供应商最终账单。",
         ],
-    }
+    )
+    result.update(
+        {
+            "segment_count": segment_count,
+            "source_char_count": source_chars,
+            # Existing task repositories store a numeric compatibility field.
+            "estimated_cost_usd": float(result.get("estimated_cost_usd") or 0.0),
+        }
+    )
+    return result

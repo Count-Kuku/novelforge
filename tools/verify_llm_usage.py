@@ -85,6 +85,27 @@ def verify_normalization_and_costs() -> None:
     check(event["cost_source"] == "configured_rates", "手动价格标记为配置估算")
     check(event["price_snapshot"]["pricing_updated_at"] == "2026-08-10", "调用保存价格快照")
 
+    cny_event = build_llm_usage_event(
+        usage={
+            "prompt_tokens": 1000,
+            "prompt_cache_hit_tokens": 400,
+            "completion_tokens": 500,
+            "total_tokens": 1500,
+        },
+        profile=_profile(
+            pricing_currency="CNY",
+            display_currency="CNY",
+            usd_to_cny_rate=7.142857,
+            input_price_per_million=1.0,
+            cached_input_price_per_million=0.02,
+            output_price_per_million=2.0,
+        ),
+        endpoint_type="chat",
+        requested_model="deepseek-v4-flash",
+    )
+    check(cny_event["calculated_cost_microusd"] == 225, "人民币单价按快照系数写入美元账本")
+    check(cny_event["price_snapshot"]["currency"] == "CNY", "价格快照保留人民币币种")
+
     openrouter = build_llm_usage_event(
         usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15, "cost": 0.012345},
         profile=_profile(

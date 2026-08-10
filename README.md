@@ -66,10 +66,12 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 写作工作�
 ### Token 与费用可观测性
 
 - 对话、流式响应和 Embedding 调用统一记录输入、缓存输入、缓存写入、输出、推理和向量 Token。
-- DeepSeek 等 OpenAI-compatible 服务可按用户配置的百万 Token 单价估算；OpenRouter 可优先采用响应中的供应商费用；也可选择只记录 Token。
+- DeepSeek 等 OpenAI-compatible 服务可按用户配置的百万 Token 单价估算；价格输入支持人民币或美元，DeepSeek 快速填充直接采用官方人民币价格。OpenRouter 可优先采用响应中的供应商费用；也可选择只记录 Token。
 - 每次调用保存当时的价格快照，并按项目、故事、任务、操作和 Agent 角色归因。历史费用不会因后续修改单价而变化。
-- 侧边栏显示当前故事今日/本月摘要，每次界面操作结束显示本次用量；项目概览和模型配置提供按日趋势、拆分明细和 CSV 导出。
+- 人民币是默认主显示币种，侧边栏显示当前故事今日/本月摘要，每次界面操作结束显示本次用量；项目概览和模型配置提供 CNY/USD 双币种按日趋势、拆分明细和 CSV 导出。美元账本保留为跨供应商兼容基准。
 - 用量事件默认长期保存在 `data/global.db`，只保存计量与归因元数据，不保存提示词或模型回复正文。缺少供应商 usage 时 Token 标记为估算；缺少价格时显示“未计价”，不会伪装成零费用。
+- 长资料导入、自动网络研究和自由创作会在执行前显示输入、输出、Embedding、总 Token 与费用的低/预期/高区间。网络研究按 Planner、Extractor、Verifier 和索引阶段拆分，并单独提示搜索 API 等外部费用没有计入 Token 金额。
+- 同一模型方案、操作和 Agent 角色积累至少 5 条精确调用后，执行前估算会参考历史 P50/P90 自动校准；样本不足时使用可解释的操作模板。模型配置中可以设置 Token/费用提醒阈值，并可要求超出确认阈值后显式确认。
 
 ## 界面导航
 
@@ -102,7 +104,7 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 写作工作�
 
 1. 讨论并保存大纲或章节方向。
 2. 生成章节细纲和正文，或直接在自由创作中迭代片段。
-3. 在生成前展开上下文预览，检查规则、核心设定、检索证据和预算遗漏。
+3. 在生成前查看 Token/费用区间，并展开上下文预览，检查规则、核心设定、检索证据和预算遗漏。
 4. 审阅或评价章节，把稳定的新事实提炼为待审核知识。
 5. 确认知识后继续后续章节，使新设定进入检索与上下文。
 
@@ -131,11 +133,14 @@ LLM_MODEL=deepseek-v4-flash
 LLM_EMBEDDING_MODEL=
 LLM_PROVIDER_TYPE=auto
 LLM_COST_TRACKING_MODE=auto
+LLM_PRICING_CURRENCY=USD
+LLM_DISPLAY_CURRENCY=CNY
+LLM_USD_TO_CNY_RATE=7.142857
 
 # 可选：资料导入页的网络检索
 BRAVE_SEARCH_API_KEY=
 
-# 可选本地费用估算，单位：USD / 1M tokens
+# 可选本地费用估算，单位由 LLM_PRICING_CURRENCY 决定 / 1M tokens
 LLM_INPUT_PRICE_PER_MILLION=0
 LLM_CACHED_INPUT_PRICE_PER_MILLION=0
 LLM_CACHE_WRITE_PRICE_PER_MILLION=0
@@ -143,7 +148,7 @@ LLM_OUTPUT_PRICE_PER_MILLION=0
 LLM_EMBEDDING_PRICE_PER_MILLION=0
 ```
 
-价格留空或填 `0` 时，系统仍记录 Token，但不会猜测费用。供应商未直接返回费用时，本地金额只是按价格快照计算的估算，不是实际账单；价格变化后应在 `模型配置` 中更新并记录核对日期。
+价格留空或填 `0` 时，系统仍记录 Token，但不会猜测费用。供应商未直接返回费用时，本地金额只是按价格快照计算的估算，不是实际账单。`模型配置` 可分别设置价格币种、主显示币种和美元兑人民币换算系数；DeepSeek 用户可直接填写官方人民币单价。DeepSeek 预设系数用于对齐其官方中英文价目，不代表实时外汇牌价。价格或换算口径变化后，应同时更新数值、核对日期和来源。
 
 `BRAVE_SEARCH_API_KEY` 只传给 Brave Search API。网络研究仅抓取公开的 HTTP/HTTPS 静态文本页面，不登录网站、不携带浏览器 Cookie、不绕过付费墙。自动研究任务可在后台恢复；手动搜索入口仍要求先勾选结果。
 

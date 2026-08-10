@@ -30,6 +30,7 @@ from novelforge.services.memory import (
     save_source_ingestion_task,
     set_source_ingestion_task_archived,
 )
+from novelforge.services.llm_estimation import load_stage_calibration
 from novelforge.workflows.long_reference_quick_process import run_long_reference_quick_process
 from novelforge.workflows.ingestion_task_results import build_ingestion_task_result
 
@@ -61,6 +62,7 @@ def build_long_reference_ingestion_estimate(
     consolidate_after_extract: bool,
     custom_instructions: str = "",
 ) -> dict:
+    profile = get_active_llm_profile()
     return estimate_ingestion_task(
         batch,
         segment_indices,
@@ -69,7 +71,21 @@ def build_long_reference_ingestion_estimate(
         import_to_index=import_to_index,
         consolidate_after_extract=consolidate_after_extract,
         custom_instructions=custom_instructions,
-        model_profile=get_active_llm_profile(),
+        model_profile=profile,
+        calibrations={
+            "chat": load_stage_calibration(
+                "source_ingestion.run",
+                agent_role="ingestion",
+                endpoint_type="chat",
+                profile=profile,
+            ),
+            "embedding": load_stage_calibration(
+                "source_ingestion.run",
+                agent_role="ingestion",
+                endpoint_type="embedding",
+                profile=profile,
+            ),
+        },
     )
 
 

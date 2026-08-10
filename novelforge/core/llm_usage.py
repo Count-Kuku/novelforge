@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import math
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -10,6 +9,13 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Iterator
 from urllib.parse import urlparse
 from uuid import uuid4
+
+from novelforge.core.cost_currency import (
+    cost_display_preferences,
+    normalize_cost_currency,
+    normalize_usd_to_cny_rate,
+)
+from novelforge.core.token_estimation import estimate_text_tokens
 
 
 LOGGER = logging.getLogger("novelforge.llm_usage")
@@ -124,8 +130,7 @@ def _safe_decimal(value: object) -> Decimal:
 
 
 def _estimate_tokens(text: str) -> int:
-    clean = str(text or "")
-    return max(1, math.ceil(len(clean) / 1.8)) if clean else 0
+    return estimate_text_tokens(text)
 
 
 def normalize_usage(
@@ -199,8 +204,13 @@ def normalize_usage(
 
 
 def _rate_snapshot(profile: dict) -> dict[str, object]:
+    preferences = cost_display_preferences(profile)
     return {
-        "currency": "USD",
+        "currency": preferences["pricing_currency"],
+        "display_currency": preferences["display_currency"],
+        "usd_to_cny_rate": preferences["usd_to_cny_rate"],
+        "currency_rate_updated_at": preferences["currency_rate_updated_at"],
+        "currency_rate_source_url": preferences["currency_rate_source_url"],
         "input_price_per_million": float(_safe_decimal(profile.get("input_price_per_million"))),
         "cached_input_price_per_million": float(
             _safe_decimal(profile.get("cached_input_price_per_million"))
@@ -234,7 +244,12 @@ def calculate_configured_cost_microusd(usage: dict, profile: dict) -> int | None
     if embedding_tokens:
         if embedding_rate <= 0:
             return None
-        return int((Decimal(embedding_tokens) * embedding_rate).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        cost_microprice = Decimal(embedding_tokens) * embedding_rate
+        if normalize_cost_currency(profile.get("pricing_currency")) == "CNY":
+            cost_microprice /= Decimal(
+                str(normalize_usd_to_cny_rate(profile.get("usd_to_cny_rate")))
+            )
+        return int(cost_microprice.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
     input_tokens = _nonnegative_int(usage.get("input_tokens"))
     cached_tokens = min(_nonnegative_int(usage.get("cached_input_tokens")), input_tokens)
@@ -258,15 +273,19 @@ def calculate_configured_cost_microusd(usage: dict, profile: dict) -> int | None
     if output_tokens and output_rate <= 0:
         return None
 
-    cost_microusd = (
+    cost_microprice = (
         Decimal(uncached_tokens) * input_rate
         + Decimal(cached_tokens) * cached_rate
         + Decimal(cache_write_tokens) * cache_write_rate
         + Decimal(output_tokens) * output_rate
     )
-    if cost_microusd <= 0 and (input_tokens or output_tokens):
+    if cost_microprice <= 0 and (input_tokens or output_tokens):
         return None
-    return int(cost_microusd.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    if normalize_cost_currency(profile.get("pricing_currency")) == "CNY":
+        cost_microprice /= Decimal(
+            str(normalize_usd_to_cny_rate(profile.get("usd_to_cny_rate")))
+        )
+    return int(cost_microprice.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def build_llm_usage_event(

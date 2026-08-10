@@ -36,6 +36,8 @@ COST_TRACKING_MODE_OPTIONS = {
     "manual": "按 Token 价格估算",
     "tokens_only": "仅统计 Token",
 }
+PRICING_CURRENCY_OPTIONS = {"CNY": "人民币（CNY）", "USD": "美元（USD）"}
+DISPLAY_CURRENCY_OPTIONS = {"CNY": "人民币为主", "USD": "美元为主"}
 
 
 def _load_llm_profile_state() -> tuple[list[dict], dict, dict, list[str], dict[str, str]]:
@@ -164,6 +166,9 @@ def _render_provider_quick_fill(profile_id: str) -> None:
                         _profile_widget_key("llm_embedding_model_name", pid): p["embedding_model_name"],
                         _profile_widget_key("llm_provider_type", pid): p.get("provider_type", "auto"),
                         _profile_widget_key("llm_cost_tracking_mode", pid): p.get("cost_tracking_mode", "auto"),
+                        _profile_widget_key("llm_pricing_currency", pid): p.get("pricing_currency", "USD"),
+                        _profile_widget_key("llm_display_currency", pid): p.get("display_currency", "CNY"),
+                        _profile_widget_key("llm_usd_to_cny_rate", pid): float(p.get("usd_to_cny_rate", 7.142857) or 7.142857),
                         _profile_widget_key("llm_input_price", pid): float(p.get("input_price_per_million", 0) or 0),
                         _profile_widget_key("llm_cached_input_price", pid): float(p.get("cached_input_price_per_million", 0) or 0),
                         _profile_widget_key("llm_cache_write_price", pid): float(p.get("cache_write_price_per_million", 0) or 0),
@@ -171,6 +176,8 @@ def _render_provider_quick_fill(profile_id: str) -> None:
                         _profile_widget_key("llm_embedding_price", pid): float(p.get("embedding_price_per_million", 0) or 0),
                         _profile_widget_key("llm_pricing_updated_at", pid): p.get("pricing_updated_at", ""),
                         _profile_widget_key("llm_pricing_source_url", pid): p.get("pricing_source_url", ""),
+                        _profile_widget_key("llm_currency_rate_updated_at", pid): p.get("currency_rate_updated_at", ""),
+                        _profile_widget_key("llm_currency_rate_source_url", pid): p.get("currency_rate_source_url", ""),
                     })
                 ) or None,
             )
@@ -185,6 +192,11 @@ def _clean_llm_profile_form_values(
     embedding_model_name: str,
     provider_type: str,
     cost_tracking_mode: str,
+    pricing_currency: str,
+    display_currency: str,
+    usd_to_cny_rate: float,
+    currency_rate_updated_at: str,
+    currency_rate_source_url: str,
     input_price_per_million: float,
     cached_input_price_per_million: float,
     cache_write_price_per_million: float,
@@ -192,6 +204,14 @@ def _clean_llm_profile_form_values(
     embedding_price_per_million: float,
     pricing_updated_at: str,
     pricing_source_url: str,
+    preflight_enabled: bool,
+    preflight_warning_tokens: int,
+    preflight_confirmation_tokens: int,
+    preflight_warning_cost_usd: float,
+    preflight_confirmation_cost_usd: float,
+    preflight_warning_cost_cny: float,
+    preflight_confirmation_cost_cny: float,
+    preflight_require_confirmation: bool,
 ) -> dict:
     return {
         "id": profile_id_value.strip(),
@@ -202,6 +222,11 @@ def _clean_llm_profile_form_values(
         "embedding_model_name": embedding_model_name.strip(),
         "provider_type": provider_type.strip().lower() or "auto",
         "cost_tracking_mode": cost_tracking_mode.strip().lower() or "auto",
+        "pricing_currency": pricing_currency.strip().upper() or "USD",
+        "display_currency": display_currency.strip().upper() or "CNY",
+        "usd_to_cny_rate": max(float(usd_to_cny_rate), 0.000001),
+        "currency_rate_updated_at": currency_rate_updated_at.strip(),
+        "currency_rate_source_url": currency_rate_source_url.strip(),
         "input_price_per_million": max(float(input_price_per_million), 0.0),
         "cached_input_price_per_million": max(float(cached_input_price_per_million), 0.0),
         "cache_write_price_per_million": max(float(cache_write_price_per_million), 0.0),
@@ -209,6 +234,18 @@ def _clean_llm_profile_form_values(
         "embedding_price_per_million": max(float(embedding_price_per_million), 0.0),
         "pricing_updated_at": pricing_updated_at.strip(),
         "pricing_source_url": pricing_source_url.strip(),
+        "preflight_enabled": bool(preflight_enabled),
+        "preflight_warning_tokens": max(int(preflight_warning_tokens), 0),
+        "preflight_confirmation_tokens": max(int(preflight_confirmation_tokens), 0),
+        "preflight_warning_cost_usd": max(float(preflight_warning_cost_usd), 0.0),
+        "preflight_confirmation_cost_usd": max(
+            float(preflight_confirmation_cost_usd), 0.0
+        ),
+        "preflight_warning_cost_cny": max(float(preflight_warning_cost_cny), 0.0),
+        "preflight_confirmation_cost_cny": max(
+            float(preflight_confirmation_cost_cny), 0.0
+        ),
+        "preflight_require_confirmation": bool(preflight_require_confirmation),
     }
 
 
@@ -238,11 +275,23 @@ def _validate_llm_profile_payload(payload: dict, *, require_api_key: bool, auto_
     if payload.get("cost_tracking_mode") not in COST_TRACKING_MODE_OPTIONS:
         st.error("费用统计模式无效，请重新选择。")
         return False
+    if payload.get("pricing_currency") not in PRICING_CURRENCY_OPTIONS:
+        st.error("价格币种无效，请重新选择。")
+        return False
+    if payload.get("display_currency") not in DISPLAY_CURRENCY_OPTIONS:
+        st.error("主显示币种无效，请重新选择。")
+        return False
     pricing_source_url = str(payload.get("pricing_source_url") or "")
     if pricing_source_url:
         parsed_source = urlparse(pricing_source_url)
         if parsed_source.scheme not in {"http", "https"} or not parsed_source.netloc:
             st.error("价格来源网址格式无效，需要以 http:// 或 https:// 开头。")
+            return False
+    currency_rate_source_url = str(payload.get("currency_rate_source_url") or "")
+    if currency_rate_source_url:
+        parsed_source = urlparse(currency_rate_source_url)
+        if parsed_source.scheme not in {"http", "https"} or not parsed_source.netloc:
+            st.error("币种换算来源网址格式无效，需要以 http:// 或 https:// 开头。")
             return False
     return True
 
@@ -348,10 +397,51 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             help="自动模式优先采用 OpenRouter 等供应商直接返回的费用，否则按下方价格估算。",
         )
         with st.expander("Token 费用估算设置", expanded=False):
-            st.caption("价格单位为美元 / 百万 Token。费用按调用发生时的价格快照保存；缺少必要价格时只显示 Token，不会显示为 $0。")
+            currency_cols = st.columns(3)
+            pricing_currency_values = list(PRICING_CURRENCY_OPTIONS)
+            selected_pricing_currency = str(
+                selected_profile.get("pricing_currency") or "USD"
+            ).upper()
+            if selected_pricing_currency not in pricing_currency_values:
+                selected_pricing_currency = "USD"
+            pricing_currency = currency_cols[0].selectbox(
+                "价格币种",
+                options=pricing_currency_values,
+                index=pricing_currency_values.index(selected_pricing_currency),
+                format_func=lambda value: PRICING_CURRENCY_OPTIONS[value],
+                key=_profile_widget_key("llm_pricing_currency", selected_profile_id),
+                help="下方每百万 Token 单价使用的币种。DeepSeek 官方中文价格可直接选择人民币。",
+            )
+            display_currency_values = list(DISPLAY_CURRENCY_OPTIONS)
+            selected_display_currency = str(
+                selected_profile.get("display_currency") or "CNY"
+            ).upper()
+            if selected_display_currency not in display_currency_values:
+                selected_display_currency = "CNY"
+            display_currency = currency_cols[1].selectbox(
+                "主显示币种",
+                options=display_currency_values,
+                index=display_currency_values.index(selected_display_currency),
+                format_func=lambda value: DISPLAY_CURRENCY_OPTIONS[value],
+                key=_profile_widget_key("llm_display_currency", selected_profile_id),
+            )
+            usd_to_cny_rate = currency_cols[2].number_input(
+                "美元兑人民币换算系数",
+                min_value=0.000001,
+                value=float(selected_profile.get("usd_to_cny_rate") or 7.142857),
+                step=0.01,
+                format="%.6f",
+                key=_profile_widget_key("llm_usd_to_cny_rate", selected_profile_id),
+                help="用于双币种显示和将人民币价格标准化到账本；可按服务商账单口径自行调整。",
+            )
+            currency_name = PRICING_CURRENCY_OPTIONS[pricing_currency]
+            st.caption(
+                f"下方价格单位为{currency_name} / 百万 Token。费用按调用发生时的价格与换算快照保存；"
+                "缺少必要价格时只显示 Token，不会伪装成零费用。"
+            )
             price_cols = st.columns(3)
             input_price_per_million = price_cols[0].number_input(
-                "输入价格 / 百万 Token",
+                f"输入价格 / 百万 Token（{pricing_currency}）",
                 min_value=0.0,
                 value=float(selected_profile.get("input_price_per_million") or 0.0),
                 step=0.01,
@@ -359,7 +449,7 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
                 key=_profile_widget_key("llm_input_price", selected_profile_id),
             )
             cached_input_price_per_million = price_cols[1].number_input(
-                "缓存输入价格 / 百万 Token",
+                f"缓存输入价格 / 百万 Token（{pricing_currency}）",
                 min_value=0.0,
                 value=float(selected_profile.get("cached_input_price_per_million") or 0.0),
                 step=0.001,
@@ -367,7 +457,7 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
                 key=_profile_widget_key("llm_cached_input_price", selected_profile_id),
             )
             output_price_per_million = price_cols[2].number_input(
-                "输出价格 / 百万 Token",
+                f"输出价格 / 百万 Token（{pricing_currency}）",
                 min_value=0.0,
                 value=float(selected_profile.get("output_price_per_million") or 0.0),
                 step=0.01,
@@ -376,7 +466,7 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             )
             secondary_price_cols = st.columns(2)
             cache_write_price_per_million = secondary_price_cols[0].number_input(
-                "缓存写入价格 / 百万 Token",
+                f"缓存写入价格 / 百万 Token（{pricing_currency}）",
                 min_value=0.0,
                 value=float(selected_profile.get("cache_write_price_per_million") or 0.0),
                 step=0.001,
@@ -384,7 +474,7 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
                 key=_profile_widget_key("llm_cache_write_price", selected_profile_id),
             )
             embedding_price_per_million = secondary_price_cols[1].number_input(
-                "Embedding 价格 / 百万 Token",
+                f"Embedding 价格 / 百万 Token（{pricing_currency}）",
                 min_value=0.0,
                 value=float(selected_profile.get("embedding_price_per_million") or 0.0),
                 step=0.01,
@@ -404,8 +494,111 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
                 placeholder="https://...",
                 key=_profile_widget_key("llm_pricing_source_url", selected_profile_id),
             )
+            currency_meta_cols = st.columns(2)
+            currency_rate_updated_at = currency_meta_cols[0].text_input(
+                "换算系数核对日期",
+                value=str(selected_profile.get("currency_rate_updated_at") or ""),
+                placeholder="2026-08-10",
+                key=_profile_widget_key(
+                    "llm_currency_rate_updated_at", selected_profile_id
+                ),
+            )
+            currency_rate_source_url = currency_meta_cols[1].text_input(
+                "换算系数来源网址",
+                value=str(selected_profile.get("currency_rate_source_url") or ""),
+                placeholder="https://...",
+                key=_profile_widget_key(
+                    "llm_currency_rate_source_url", selected_profile_id
+                ),
+            )
             if provider_type == "deepseek":
-                st.info("DeepSeek 官方价格可能调整；快速填充只是一份带核对日期的预设，使用前请按价格来源网址复核。")
+                st.info(
+                    "DeepSeek 快速填充采用官方中文页的人民币价格。默认换算系数用于对齐该预设的"
+                    "官方中英文价目，不是实时外汇汇率；官方价格调整后请一并复核。"
+                )
+        with st.expander("执行前预算与提醒", expanded=False):
+            preflight_enabled = st.checkbox(
+                "在支持的操作前显示 Token 与费用预估",
+                value=bool(selected_profile.get("preflight_enabled", True)),
+                key=_profile_widget_key("llm_preflight_enabled", selected_profile_id),
+            )
+            st.caption("阈值使用预估区间的上界判断；设为 0 表示关闭对应阈值。")
+            token_budget_cols = st.columns(2)
+            preflight_warning_tokens = token_budget_cols[0].number_input(
+                "Token 提醒阈值",
+                min_value=0,
+                value=int(selected_profile.get("preflight_warning_tokens") or 0),
+                step=10000,
+                key=_profile_widget_key("llm_preflight_warning_tokens", selected_profile_id),
+            )
+            preflight_confirmation_tokens = token_budget_cols[1].number_input(
+                "Token 确认阈值",
+                min_value=0,
+                value=int(selected_profile.get("preflight_confirmation_tokens") or 0),
+                step=10000,
+                key=_profile_widget_key(
+                    "llm_preflight_confirmation_tokens", selected_profile_id
+                ),
+            )
+            preflight_warning_cost_usd = float(
+                selected_profile.get("preflight_warning_cost_usd") or 0
+            )
+            preflight_confirmation_cost_usd = float(
+                selected_profile.get("preflight_confirmation_cost_usd") or 0
+            )
+            preflight_warning_cost_cny = float(
+                selected_profile.get("preflight_warning_cost_cny") or 0
+            )
+            preflight_confirmation_cost_cny = float(
+                selected_profile.get("preflight_confirmation_cost_cny") or 0
+            )
+            cost_budget_cols = st.columns(2)
+            budget_currency_name = "人民币" if display_currency == "CNY" else "美元"
+            warning_cost_value = cost_budget_cols[0].number_input(
+                f"费用提醒阈值（{budget_currency_name}）",
+                min_value=0.0,
+                value=(
+                    preflight_warning_cost_cny
+                    if display_currency == "CNY"
+                    else preflight_warning_cost_usd
+                ),
+                step=0.01,
+                format="%.4f",
+                key=_profile_widget_key(
+                    f"llm_preflight_warning_cost_{display_currency.lower()}",
+                    selected_profile_id,
+                ),
+            )
+            confirmation_cost_value = cost_budget_cols[1].number_input(
+                f"费用确认阈值（{budget_currency_name}）",
+                min_value=0.0,
+                value=(
+                    preflight_confirmation_cost_cny
+                    if display_currency == "CNY"
+                    else preflight_confirmation_cost_usd
+                ),
+                step=0.01,
+                format="%.4f",
+                key=_profile_widget_key(
+                    f"llm_preflight_confirmation_cost_{display_currency.lower()}",
+                    selected_profile_id,
+                ),
+            )
+            if display_currency == "CNY":
+                preflight_warning_cost_cny = warning_cost_value
+                preflight_confirmation_cost_cny = confirmation_cost_value
+            else:
+                preflight_warning_cost_usd = warning_cost_value
+                preflight_confirmation_cost_usd = confirmation_cost_value
+            preflight_require_confirmation = st.checkbox(
+                "超过确认阈值时必须勾选确认",
+                value=bool(
+                    selected_profile.get("preflight_require_confirmation", False)
+                ),
+                key=_profile_widget_key(
+                    "llm_preflight_require_confirmation", selected_profile_id
+                ),
+            )
         auto_activate = st.checkbox(
             "保存后立即启用这个方案",
             value=selected_profile.get("id") == active_profile.get("id"),
@@ -422,6 +615,11 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             embedding_model_name,
             provider_type,
             cost_tracking_mode,
+            pricing_currency,
+            display_currency,
+            usd_to_cny_rate,
+            currency_rate_updated_at,
+            currency_rate_source_url,
             input_price_per_million,
             cached_input_price_per_million,
             cache_write_price_per_million,
@@ -429,6 +627,14 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             embedding_price_per_million,
             pricing_updated_at,
             pricing_source_url,
+            preflight_enabled,
+            preflight_warning_tokens,
+            preflight_confirmation_tokens,
+            preflight_warning_cost_usd,
+            preflight_confirmation_cost_usd,
+            preflight_warning_cost_cny,
+            preflight_confirmation_cost_cny,
+            preflight_require_confirmation,
         )
         if test_col.form_submit_button("测试并保存", use_container_width=True):
             _handle_test_and_save_profile(payload, auto_activate=auto_activate)
@@ -459,6 +665,7 @@ def _render_saved_llm_profiles(profiles: list[dict], active_profile: dict) -> No
                     <b>服务地址：</b>{html.escape(profile.get("base_url", ""))}<br>
                     <b>供应商：</b>{html.escape(PROVIDER_TYPE_OPTIONS.get(profile.get("provider_type", "auto"), profile.get("provider_type", "auto")))}<br>
                     <b>计费方式：</b>{html.escape(COST_TRACKING_MODE_OPTIONS.get(profile.get("cost_tracking_mode", "auto"), profile.get("cost_tracking_mode", "auto")))}<br>
+                    <b>价格 / 主显示币种：</b>{html.escape(str(profile.get("pricing_currency") or "USD"))} / {html.escape(str(profile.get("display_currency") or "CNY"))}<br>
                     <b>聊天模型：</b>{html.escape(profile.get("model_name", ""))}<br>
                     <b>向量模型：</b>{html.escape(profile.get("embedding_model_name", ""))}<br>
                     <b>价格核对：</b>{html.escape(str(profile.get("pricing_updated_at") or "未标记"))}<br>
@@ -482,12 +689,23 @@ def _render_active_llm_settings(settings: dict) -> None:
         "语义向量模型名": settings.get("embedding_model_name", ""),
         "供应商类型": settings.get("provider_type", "auto"),
         "费用统计模式": settings.get("cost_tracking_mode", "auto"),
+        "价格币种": settings.get("pricing_currency", "USD"),
+        "主显示币种": settings.get("display_currency", "CNY"),
+        "美元兑人民币换算系数": settings.get("usd_to_cny_rate", 7.142857),
         "输入价格/百万Token": settings.get("input_price_per_million", 0),
         "缓存输入价格/百万Token": settings.get("cached_input_price_per_million", 0),
         "缓存写入价格/百万Token": settings.get("cache_write_price_per_million", 0),
         "输出价格/百万Token": settings.get("output_price_per_million", 0),
         "Embedding价格/百万Token": settings.get("embedding_price_per_million", 0),
         "价格核对日期": settings.get("pricing_updated_at", ""),
+        "执行前预估": settings.get("preflight_enabled", True),
+        "Token提醒阈值": settings.get("preflight_warning_tokens", 0),
+        "Token确认阈值": settings.get("preflight_confirmation_tokens", 0),
+        "费用提醒阈值/人民币": settings.get("preflight_warning_cost_cny", 0),
+        "费用确认阈值/人民币": settings.get("preflight_confirmation_cost_cny", 0),
+        "费用提醒阈值/美元": settings.get("preflight_warning_cost_usd", 0),
+        "费用确认阈值/美元": settings.get("preflight_confirmation_cost_usd", 0),
+        "超阈值必须确认": settings.get("preflight_require_confirmation", False),
         "环境配置文件": settings.get("env_path", ""),
         "方案保存文件": settings.get("profiles_path", ""),
     }, ensure_ascii=False, indent=2), language="json")

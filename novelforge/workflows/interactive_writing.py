@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -12,6 +13,9 @@ from novelforge.workflows.context_assembly import (
 )
 from novelforge.core.llm import call_llm
 from novelforge.core.llm_usage import llm_usage_scope
+from novelforge.core.token_estimation import estimate_chat_input_tokens, estimate_text_tokens
+from novelforge.domain.llm_preflight import parse_requested_output_range
+from novelforge.services.llm_estimation import build_calibrated_preflight
 from novelforge.services.memory import (
     accept_creative_fragment,
     begin_creative_turn,
@@ -293,6 +297,77 @@ def build_writing_session_query(
         f"滚动摘要：{str(session.get('rolling_summary') or '')[:1800]}",
         f"最近片段：{recent[-2400:]}",
     ])
+
+
+def build_writing_fragment_preflight(
+    bundle: dict | None,
+    user_message: str,
+    *,
+    word_count: str = "800-1200",
+    context_budget: int = 12_000,
+) -> dict:
+    """Estimate one free-writing turn without running retrieval or the model."""
+
+    active_bundle = dict(bundle or {})
+    if active_bundle:
+        query = build_writing_session_query(
+            active_bundle,
+            user_message,
+            context_head_id=None,
+        )
+    else:
+        query = f"自由创作目标：{str(user_message or '').strip()}"
+    known_input = estimate_chat_input_tokens(query)
+    budget = max(int(context_budget), 2000)
+    input_low = max(known_input + 800, 1800)
+    input_expected = min(max(known_input + 3500, 4500), budget + 1200)
+    input_high = max(input_expected, budget + 1800, known_input + 1800)
+    low_chars, high_chars = parse_requested_output_range(word_count)
+    expected_chars = math.ceil((low_chars + high_chars) / 2)
+    output_range = {
+        "low": max(math.ceil(low_chars / 1.8), 1),
+        "expected": max(math.ceil(expected_chars / 1.6), 1),
+        "high": max(math.ceil(high_chars / 1.35), 1),
+    }
+    retrieval_query_tokens = max(estimate_text_tokens(query), 1)
+    return build_calibrated_preflight(
+        [
+            {
+                "stage_name": "写作资料检索",
+                "operation": "ui.generate_writing_fragment",
+                "agent_role": "ui_action",
+                "endpoint_type": "embedding",
+                "call_count": 1,
+                "embedding_tokens_per_call": {
+                    "low": retrieval_query_tokens,
+                    "expected": retrieval_query_tokens,
+                    "high": math.ceil(retrieval_query_tokens * 1.1),
+                },
+                "calibrate_output": False,
+                "confidence": "high",
+            },
+            {
+                "stage_name": "创作片段生成",
+                "operation": "creative.fragment",
+                "agent_role": "generator",
+                "call_count": 1,
+                "input_tokens_per_call": {
+                    "low": input_low,
+                    "expected": input_expected,
+                    "high": input_high,
+                },
+                "output_tokens_per_call": output_range,
+                "calibrate_input": False,
+                "calibrate_output": True,
+                "confidence": "low",
+                "assumptions": [
+                    "执行前不运行语义检索，输入区间包含可能注入的设定、规则和检索资料。",
+                    "输出区间由片段长度设置和同类历史调用共同校准。",
+                ],
+            },
+        ],
+        estimate_kind="creative_fragment",
+    )
 
 
 def preview_writing_context(

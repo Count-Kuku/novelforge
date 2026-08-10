@@ -115,11 +115,12 @@ DB-only 错误语义并提前删除待迁移镜像。
 
 ### LLM 用量账本
 
-- `llm_usage_events`：每次对话或 Embedding 请求一条追加式记录，保存标准化 Token、费用、费用来源、价格快照和供应商请求 ID。
+- `llm_usage_events`：每次对话或 Embedding 请求一条追加式记录，保存标准化 Token、微美元基准费用、费用来源、价格/币种换算快照和供应商请求 ID。
 - 用量账本只在 `global.db` 作为权威数据使用，以便跨项目按日期和模型聚合；共享迁移也会在项目库创建同名空表，业务不得向项目库写入该账本。
 - 归因字段包括 `project_name/story_id/workflow_run_id/task_id/operation_id/operation/agent_role`。网络研究和资料导入的子 Agent 继承任务 ID，并细化操作和角色。
 - `provider_request_id` 在供应商范围内唯一，防止流式末尾 usage 或重试路径重复记账；业务事件 ID 同样幂等。
-- `price_snapshot_json` 保存调用发生时的单价和核对来源。费用展示不得用当前配置重算历史事件。
+- `price_snapshot_json` 保存调用发生时的原始价格币种、单价、USD/CNY 换算系数及核对来源。基准 USD 历史费用不得用当前配置重算；单事件人民币明细优先采用事件快照，跨事件聚合的人民币显示由已聚合 USD 按当前显示系数换算并明确标注。
+- 执行前历史校准直接按 `profile_id/operation/agent_role/endpoint_type/model` 查询该追加账本，不新增第二套统计表，也不写入“预计调用”事件。只有 `usage_status='exact'` 的实际调用参与 P50/P90 样本。
 - 账本不保存 prompt 和模型响应正文；`metadata_json` 只允许保存非正文的操作标签和诊断元数据。
 - 记录默认长期保留。删除接口必须提供项目、截止时间或明确事件 ID，禁止无范围清空。
 
@@ -179,6 +180,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 - `control_requested`：pause/resume/cancel 控制请求。
 - `priority`：队列顺序。
 - `estimated_*`：创建时 Token/费用估算快照。
+- 估算快照的兼容标量字段保存预期值；完整 `estimate` JSON 同时保存低/预期/高区间、阶段/Agent 明细、置信度、价格快照、外部调用说明和预算判断。任务创建后的价格变化不得重算既有快照。
 - `archived_at`：历史归档，不等同业务状态。
 
 ### 原子领取
@@ -320,6 +322,12 @@ streamlit run app.py
 
 # LLM usage 标准化、费用、归因、聚合与调用接入
 .\.venv\Scripts\python.exe tools\verify_llm_usage.py
+.\.venv\Scripts\python.exe tools\verify_llm_usage_ui.py
+
+# 执行前 Token/费用区间、历史校准、预算判断和 Streamlit 展示
+.\.venv\Scripts\python.exe tools\verify_llm_preflight.py
+.\.venv\Scripts\python.exe tools\verify_llm_preflight_ui.py
+.\.venv\Scripts\python.exe tools\verify_llm_currency_ui.py
 ```
 
 验证脚本创建的项目使用专用 `_verify_*` 前缀。脚本和人工清理都必须校验目标在工作区和允许前缀内。

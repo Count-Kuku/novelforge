@@ -66,10 +66,12 @@ Research tasks reuse SQLite `workflow_runs/workflow_steps` and support backgroun
 ### Token And Cost Observability
 
 - Chat, streaming, and embedding calls share one ledger for input, cached input, cache write, output, reasoning, and embedding tokens.
-- OpenAI-compatible providers such as DeepSeek can use user-configured per-million-token rates; OpenRouter can prefer provider-reported cost; token-only mode is also supported.
+- OpenAI-compatible providers such as DeepSeek can use user-configured per-million-token rates in CNY or USD. The DeepSeek quick-fill preset uses its official CNY prices; OpenRouter can prefer provider-reported cost, and token-only mode is also supported.
 - Every event stores its price snapshot and project/story/task/operation/agent attribution, so later price edits do not rewrite history.
-- The sidebar shows today/month summaries, each UI action reports its own usage, and project/model pages provide daily trends, breakdowns, recent events, and CSV export.
+- CNY is the default primary display currency. The sidebar shows today/month summaries, each UI action reports its own usage, and project/model pages provide CNY/USD daily tables, breakdowns, recent events, and CSV export. The USD ledger remains the cross-provider compatibility baseline.
 - Events are retained in `data/global.db` by default and contain metering metadata rather than prompt or response bodies. Missing provider usage is marked estimated; missing prices remain unpriced instead of becoming a false zero.
+- Long-source ingestion, automatic web research, and free writing show low/expected/high ranges for input, output, embedding, total tokens, and cost before execution. Research estimates are split across Planner, Extractor, Verifier, and indexing stages, while non-token services such as search APIs are explicitly excluded from the LLM amount.
+- Once the same model profile, operation, and agent role has at least five exact calls, preflight estimates are calibrated with historical P50/P90 usage. Model Settings provides token/cost warning thresholds and an optional explicit confirmation gate for estimates above the configured limits.
 
 ## Navigation
 
@@ -102,7 +104,7 @@ The source-ingestion page contains workspaces for durable tasks, source ledger, 
 
 1. Discuss and save the outline or chapter direction.
 2. Generate a chapter outline and prose, or iterate directly in free writing.
-3. Open the context preview before generation to inspect rules, core state, retrieved evidence, and budget omissions.
+3. Review the token/cost range, then open the context preview before generation to inspect rules, core state, retrieved evidence, and budget omissions.
 4. Review or evaluate the chapter, then extract stable new facts into pending knowledge.
 5. Confirm knowledge so later chapters can retrieve it.
 
@@ -131,11 +133,14 @@ LLM_MODEL=deepseek-v4-flash
 LLM_EMBEDDING_MODEL=
 LLM_PROVIDER_TYPE=auto
 LLM_COST_TRACKING_MODE=auto
+LLM_PRICING_CURRENCY=USD
+LLM_DISPLAY_CURRENCY=CNY
+LLM_USD_TO_CNY_RATE=7.142857
 
 # Optional: web discovery on the source-ingestion page
 BRAVE_SEARCH_API_KEY=
 
-# Optional local cost estimation, in USD per 1M tokens
+# Optional local cost estimation, per 1M tokens in LLM_PRICING_CURRENCY
 LLM_INPUT_PRICE_PER_MILLION=0
 LLM_CACHED_INPUT_PRICE_PER_MILLION=0
 LLM_CACHE_WRITE_PRICE_PER_MILLION=0
@@ -143,7 +148,7 @@ LLM_OUTPUT_PRICE_PER_MILLION=0
 LLM_EMBEDDING_PRICE_PER_MILLION=0
 ```
 
-When prices are empty or `0`, NovelForge still records tokens but does not guess a cost. If the provider does not return cost directly, local amounts are estimates from the event's price snapshot rather than provider invoices. Update rates and their verification date in Model Settings when prices change.
+When prices are empty or `0`, NovelForge still records tokens but does not guess a cost. If the provider does not return cost directly, local amounts are estimates from the event's price snapshot rather than provider invoices. Model Settings separately controls the price-entry currency, primary display currency, and USD-to-CNY factor. The DeepSeek preset factor aligns its official Chinese and English price tables; it is not a live foreign-exchange quote. Update values, verification dates, and sources when either pricing or conversion policy changes.
 
 `BRAVE_SEARCH_API_KEY` is sent only to the Brave Search API. Web research fetches public HTTP/HTTPS static-text pages without website login, browser cookies, or paywall bypass. Automatic research is recoverable in the background; the manual path still requires result selection.
 

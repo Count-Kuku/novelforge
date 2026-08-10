@@ -25,6 +25,7 @@ from .shared import (
     last_result_key,
     pending_active_session_key,
 )
+from .preflight import render_writing_preflight
 
 
 def _manual_knowledge_selector(
@@ -311,9 +312,22 @@ def render_composer(
     if bundle and str(active_fragment(bundle).get("status") or "") == "proposed" and action == "continue":
         st.caption("继续生成成功后，当前片段会自动保留；生成失败不会改变当前内容。")
 
+    estimate_approved = render_writing_preflight(
+        project_name,
+        story_id,
+        session_id,
+        bundle,
+        str(user_message or "").strip(),
+        config["word_count"],
+    )
+
     if st.button(
         ACTION_LABELS[action],
-        disabled=archived or not bool(str(user_message or "").strip()),
+        disabled=(
+            archived
+            or not bool(str(user_message or "").strip())
+            or not estimate_approved
+        ),
         key=scoped_widget_key(
             "creative_generate",
             project_name,

@@ -7,6 +7,11 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
+from novelforge.core.cost_currency import (
+    convert_cost,
+    cost_display_preferences,
+    normalize_cost_currency,
+)
 from novelforge.services.llm_usage import (
     list_daily_llm_usage,
     list_llm_usage_breakdown,
@@ -15,6 +20,7 @@ from novelforge.services.llm_usage import (
     summarize_llm_usage,
     summarize_local_period,
 )
+from novelforge.services.memory import load_llm_settings
 
 
 DIMENSION_LABELS = {
@@ -52,7 +58,39 @@ def format_cost_usd(value: int | float | None) -> str:
     return f"${amount:.4f}"
 
 
-def format_usage_cost(summary: dict) -> str:
+def format_cost_cny(value: int | float | None) -> str:
+    amount = max(float(value or 0), 0.0)
+    if amount == 0:
+        return "¥0.000000"
+    if amount < 0.01:
+        return f"¥{amount:.6f}"
+    return f"¥{amount:.4f}"
+
+
+def _load_cost_preferences() -> dict[str, object]:
+    try:
+        return cost_display_preferences(load_llm_settings())
+    except Exception:
+        return cost_display_preferences({})
+
+
+def _display_cost_usd(value: int | float | None, preferences: dict) -> str:
+    display_currency = normalize_cost_currency(
+        preferences.get("display_currency"), default="CNY"
+    )
+    if display_currency == "USD":
+        return format_cost_usd(value)
+    converted = convert_cost(
+        float(value or 0),
+        source_currency="USD",
+        target_currency="CNY",
+        usd_to_cny_rate=preferences.get("usd_to_cny_rate"),
+    )
+    return format_cost_cny(converted)
+
+
+def format_usage_cost(summary: dict, preferences: dict | None = None) -> str:
+    display = cost_display_preferences(preferences or {})
     requests = int(summary.get("request_count") or 0)
     if requests <= 0:
         return "—"
@@ -62,21 +100,25 @@ def format_usage_cost(summary: dict) -> str:
         if int(summary.get("tokens_only_request_count") or 0) == requests:
             return "仅记录 Token"
         return "费用未配置"
-    value = format_cost_usd(summary.get("cost_usd"))
+    value = _display_cost_usd(summary.get("cost_usd"), display)
     provider_count = int(summary.get("provider_cost_count") or 0)
-    prefix = "" if provider_count == priced else "≈"
+    prefix = (
+        ""
+        if provider_count == priced and display["display_currency"] == "USD"
+        else "≈"
+    )
     suffix = f" + {unpriced} 次未计价" if unpriced else ""
     return f"{prefix}{value}{suffix}"
 
 
-def usage_summary_text(summary: dict) -> str:
+def usage_summary_text(summary: dict, preferences: dict | None = None) -> str:
     if not summary.get("has_usage"):
         return "本次没有产生模型调用"
     estimated = int(summary.get("estimated_request_count") or 0)
     estimate_note = f" · 含 {estimated} 次 Token 估算" if estimated else ""
     return (
         f"{format_token_count(summary.get('total_tokens'))} Token · "
-        f"{format_usage_cost(summary)} · {int(summary.get('request_count') or 0)} 次调用{estimate_note}"
+        f"{format_usage_cost(summary, preferences)} · {int(summary.get('request_count') or 0)} 次调用{estimate_note}"
     )
 
 
@@ -89,7 +131,9 @@ def render_operation_usage_summary(operation_id: str, *, container=None) -> None
     except Exception:
         return
     if summary.get("has_usage"):
-        host.caption(f"本次用量：{usage_summary_text(summary)}")
+        host.caption(
+            f"本次用量：{usage_summary_text(summary, _load_cost_preferences())}"
+        )
 
 
 def render_sidebar_usage_summary(project_name: str, story_id: str) -> None:
@@ -98,11 +142,12 @@ def render_sidebar_usage_summary(project_name: str, story_id: str) -> None:
         month = summarize_local_period("month", project_name=project_name, story_id=story_id)
     except Exception:
         return
+    preferences = _load_cost_preferences()
     st.sidebar.caption(
-        f"今日用量：{format_token_count(today.get('total_tokens'))} Token · {format_usage_cost(today)}"
+        f"今日用量：{format_token_count(today.get('total_tokens'))} Token · {format_usage_cost(today, preferences)}"
     )
     st.sidebar.caption(
-        f"本月用量：{format_token_count(month.get('total_tokens'))} Token · {format_usage_cost(month)}"
+        f"本月用量：{format_token_count(month.get('total_tokens'))} Token · {format_usage_cost(month, preferences)}"
     )
 
 
@@ -131,7 +176,24 @@ def _filters(project_name: str | None, story_id: str | None, period_days: int | 
     return result
 
 
-def _daily_table(rows: list[dict]) -> list[dict]:
+def _cost_columns(value: int | float | None, preferences: dict) -> dict[str, float]:
+    usd = max(float(value or 0), 0.0)
+    cny = convert_cost(
+        usd,
+        source_currency="USD",
+        target_currency="CNY",
+        usd_to_cny_rate=preferences.get("usd_to_cny_rate"),
+    )
+    columns = {
+        "费用（CNY）": round(cny, 6),
+        "费用（USD）": round(usd, 6),
+    }
+    if preferences.get("display_currency") == "USD":
+        return {"费用（USD）": columns["费用（USD）"], "费用（CNY）": columns["费用（CNY）"]}
+    return columns
+
+
+def _daily_table(rows: list[dict], preferences: dict) -> list[dict]:
     return [
         {
             "日期": row.get("usage_date", ""),
@@ -141,30 +203,42 @@ def _daily_table(rows: list[dict]) -> list[dict]:
             "输出 Token": int(row.get("output_tokens") or 0),
             "Embedding Token": int(row.get("embedding_tokens") or 0),
             "总 Token": int(row.get("total_tokens") or 0),
-            "费用（USD）": round(float(row.get("cost_usd") or 0), 6),
+            **_cost_columns(row.get("cost_usd"), preferences),
             "未计价调用": int(row.get("unpriced_request_count") or 0),
         }
         for row in rows
     ]
 
 
-def _breakdown_table(rows: list[dict], dimension: str) -> list[dict]:
+def _breakdown_table(rows: list[dict], dimension: str, preferences: dict) -> list[dict]:
     return [
         {
             DIMENSION_LABELS[dimension]: row.get("bucket", "未标记"),
             "调用次数": int(row.get("request_count") or 0),
             "总 Token": int(row.get("total_tokens") or 0),
-            "费用（USD）": round(float(row.get("cost_usd") or 0), 6),
+            **_cost_columns(row.get("cost_usd"), preferences),
             "未计价调用": int(row.get("unpriced_request_count") or 0),
         }
         for row in rows
     ]
 
 
-def _recent_table(rows: list[dict]) -> list[dict]:
+def _recent_table(rows: list[dict], preferences: dict) -> list[dict]:
     result = []
     for row in rows:
         cost = row.get("cost_usd")
+        row_preferences = dict(preferences)
+        price_snapshot = row.get("price_snapshot_json")
+        if isinstance(price_snapshot, dict) and price_snapshot.get("usd_to_cny_rate"):
+            row_preferences["usd_to_cny_rate"] = price_snapshot["usd_to_cny_rate"]
+        cost_columns = (
+            {"费用（CNY）": "—", "费用（USD）": "—"}
+            if cost is None
+            else {
+                key: f"{value:.6f}"
+                for key, value in _cost_columns(cost, row_preferences).items()
+            }
+        )
         result.append(
             {
                 "时间": str(row.get("occurred_at") or "").replace("T", " ")[:19],
@@ -176,7 +250,7 @@ def _recent_table(rows: list[dict]) -> list[dict]:
                 "模型": row.get("reported_model") or row.get("requested_model") or "未知",
                 "类型": ENDPOINT_LABELS.get(row.get("endpoint_type"), row.get("endpoint_type") or "未知"),
                 "Token": int(row.get("total_tokens") or 0),
-                "费用（USD）": "—" if cost is None else f"{float(cost):.6f}",
+                **cost_columns,
                 "Token 状态": USAGE_STATUS_LABELS.get(row.get("usage_status"), row.get("usage_status") or "未知"),
                 "费用来源": COST_SOURCE_LABELS.get(row.get("cost_source"), row.get("cost_source") or "未知"),
             }
@@ -209,19 +283,23 @@ def render_usage_dashboard(
     period_days = {"最近 7 天": 7, "最近 30 天": 30, "最近 90 天": 90}.get(period_label)
     filters = _filters(project_name, story_id, period_days)
     summary = summarize_llm_usage(**filters)
+    preferences = _load_cost_preferences()
 
     metrics = st.columns(4)
     metrics[0].metric("总 Token", format_token_count(summary.get("total_tokens")))
     metrics[1].metric("模型调用", int(summary.get("request_count") or 0))
-    metrics[2].metric("费用", format_usage_cost(summary))
+    metrics[2].metric("费用", format_usage_cost(summary, preferences))
     metrics[3].metric("未计价调用", int(summary.get("unpriced_request_count") or 0))
-    st.caption("精确费用优先采用供应商返回值；“≈”表示按当前配置的 Token 单价估算。每次调用保存价格快照，历史费用不会随配置变化。")
+    st.caption(
+        "人民币为默认主显示；“≈”表示按 Token 单价或当前换算系数估算。"
+        "底层历史账本保留 USD，最近调用优先使用事件换算快照；按日和分组聚合中的人民币按当前系数换算。"
+    )
 
     daily = list_daily_llm_usage(
         utc_offset_minutes=local_utc_offset_minutes(),
         **filters,
     )
-    daily_table = _daily_table(daily)
+    daily_table = _daily_table(daily, preferences)
     if daily_table:
         chart_rows = [{"日期": row["日期"], "Token": row["总 Token"]} for row in daily_table]
         st.line_chart(chart_rows, x="日期", y="Token")
@@ -239,12 +317,15 @@ def render_usage_dashboard(
     breakdown = _breakdown_table(
         list_llm_usage_breakdown(dimension=dimension, **filters),
         dimension,
+        preferences,
     )
     if breakdown:
         st.dataframe(breakdown, use_container_width=True, hide_index=True)
 
     with st.expander("最近调用与导出", expanded=False):
-        recent = _recent_table(list_recent_llm_usage_events(limit=200, **filters))
+        recent = _recent_table(
+            list_recent_llm_usage_events(limit=200, **filters), preferences
+        )
         if recent:
             st.dataframe(recent, use_container_width=True, hide_index=True)
             st.download_button(

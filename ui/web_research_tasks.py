@@ -6,7 +6,6 @@ import os
 
 import streamlit as st
 
-from novelforge.domain.web_research_tasks import build_web_research_estimate
 from novelforge.services.memory import list_web_research_tasks, load_web_research_task
 from novelforge.services.web_research import load_imported_web_page
 from novelforge.workflows.web_research_task_dispatcher import (
@@ -14,6 +13,7 @@ from novelforge.workflows.web_research_task_dispatcher import (
     wake_web_research_task_dispatcher,
 )
 from novelforge.workflows.web_research_tasks import (
+    build_web_research_task_estimate,
     activate_web_research_sources,
     archive_web_research_task,
     cancel_web_research_task,
@@ -28,6 +28,7 @@ from novelforge.workflows.web_research_tasks import (
 )
 from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import KNOWLEDGE_CATEGORY_LABELS, label_scope
+from ui.llm_preflight import render_preflight_estimate
 
 
 SOURCE_KIND_LABELS = {
@@ -131,17 +132,23 @@ def _render_task_creator(project_name: str, story_id: str) -> None:
         )
         use_llm_planner = behavior_cols[1].checkbox("模型规划查询", value=True)
         use_llm_verifier = behavior_cols[2].checkbox("模型识别语义冲突", value=True)
-        estimate = build_web_research_estimate(
+        estimate = build_web_research_task_estimate(
             {
                 "max_pages": max_pages,
                 "source_kinds": source_kinds,
                 "use_llm_planner": use_llm_planner,
                 "use_llm_verifier": use_llm_verifier,
+                "enabled_categories": categories,
+                "max_chars_per_page": 30000,
+                "max_claims_per_page": 20,
             }
         )
-        st.caption(
-            f"预计：搜索 {estimate['estimated_search_calls']} 次，抓取最多 {estimate['estimated_fetch_calls']} 页，"
-            f"模型调用约 {estimate['estimated_model_calls']} 次。实际调用受抓取成功数影响。"
+        estimate_approved = render_preflight_estimate(
+            estimate,
+            expanded=max_pages >= 8,
+            confirmation_key=scoped_widget_key(
+                "web_research_budget_confirm", project_name, story_id
+            ),
         )
         submitted = st.form_submit_button("创建后台研究任务", type="primary", use_container_width=True)
 
@@ -152,6 +159,9 @@ def _render_task_creator(project_name: str, story_id: str) -> None:
         return
     if not source_kinds or not categories:
         st.error("至少选择一个来源角色和一个提取分类。")
+        return
+    if not estimate_approved:
+        st.error("本次预估超过预算确认阈值，请先确认 Token 与费用上界。")
         return
     official_domains = [
         item.strip()

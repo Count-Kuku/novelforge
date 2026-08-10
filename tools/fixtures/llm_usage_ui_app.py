@@ -4,6 +4,12 @@ from __future__ import annotations
 import ui.llm_usage as usage
 
 
+usage.load_llm_settings = lambda: {
+    "display_currency": "CNY",
+    "pricing_currency": "CNY",
+    "usd_to_cny_rate": 7.142857,
+}
+
 usage.summarize_llm_usage = lambda **kwargs: {
     "request_count": 1,
     "total_tokens": 15,

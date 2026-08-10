@@ -87,6 +87,12 @@ def _filters(
     story_id: str | None = None,
     task_id: str | None = None,
     operation_id: str | None = None,
+    operation: str | None = None,
+    agent_role: str | None = None,
+    profile_id: str | None = None,
+    provider: str | None = None,
+    endpoint_type: str | None = None,
+    model_name: str | None = None,
     start_at: str | None = None,
     end_at: str | None = None,
 ) -> tuple[str, list[object]]:
@@ -97,11 +103,19 @@ def _filters(
         ("story_id", story_id),
         ("task_id", task_id),
         ("operation_id", operation_id),
+        ("operation", operation),
+        ("agent_role", agent_role),
+        ("profile_id", profile_id),
+        ("provider", provider),
+        ("endpoint_type", endpoint_type),
     ):
         if value is None:
             continue
         clauses.append(f"{column} = ?")
         params.append(str(value))
+    if model_name is not None:
+        clauses.append("(reported_model = ? OR requested_model = ?)")
+        params.extend([str(model_name), str(model_name)])
     if start_at:
         clauses.append("occurred_at >= ?")
         params.append(str(start_at))
@@ -217,6 +231,36 @@ def list_recent_llm_usage_event_rows(
                 item[column.removesuffix("_json")] = {}
         result.append(item)
     return result
+
+
+def list_llm_usage_calibration_rows(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 500,
+    exact_only: bool = True,
+    **filters,
+) -> list[dict]:
+    """Return recent per-call measurements used by execution preflight estimates."""
+
+    where, params = _filters(**filters)
+    clauses = []
+    if where:
+        clauses.append(where.removeprefix(" WHERE "))
+    if exact_only:
+        clauses.append("usage_status = 'exact'")
+    clauses.append("total_tokens > 0")
+    calibration_where = " WHERE " + " AND ".join(clauses)
+    rows = conn.execute(
+        f"""
+        SELECT input_tokens, output_tokens, embedding_tokens, total_tokens
+        FROM llm_usage_events
+        {calibration_where}
+        ORDER BY occurred_at DESC, event_id DESC
+        LIMIT ?
+        """,
+        [*params, max(min(int(limit), 5000), 1)],
+    ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def delete_llm_usage_event_rows(

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -21,6 +20,7 @@ from novelforge.services.memory import (
 )
 from novelforge.core.prompt_options import format_prompt_options_for_prompt, merge_prompt_option_layers
 from novelforge.core.prompts import format_rules_for_prompt
+from novelforge.core.token_estimation import estimate_text_tokens
 from novelforge.services.retrieval import retrieve_context
 from novelforge.core.schemas import ChapterWritingGuidance, ContextAssembly, ContextBlock, RetrievalHit
 from novelforge.domain.setting_knowledge import (
@@ -69,12 +69,7 @@ def build_chapter_context_query(
 def estimate_context_tokens(text: str) -> int:
     """Return a deterministic token estimate without adding a tokenizer dependency."""
 
-    content = str(text or "")
-    if not content:
-        return 0
-    cjk_count = sum(1 for char in content if "\u3400" <= char <= "\u9fff")
-    non_cjk = len(content) - cjk_count
-    return max(1, math.ceil(cjk_count / 1.6 + non_cjk / 4.0))
+    return estimate_text_tokens(text)
 
 
 def _context_block(
