@@ -55,6 +55,87 @@ def _item_summary(item: dict) -> str:
     return ""
 
 
+def _sync_item_evidence(
+    conn: sqlite3.Connection,
+    *,
+    item: dict,
+    knowledge_id: str | None = None,
+    pending_id: str | None = None,
+) -> None:
+    """Persist traceable quotes already carried by knowledge payloads."""
+
+    if "evidence" not in item:
+        return
+    raw_evidence = item.get("evidence")
+    if not isinstance(raw_evidence, list):
+        return
+    if knowledge_id:
+        conn.execute("DELETE FROM knowledge_evidence WHERE knowledge_id = ?", (knowledge_id,))
+    if pending_id:
+        conn.execute("DELETE FROM knowledge_evidence WHERE pending_id = ?", (pending_id,))
+    for index, raw_item in enumerate(raw_evidence, start=1):
+        if isinstance(raw_item, str):
+            raw_item = {"quote": raw_item}
+        if not isinstance(raw_item, dict):
+            continue
+        quote = str(raw_item.get("quote") or "").strip()
+        if not quote:
+            continue
+        location = {
+            key: raw_item.get(key)
+            for key in (
+                "source_title",
+                "note",
+                "source_url",
+                "source_kind",
+                "authority",
+                "content_hash",
+                "location",
+                "source_relative_path",
+                "claim_id",
+                "stance",
+            )
+            if raw_item.get(key) is not None and raw_item.get(key) != ""
+        }
+        owner = knowledge_id or pending_id or "unknown"
+        digest = sha256(
+            f"{owner}|{index}|{quote}|{_json_dumps(location)}".encode("utf-8")
+        ).hexdigest()[:24]
+        conn.execute(
+            """
+            INSERT INTO knowledge_evidence (
+                evidence_id, knowledge_id, pending_id, source_id, segment_id,
+                chunk_id, quote, location_json, confidence, evidence_strength
+            )
+            VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+            ON CONFLICT(evidence_id) DO UPDATE SET
+                knowledge_id = excluded.knowledge_id,
+                pending_id = excluded.pending_id,
+                quote = excluded.quote,
+                location_json = excluded.location_json,
+                confidence = excluded.confidence,
+                evidence_strength = excluded.evidence_strength
+            """,
+            (
+                f"evidence_{digest}",
+                knowledge_id,
+                pending_id,
+                quote,
+                _json_dumps(location),
+                _float_or_none(
+                    raw_item.get("confidence")
+                    if raw_item.get("confidence") is not None
+                    else item.get("confidence")
+                ),
+                _float_or_none(
+                    raw_item.get("evidence_strength")
+                    if raw_item.get("evidence_strength") is not None
+                    else item.get("evidence_strength")
+                ),
+            ),
+        )
+
+
 def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list[dict]) -> list[dict]:
     clean_category = str(category or "").strip()
     normalized_items = [dict(item) for item in items if isinstance(item, dict)]
@@ -133,6 +214,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 item=item,
                 story_id=story_id,
             )
+        _sync_item_evidence(conn, item=item, knowledge_id=knowledge_id)
     if active_ids:
         placeholders = ",".join("?" for _ in active_ids)
         conn.execute(
@@ -632,6 +714,7 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
                 str(item.get("status") or "pending"),
             ),
         )
+        _sync_item_evidence(conn, item=item, pending_id=pending_id)
     if active_ids:
         placeholders = ",".join("?" for _ in active_ids)
         conn.execute(
@@ -643,6 +726,10 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
             """,
             tuple(active_ids),
         )
+        conn.execute(
+            f"DELETE FROM knowledge_evidence WHERE pending_id IS NOT NULL AND pending_id NOT IN ({placeholders})",
+            tuple(active_ids),
+        )
     else:
         conn.execute(
             """
@@ -652,6 +739,7 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
             WHERE deleted_at IS NULL
             """
         )
+        conn.execute("DELETE FROM knowledge_evidence WHERE pending_id IS NOT NULL")
     return normalized_items
 
 

@@ -20,6 +20,7 @@ NovelForge is a local LLM writing workspace for long-form fiction and fan fictio
 ### Sources And Knowledge
 
 - Pasted sources, manual source cards, and long-form TXT/Markdown ingestion.
+- Recoverable Brave Search research agents with official/wiki/community/fanon planning, parallel discovery, safe fetching, claim extraction, cross-source verification, and human review.
 - Chapter-heading or length-based splitting with batch and segment checkpoints.
 - General, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction modes.
 - Multi-specialist plans, pending review, automatic review policy, conflict/duplicate checks, and batch rollback.
@@ -49,6 +50,19 @@ Long-form automatic processing now creates a SQLite-backed task and returns cont
 
 “Background” does not mean an independent system service. Exiting NovelForge, terminating Python, or shutting down the machine interrupts the current call; the next app launch resumes from SQLite checkpoints.
 
+### Web Research Agent
+
+`资料导入 → 网络检索 → 自动研究 Agent` provides the complete research loop:
+
+1. A bounded Planner creates queries from the topic, objective, and source roles.
+2. LangGraph Collectors search official, secondary, community, and fanon branches in parallel.
+3. The fetcher rejects local/private addresses, validates each redirect, pins the connection to an approved public IP, and limits content types, bytes, and redirects.
+4. The Extractor keeps only candidates whose claim text and exact quotes can be located in the fetched page.
+5. The model Verifier only proposes relationships; a deterministic guard isolates evidence by source role, category, and grounded statement, detects same-role conflicts, and scores evidence strength.
+6. The user selects claims for pending review; they become formal knowledge only after confirmation.
+
+Research tasks reuse SQLite `workflow_runs/workflow_steps` and support background execution, stage checkpoints, pause, resume, cancel, failed-stage retry, and archive. Official authority is assessed from the final HTTPS URL after redirects and the user-owned whitelist; official, community, and fanon evidence cannot promote one another. Each task owns separate page snapshots. Raw pages are quarantined from writing retrieval by default and enter RAG as explicitly marked untrusted external data only after user activation. The smaller manual search/select/import path remains available.
+
 ## Navigation
 
 - `工作台` (Workbench): project overview and project resources.
@@ -70,7 +84,7 @@ The source-ingestion page contains workspaces for durable tasks, source ledger, 
 
 ### Source Processing
 
-1. Upload or paste TXT/Markdown, inspect the split preview, and save a long-form batch.
+1. Upload or paste TXT/Markdown, or choose network search to create an automatic research task or manually select public pages.
 2. Select indexing, knowledge extraction, and optional automatic-review behavior.
 3. Review segment, call, token, and cost estimates.
 4. Create the background task and monitor it in `资料任务` (Source Tasks); the browser page may be closed.
@@ -108,6 +122,9 @@ LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
 LLM_EMBEDDING_MODEL=
 
+# Optional: web discovery on the source-ingestion page
+BRAVE_SEARCH_API_KEY=
+
 # Used only for local task estimates, in USD per 1M tokens
 LLM_INPUT_PRICE_PER_MILLION=0
 LLM_OUTPUT_PRICE_PER_MILLION=0
@@ -115,6 +132,8 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 ```
 
 When prices are empty or `0`, token estimates remain available but NovelForge does not guess a cost. Estimates are not provider invoices.
+
+`BRAVE_SEARCH_API_KEY` is sent only to the Brave Search API. Web research fetches public HTTP/HTTPS static-text pages without website login, browser cookies, or paywall bypass. Automatic research is recoverable in the background; the manual path still requires result selection.
 
 `.env` bootstraps the default model profile on first launch. After model profiles have been written to `data/global.db`, the database is authoritative; update models and rates in `模型配置` (Model Settings), because editing `.env` alone does not override a saved profile.
 
@@ -142,10 +161,10 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 ## Current Limits And Priorities
 
 - Parent/child chunks, type-specific splitters, multi-query planning, and RRF-style rank fusion remain the next RAG priorities.
-- Stable ingestion currently focuses on pasted text, TXT, and Markdown; EPUB, DOCX, PDF, and folder ingestion are not yet provided.
+- Stable ingestion supports pasted text, TXT, Markdown, and public static web pages; dynamically rendered pages, EPUB, DOCX, PDF, and folder ingestion are not yet provided.
 - Durable source tasks depend on the NovelForge application process; they are not a resident service or distributed queue.
 - A dedicated vector database and GraphRAG will be evaluated only after the current local SQLite/retrieval path shows a measured scale bottleneck.
-- Autonomous multi-agent orchestration is still planned; current workflows are explicit, recoverable, and testable.
+- Web research now includes durable tasks, claim extraction, cross-source verification, evaluation, and human review. LangGraph only coordinates parallel dispatch inside one search step; SQLite `workflow_runs/workflow_steps` remains authoritative.
 
 ## Development Documentation
 

@@ -35,6 +35,7 @@ class _TaskHeartbeat:
         lease_seconds: int,
         interval_seconds: float,
         heartbeat_func,
+        task_label: str = "资料",
     ) -> None:
         self.project_name = project_name
         self.task_id = task_id
@@ -42,6 +43,7 @@ class _TaskHeartbeat:
         self.lease_seconds = lease_seconds
         self.interval_seconds = interval_seconds
         self.heartbeat_func = heartbeat_func
+        self.task_label = str(task_label or "资料")
         self.stop_event = threading.Event()
         self.lost = False
         self.last_success_monotonic = time.monotonic()
@@ -64,7 +66,8 @@ class _TaskHeartbeat:
             except Exception as exc:
                 self.consecutive_errors += 1
                 LOGGER.warning(
-                    "资料任务心跳写入暂时失败（第 %s 次）：%s；%s",
+                    "%s任务心跳写入暂时失败（第 %s 次）：%s；%s",
+                    self.task_label,
                     self.consecutive_errors,
                     self.task_id,
                     exc,
@@ -103,6 +106,7 @@ class IngestionTaskDispatcher:
         heartbeat_seconds: float = DEFAULT_HEARTBEAT_SECONDS,
         lease_seconds: int = DEFAULT_TASK_LEASE_SECONDS,
         worker_id: str = "",
+        task_label: str = "资料",
     ) -> None:
         self.project_provider = project_provider
         self.claim_func = claim_func
@@ -119,6 +123,7 @@ class IngestionTaskDispatcher:
         self.worker_id = worker_id or (
             f"{socket.gethostname()}:{os.getpid()}:{uuid4().hex[:10]}"
         )
+        self.task_label = str(task_label or "资料")
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.thread: threading.Thread | None = None
@@ -157,7 +162,7 @@ class IngestionTaskDispatcher:
             projects = list(self.project_provider())
         except Exception as exc:
             self.last_error = str(exc)
-            LOGGER.exception("无法列出资料任务项目")
+            LOGGER.exception("无法列出%s任务项目", self.task_label)
             return False
         if not projects:
             return False
@@ -179,7 +184,7 @@ class IngestionTaskDispatcher:
                 )
             except Exception as exc:
                 self.last_error = str(exc)
-                LOGGER.exception("领取资料任务失败：%s", project_name)
+                LOGGER.exception("领取%s任务失败：%s", self.task_label, project_name)
                 continue
             if not task:
                 continue
@@ -195,7 +200,8 @@ class IngestionTaskDispatcher:
                     lease_seconds=self.lease_seconds,
                     interval_seconds=self.heartbeat_seconds,
                     heartbeat_func=self.heartbeat_func,
-                ):
+                    task_label=self.task_label,
+                ) as heartbeat:
                     self.runner(
                         project_name,
                         task_id,
@@ -203,10 +209,12 @@ class IngestionTaskDispatcher:
                         lease_seconds=self.lease_seconds,
                         lease_already_claimed=True,
                     )
+                    if heartbeat.lost:
+                        raise RuntimeError(f"任务租约心跳已失效：{task_id}")
                 self.last_error = ""
             except Exception as exc:
                 self.last_error = str(exc)
-                LOGGER.exception("后台资料任务执行失败：%s", task_id)
+                LOGGER.exception("后台%s任务执行失败：%s", self.task_label, task_id)
             finally:
                 self.active_project = ""
                 self.active_task_id = ""

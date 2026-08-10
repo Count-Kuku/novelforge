@@ -35,7 +35,13 @@ def verify() -> None:
     implementation_slices = [
         *sorted((ROOT / "novelforge" / "services" / "memory").glob("*.py")),
         *sorted((ROOT / "novelforge" / "services" / "retrieval").glob("*.py")),
+        *sorted((ROOT / "novelforge" / "services" / "web_research").glob("*.py")),
         *sorted((ROOT / "novelforge" / "workflows" / "skills").glob("*.py")),
+        *sorted((ROOT / "novelforge" / "workflows").glob("web_research*.py")),
+        ROOT / "novelforge" / "domain" / "web_research_tasks.py",
+        ROOT / "storage" / "repositories" / "durable_tasks.py",
+        ROOT / "ui" / "web_research.py",
+        ROOT / "ui" / "web_research_tasks.py",
     ]
     oversized = {
         str(path.relative_to(ROOT)): len(path.read_text(encoding="utf-8").splitlines())
@@ -90,11 +96,16 @@ def verify() -> None:
                     stale_imports.append(f"{source_file.relative_to(ROOT)}:{node.lineno}:{module_name}")
     check(not stale_imports, f"代码不再使用旧根目录模块导入：{stale_imports}")
 
-    from novelforge.services import memory, retrieval
+    from novelforge.services import memory, retrieval, web_research
     from novelforge.workflows import skills
+    from novelforge.workflows import web_research_tasks
 
     check(callable(memory.load_memory), "memory 门面公开持久化 API")
     check(callable(retrieval.retrieve_context), "retrieval 门面公开检索 API")
+    check(callable(web_research.search_web), "web_research 门面公开网络检索 API")
+    check(callable(web_research.fetch_web_page), "web_research 门面公开安全抓取 API")
+    check(callable(memory.list_web_research_tasks), "memory 门面公开网络研究任务 API")
+    check(callable(web_research_tasks.create_web_research_task), "网络研究工作流公开持久任务 API")
     check(callable(skills.write_chapter), "skills 门面公开生成 API")
 
 

@@ -26,10 +26,11 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 工作台。�
 - 总纲、分卷、剧情段、章节细纲、正文、审阅、评价和自由创作。
 - 全局、项目、故事三层生成规则和提示词选项。
 - 资料导入、长篇切分、结构化提取、待审核队列、自动审核、实体卡和资料包。
+- 可恢复的 Brave Search 网络研究任务，覆盖模型规划、分角色并行搜索、安全抓取、事实提取、交叉验证、质量评测和人工审核。
 - 词法、语义和混合检索；世界线、来源权威、反馈和冲突裁决参与排序。
 - 固定 RAG 评测用例，支持 Recall@K、MRR、nDCG@K 和零召回统计。
 - 基于内容哈希的增量向量重建，正常情况下只生成变化片段；不可复用的异常向量按片段重生成，模型或向量维度变化时切换为完整重建。
-- SQLite 持久资料任务，支持后台执行、租约、心跳、重启接管、暂停、继续、取消、失败项重试、估算和归档。
+- SQLite 持久资料与网络研究任务，支持后台执行、租约、心跳、重启接管、暂停、继续、取消、失败项重试、估算和归档。
 - SQLite 作为结构化数据权威来源，Markdown/TXT 继续保存长文本资产。
 
 当前边界：
@@ -38,7 +39,7 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 工作台。�
 - 尚未实现跨机器分布式 worker，也不会强制终止正在进行的第三方模型 HTTP 请求。
 - GraphRAG 表结构已经预留，但图谱构建与图扩展检索尚未成为正式工作流。
 - EPUB、DOCX、PDF 和目录批量导入尚未作为稳定入口提供。
-- 多 Agent 自治编排仍是远期方向；当前优先维护可验证、可恢复的显式工作流。
+- 网络研究只支持公开静态文本页面；不执行 JavaScript、不登录网站、不绕过付费墙。LangGraph 只负责单次搜索步骤内的并行分派，SQLite 始终负责持久恢复。
 
 ## 总体架构
 
@@ -110,11 +111,44 @@ novelforge/
 
 - `novelforge.services.memory`：项目、故事、知识、来源、资产和运行记录持久化。
 - `novelforge.services.retrieval`：文档收集、切分、索引、向量、搜索、重排和来源导入。
+- `novelforge.services.web_research`：搜索 Provider、安全公开网页抓取和批量资料导入。
 - `novelforge.workflows.skills`：讨论、生成、审阅、分析和可恢复流水线能力。
 
 门面文件负责公开 API 和兼容性，不应重新累积完整实现。新增职责优先创建小型实现模块，再由门面导出。
 项目运行记录的“只打开既有数据库”、故障恢复和目录生命周期围栏集中在
 `novelforge/services/memory/runtime_storage.py`；它不得在调度器持有旧项目名时重建目录或空数据库。
+
+### 网络研究与多 Agent 边界
+
+当前用户可用链路：
+
+```text
+资料导入 / 网络检索 / 自动研究 Agent
+  -> LLM Planner（可关闭，回退为确定性计划）
+  -> LangGraph Collectors: official | secondary | community | fanon
+  -> URL 去重、来源角色与域名多样性选择
+  -> Safe Fetch + 隔离区来源资产
+  -> Extractor + 原文引文硬校验
+  -> Verifier + 来源评级 + 冲突聚合
+  -> 覆盖率、重复率、多样性、佐证率和冲突率评测
+  -> Human Review
+  -> Pending Knowledge + Evidence
+  -> 用户明确启用后，网页原文进入 Retrieval
+```
+
+`novelforge.services.web_research` 包含搜索、抓取和导入三个实现切片。抓取器只允许 HTTP/HTTPS，不携带 Cookie 或登录凭据，逐次校验重定向目标，拒绝本机、内网和保留地址，并把实际连接固定到本次重新解析且已校验的公网 IP；HTTPS 仍使用原主机名完成 SNI 与证书校验。响应类型、大小和重定向次数均有上限。来源文件名同时绑定 `research_task_id` 与最终 URL，同一网页在不同任务中不会共享隔离、启用或删除状态。自动抓取的原文以 `retrieval_status=quarantine` 保存，未获用户明确启用时，`documents.py` 不会把它收集为检索文档。
+
+`novelforge/workflows/web_research_graph.py` 是进程内 LangGraph 搜索子图，提供按来源角色并行的 Collector，以及跨分支 URL 去重与来源角色聚合。它刻意不配置 LangGraph checkpointer：`workflow_runs/workflow_steps` 是运行状态、租约、重试、暂停和恢复的唯一权威；LangGraph 只负责一次已领取搜索步骤内部的并行编排，结果随后回写 SQLite。
+
+持久研究任务包含六个阶段：
+
+```text
+plan -> search -> fetch -> extract -> verify -> evaluate
+```
+
+`novelforge/domain/web_research_tasks.py` 定义纯状态转换和阶段失效规则；`storage/repositories/durable_tasks.py` 提供通用租约、心跳、控制和归档；`novelforge/services/memory/web_research_tasks.py` 是 DB 门面；`novelforge/workflows/web_research_tasks.py` 编排恢复与阶段检查点；`web_research_agents.py` 实现 Planner、来源评估、Extractor 和 Verifier；`web_research_evaluation.py` 计算研究指标并转换待审核知识；`ui/web_research_tasks.py` 提供任务控制、证据预览和逐条送审。
+
+网页正文始终作为不可信数据传给 Extractor/Verifier，系统提示明确拒绝执行正文中的指令。模型提取的主张正文和引文都必须在持久网页正文中定位，否则候选被剔除；名称不在原文时会回退为已定位的主张文本。Verifier 只能引用已有 `claim_id`，其模型输出的摘要和详情不会直接成为结论；确定性校验层只在相同来源角色、分类和原文主张内合并支持证据，并限制冲突证据的来源角色与主体。只有重定向后的最终 HTTPS URL 命中用户显式提供的官方域名白名单才会评为 `official`。激活后的网页进入 RAG 时仍包裹 `UNTRUSTED_WEB_SOURCE` 边界。结论默认只进入待审核知识，不能由研究任务直接写入正式知识。
 
 ### 资料工作台
 
@@ -290,6 +324,10 @@ queued -> running -> completed
 .\.venv\Scripts\python.exe tools\verify_retrieval_hardening.py
 .\.venv\Scripts\python.exe tools\verify_vector_metadata_persistence.py
 
+# 网络检索与研究子图（离线 Mock，不调用真实搜索服务）
+.\.venv\Scripts\python.exe tools\verify_web_research.py
+.\.venv\Scripts\python.exe tools\verify_web_research_tasks.py
+
 # 应用导入冒烟
 .\.venv\Scripts\python.exe tools\verify_app_smoke.py
 ```
@@ -318,7 +356,7 @@ queued -> running -> completed
 
 1. 只有在实际项目规模证明 SQLite 向量扫描成为瓶颈后，再评估专用向量后端。
 2. 需要脱离 UI 进程长期运行时，再引入独立 worker 进程或系统服务。
-3. 在显式工作流的状态、重试和评测稳定后，再评估 LangGraph 或多 Agent 编排。
+3. LangGraph 只扩展单次研究任务内部的多角色编排；当前已提供逐任务覆盖率、重复率、来源多样性、佐证率和冲突率，后续在有稳定真实数据集时再增加跨版本基准与反思搜索。
 4. 图谱层应作为检索证据扩展器，不替代现有 chunk retrieval。
 
 ## 已知技术债
@@ -332,6 +370,7 @@ queued -> running -> completed
 | FTS | FTS5 表已创建但未成为当前词法查询后端 | 在规模数据基准下决定接入或移除预留 |
 | 兼容层 | DB-first 已完成，但仍保留旧 JSON 导入和可选镜像代码 | 等兼容窗口结束后分阶段收缩 |
 | 任务运行时 | worker 与应用进程同生命周期 | 只有明确需要常驻执行时再独立进程化 |
+| 网络研究 | 当前只抓取公开静态文本，搜索 Provider 为 Brave Search | 根据真实失败样本评估动态渲染抓取和更多 Provider；不以绕过登录或反爬为目标 |
 | 启动器 | Windows 支持完整，Linux/macOS 主要回退到当前解释器 | 增加跨平台运行时发现和发布验证 |
 
 ## 修改前检查顺序

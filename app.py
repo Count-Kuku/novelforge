@@ -53,10 +53,17 @@ from novelforge.workflows.ingestion_task_dispatcher import (
     ensure_ingestion_task_dispatcher,
     get_ingestion_task_dispatcher_status,
 )
+from novelforge.workflows.web_research_task_dispatcher import (
+    ensure_web_research_task_dispatcher,
+    get_web_research_task_dispatcher_status,
+)
 
 def _reload_live_ui_modules() -> dict[str, object]:
     global list_projects
-    background_runtime_active = bool(get_ingestion_task_dispatcher_status().get("running"))
+    background_runtime_active = bool(
+        get_ingestion_task_dispatcher_status().get("running")
+        or get_web_research_task_dispatcher_status().get("running")
+    )
     memory_helpers = memory_module if background_runtime_active else memory_module.reload_implementation_modules()
     list_projects = memory_helpers.list_projects
     importlib.reload(project_manager_module)
@@ -129,6 +136,7 @@ def main():
     st.set_page_config(page_title="NovelForge", layout="wide")
     ui_modules = _reload_live_ui_modules()
     ensure_ingestion_task_dispatcher()
+    ensure_web_research_task_dispatcher()
     layout_helpers = ui_modules["layout"]
     layout_helpers.apply_app_style()
 

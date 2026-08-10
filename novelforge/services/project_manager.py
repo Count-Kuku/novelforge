@@ -25,6 +25,7 @@ from novelforge.services.memory import (
     list_pipeline_run_summaries,
     list_retrieval_source_files,
     list_source_ingestion_tasks,
+    list_web_research_tasks,
     load_review,
     load_review_json,
     load_source_package_report,
@@ -112,15 +113,29 @@ def _blocking_source_ingestion_tasks(project_name: str) -> list[dict]:
     ]
 
 
+def _blocking_web_research_tasks(project_name: str) -> list[dict]:
+    return [
+        task
+        for task in list_web_research_tasks(
+            project_name,
+            statuses=sorted(PROJECT_MUTATION_BLOCKING_TASK_STATUSES),
+        )
+        if str(task.get("status") or "") in PROJECT_MUTATION_BLOCKING_TASK_STATUSES
+    ]
+
+
 def _ensure_project_mutation_is_safe(project_name: str, action_label: str) -> None:
-    blocking_tasks = _blocking_source_ingestion_tasks(project_name)
+    blocking_tasks = [
+        *_blocking_source_ingestion_tasks(project_name),
+        *_blocking_web_research_tasks(project_name),
+    ]
     if not blocking_tasks:
         return
     running_count = sum(1 for task in blocking_tasks if task.get("status") == "running")
     queued_count = sum(1 for task in blocking_tasks if task.get("status") == "queued")
     raise RuntimeError(
-        f"项目仍有 {running_count} 个运行中、{queued_count} 个等待中的资料任务，"
-        f"暂不能{action_label}。请先到“资料导入 → 资料任务”暂停或取消这些任务。"
+        f"项目仍有 {running_count} 个运行中、{queued_count} 个等待中的资料或网络研究任务，"
+        f"暂不能{action_label}。请先到“资料导入 → 资料任务/网络检索”暂停或取消这些任务。"
     )
 
 

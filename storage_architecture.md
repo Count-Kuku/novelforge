@@ -118,7 +118,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 - `source_segments`：长篇分段、导入/提取状态和片段元数据。
 - `knowledge_items`：已确认结构化知识。
 - `pending_knowledge_items`：待审核知识和质量状态。
-- `knowledge_evidence`：知识到来源、片段和检索 chunk 的证据关系。
+- `knowledge_evidence`：知识到来源、片段和检索 chunk 的证据关系；网络研究结论还会在 `location_json` 中保存 URL、原文引文和定位信息。
 - `entity_alias_groups`：主名称、别名和实体类型。
 - `auto_review_policy`、`auto_review_runs`：自动审核策略、批处理记录和回退快照。
 
@@ -139,7 +139,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 
 ### 工作流与自由创作
 
-- `workflow_runs`：运行级输入、输出、错误、状态和运行时所有权。
+- `workflow_runs`：运行级输入、输出、错误、状态和运行时所有权；当前承载 `source_ingestion` 与 `web_research` 两类可恢复任务。
 - `workflow_steps`：步骤/资料片段检查点，随 run 级联删除。
 - `creative_sessions`：自由创作会话。
 - `creative_turns`：会话轮次和操作。
@@ -197,6 +197,20 @@ COMMIT
 - 恢复归档的未完成任务时会重新检查批次及所选片段；批次已删除或片段已替换时拒绝恢复。
 - 永久删除要求任务已经归档，删除 run 时由外键级联删除 steps。
 - 批量清理只删除早于指定时间的归档任务，不操作活动任务。
+
+## 持久网络研究任务
+
+网络研究复用同一组 `workflow_runs/workflow_steps`，不引入 LangGraph 自身的第二套持久状态。`workflow_type='web_research'` 的 run 保存研究目标、来源角色、用户提供的官方域名白名单、模型开关、搜索/抓取上限、估算、评测结果和人工审核所需的证据摘要；六个稳定 step 分别对应：
+
+```text
+plan -> search -> fetch -> extract -> verify -> evaluate
+```
+
+`storage/repositories/durable_tasks.py` 为这类任务提供通用的原子领取、租约心跳、owner fencing、控制请求、归档和删除能力。`novelforge/services/memory/web_research_tasks.py` 负责领域对象与数据库行之间的转换，workflow 与 UI 不直接访问 SQL。LangGraph 只在已领取的 `search` step 内并行执行来源角色 Collector，输出随步骤检查点回写 SQLite；暂停、恢复、取消、重试和失联接管均以 SQLite 为准。
+
+研究任务按页面保存抓取与提取检查点。重启后已成功页面不会重复抓取或调用提取模型；失败阶段重试会清除该阶段的旧错误和所有失效下游结果，同时保留仍可复用的成功页面。网页快照路径以 `research_task_id + 最终 URL` 命名，避免不同任务因相同 URL 共享状态；重定向到同一最终 URL 的多个搜索结果则在同一任务内合并来源角色和请求 URL。自动抓取的网页正文作为文件资产登记，元数据包含 `research_task_id`、`story_id`、来源角色、权威评估、`untrusted_web_content=true` 和 `retrieval_status=quarantine`。隔离状态的网页不会进入 `retrieval_documents`；只有用户在任务结果页明确启用后才参与后续索引重建，并始终以不可信外部数据边界装配进模型上下文。归档任务永久删除时会同时删除该任务拥有的网页快照并重建检索资产。
+
+Verifier 产出的事实结论仍不是正式知识。用户选择“送入待审核知识”后，结论写入 `pending_knowledge_items`，对应 URL、精确引文、权威与置信度同步写入 `knowledge_evidence`。只有既有知识审核流程可以把它提升为 `knowledge_items`，并继续保留证据关系。
 
 ## 文件资产契约
 
@@ -288,6 +302,10 @@ streamlit run app.py
 # 向量异常处理、增量构建与零向量行时的元数据持久化
 .\.venv\Scripts\python.exe tools\verify_retrieval_hardening.py
 .\.venv\Scripts\python.exe tools\verify_vector_metadata_persistence.py
+
+# 网络研究 Agent、持久任务、证据与隔离区（离线 Mock）
+.\.venv\Scripts\python.exe tools\verify_web_research.py
+.\.venv\Scripts\python.exe tools\verify_web_research_tasks.py
 ```
 
 验证脚本创建的项目使用专用 `_verify_*` 前缀。脚本和人工清理都必须校验目标在工作区和允许前缀内。

@@ -889,6 +889,9 @@ def _documents_from_external_sources(project_name: str) -> list[_retrieval_api.R
                 )
                 content = raw_text
 
+        if str(metadata.get("retrieval_status") or "active") == "quarantine":
+            continue
+
         doc = _retrieval_api._make_document(
             project_name,
             source_type,

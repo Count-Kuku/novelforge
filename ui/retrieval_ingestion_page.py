@@ -20,6 +20,7 @@ from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_authority, label_knowledge_category, label_scope, label_source_type
 from ui.step_views import render_step_json_expander, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
+from ui.web_research import render_web_research_import
 
 
 INGESTION_WORKSPACE_SECTIONS = ["资料任务", "资料来源", "待审核设定", "处理记录", "长篇批次", "知识整理", "资料包"]
@@ -541,12 +542,14 @@ def _render_ingestion_wizard(
     st.caption("先选择资料的输入方式。整本原作等大段文本用“长篇文本”，少量内容可直接粘贴或填写资料卡。")
     source_choice = st.radio(
         "资料来源",
-        options=["长篇文本", "粘贴资料", "手动资料卡"],
+        options=["网络检索", "长篇文本", "粘贴资料", "手动资料卡"],
         horizontal=True,
         key=scoped_widget_key("ingestion_source_choice", project_name, story_id),
     )
 
-    if source_choice == "长篇文本":
+    if source_choice == "网络检索":
+        render_web_research_import(project_name, story_id)
+    elif source_choice == "长篇文本":
         render_long_reference_importer(
             project_name,
             source_type_options,
