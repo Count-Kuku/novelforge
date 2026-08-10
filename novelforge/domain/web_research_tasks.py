@@ -215,25 +215,6 @@ def build_web_research_estimate(
             )
         )
 
-    embedding_per_page = max(500, math.ceil(max_chars_per_page * 0.18))
-    stages.append(
-        build_stage_estimate(
-            "网页原文向量索引",
-            operation="web_research.index",
-            agent_role="indexer",
-            endpoint_type="embedding",
-            call_count=max_pages,
-            embedding_tokens_per_call={
-                "low": math.ceil(embedding_per_page * 0.35),
-                "expected": embedding_per_page,
-                "high": math.ceil(max_chars_per_page / 1.6),
-            },
-            calibration=history.get("index"),
-            calibrate_output=False,
-            confidence="low",
-            assumptions=["向量索引按最多抓取页数估算，增量复用会降低实际消耗。"],
-        )
-    )
     result = build_preflight_estimate(
         stages,
         profile=model_profile,
@@ -255,6 +236,7 @@ def build_web_research_estimate(
         assumptions=[
             "模型费用不包含 Brave Search、代理或其它外部工具可能产生的独立费用。",
             "未成功抓取的网页不会进入事实提取，实际模型调用可能低于上界。",
+            "抓取原文先进入隔离区，本任务不生成向量；人工激活时的向量费用不计入本次预估。",
         ],
     )
     result.update(

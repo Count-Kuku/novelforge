@@ -73,9 +73,15 @@ def build_long_reference_ingestion_estimate(
         custom_instructions=custom_instructions,
         model_profile=profile,
         calibrations={
-            "chat": load_stage_calibration(
-                "source_ingestion.run",
-                agent_role="ingestion",
+            "extract": load_stage_calibration(
+                "reference.extract",
+                agent_role="extractor",
+                endpoint_type="chat",
+                profile=profile,
+            ),
+            "consolidate": load_stage_calibration(
+                "reference.consolidate",
+                agent_role="consolidator",
                 endpoint_type="chat",
                 profile=profile,
             ),

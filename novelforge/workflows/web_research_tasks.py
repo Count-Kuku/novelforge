@@ -101,7 +101,6 @@ def build_web_research_task_estimate(configuration: dict) -> dict:
         "plan": ("web_research.plan", "planner", "chat"),
         "extract": ("web_research.extract", "extractor", "chat"),
         "verify": ("web_research.verify", "verifier", "chat"),
-        "index": ("web_research.index", "indexer", "embedding"),
     }
     calibrations = {
         key: load_stage_calibration(
@@ -591,19 +590,11 @@ def run_web_research_task(
                 checkpoint(f"已处理 {len(existing_urls)}/{len(result.get('selected_hits', []))} 个候选网页。")
             if not fetched_sources:
                 raise RuntimeError("所有候选网页均抓取失败。")
-            with llm_usage_scope(
-                project_name=project_name,
-                story_id=str(task_holder["task"].get("story_id") or "default"),
-                task_id=task_id,
-                workflow_run_id=task_id,
-                operation="web_research.index",
-                agent_role="indexer",
-            ):
-                rebuild_func(project_name, build_vectors=True)
+            rebuild_func(project_name, build_vectors=False)
             finish_stage(
                 "fetch",
                 {"source_count": len(fetched_sources), "errors": fetch_errors},
-                "网页原文已持久化并更新检索资产。",
+                "网页原文已持久化并刷新隔离区清单。",
             )
 
         if task_holder["task"]["steps"]["extract"]["status"] != "completed":

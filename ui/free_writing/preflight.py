@@ -13,6 +13,10 @@ def render_writing_preflight(
     bundle: dict,
     user_message: str,
     word_count: str,
+    *,
+    action_type: str,
+    branch_from_fragment_id: str | None,
+    auto_extract_mode: str,
 ) -> bool:
     if not str(user_message or "").strip():
         return True
@@ -20,6 +24,9 @@ def render_writing_preflight(
         bundle,
         str(user_message or "").strip(),
         word_count=word_count,
+        action_type=action_type,
+        branch_from_fragment_id=branch_from_fragment_id,
+        auto_extract_mode=auto_extract_mode,
     )
     estimate_high = int(dict(estimate.get("total_tokens") or {}).get("high") or 0)
     cost_high = round(

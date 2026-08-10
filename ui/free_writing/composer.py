@@ -319,6 +319,9 @@ def render_composer(
         bundle,
         str(user_message or "").strip(),
         config["word_count"],
+        action_type=action,
+        branch_from_fragment_id=branch_id,
+        auto_extract_mode=session_options["auto_extract_mode"],
     )
 
     if st.button(

@@ -228,7 +228,7 @@ def _recent_table(rows: list[dict], preferences: dict) -> list[dict]:
     for row in rows:
         cost = row.get("cost_usd")
         row_preferences = dict(preferences)
-        price_snapshot = row.get("price_snapshot_json")
+        price_snapshot = row.get("price_snapshot")
         if isinstance(price_snapshot, dict) and price_snapshot.get("usd_to_cny_rate"):
             row_preferences["usd_to_cny_rate"] = price_snapshot["usd_to_cny_rate"]
         cost_columns = (

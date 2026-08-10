@@ -9,10 +9,12 @@ def render_ingestion_task_estimate(
     *,
     expanded: bool = False,
     confirmation_key: str | None = None,
+    interactive_confirmation: bool = True,
 ) -> bool:
     return render_preflight_estimate(
         estimate,
         expanded=expanded,
         confirmation_key=confirmation_key,
+        interactive_confirmation=interactive_confirmation,
         leading_metrics={"资料片段": int(estimate.get("segment_count") or 0)},
     )

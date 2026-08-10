@@ -348,7 +348,11 @@ def render_ingestion_task_manager(project_name: str, story_id: str = "default") 
     _render_runtime_status(task)
     _render_task_actions(project_name, task)
     if task.get("estimate"):
-        render_ingestion_task_estimate(task["estimate"], expanded=False)
+        render_ingestion_task_estimate(
+            task["estimate"],
+            expanded=False,
+            interactive_confirmation=False,
+        )
     _render_task_details(task)
 
     if archive_mode in {"已归档", "全部任务"}:

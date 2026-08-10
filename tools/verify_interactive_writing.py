@@ -148,6 +148,63 @@ def verify() -> None:
     chain = interactive_writing.active_fragment_chain(bundle or {})
     check([item["fragment_id"] for item in chain] == [first_id, second_id], "续写形成父子片段链")
     check(chain[0]["status"] == "accepted", "续写保持父片段已接受状态")
+    continuation_estimate = interactive_writing.build_writing_fragment_preflight(
+        bundle,
+        "继续写并接受当前候选",
+        action_type="continue",
+        auto_extract_mode="on_accept",
+    )
+    continuation_operations = [
+        stage["operation"] for stage in continuation_estimate["stages"]
+    ]
+    check(
+        "reference.extract" in continuation_operations,
+        "续写预估包含接受当前候选后触发的自动知识提取",
+    )
+    check(
+        continuation_estimate["estimated_model_calls"] == 2,
+        "续写预估统计创作与自动知识提取两次模型调用",
+    )
+
+    long_bundle = {
+        "session": {
+            "active_fragment_id": "summary-fragment-3",
+            "rolling_summary": "",
+            "summary_fragment_id": "",
+            "auto_extract_mode": "manual",
+        },
+        "fragments": [
+            {
+                "fragment_id": "summary-fragment-1",
+                "parent_fragment_id": None,
+                "status": "accepted",
+                "content": "甲" * 4200,
+            },
+            {
+                "fragment_id": "summary-fragment-2",
+                "parent_fragment_id": "summary-fragment-1",
+                "status": "accepted",
+                "content": "乙" * 4200,
+            },
+            {
+                "fragment_id": "summary-fragment-3",
+                "parent_fragment_id": "summary-fragment-2",
+                "status": "proposed",
+                "content": "丙" * 4200,
+            },
+        ],
+    }
+    summary_estimate = interactive_writing.build_writing_fragment_preflight(
+        long_bundle,
+        "继续长会话",
+        action_type="continue",
+        auto_extract_mode="manual",
+    )
+    check(
+        "creative.summary"
+        in [stage["operation"] for stage in summary_estimate["stages"]],
+        "达到刷新条件的续写预估包含滚动摘要调用",
+    )
 
     with patch.object(interactive_writing, "call_llm", return_value="她抬眼看他，熟悉的称呼到了唇边又被咽下。"):
         rewritten = interactive_writing.generate_writing_fragment(

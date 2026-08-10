@@ -221,7 +221,7 @@ def main() -> int:
                 ]
             )
 
-        rebuild_calls: list[str] = []
+        rebuild_calls: list[tuple[str, bool]] = []
 
         completed, result = workflows.run_web_research_task(
             project_name,
@@ -230,7 +230,9 @@ def main() -> int:
             fetcher=fake_fetcher,
             extractor=fake_extractor,
             verifier=fake_verifier,
-            rebuild_func=lambda project_name, build_vectors=True: rebuild_calls.append(project_name),
+            rebuild_func=lambda project_name, build_vectors=True: rebuild_calls.append(
+                (project_name, build_vectors)
+            ),
         )
         check(completed["status"] == "completed", "full durable research workflow completes")
         check(all(step["status"] == "completed" for step in completed["steps"].values()), "every stage checkpoint completes")
@@ -246,6 +248,7 @@ def main() -> int:
         check(result["evaluation"]["corroboration_rate"] == 0.0, "evaluation does not treat mixed source roles as corroboration")
         check(result["evaluation"]["evidence_valid_rate"] == 1.0, "evaluation uses attempted extraction candidates")
         check(len(rebuild_calls) == 1, "source assets rebuild once after fetch batch")
+        check(rebuild_calls[0][1] is False, "quarantined web pages do not build vectors before activation")
         quarantined_documents = [
             item for item in gather_retrieval_documents(project_name)
             if item.metadata.get("research_task_id") == task["task_id"]

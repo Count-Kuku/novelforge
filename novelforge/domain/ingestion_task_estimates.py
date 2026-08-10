@@ -60,8 +60,8 @@ def estimate_ingestion_task(
     stages = [
         build_stage_estimate(
             "知识提取",
-            operation="source_ingestion.run",
-            agent_role="ingestion",
+            operation="reference.extract",
+            agent_role="extractor",
             call_count=segment_count,
             input_tokens_per_call={
                 "low": math.ceil((average_source_tokens + prompt_overhead_per_call) * 0.85),
@@ -73,7 +73,7 @@ def estimate_ingestion_task(
                 "expected": output_per_call,
                 "high": math.ceil(output_per_call * 1.55),
             },
-            calibration=history.get("chat"),
+            calibration=history.get("extract"),
             calibrate_input=False,
             calibrate_output=True,
             confidence="medium",
@@ -88,8 +88,8 @@ def estimate_ingestion_task(
         stages.append(
             build_stage_estimate(
                 "知识整理",
-                operation="source_ingestion.run",
-                agent_role="ingestion",
+                operation="reference.consolidate",
+                agent_role="consolidator",
                 call_count=1,
                 input_tokens_per_call={
                     "low": math.ceil(consolidation_input * 0.75),
@@ -101,7 +101,7 @@ def estimate_ingestion_task(
                     "expected": consolidation_output,
                     "high": math.ceil(consolidation_output * 1.5),
                 },
-                calibration=history.get("chat"),
+                calibration=history.get("consolidate"),
                 calibrate_input=False,
                 calibrate_output=True,
                 confidence="medium",

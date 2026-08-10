@@ -83,6 +83,7 @@ def render_preflight_estimate(
     *,
     expanded: bool = False,
     confirmation_key: str | None = None,
+    interactive_confirmation: bool = True,
     leading_metrics: dict[str, object] | None = None,
 ) -> bool:
     """Render an estimate and return whether a required budget check is approved."""
@@ -229,9 +230,11 @@ def render_preflight_estimate(
         st.warning("；".join(dict.fromkeys(str(item) for item in reasons if str(item))) + "。")
     if not budget.get("confirmation_required"):
         return True
+    if not interactive_confirmation:
+        return True
     if not confirmation_key:
         st.error("该操作超过模型方案的确认阈值，执行入口需要显式确认。")
-        return True
+        return False
     return bool(
         st.checkbox(
             "我已了解 Token 与费用上界，确认继续执行",

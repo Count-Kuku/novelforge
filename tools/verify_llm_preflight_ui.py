@@ -27,7 +27,21 @@ def main() -> int:
     ]
     assert app.metric[3].value == "300"
     assert app.metric[4].value == "¥0.0143"
-    print({"ok": True, "checks": 3})
+    confirmation_app = AppTest.from_file(
+        ROOT / "tools" / "fixtures" / "llm_preflight_confirmation_ui_app.py"
+    ).run(timeout=30)
+    if confirmation_app.exception:
+        print({
+            "ok": False,
+            "exceptions": [str(item.value) for item in confirmation_app.exception],
+        })
+        return 1
+    assert len(confirmation_app.error) == 1
+    assert [item.value for item in confirmation_app.text] == [
+        "interactive_result=False",
+        "readonly_result=True",
+    ]
+    print({"ok": True, "checks": 6})
     return 0
 
 

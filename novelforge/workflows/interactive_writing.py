@@ -148,6 +148,43 @@ def accepted_active_fragments(bundle: dict) -> list[dict]:
     ]
 
 
+def _summary_refresh_material(
+    bundle: dict,
+    *,
+    additionally_accepted_fragment_id: str | None = None,
+) -> tuple[list[dict], list[dict], str, str]:
+    """Return the accepted chain and the portion pending rolling-summary refresh."""
+
+    extra_id = str(additionally_accepted_fragment_id or "")
+    accepted = [
+        fragment
+        for fragment in active_fragment_chain(bundle)
+        if (
+            str(fragment.get("status") or "") in {"accepted", "finalized"}
+            or str(fragment.get("fragment_id") or "") == extra_id
+        )
+    ]
+    if not accepted:
+        return [], [], "", ""
+    session = bundle.get("session", {}) or {}
+    summary_fragment_id = str(session.get("summary_fragment_id") or "")
+    if not summary_fragment_id:
+        pending = accepted
+    else:
+        pending = []
+        covered = False
+        for fragment in accepted:
+            if covered:
+                pending.append(fragment)
+            elif str(fragment.get("fragment_id") or "") == summary_fragment_id:
+                covered = True
+        if not covered:
+            pending = accepted
+    pending_text = "\n\n".join(str(item.get("content") or "") for item in pending)
+    total_text = "\n\n".join(str(item.get("content") or "") for item in accepted)
+    return accepted, pending, pending_text, total_text
+
+
 def _recent_fragment_text(chain: list[dict]) -> str:
     sections: list[str] = []
     remaining = RECENT_FRAGMENT_CONTEXT_CHARS
@@ -305,15 +342,24 @@ def build_writing_fragment_preflight(
     *,
     word_count: str = "800-1200",
     context_budget: int = 12_000,
+    action_type: str = "continue",
+    branch_from_fragment_id: str | None = None,
+    auto_extract_mode: str | None = None,
 ) -> dict:
     """Estimate one free-writing turn without running retrieval or the model."""
 
     active_bundle = dict(bundle or {})
+    branch: dict | None = None
     if active_bundle:
+        branch = _resolve_generation_branch(
+            active_bundle,
+            action_type,
+            branch_from_fragment_id,
+        )
         query = build_writing_session_query(
             active_bundle,
             user_message,
-            context_head_id=None,
+            context_head_id=branch["context_head_id"],
         )
     else:
         query = f"自由创作目标：{str(user_message or '').strip()}"
@@ -330,42 +376,122 @@ def build_writing_fragment_preflight(
         "high": max(math.ceil(high_chars / 1.35), 1),
     }
     retrieval_query_tokens = max(estimate_text_tokens(query), 1)
-    return build_calibrated_preflight(
-        [
-            {
-                "stage_name": "写作资料检索",
-                "operation": "ui.generate_writing_fragment",
-                "agent_role": "ui_action",
-                "endpoint_type": "embedding",
-                "call_count": 1,
-                "embedding_tokens_per_call": {
-                    "low": retrieval_query_tokens,
-                    "expected": retrieval_query_tokens,
-                    "high": math.ceil(retrieval_query_tokens * 1.1),
-                },
-                "calibrate_output": False,
-                "confidence": "high",
+    stages = [
+        {
+            "stage_name": "写作资料检索",
+            "operation": "ui.generate_writing_fragment",
+            "agent_role": "ui_action",
+            "endpoint_type": "embedding",
+            "call_count": 1,
+            "embedding_tokens_per_call": {
+                "low": retrieval_query_tokens,
+                "expected": retrieval_query_tokens,
+                "high": math.ceil(retrieval_query_tokens * 1.1),
             },
-            {
-                "stage_name": "创作片段生成",
-                "operation": "creative.fragment",
-                "agent_role": "generator",
+            "calibrate_output": False,
+            "confidence": "high",
+        },
+        {
+            "stage_name": "创作片段生成",
+            "operation": "creative.fragment",
+            "agent_role": "generator",
+            "call_count": 1,
+            "input_tokens_per_call": {
+                "low": input_low,
+                "expected": input_expected,
+                "high": input_high,
+            },
+            "output_tokens_per_call": output_range,
+            "calibrate_input": False,
+            "calibrate_output": True,
+            "confidence": "low",
+            "assumptions": [
+                "执行前不运行语义检索，输入区间包含可能注入的设定、规则和检索资料。",
+                "输出区间由片段长度设置和同类历史调用共同校准。",
+            ],
+        },
+    ]
+    accept_fragment_id = str((branch or {}).get("accept_fragment_id") or "")
+    if active_bundle:
+        accepted, pending, pending_text, total_text = _summary_refresh_material(
+            active_bundle,
+            additionally_accepted_fragment_id=accept_fragment_id or None,
+        )
+        if (
+            len(total_text) >= SUMMARY_REFRESH_THRESHOLD_CHARS
+            and len(pending) >= SUMMARY_BATCH_MIN_FRAGMENTS
+            and pending_text.strip()
+        ):
+            rolling_summary = str(
+                (active_bundle.get("session", {}) or {}).get("rolling_summary") or ""
+            )
+            summary_input = estimate_chat_input_tokens(
+                f"{rolling_summary}\n\n{pending_text}"
+            )
+            stages.append({
+                "stage_name": "会话滚动摘要",
+                "operation": "creative.summary",
+                "agent_role": "summarizer",
                 "call_count": 1,
                 "input_tokens_per_call": {
-                    "low": input_low,
-                    "expected": input_expected,
-                    "high": input_high,
+                    "low": max(summary_input + 350, 900),
+                    "expected": max(summary_input + 900, 1600),
+                    "high": max(math.ceil(summary_input * 1.25) + 1500, 2800),
                 },
-                "output_tokens_per_call": output_range,
-                "calibrate_input": False,
+                "output_tokens_per_call": {
+                    "low": 250,
+                    "expected": 650,
+                    "high": 1400,
+                },
+                "calibrate_input": True,
+                "calibrate_output": True,
+                "confidence": "medium",
+                "assumptions": [
+                    (
+                        f"接受当前候选后，{len(accepted)} 个已接受片段将达到滚动摘要刷新条件。"
+                        if accept_fragment_id
+                        else f"当前 {len(accepted)} 个已接受片段已达到滚动摘要刷新条件。"
+                    )
+                ],
+            })
+
+    if accept_fragment_id:
+        session = active_bundle.get("session", {}) or {}
+        effective_auto_extract_mode = str(
+            auto_extract_mode
+            if auto_extract_mode is not None
+            else session.get("auto_extract_mode") or "manual"
+        )
+        if effective_auto_extract_mode == "on_accept":
+            fragment = _fragment_map(active_bundle).get(accept_fragment_id, {})
+            source_tokens = max(
+                estimate_text_tokens(str(fragment.get("content") or "")),
+                1,
+            )
+            stages.append({
+                "stage_name": "已接受片段设定提炼",
+                "operation": "reference.extract",
+                "agent_role": "extractor",
+                "call_count": 1,
+                "input_tokens_per_call": {
+                    "low": source_tokens + 1200,
+                    "expected": source_tokens + 3000,
+                    "high": source_tokens + 7000,
+                },
+                "output_tokens_per_call": {
+                    "low": 500,
+                    "expected": 1400,
+                    "high": 3000,
+                },
+                "calibrate_input": True,
                 "calibrate_output": True,
                 "confidence": "low",
                 "assumptions": [
-                    "执行前不运行语义检索，输入区间包含可能注入的设定、规则和检索资料。",
-                    "输出区间由片段长度设置和同类历史调用共同校准。",
+                    "继续生成会先接受当前候选；自动提炼开启时会追加一次结构化知识提取调用。"
                 ],
-            },
-        ],
+            })
+    return build_calibrated_preflight(
+        stages,
         estimate_kind="creative_fragment",
     )
 
@@ -721,25 +847,9 @@ def maybe_refresh_session_summary(
 ) -> str:
     bundle = _bundle_or_raise(project_name, story_id, session_id)
     session = bundle.get("session", {}) or {}
-    accepted = accepted_active_fragments(bundle)
+    accepted, pending, pending_text, total_text = _summary_refresh_material(bundle)
     if not accepted:
         return ""
-    summary_fragment_id = str(session.get("summary_fragment_id") or "")
-    pending: list[dict] = []
-    covered = not summary_fragment_id
-    if summary_fragment_id:
-        covered = False
-        for fragment in accepted:
-            if covered:
-                pending.append(fragment)
-            elif str(fragment.get("fragment_id") or "") == summary_fragment_id:
-                covered = True
-        if not covered:
-            pending = accepted
-    else:
-        pending = accepted
-    pending_text = "\n\n".join(str(item.get("content") or "") for item in pending)
-    total_text = "\n\n".join(str(item.get("content") or "") for item in accepted)
     if not force and (
         len(total_text) < SUMMARY_REFRESH_THRESHOLD_CHARS
         or len(pending) < SUMMARY_BATCH_MIN_FRAGMENTS
