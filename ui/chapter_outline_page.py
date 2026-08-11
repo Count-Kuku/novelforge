@@ -194,14 +194,14 @@ def _render_chapter_discussion_summary_panel(
         scoped_widget_key("chapter_discussion_prompt_options", *chapter_scope),
     )
     approve_col, clear_col = st.columns(2)
-    if approve_col.button("保存本章结论", key=scoped_widget_key("approve_chapter_discussion", *chapter_scope), use_container_width=True):
+    if approve_col.button("保存本章结论", key=scoped_widget_key("approve_chapter_discussion", *chapter_scope), width="stretch"):
         try:
             result = approve_chapter_discussion(project_name, chapter_no, discussion_step, story_id=story_id)
             st.success("已保存章节讨论结论。")
             st.rerun()
         except Exception as exc:
             st.error(f"保存失败：{exc}")
-    if clear_col.button("清除本章结论", key=scoped_widget_key("clear_chapter_discussion", *chapter_scope), use_container_width=True):
+    if clear_col.button("清除本章结论", key=scoped_widget_key("clear_chapter_discussion", *chapter_scope), width="stretch"):
         if clear_chapter_discussion_approval(project_name, chapter_no, story_id=story_id):
             st.success("已清除章节讨论结论。")
             st.rerun()
@@ -246,7 +246,7 @@ def _render_chapter_discussion_area(
         has_started = bool(st.session_state.get(discussion_context["result_key"]) or current_messages)
         send_label = "发送" if has_started else "开始讨论"
         send_col, reset_col = st.columns([3, 1])
-        if send_col.button(send_label, key=scoped_widget_key("send_chapter_discussion", *chapter_scope), use_container_width=True):
+        if send_col.button(send_label, key=scoped_widget_key("send_chapter_discussion", *chapter_scope), width="stretch"):
             submitted = str(user_input or "").strip()
             if not submitted:
                 st.warning("讨论消息不能为空。")
@@ -295,7 +295,7 @@ def _render_chapter_discussion_area(
                     st.rerun()
                 except Exception as exc:
                     st.error(f"讨论失败：{exc}")
-        if reset_col.button("重置", key=scoped_widget_key("reset_chapter_discussion", *chapter_scope), use_container_width=True):
+        if reset_col.button("重置", key=scoped_widget_key("reset_chapter_discussion", *chapter_scope), width="stretch"):
             st.session_state[discussion_context["result_key"]] = {}
             st.session_state[messages_key] = []
             st.session_state[discussion_context["clear_input_flag_key"]] = True
@@ -364,7 +364,7 @@ def _render_chapter_outline_generation(
     discussion_context,
 ) -> dict:
     step_result = st.session_state.get(context["step_key"], {})
-    if st.button("生成章节细纲", key=scoped_widget_key("generate_chapter_outline", *context["chapter_scope"]), type="primary", use_container_width=True):
+    if st.button("生成章节细纲", key=scoped_widget_key("generate_chapter_outline", *context["chapter_scope"]), type="primary", width="stretch"):
         if not _generation_blocked_by_approval(approval_required, context, discussion_context):
             step_result = _run_chapter_outline_generation(project_name, story_id, context, requirement)
     return step_result
@@ -378,7 +378,7 @@ def _render_chapter_outline_editor(project_name: str, story_id: str, context) ->
         key=context["editor_key"],
     )
 
-    if st.button("保存章节细纲", key=scoped_widget_key("save_chapter_outline", *context["chapter_scope"]), use_container_width=True):
+    if st.button("保存章节细纲", key=scoped_widget_key("save_chapter_outline", *context["chapter_scope"]), width="stretch"):
         save_chapter_outline(project_name, context["chapter_no"], outline_text, story_id=story_id)
         save_chapter_outline_metadata(
             project_name,

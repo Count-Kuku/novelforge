@@ -39,7 +39,6 @@ from novelforge.domain.knowledge_workflows import (
 from ui.app_shell import activate_story_after_creation, copy_story_workspace_settings, switch_to_story
 from ui.common import navigate_to, scoped_widget_key
 from ui.labels import label_knowledge_category
-from ui.llm_settings import render_llm_settings_page
 
 
 def _setting_field_label(field_name: str) -> str:
@@ -103,8 +102,8 @@ def _render_setting_item_form(project_name: str, story_id: str, setting_scope: s
         tags = st.text_input("标签（逗号分隔）", value=", ".join(current.get("tags", []) or []))
         delete_checked = st.checkbox("删除这个设定", value=False, disabled=not bool(current.get("id")))
         col_save, col_delete = st.columns(2)
-        save_clicked = col_save.form_submit_button("保存设定", type="primary", use_container_width=True)
-        delete_clicked = col_delete.form_submit_button("删除设定", use_container_width=True, disabled=not bool(current.get("id")) or not delete_checked)
+        save_clicked = col_save.form_submit_button("保存设定", type="primary", width="stretch")
+        delete_clicked = col_delete.form_submit_button("删除设定", width="stretch", disabled=not bool(current.get("id")) or not delete_checked)
 
     if save_clicked:
         if not summary.strip():
@@ -341,9 +340,9 @@ def _render_pending_core_setting_form(item: dict, pending_id: str, key_prefix: s
             key=f"{key_prefix}_tags_{pending_id}",
         )
         col_save, col_confirm, col_discard = st.columns(3)
-        save_clicked = col_save.form_submit_button("保存修改", use_container_width=True)
-        confirm_clicked = col_confirm.form_submit_button("保存并确认", type="primary", use_container_width=True)
-        discard_clicked = col_discard.form_submit_button("丢弃", use_container_width=True)
+        save_clicked = col_save.form_submit_button("保存修改", width="stretch")
+        confirm_clicked = col_confirm.form_submit_button("保存并确认", type="primary", width="stretch")
+        discard_clicked = col_discard.form_submit_button("丢弃", width="stretch")
     values = {
         "field_name": field_name,
         "category": category,
@@ -451,7 +450,7 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
             st.caption(f"这里只展示前 {preview_limit} 条，共 {len(pending_items)} 条。")
 
         col_confirm, col_discard = st.columns(2)
-        if col_confirm.button("确认所选设定", key=f"{key_prefix}_confirm", use_container_width=True):
+        if col_confirm.button("确认所选设定", key=f"{key_prefix}_confirm", width="stretch"):
             if not selected_ids:
                 st.warning("请先选择候选设定。")
             else:
@@ -460,7 +459,7 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
                     rebuild_retrieval_assets(project_name, build_vectors=True)
                 st.success(f"已确认 {saved_count} 条核心设定。")
                 st.rerun()
-        if col_discard.button("丢弃所选候选", key=f"{key_prefix}_discard", use_container_width=True):
+        if col_discard.button("丢弃所选候选", key=f"{key_prefix}_discard", width="stretch"):
             if not selected_ids:
                 st.warning("请先选择候选设定。")
             else:
@@ -510,11 +509,11 @@ def _render_story_settings_tab(project_name: str, story_id: str, story_name: str
 
     st.markdown("##### 当前故事与整个项目")
     col_a, col_c = st.columns(2)
-    if col_a.button("把项目共用设定复制到当前故事", use_container_width=True):
+    if col_a.button("把项目共用设定复制到当前故事", width="stretch"):
         result = copy_project_core_settings_to_story(project_name, story_id)
         st.success(f"已处理项目核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
         st.rerun()
-    if col_c.button("把当前故事设定共享给整个项目", use_container_width=True):
+    if col_c.button("把当前故事设定共享给整个项目", width="stretch"):
         result = copy_story_core_settings_to_project(project_name, story_id)
         st.success(f"已共享当前故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
         st.rerun()
@@ -530,7 +529,7 @@ def _render_story_settings_tab(project_name: str, story_id: str, story_name: str
             key="settings_import_story",
         )
         action_col.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
-        if action_col.button("复制所选故事设定", use_container_width=True, key="import_other_story"):
+        if action_col.button("复制所选故事设定", width="stretch", key="import_other_story"):
             result = copy_story_core_settings_to_story(project_name, sel_story, story_id)
             st.success(f"已复制故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
             st.rerun()
@@ -582,7 +581,7 @@ def _render_project_settings_tab(project_name: str):
                 for item in items:
                     summary = str(item.get("summary") or item.get("content") or "")[:200]
                     st.markdown(f"- **{item.get('name', '-')}**：{summary}")
-    if st.button("前往资料导入", use_container_width=True, key="goto_ingestion"):
+    if st.button("前往资料导入", width="stretch", key="goto_ingestion"):
         navigate_to("资料导入")
 
 
@@ -598,11 +597,11 @@ def _render_story_management_tab(project_name: str):
         cols[2].write(s.get("created_at", "")[:10])
 
         is_active = story_id == st.session_state.get("active_story_id", "default")
-        if cols[3].button("切换", key=f"switch_{story_id}", disabled=is_active, use_container_width=True):
+        if cols[3].button("切换", key=f"switch_{story_id}", disabled=is_active, width="stretch"):
             switch_to_story(project_name, story_id)
             st.rerun()
 
-        with cols[4].popover("编辑", use_container_width=True):
+        with cols[4].popover("编辑", width="stretch"):
             st.caption(f"故事 ID：`{story_id}`")
             new_story_name = st.text_input(
                 "故事名称",
@@ -615,7 +614,7 @@ def _render_story_management_tab(project_name: str):
                 height=80,
                 key=f"rename_story_desc_{story_id}",
             )
-            if st.button("保存故事信息", key=f"save_story_meta_{story_id}", use_container_width=True):
+            if st.button("保存故事信息", key=f"save_story_meta_{story_id}", width="stretch"):
                 try:
                     rename_story(project_name, story_id, new_story_name, new_story_description)
                     st.success("故事信息已更新。")
@@ -623,7 +622,7 @@ def _render_story_management_tab(project_name: str):
                 except Exception as exc:
                     st.error(f"保存失败：{exc}")
 
-        if cols[5].button("复制", key=f"copy_{story_id}", use_container_width=True):
+        if cols[5].button("复制", key=f"copy_{story_id}", width="stretch"):
             try:
                 new_story_name = f"{s.get('name') or story_id} 副本"
                 meta = copy_story(project_name, story_id, new_story_name)
@@ -634,12 +633,12 @@ def _render_story_management_tab(project_name: str):
 
     st.divider()
     st.markdown("#### 创建新故事")
-    with st.popover("新故事", use_container_width=True):
+    with st.popover("新故事", width="stretch"):
         new_story_name = st.text_input("故事名称", key="settings_new_story_name")
         new_story_desc = st.text_area("故事描述", height=80, key="settings_new_story_desc",
                                        placeholder="例如：原作线续写、平行世界、角色穿越...")
         copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True, key="settings_copy_story_workspace")
-        if st.button("创建故事", key="settings_create_story", use_container_width=True):
+        if st.button("创建故事", key="settings_create_story", width="stretch"):
             if new_story_name.strip():
                 meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
                 if copy_from:
@@ -650,5 +649,7 @@ def _render_story_management_tab(project_name: str):
                 st.error("故事名称不能为空。")
 
     st.divider()
-    st.markdown("#### 模型配置")
-    render_llm_settings_page()
+    st.markdown("#### 模型与费用")
+    st.caption("模型服务、API 密钥、Token 预算和用量统计已集中到独立页面，避免与故事管理混在一起。")
+    if st.button("前往模型与费用", key="settings_goto_llm", width="stretch"):
+        navigate_to("模型配置")

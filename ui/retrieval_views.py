@@ -134,7 +134,7 @@ def render_retrieval_feedback_controls(
         if st.button(
             "保存检索反馈",
             key=scoped_widget_key("save_retrieval_feedback", project_name, story_id),
-            use_container_width=True,
+            width="stretch",
         ):
             selected_hit = next((hit for hit in current_hits if hit.get("chunk", {}).get("chunk_id") == selected_chunk_id), {})
             chunk = selected_hit.get("chunk", {})

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import html
 
 import streamlit as st
 
@@ -36,6 +35,7 @@ from ui.common import create_batch_progress_callback, scoped_widget_key
 from ui.labels import label_authority, label_knowledge_category, label_scope, label_source_type
 from ui.ingestion_task_estimate import render_ingestion_task_estimate
 from ui.ingestion_batch_guard import render_batch_write_guard
+from ui.layout import render_selection_summary, render_stat_strip, render_step_heading
 from ui.streaming import run_with_stream as _run_with_stream
 
 
@@ -105,55 +105,48 @@ def apply_long_reference_fanfic_preset(preset: str, state_scope: StateScope):
 
 
 def _render_long_reference_preset_selector(state_scope: StateScope):
-    with st.expander("1. 选择处理方案", expanded=True):
-        st.caption("先说明这批资料准备用来做什么。第一次整理整本原作，通常直接选“同人资料准备”。系统会自动设置资料范围、可信度和整理方式，之后仍可手动调整。")
-        active_preset = st.session_state.get(_long_reference_key("long_reference_active_preset", state_scope), "")
-        if active_preset in LONG_REFERENCE_PRESET_INFO:
-            active_info = LONG_REFERENCE_PRESET_INFO[active_preset]
-            st.success(st.session_state.get(_long_reference_key("long_reference_preset_notice", state_scope), f"当前方案：{active_info['label']}"))
-            st.caption(active_info["effect"])
-        else:
-            st.info("当前还没有选择处理方案。第一次整理整本原作，建议选“同人资料准备（推荐）”。")
-        preset_cols = st.columns(3)
-        for column, preset_key in zip(preset_cols, LONG_REFERENCE_PRESET_INFO):
-            preset_info = LONG_REFERENCE_PRESET_INFO[preset_key]
-            with column:
-                is_active = active_preset == preset_key
-                with st.container(border=True):
-                    st.markdown(
-                        f"""
-                        <div class="nf-preset-card">
-                            <div class="nf-preset-card-title">{html.escape(preset_info['label'])}{'（当前）' if is_active else ''}</div>
-                            <div class="nf-preset-card-copy">{html.escape(preset_info['summary'])}</div>
-                            <div class="nf-preset-card-effect">{html.escape(preset_info['effect'])}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                    if st.button(
-                        "已使用此方案" if is_active else preset_info["button"],
-                        key=_long_reference_key("long_reference_preset", state_scope, preset_key),
-                        use_container_width=True,
-                        type="primary" if is_active else "secondary",
-                    ):
-                        apply_long_reference_fanfic_preset(preset_key, state_scope)
-                        st.rerun()
+    render_step_heading(1, "选择处理方案", "第一次整理整本原作，直接使用推荐方案即可；之后仍可在高级设置中调整。")
+    active_key = _long_reference_key("long_reference_active_preset", state_scope)
+    active_preset = str(st.session_state.get(active_key) or "")
+    if active_preset not in LONG_REFERENCE_PRESET_INFO:
+        active_preset = "fanfic_foundation"
+        apply_long_reference_fanfic_preset(active_preset, state_scope)
+
+    selector_key = _long_reference_key("long_reference_preset_selector", state_scope)
+    selected_preset = st.segmented_control(
+        "处理方案",
+        options=list(LONG_REFERENCE_PRESET_INFO),
+        default=active_preset if selector_key not in st.session_state else None,
+        format_func=lambda value: LONG_REFERENCE_PRESET_INFO[value]["label"],
+        key=selector_key,
+        width="stretch",
+        label_visibility="collapsed",
+    )
+    selected_preset = str(selected_preset or active_preset)
+    if selected_preset != active_preset:
+        apply_long_reference_fanfic_preset(selected_preset, state_scope)
+        st.rerun()
+
+    active_info = LONG_REFERENCE_PRESET_INFO[selected_preset]
+    with st.container(border=True):
+        st.markdown(f"**{active_info['label']}**")
+        st.caption(active_info["summary"])
+        st.caption("处理结果：" + active_info["effect"])
 
 
 def _render_long_reference_flow_notes():
-    with st.expander("流程说明", expanded=False):
-        st.markdown(
-            """
-1. **预览切分**：只把文本临时拆成章节/片段，方便检查切分是否合理，还不会写入资料库。
-2. **保存为处理批次**：保存这次切分结果，之后可以在“长篇批次”中继续处理或重试失败片段。
-3. **保存为可匹配原文**：让后续规划、写作和审阅能找到相关原文证据；这一步不会自动生成角色卡或世界设定卡。
-4. **整理为知识条目**：从原文中整理角色、关系、时间线、世界观和文风等内容。结果会先进入“待审核设定”，确认后才成为正式知识。
-            """.strip()
-        )
+    render_selection_summary(
+        [
+            "选择方案",
+            "添加文件或正文",
+            "检查拆分",
+            "确认费用并处理",
+        ]
+    )
 
 
 def _render_long_reference_source_inputs(source_type_options: dict, state_scope: StateScope) -> dict:
-    st.markdown("#### 2. 上传或粘贴资料")
+    render_step_heading(2, "添加资料", "支持多文件上传，也可以直接粘贴正文；文件解析结果会在下方立即显示。")
     long_title = st.text_input("资料标题", key=_long_reference_key("long_reference_title", state_scope), placeholder="例如：某某原作正文")
     with st.expander("资料属性与切分规则（可选）", expanded=False):
         col_a, col_b = st.columns(2)
@@ -217,9 +210,10 @@ def _render_long_reference_source_inputs(source_type_options: dict, state_scope:
             st.error(error)
         if not uploaded_text.strip():
             st.warning("文件已上传，但没有提取出正文。扫描版 PDF 需先 OCR；加密或损坏的文件请转换后重试。")
+    if text_key not in st.session_state:
+        st.session_state[text_key] = uploaded_text
     pasted_text = st.text_area(
         "或直接粘贴资料正文",
-        value=st.session_state.get(text_key, uploaded_text),
         height=260,
         key=text_key,
     )
@@ -246,7 +240,23 @@ def _long_reference_fallback_title(long_title: str, uploaded_files) -> str:
         return files[0].name.rsplit(".", 1)[0]
     if files:
         return f"{files[0].name.rsplit('.', 1)[0]} 等 {len(files)} 份资料"
-    return "长篇资料"
+    return "粘贴资料"
+
+
+def _reset_long_reference_selection_state(state_scope: StateScope) -> None:
+    start_key = _long_reference_key("long_reference_range_start", state_scope)
+    try:
+        previous_start = int(st.session_state.get(start_key) or 1)
+    except (TypeError, ValueError):
+        previous_start = 1
+    keys = [
+        _long_reference_key("long_reference_selection_mode", state_scope),
+        start_key,
+        _long_reference_key("long_reference_range_end", state_scope, previous_start),
+        _long_reference_key("long_reference_selected_segments", state_scope),
+    ]
+    for key in keys:
+        st.session_state.pop(key, None)
 
 
 def _render_long_reference_split_controls(
@@ -266,6 +276,7 @@ def _render_long_reference_split_controls(
     # 文本、标题、模板或上限变化后立即废弃旧预览，避免把新原文哈希
     # 与旧片段/旧证据位置保存到同一批次。
     if pasted_text.strip() and st.session_state.get(split_signature_key) != split_signature:
+        _reset_long_reference_selection_state(state_scope)
         title = _long_reference_fallback_title(long_title, uploaded_files)
         segments = split_long_reference_text(
             title,
@@ -323,10 +334,15 @@ def _render_long_reference_segment_preview(
         char_count=len(normalize_text_for_fingerprint(pasted_text)),
         segment_count=len(segments),
     )
-    st.markdown("#### 3. 检查切分结果")
-    st.caption(f"当前预览：{len(segments)} 个片段 / 共 {total_chars} 字符。")
-    if content_fingerprint:
-        st.caption(f"资料指纹：`{content_fingerprint[:12]}`")
+    render_step_heading(3, "检查切分", "确认章节识别和处理范围；这里只是预览，还不会写入资料库。")
+    render_stat_strip(
+        [
+            ("片段", len(segments)),
+            ("正文字符", f"{total_chars:,}"),
+            ("输入来源", f"{len(files)} 个文件" if files else "粘贴文本"),
+            ("资料指纹", content_fingerprint[:12] if content_fingerprint else "-"),
+        ]
+    )
     if matching_batches:
         best_match = matching_batches[0]
         st.warning(
@@ -353,20 +369,76 @@ def _render_long_reference_segment_preview(
             st.session_state[_long_reference_key("long_reference_batch_id", state_scope)] = selected_match_id
             st.success("已绑定到已有批次。请在“长篇资料批次管理”里继续导入、提取或重试。")
             st.rerun()
-    for segment in segments[:10]:
-        st.markdown(f"#### {segment.get('index')}. {segment.get('title')}")
-        st.caption(f"切分方式={segment.get('split_method')} / 字符数={segment.get('char_count')}")
-        st.write(segment.get("content", "")[:320] + ("..." if len(segment.get("content", "")) > 320 else ""))
-    if len(segments) > 10:
-        st.caption(f"仅预览前 10 个片段，共 {len(segments)} 个。")
-
     segment_options = list(range(len(segments)))
-    selected_indices = st.multiselect(
-        "选择本次要处理的片段",
-        options=segment_options,
-        default=segment_options,
-        format_func=lambda index: f"{segments[index].get('index')}. {segments[index].get('title')}（{segments[index].get('char_count')} 字符）",
-        key=_long_reference_key("long_reference_selected_segments", state_scope),
+    preview_rows = [
+        {
+            "序号": segment.get("index", index + 1),
+            "章节 / 片段": segment.get("title") or f"片段 {index + 1}",
+            "字符": int(segment.get("char_count") or 0),
+            "切分方式": segment.get("split_method") or "自动",
+            "内容预览": str(segment.get("content") or "").replace("\n", " ")[:90],
+        }
+        for index, segment in enumerate(segments[:200])
+    ]
+    st.dataframe(
+        preview_rows,
+        width="stretch",
+        hide_index=True,
+        height=min(420, 38 + max(1, len(preview_rows)) * 35),
+    )
+    if len(segments) > len(preview_rows):
+        st.caption(f"表格只展示前 {len(preview_rows)} 个片段，共 {len(segments)} 个；处理范围仍可覆盖全部片段。")
+
+    selection_mode_key = _long_reference_key("long_reference_selection_mode", state_scope)
+    selection_mode = st.segmented_control(
+        "处理范围",
+        options=["全部片段", "指定范围", "手动选择"],
+        default="全部片段" if selection_mode_key not in st.session_state else None,
+        key=selection_mode_key,
+        width="stretch",
+    )
+    if selection_mode == "指定范围":
+        range_cols = st.columns(2)
+        start_index = int(
+            range_cols[0].number_input(
+                "起始片段",
+                min_value=1,
+                max_value=max(1, len(segments)),
+                value=1,
+                key=_long_reference_key("long_reference_range_start", state_scope),
+            )
+        )
+        end_index = int(
+            range_cols[1].number_input(
+                "结束片段",
+                min_value=start_index,
+                max_value=max(start_index, len(segments)),
+                value=min(len(segments), max(start_index, 20)),
+                key=_long_reference_key("long_reference_range_end", state_scope, start_index),
+            )
+        )
+        selected_indices = list(range(start_index - 1, end_index))
+    elif selection_mode == "手动选择":
+        selected_indices = st.multiselect(
+            "选择片段",
+            options=segment_options,
+            default=[],
+            format_func=lambda index: (
+                f"{segments[index].get('index')}. {segments[index].get('title')}"
+                f"（{segments[index].get('char_count')} 字符）"
+            ),
+            key=_long_reference_key("long_reference_selected_segments", state_scope),
+            placeholder="搜索并选择需要处理的片段",
+        )
+    else:
+        selected_indices = segment_options
+
+    render_selection_summary(
+        [
+            f"处理范围：{selection_mode or '全部片段'}",
+            f"已选 {len(selected_indices)} / {len(segments)} 个",
+            f"约 {sum(int(segments[index].get('char_count') or 0) for index in selected_indices):,} 字符",
+        ]
     )
     return {
         "source_file_name": source_file_name,
@@ -417,12 +489,14 @@ def _render_long_reference_extraction_options(
     state_scope: StateScope,
 ) -> dict:
     with st.expander("提取参数设置", expanded=False):
+        expert_preset_key = _long_reference_key("long_reference_shared_expert_preset", state_scope)
+        if expert_preset_key not in st.session_state:
+            st.session_state[expert_preset_key] = "balanced"
         shared_expert_preset = st.selectbox(
             "专家提取预设",
             options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
-            index=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()).index("balanced"),
             format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
-            key=_long_reference_key("long_reference_shared_expert_preset", state_scope),
+            key=expert_preset_key,
             help="预设会自动推荐提取分类和提取模式。第一次处理长篇资料建议使用“平衡总管”。",
         )
         shared_preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[shared_expert_preset]
@@ -447,12 +521,22 @@ def _render_long_reference_extraction_options(
             ),
             help="决定允许模型输出哪些类型的知识。没有选中的分类不会被主动提取。",
         )
+        extraction_mode_key = _long_reference_key(
+            "long_reference_shared_mode",
+            state_scope,
+            shared_expert_preset,
+        )
+        if extraction_mode_key not in st.session_state:
+            st.session_state[extraction_mode_key] = (
+                shared_preset["mode"]
+                if shared_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS
+                else next(iter(KNOWLEDGE_EXTRACTION_MODE_LABELS))
+            )
         shared_extraction_mode = st.selectbox(
             "提取模式",
             options=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()),
-            index=list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys()).index(shared_preset["mode"]) if shared_preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
             format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
-            key=_long_reference_key("long_reference_shared_mode", state_scope, shared_expert_preset),
+            key=extraction_mode_key,
             help="模式决定模型整理资料时的细致程度。通用模式更稳，深度模式更适合建立完整的同人创作资料库。",
         )
         st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(shared_extraction_mode, "当前模式暂无说明。"))
@@ -477,8 +561,11 @@ def _render_long_reference_quick_processing(
     selected_indices: list[int],
     knowledge_category_options: list[str],
 ) -> dict:
-    st.markdown("#### 4. 自动处理")
-    st.caption("系统会依次保存批次、保存可匹配原文、整理知识条目，并自动确认低风险内容；有冲突或证据不足的内容会留在“待审核设定”。")
+    render_step_heading(
+        4,
+        "确认并处理",
+        "系统会保存原文、整理知识并确认低风险内容；冲突或证据不足的结果会进入待审核。",
+    )
     quick_extract_limit = st.number_input(
         "本次最多处理片段数",
         min_value=1,
@@ -495,20 +582,23 @@ def _render_long_reference_quick_processing(
         )
     selected_count = len(selected_indices)
     planned_quick_count = min(int(quick_extract_limit), selected_count)
-    st.info(
-        f"本次自动处理将按当前选择顺序处理 {planned_quick_count} 个片段；"
-        f"已选择 {selected_count} 个，当前资料共 {len(segments)} 个片段。"
+    render_selection_summary(
+        [
+            f"本次处理 {planned_quick_count} 个片段",
+            f"已选 {selected_count} 个",
+            f"资料共 {len(segments)} 个片段",
+        ]
     )
     with st.expander("自动处理选项", expanded=False):
         quick_import_to_index = st.checkbox(
             "同时保存为可匹配原文",
-            value=True,
+            value=False,
             key=_long_reference_key("long_reference_quick_import_index", state_scope),
             help="开启后，原文片段会成为可匹配资料，后续写作可以找到相关原文证据。",
         )
         quick_auto_confirm = st.checkbox(
             "自动审核并保存低风险知识",
-            value=True,
+            value=False,
             key=_long_reference_key("long_reference_quick_auto_confirm", state_scope),
             help="只自动确认没有冲突、有证据且可信度较高的内容；风险内容会留在待审核设定中。",
         )
@@ -542,8 +632,8 @@ def _render_long_reference_quick_processing(
     )
 
     if st.button(
-        "开始处理所选片段",
-        use_container_width=True,
+        f"开始处理 {planned_quick_count} 个片段",
+        width="stretch",
         type="primary",
         key=_long_reference_key("long_reference_quick_process", state_scope),
     ):
@@ -581,7 +671,8 @@ def _render_long_reference_quick_processing(
             }
             story_id = str(st.session_state.get("active_story_id") or "default")
             st.session_state[scoped_widget_key("source_ingestion_task_select", project_name, story_id)] = task["task_id"]
-            st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "资料任务"
+            st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "处理"
+            st.session_state[scoped_widget_key("ingestion_task_view", project_name, story_id)] = "后台任务"
             wake_ingestion_task_dispatcher()
             st.rerun()
 
@@ -669,7 +760,7 @@ def _render_long_reference_stepwise_processing(
         )
         if st.button(
             "提取知识库条目",
-            use_container_width=True,
+            width="stretch",
             key=_long_reference_key("long_reference_manual_extract", state_scope),
         ):
             if not selected_indices:
@@ -732,93 +823,95 @@ def _render_long_reference_stepwise_processing(
                 })
 
 
-def render_long_reference_importer(project_name: str, source_type_options: dict, knowledge_category_options: list[str], expanded: bool = False):
+def render_long_reference_importer(
+    project_name: str,
+    source_type_options: dict,
+    knowledge_category_options: list[str],
+):
     current_story_id = str(st.session_state.get("active_story_id") or "default")
     state_scope = (project_name, current_story_id)
-    with st.expander("长篇文本导入", expanded=expanded):
-        st.info("推荐顺序：选择处理方案 → 上传或粘贴文本 → 检查切分结果 → 自动处理。有冲突或证据不足的内容会留在“待审核设定”中。")
-        _render_long_reference_preset_selector(state_scope)
-        _render_long_reference_flow_notes()
+    _render_long_reference_flow_notes()
+    _render_long_reference_preset_selector(state_scope)
 
-        source_inputs = _render_long_reference_source_inputs(source_type_options, state_scope)
-        long_title = source_inputs["long_title"]
-        long_scope = source_inputs["long_scope"]
-        long_authority = source_inputs["long_authority"]
-        long_source_type = source_inputs["long_source_type"]
-        long_origin = source_inputs["long_origin"]
-        max_chars = source_inputs["max_chars"]
-        uploaded_files = source_inputs["uploaded_files"]
-        pasted_text = source_inputs["pasted_text"]
+    source_inputs = _render_long_reference_source_inputs(source_type_options, state_scope)
+    long_title = source_inputs["long_title"]
+    long_scope = source_inputs["long_scope"]
+    long_authority = source_inputs["long_authority"]
+    long_source_type = source_inputs["long_source_type"]
+    long_origin = source_inputs["long_origin"]
+    max_chars = source_inputs["max_chars"]
+    uploaded_files = source_inputs["uploaded_files"]
+    pasted_text = source_inputs["pasted_text"]
 
-        segments = _render_long_reference_split_controls(
-            long_title,
-            uploaded_files,
-            pasted_text,
-            max_chars,
-            long_source_type,
-            state_scope,
-        )
-        if not segments:
+    segments = _render_long_reference_split_controls(
+        long_title,
+        uploaded_files,
+        pasted_text,
+        max_chars,
+        long_source_type,
+        state_scope,
+    )
+    if not segments:
+        return
+
+    preview_state = _render_long_reference_segment_preview(
+        project_name,
+        uploaded_files,
+        pasted_text,
+        segments,
+        state_scope,
+    )
+    source_file_name = preview_state["source_file_name"]
+    content_fingerprint = preview_state["content_fingerprint"]
+    selected_indices = preview_state["selected_indices"]
+
+    batch_context = {
+        "project_name": project_name,
+        "long_title": long_title,
+        "long_scope": long_scope,
+        "long_authority": long_authority,
+        "long_source_type": long_source_type,
+        "long_origin": long_origin,
+        "uploaded_files": uploaded_files,
+        "parsed_documents": source_inputs.get("parsed_documents", []),
+        "story_id": current_story_id,
+        "source_file_name": source_file_name,
+        "content_fingerprint": content_fingerprint,
+        "source_content_hash": hashlib.sha256(pasted_text.encode("utf-8")).hexdigest(),
+        "pasted_text": pasted_text,
+        "segments": segments,
+        "state_scope": state_scope,
+    }
+
+    bound_batch_id = str(
+        st.session_state.get(_long_reference_key("long_reference_batch_id", state_scope)) or ""
+    )
+    if bound_batch_id and load_long_reference_batch(project_name, bound_batch_id):
+        if render_batch_write_guard(
+            project_name,
+            bound_batch_id,
+            widget_scope="importer",
+        ):
             return
 
-        preview_state = _render_long_reference_segment_preview(
-            project_name,
-            uploaded_files,
-            pasted_text,
-            segments,
-            state_scope,
-        )
-        source_file_name = preview_state["source_file_name"]
-        content_fingerprint = preview_state["content_fingerprint"]
-        selected_indices = preview_state["selected_indices"]
+    extraction_options = _render_long_reference_quick_processing(
+        project_name,
+        state_scope,
+        batch_context,
+        segments,
+        selected_indices,
+        knowledge_category_options,
+    )
+    shared_categories = extraction_options["categories"]
+    shared_extraction_mode = extraction_options["mode"]
+    shared_custom_instructions = extraction_options["custom_instructions"]
 
-        batch_context = {
-            "project_name": project_name,
-            "long_title": long_title,
-            "long_scope": long_scope,
-            "long_authority": long_authority,
-            "long_source_type": long_source_type,
-            "long_origin": long_origin,
-            "uploaded_files": uploaded_files,
-            "parsed_documents": source_inputs.get("parsed_documents", []),
-            "story_id": current_story_id,
-            "source_file_name": source_file_name,
-            "content_fingerprint": content_fingerprint,
-            "source_content_hash": hashlib.sha256(pasted_text.encode("utf-8")).hexdigest(),
-            "pasted_text": pasted_text,
-            "segments": segments,
-            "state_scope": state_scope,
-        }
-
-        bound_batch_id = str(
-            st.session_state.get(_long_reference_key("long_reference_batch_id", state_scope)) or ""
-        )
-        if bound_batch_id and load_long_reference_batch(project_name, bound_batch_id):
-            if render_batch_write_guard(
-                project_name,
-                bound_batch_id,
-                widget_scope="importer",
-            ):
-                return
-
-        extraction_options = _render_long_reference_quick_processing(
-            project_name,
-            state_scope,
-            batch_context,
-            segments,
-            selected_indices,
-            knowledge_category_options,
-        )
-        shared_categories = extraction_options["categories"]
-        shared_extraction_mode = extraction_options["mode"]
-        shared_custom_instructions = extraction_options["custom_instructions"]
-
-        _render_long_reference_stepwise_processing(
-            project_name,
-            state_scope,
-            batch_context,
-            selected_indices,
-            shared_categories,
-            shared_extraction_mode,
-            shared_custom_instructions,
-        )
+    _render_long_reference_stepwise_processing(
+        project_name,
+        state_scope,
+        batch_context,
+        selected_indices,
+        shared_categories,
+        shared_extraction_mode,
+        shared_custom_instructions,
+    )

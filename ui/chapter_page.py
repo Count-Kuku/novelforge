@@ -31,7 +31,7 @@ from ui.discussion import (
     _render_approved_discussion_artifact,
 )
 from ui.labels import label_status
-from ui.layout import render_section_heading
+from ui.layout import render_empty_state, render_section_heading
 from ui.prompt_option_tools import (
     _prompt_option_label,
     _render_generation_injection_preview,
@@ -261,7 +261,7 @@ def _render_missing_outline_actions(
         )
         col_gen_outline, col_full_pipeline = st.columns(2)
         with col_gen_outline:
-            if st.button("仅生成细纲", use_container_width=True, key=scoped_widget_key("gen_outline_btn", *chapter_scope)):
+            if st.button("仅生成细纲", width="stretch", key=scoped_widget_key("gen_outline_btn", *chapter_scope)):
                 if not gen_requirement.strip():
                     st.warning("请先填写创作需求。")
                 else:
@@ -285,7 +285,7 @@ def _render_missing_outline_actions(
                     except Exception as exc:
                         st.error(f"细纲生成失败：{exc}")
         with col_full_pipeline:
-            if st.button("自动完成：细纲→正文→审阅→整理设定", use_container_width=True, type="primary", key=scoped_widget_key("full_pipeline_btn", *chapter_scope)):
+            if st.button("自动完成：细纲→正文→审阅→整理设定", width="stretch", type="primary", key=scoped_widget_key("full_pipeline_btn", *chapter_scope)):
                 if not gen_requirement.strip():
                     st.warning("请先填写创作需求。")
                 else:
@@ -367,14 +367,14 @@ def _render_chapter_generation_actions(
             "写正文" if has_outline else "需要先填写或生成细纲",
             type="primary" if has_outline else "secondary",
             disabled=not has_outline,
-            use_container_width=True,
+            width="stretch",
             key=scoped_widget_key("write_chapter_btn", *chapter_scope),
         )
     with col_pipeline:
         pipeline_clicked = st.button(
             "自动完成：正文→审阅→整理设定" if has_outline else "需要先填写或生成细纲",
             disabled=not has_outline,
-            use_container_width=True,
+            width="stretch",
             key=scoped_widget_key("inline_pipeline_btn", *chapter_scope),
         )
 
@@ -451,7 +451,7 @@ def _render_chapter_review_memory_actions(
 ):
     save_col, review_col, memory_col = st.columns(3)
     with save_col:
-        if st.button("保存正文", use_container_width=True):
+        if st.button("保存正文", width="stretch"):
             save_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
             st.success("正文已保存")
 
@@ -461,7 +461,7 @@ def _render_chapter_review_memory_actions(
             "审阅正文" if has_chapter else "需要先生成正文",
             disabled=not has_chapter,
             key=scoped_widget_key("review_inline", *chapter_scope),
-            use_container_width=True,
+            width="stretch",
         )
         if do_review and has_chapter:
             try:
@@ -485,7 +485,7 @@ def _render_chapter_review_memory_actions(
             "提炼待审核设定" if has_chapter else "需要先生成正文",
             disabled=not has_chapter,
             key=scoped_widget_key("memory_inline", *chapter_scope),
-            use_container_width=True,
+            width="stretch",
         )
         if do_memory and has_chapter:
             try:
@@ -795,9 +795,36 @@ def _render_chapter_review_section(project_name: str, context: dict, chapter_tex
 
 def render_chapter_page(project_name: str):
     context = _prepare_chapter_page_context(project_name)
-    render_section_heading("细纲输入", "可以读取已有细纲，也可以从需求自动生成细纲或完整执行。")
-    chapter_outline = _render_chapter_outline_section(project_name, context)
-    render_section_heading("写作控制", "确认本章临时要求和可选写作设置，然后单独生成正文或运行完整自动流程。")
-    chapter_text = _render_chapter_generation_section(project_name, context, chapter_outline)
+    if context["chapter_outline_editor_key"] in st.session_state:
+        st.session_state[context["chapter_outline_gen_key"]] = st.session_state[context["chapter_outline_editor_key"]]
+    if context["chapter_text_editor_key"] in st.session_state:
+        st.session_state[context["chapter_text_key"]] = st.session_state[context["chapter_text_editor_key"]]
+
+    view = st.segmented_control(
+        "章节写作流程",
+        options=["1 · 准备细纲", "2 · 写作正文", "3 · 审阅整理"],
+        default="1 · 准备细纲",
+        key=scoped_widget_key("chapter_page_view", *context["chapter_scope"]),
+        label_visibility="collapsed",
+    )
+    if view == "1 · 准备细纲":
+        render_section_heading("细纲输入", "可以读取已有细纲，也可以从需求自动生成细纲或完整执行。")
+        _render_chapter_outline_section(project_name, context)
+        return
+
+    chapter_outline = str(st.session_state.get(context["chapter_outline_gen_key"], context["existing_outline"]) or "")
+    if view == "2 · 写作正文":
+        if not chapter_outline.strip():
+            st.warning("当前没有细纲。仍可以直接写作，但先准备细纲通常会更稳定。")
+        render_section_heading("写作正文", "设定本章临时要求，然后单独生成正文或运行完整自动流程。")
+        _render_chapter_generation_section(project_name, context, chapter_outline)
+        return
+
+    chapter_text = str(st.session_state.get(context["chapter_text_key"], context["existing_chapter"]) or "")
     render_section_heading("审阅与设定提炼", "正文稳定后可以保存、审阅，并把长期设定整理为待审核内容。")
+    if not chapter_text.strip():
+        render_empty_state("还没有可审阅的正文", "请先切换到“写作正文”生成或粘贴本章内容。")
+        return
+    with st.expander("预览当前正文", expanded=False):
+        st.text_area("待审阅正文", value=chapter_text, height=320, disabled=True)
     _render_chapter_review_section(project_name, context, chapter_text)

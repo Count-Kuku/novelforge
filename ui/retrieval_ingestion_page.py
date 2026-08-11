@@ -3,36 +3,49 @@ from __future__ import annotations
 
 import streamlit as st
 
-from novelforge.domain.extraction_presets import (
-    KNOWLEDGE_EXTRACTION_EXPERT_PRESETS,
-    KNOWLEDGE_EXTRACTION_MODE_HELP,
-    KNOWLEDGE_EXTRACTION_MODE_LABELS,
-    default_extraction_categories,
-)
-from novelforge.workflows.skills import organize_reference_text
 from novelforge.workflows.source_workflows import (
     build_ingestion_workbench,
-    extract_pasted_reference_to_pending,
-    import_organized_reference_entries,
     save_manual_retrieval_source_card,
 )
-from ui.common import scoped_session_key, scoped_widget_key
-from ui.labels import label_authority, label_knowledge_category, label_scope, label_source_type
-from ui.step_views import render_step_json_expander, render_step_validation
-from ui.streaming import run_with_stream as _run_with_stream
+from ui.common import scoped_widget_key
+from ui.labels import label_authority, label_scope, label_source_type
+from ui.layout import render_empty_state, render_section_heading, render_stat_strip
 from ui.web_research import render_web_research_import
 
 
-INGESTION_WORKSPACE_SECTIONS = ["资料任务", "资料来源", "待审核设定", "处理记录", "长篇批次", "知识整理", "资料包"]
+INGESTION_WORKSPACE_SECTIONS = ["概览", "导入", "处理", "审核", "管理"]
 
 INGESTION_WORKSPACE_DESCRIPTIONS = {
-    "资料任务": "查看持久化执行进度，继续中断任务，或只重试失败片段。",
-    "资料来源": "查看资料健康度、批次和原文来源账本。",
-    "待审核设定": "审核提取结果，处理重复、冲突和证据不足的条目。",
-    "处理记录": "检查自动审核决策，并在需要时回滚处理记录。",
-    "长篇批次": "继续未完成批次，重试失败片段或执行专项提取。",
-    "知识整理": "维护已经进入正式知识库的角色、关系、事件与规则。",
-    "资料包": "生成供人工检查和后续使用的项目资料汇总。",
+    "概览": "查看资料准备状态和当前最需要完成的一件事。",
+    "导入": "上传文件、粘贴文本、整理网络资料或新增手动条目。",
+    "处理": "跟踪后台任务，继续长篇批次或重试失败片段。",
+    "审核": "确认提取结果，处理重复、冲突和证据不足的条目。",
+    "管理": "维护原文来源、正式知识、资料健康度和资料包。",
+}
+
+_WORKSPACE_TARGET_MAP = {
+    "导入向导": "导入",
+    "导入资料": "导入",
+    "资料任务": "处理",
+    "处理任务": "处理",
+    "处理进度": "处理",
+    "长篇批次": "处理",
+    "待审核设定": "审核",
+    "待审核": "审核",
+    "处理记录": "审核",
+    "资料来源": "管理",
+    "资料库": "管理",
+    "资料包": "管理",
+    "知识整理": "管理",
+    "知识库": "管理",
+}
+
+_MANAGEMENT_VIEW_MAP = {
+    "资料来源": "原文资料",
+    "资料库": "原文资料",
+    "资料包": "资料包",
+    "知识整理": "知识条目",
+    "知识库": "知识条目",
 }
 
 
@@ -40,379 +53,87 @@ def _ingestion_workspace_key(project_name: str, story_id: str) -> str:
     return scoped_widget_key("ingestion_workspace_section", project_name, story_id)
 
 
+def _migrate_ingestion_subview_state(project_name: str, story_id: str, legacy_workspace: str) -> None:
+    if legacy_workspace in {"资料任务", "处理任务", "处理进度", "长篇批次"}:
+        st.session_state[scoped_widget_key("ingestion_task_view", project_name, story_id)] = (
+            "长篇批次" if legacy_workspace == "长篇批次" else "后台任务"
+        )
+    elif legacy_workspace in {"待审核设定", "待审核", "处理记录"}:
+        st.session_state[scoped_widget_key("ingestion_review_view", project_name, story_id)] = (
+            "处理记录" if legacy_workspace == "处理记录" else "审核队列"
+        )
+    elif legacy_workspace in _MANAGEMENT_VIEW_MAP:
+        st.session_state[scoped_widget_key("ingestion_management_view", project_name, story_id)] = (
+            _MANAGEMENT_VIEW_MAP[legacy_workspace]
+        )
+
+
 def _render_ingestion_metrics(workbench: dict) -> None:
-    st.caption(
-        f"资料健康度 {workbench.get('health_score', 0)} / 100。"
-        "导入内容会保存在当前项目中，并自动供后续规划、写作和审阅匹配使用。"
+    render_stat_strip(
+        [
+            ("资料健康度", f"{workbench.get('health_score', 0)} / 100"),
+            ("处理中", workbench.get("needs_processing_count", 0), "后台任务与未完成批次"),
+            ("待审核", workbench.get("pending_review_count", 0), "确认后才会用于生成"),
+            ("可匹配原文", workbench.get("ready_source_count", 0)),
+            ("正式知识", workbench.get("confirmed_knowledge_count", 0)),
+        ]
     )
-    metric_cols = st.columns(6)
-    metric_cols[0].metric("待处理任务", workbench.get("needs_processing_count", 0))
-    metric_cols[1].metric("待审核设定", workbench.get("pending_review_count", 0))
-    metric_cols[2].metric("风险项", workbench.get("risk_count", 0))
-    metric_cols[3].metric("长篇批次", len(workbench.get("batch_rows", [])))
-    metric_cols[4].metric("可匹配原文", workbench.get("ready_source_count", 0))
-    metric_cols[5].metric("正式知识", workbench.get("confirmed_knowledge_count", 0))
 
 
 def _activate_ingestion_action(project_name: str, story_id: str, action: dict) -> None:
     target_section = str(action.get("target_section") or "")
-    if target_section in INGESTION_WORKSPACE_SECTIONS:
-        st.session_state[_ingestion_workspace_key(project_name, story_id)] = target_section
+    workspace = _WORKSPACE_TARGET_MAP.get(target_section, target_section)
+    if workspace in INGESTION_WORKSPACE_SECTIONS:
+        st.session_state[_ingestion_workspace_key(project_name, story_id)] = workspace
+    if target_section in {"资料任务", "处理任务", "处理进度", "长篇批次"}:
+        st.session_state[scoped_widget_key("ingestion_task_view", project_name, story_id)] = (
+            "长篇批次" if target_section == "长篇批次" else "后台任务"
+        )
+    if target_section in {"待审核设定", "待审核", "处理记录"}:
+        st.session_state[scoped_widget_key("ingestion_review_view", project_name, story_id)] = (
+            "处理记录" if target_section == "处理记录" else "审核队列"
+        )
+    if target_section in _MANAGEMENT_VIEW_MAP:
+        st.session_state[scoped_widget_key("ingestion_management_view", project_name, story_id)] = (
+            _MANAGEMENT_VIEW_MAP[target_section]
+        )
     batch_id = str(action.get("batch_id") or "")
     if batch_id:
         st.session_state[scoped_widget_key("long_reference_batch_select", project_name)] = batch_id
     task_id = str(action.get("task_id") or "")
     if task_id:
         st.session_state[scoped_widget_key("source_ingestion_task_select", project_name, story_id)] = task_id
-    if target_section == "导入向导":
-        st.session_state[scoped_session_key("ingestion_import_hint", project_name, story_id)] = True
     st.rerun()
 
 
 def _render_ingestion_workbench(project_name: str, story_id: str, workbench: dict) -> None:
-    st.markdown("### 资料处理工作台")
+    render_section_heading("资料概况", "导入内容会保存在当前项目，并自动供后续规划、写作和审阅匹配使用。")
     overall_status = str(workbench.get("overall_status") or "empty")
     if overall_status == "attention":
         st.warning("当前有失败片段或高风险知识需要处理。已成功保存的内容不会因为重试而丢失。")
-    elif overall_status == "processing":
-        st.info("资料已经进入处理流程；优先完成下面的推荐操作，就可以逐步转为正式知识。")
-    elif overall_status == "ready":
-        st.success("当前资料已经可以用于检索和写作。仍可继续补充薄弱分类或导入新来源。")
-    else:
-        st.info("当前还没有可复用资料。可以从整本原作、少量设定或手动资料卡开始。")
 
     _render_ingestion_metrics(workbench)
     actions = workbench.get("actions", [])
     if actions:
-        st.markdown("#### 推荐下一步")
-        for action in actions[:6]:
-            with st.container(border=True):
-                copy_col, action_col = st.columns([4, 1])
-                copy_col.markdown(f"**{action.get('title', '继续处理资料')}**")
-                copy_col.caption(str(action.get("detail") or ""))
-                if action_col.button(
-                    str(action.get("button_label") or "前往处理"),
-                    key=scoped_widget_key(
-                        "ingestion_workbench_action",
-                        project_name,
-                        story_id,
-                        action.get("action_id", ""),
-                    ),
-                    use_container_width=True,
-                    type="primary" if action.get("tone") == "error" else "secondary",
-                ):
-                    _activate_ingestion_action(project_name, story_id, action)
-
-    batch_rows = workbench.get("batch_rows", [])
-    if batch_rows:
-        with st.expander("查看全部长篇批次状态", expanded=False):
-            st.dataframe(
-                [
-                    {
-                        "资料批次": row.get("title", ""),
-                        "状态": row.get("status_label", ""),
-                        "片段": row.get("segment_count", 0),
-                        "已完成": row.get("completed_count", 0),
-                        "待导入": row.get("pending_import_count", 0),
-                        "待整理": row.get("pending_extract_count", 0),
-                        "失败": row.get("failed_count", 0),
-                        "更新时间": row.get("updated_at", ""),
-                    }
-                    for row in batch_rows
-                ],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-
-def _render_organized_reference_result(
-    project_name: str,
-    current_story_id: str,
-    paste_scope: str,
-    paste_authority: str,
-    paste_origin: str,
-) -> None:
-    result_key = scoped_session_key("organized_reference_result", project_name, current_story_id)
-    organized_result = st.session_state.get(result_key, {})
-    organized_payload = organized_result.get("data", {}).get("organized_reference", {})
-    if not organized_payload:
-        return
-
-    st.markdown("#### 整理预览")
-    st.markdown(organized_result.get("data", {}).get("report_markdown", ""))
-    render_step_validation(organized_result)
-    render_step_json_expander("整理结果详细数据", organized_payload)
-    if st.button(
-        "保存为可匹配资料",
-        use_container_width=True,
-        type="primary",
-        key=scoped_widget_key("save_organized_reference", project_name, current_story_id),
-    ):
-        imported = import_organized_reference_entries(
-            project_name,
-            organized_payload,
-            scope=paste_scope,
-            authority=paste_authority,
-            origin=paste_origin,
-        )
-        st.success(f"已导入 {imported} 条资料并重建索引。")
-        st.rerun()
-
-
-def _render_organized_reference_ingestion(project_name: str, current_story_id: str) -> None:
-    state_scope = (project_name, current_story_id)
-    result_key = scoped_session_key("organized_reference_result", *state_scope)
-    st.markdown("#### 粘贴并整理为可匹配资料")
-    paste_title = st.text_input(
-        "资料标题",
-        key=scoped_widget_key("organized_reference_title", *state_scope),
-    )
-    col_scope, col_auth = st.columns(2)
-    paste_scope = col_scope.selectbox(
-        "资料范围",
-        options=["canon", "reference"],
-        format_func=label_scope,
-        key=scoped_widget_key("organized_reference_scope", *state_scope),
-    )
-    paste_authority = col_auth.selectbox(
-        "资料可信度",
-        options=["official", "curated", "community", "unknown"],
-        index=1,
-        format_func=label_authority,
-        key=scoped_widget_key("organized_reference_authority", *state_scope),
-    )
-    paste_origin = st.text_input(
-        "来源说明（可选）",
-        key=scoped_widget_key("organized_reference_origin", *state_scope),
-    )
-    paste_text = st.text_area(
-        "资料正文",
-        height=240,
-        key=scoped_widget_key("organized_reference_text", *state_scope),
-    )
-    if st.button(
-        "整理并预览",
-        use_container_width=True,
-        key=scoped_widget_key("organize_reference_preview", *state_scope),
-    ):
-        if not paste_text.strip():
-            st.error("请先粘贴资料正文。")
-        else:
-            try:
-                st.session_state[result_key] = _run_with_stream(
-                    "正在整理资料...",
-                    organize_reference_text,
+        action = actions[0]
+        with st.container(border=True):
+            copy_col, action_col = st.columns([4, 1], vertical_alignment="center")
+            copy_col.markdown(f"**推荐：{action.get('title', '继续处理资料')}**")
+            copy_col.caption(str(action.get("detail") or ""))
+            if action_col.button(
+                str(action.get("button_label") or "前往处理"),
+                key=scoped_widget_key(
+                    "ingestion_workbench_action",
                     project_name,
-                    paste_title,
-                    paste_text,
-                    preview_language="json",
-                )
-            except Exception as exc:
-                st.error(f"整理失败：{exc}")
-
-    _render_organized_reference_result(
-        project_name,
-        current_story_id,
-        paste_scope,
-        paste_authority,
-        paste_origin,
-    )
-
-
-def _render_knowledge_extraction_settings(
-    knowledge_category_options: list[str],
-    project_name: str,
-    current_story_id: str,
-) -> tuple[list[str], str, str]:
-    state_scope = (project_name, current_story_id)
-    with st.expander("提取设置", expanded=False):
-        expert_preset = st.selectbox(
-            "专家提取预设",
-            options=list(KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.keys()),
-            format_func=lambda value: KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[value]["label"],
-            key=scoped_widget_key("knowledge_extract_expert_preset", *state_scope),
-        )
-        preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[expert_preset]
-        enabled_categories = st.multiselect(
-            "提取分类",
-            options=knowledge_category_options,
-            default=default_extraction_categories("preset", preset, knowledge_category_options),
-            format_func=label_knowledge_category,
-            key=scoped_widget_key("knowledge_extract_categories", *state_scope, expert_preset),
-        )
-        extraction_modes = list(KNOWLEDGE_EXTRACTION_MODE_LABELS.keys())
-        extraction_mode = st.selectbox(
-            "提取模式",
-            options=extraction_modes,
-            index=extraction_modes.index(preset["mode"]) if preset["mode"] in KNOWLEDGE_EXTRACTION_MODE_LABELS else 0,
-            format_func=lambda value: KNOWLEDGE_EXTRACTION_MODE_LABELS.get(value, value),
-            key=scoped_widget_key("knowledge_extract_mode", *state_scope, expert_preset),
-        )
-        st.info(KNOWLEDGE_EXTRACTION_MODE_HELP.get(extraction_mode, "当前模式暂无说明。"))
-        custom_instructions = st.text_area(
-            "补充提取要求（可选）",
-            height=90,
-            key=scoped_widget_key("knowledge_extract_custom_instructions", *state_scope, expert_preset),
-            placeholder="例如：只保留长期复用的事实；不确定内容标为 ambiguous。",
-        )
-    return enabled_categories, extraction_mode, custom_instructions
-
-
-def _run_pasted_knowledge_extraction(
-    project_name: str,
-    current_story_id: str,
-    *,
-    knowledge_title: str,
-    knowledge_text: str,
-    enabled_categories: list[str],
-    extraction_mode: str,
-    custom_instructions: str,
-    knowledge_scope: str,
-    knowledge_authority: str,
-    knowledge_origin: str,
-    run_auto: bool,
-) -> None:
-    extraction_summary = _run_with_stream(
-        "正在提取知识库条目...",
-        extract_pasted_reference_to_pending,
-        project_name,
-        title=knowledge_title,
-        text=knowledge_text,
-        enabled_categories=enabled_categories,
-        extraction_mode=extraction_mode,
-        custom_instructions=custom_instructions,
-        scope=knowledge_scope,
-        authority=knowledge_authority,
-        origin=knowledge_origin,
-        auto_confirm_safe_items=run_auto,
-        preview_language="json",
-    )
-    result = extraction_summary.get("result", {})
-    result_key = scoped_session_key("knowledge_extraction_result", project_name, current_story_id)
-    st.session_state[result_key] = result
-    if run_auto:
-        auto_summary = extraction_summary.get("auto_confirm", {})
-        st.success(
-            f"已整理 {extraction_summary.get('item_count', 0)} 条，加入待审核设定 {extraction_summary.get('queued_count', 0)} 条，"
-            f"自动保存 {len(auto_summary.get('confirmed_ids', []))} 条，"
-            f"保留待审核 {len(auto_summary.get('blocked_ids', []))} 条。"
-        )
-        st.rerun()
-    st.success(
-        f"已提取 {extraction_summary.get('item_count', 0)} 条，"
-        f"并加入待审核设定 {extraction_summary.get('queued_count', 0)} 条。"
-    )
-    st.rerun()
-
-
-def _render_knowledge_extraction_result(project_name: str, current_story_id: str) -> None:
-    result_key = scoped_session_key("knowledge_extraction_result", project_name, current_story_id)
-    extraction_result = st.session_state.get(result_key, {})
-    extraction_payload = extraction_result.get("data", {}).get("knowledge_extraction", {})
-    if not extraction_payload:
-        return
-
-    st.markdown("#### 最近一次提取预览")
-    st.markdown(extraction_result.get("data", {}).get("report_markdown", ""))
-    render_step_validation(extraction_result)
-    render_step_json_expander("知识提取详细数据", extraction_payload)
-
-
-def _render_knowledge_extraction_ingestion(
-    project_name: str,
-    current_story_id: str,
-    knowledge_category_options: list[str],
-) -> None:
-    state_scope = (project_name, current_story_id)
-    st.markdown("#### 粘贴资料 / 提取为知识库条目")
-    st.caption("整理结果默认先进入待审核设定；也可以自动保存低风险条目。")
-    knowledge_title = st.text_input(
-        "资料标题",
-        key=scoped_widget_key("knowledge_extract_title", *state_scope),
-    )
-    col_scope, col_auth = st.columns(2)
-    knowledge_scope = col_scope.selectbox(
-        "知识范围",
-        options=["canon", "reference", "project"],
-        index=0,
-        format_func=label_scope,
-        key=scoped_widget_key("knowledge_extract_scope", *state_scope),
-    )
-    knowledge_authority = col_auth.selectbox(
-        "知识可信度",
-        options=["official", "curated", "community", "project", "unknown"],
-        index=1,
-        format_func=label_authority,
-        key=scoped_widget_key("knowledge_extract_authority", *state_scope),
-    )
-    knowledge_origin = st.text_input(
-        "来源说明（可选）",
-        key=scoped_widget_key("knowledge_extract_origin", *state_scope),
-    )
-    enabled_categories, extraction_mode, custom_instructions = _render_knowledge_extraction_settings(
-        knowledge_category_options,
-        project_name,
-        current_story_id,
-    )
-    knowledge_text = st.text_area(
-        "资料正文",
-        height=260,
-        key=scoped_widget_key("knowledge_extract_text", *state_scope),
-    )
-
-    action_cols = st.columns(2)
-    run_extract = action_cols[0].button(
-        "提取并预览",
-        use_container_width=True,
-        key=scoped_widget_key("extract_knowledge_preview", *state_scope),
-    )
-    run_auto = action_cols[1].button(
-        "自动提取并保存低风险",
-        use_container_width=True,
-        type="primary",
-        key=scoped_widget_key("extract_knowledge_auto", *state_scope),
-    )
-    if run_extract or run_auto:
-        if not knowledge_text.strip():
-            st.error("请先粘贴资料正文。")
-        elif not enabled_categories:
-            st.error("请至少选择一个提取分类。")
-        else:
-            try:
-                _run_pasted_knowledge_extraction(
-                    project_name,
-                    current_story_id,
-                    knowledge_title=knowledge_title,
-                    knowledge_text=knowledge_text,
-                    enabled_categories=enabled_categories,
-                    extraction_mode=extraction_mode,
-                    custom_instructions=custom_instructions,
-                    knowledge_scope=knowledge_scope,
-                    knowledge_authority=knowledge_authority,
-                    knowledge_origin=knowledge_origin,
-                    run_auto=run_auto,
-                )
-            except Exception as exc:
-                st.error(f"知识提取失败：{exc}")
-
-    _render_knowledge_extraction_result(project_name, current_story_id)
-
-
-def _render_pasted_ingestion(
-    project_name: str,
-    current_story_id: str,
-    knowledge_category_options: list[str],
-) -> None:
-    target_choice = st.radio(
-        "处理方式",
-        options=["整理为可匹配资料", "提取为知识库条目"],
-        horizontal=True,
-        key=scoped_widget_key("paste_ingestion_target", project_name, current_story_id),
-    )
-    if target_choice == "整理为可匹配资料":
-        _render_organized_reference_ingestion(project_name, current_story_id)
-    else:
-        _render_knowledge_extraction_ingestion(project_name, current_story_id, knowledge_category_options)
+                    story_id,
+                    action.get("action_id", ""),
+                ),
+                width="stretch",
+                type="primary" if action.get("tone") == "error" else "secondary",
+            ):
+                _activate_ingestion_action(project_name, story_id, action)
+    elif overall_status == "empty":
+        render_empty_state("还没有资料", "从下方“导入资料”开始，可以上传文件或直接粘贴文本。", icon="↥")
 
 
 def _render_manual_retrieval_source_card(
@@ -462,7 +183,7 @@ def _render_manual_retrieval_source_card(
     )
     if st.button(
         "保存资料卡",
-        use_container_width=True,
+        width="stretch",
         type="primary",
         key=scoped_widget_key("save_retrieval_source_card", *state_scope),
     ):
@@ -488,8 +209,10 @@ def _render_manual_retrieval_source_card(
 def _render_ingestion_workspace(
     project_name: str,
     story_id: str,
+    source_type_options: dict[str, str],
     knowledge_category_options: list[str],
     *,
+    render_long_reference_importer,
     render_ingestion_health_panel,
     render_ingestion_task_manager,
     render_source_ledger_page,
@@ -499,32 +222,92 @@ def _render_ingestion_workspace(
     render_long_reference_batch_manager,
     render_knowledge_organizer,
     render_source_package_report_page,
+    workbench: dict,
 ) -> None:
-    st.divider()
-    st.markdown("### 待处理与整理")
-    selected_section = st.radio(
-        "处理工作区",
+    render_section_heading("资料准备流程", "按“导入 → 处理 → 审核 → 管理”完成资料准备；概览只负责提示当前状态。")
+    workspace_key = _ingestion_workspace_key(project_name, story_id)
+    default_workspace = "导入" if str(workbench.get("overall_status") or "empty") == "empty" else "概览"
+    if workspace_key in st.session_state:
+        raw_value = str(st.session_state.get(workspace_key) or "")
+        _migrate_ingestion_subview_state(project_name, story_id, raw_value)
+        current_value = _WORKSPACE_TARGET_MAP.get(raw_value, raw_value)
+        st.session_state[workspace_key] = (
+            current_value if current_value in INGESTION_WORKSPACE_SECTIONS else default_workspace
+        )
+    selected_section = st.segmented_control(
+        "资料处理阶段",
         options=INGESTION_WORKSPACE_SECTIONS,
-        horizontal=True,
-        key=_ingestion_workspace_key(project_name, story_id),
+        default=default_workspace if workspace_key not in st.session_state else None,
+        key=workspace_key,
+        width="stretch",
+        label_visibility="collapsed",
     )
+    selected_section = str(selected_section or default_workspace)
     st.caption(INGESTION_WORKSPACE_DESCRIPTIONS[selected_section])
-    if selected_section == "资料任务":
-        render_ingestion_task_manager(project_name, story_id)
-    elif selected_section == "资料来源":
-        render_ingestion_health_panel(project_name)
-        render_source_ledger_page(project_name)
-    elif selected_section == "待审核设定":
-        render_auto_review_policy_panel(project_name)
-        render_pending_knowledge_queue(project_name)
-    elif selected_section == "处理记录":
-        render_auto_review_runs_panel(project_name)
-    elif selected_section == "长篇批次":
-        render_long_reference_batch_manager(project_name, knowledge_category_options, expanded=True)
-    elif selected_section == "知识整理":
-        render_knowledge_organizer(project_name, knowledge_category_options)
+    if selected_section == "概览":
+        _render_ingestion_workbench(project_name, story_id, workbench)
+    elif selected_section == "导入":
+        _render_ingestion_wizard(
+            project_name,
+            story_id,
+            source_type_options,
+            knowledge_category_options,
+            render_long_reference_importer=render_long_reference_importer,
+        )
+    elif selected_section == "处理":
+        task_view_key = scoped_widget_key("ingestion_task_view", project_name, story_id)
+        task_view = st.segmented_control(
+            "任务类型",
+            options=["后台任务", "长篇批次"],
+            default="后台任务" if task_view_key not in st.session_state else None,
+            key=task_view_key,
+            label_visibility="collapsed",
+        )
+        if task_view == "长篇批次":
+            render_long_reference_batch_manager(project_name, knowledge_category_options, expanded=True)
+        else:
+            render_ingestion_task_manager(project_name, story_id)
+    elif selected_section == "审核":
+        review_view_key = scoped_widget_key("ingestion_review_view", project_name, story_id)
+        review_view = st.segmented_control(
+            "审核视图",
+            options=["审核队列", "审核策略", "处理记录"],
+            default="审核队列" if review_view_key not in st.session_state else None,
+            key=review_view_key,
+            label_visibility="collapsed",
+        )
+        if review_view == "审核策略":
+            render_auto_review_policy_panel(project_name)
+        elif review_view == "处理记录":
+            render_auto_review_runs_panel(project_name)
+        else:
+            render_pending_knowledge_queue(project_name)
     else:
-        render_source_package_report_page(project_name)
+        management_view_key = scoped_widget_key("ingestion_management_view", project_name, story_id)
+        management_view = st.segmented_control(
+            "管理内容",
+            options=["原文资料", "知识条目", "健康检查", "资料包"],
+            default="原文资料" if management_view_key not in st.session_state else None,
+            key=management_view_key,
+            width="stretch",
+            label_visibility="collapsed",
+        )
+        st.caption(
+            {
+                "原文资料": "查看保存的原文、切分片段、来源证据与修订记录。",
+                "知识条目": "维护审核通过后会参与检索和写作的结构化知识。",
+                "健康检查": "检查资料覆盖率、冲突、缺失证据和索引状态。",
+                "资料包": "汇总项目资料，便于整体检查、归档或迁移。",
+            }.get(str(management_view), "")
+        )
+        if management_view == "知识条目":
+            render_knowledge_organizer(project_name, knowledge_category_options)
+        elif management_view == "健康检查":
+            render_ingestion_health_panel(project_name)
+        elif management_view == "资料包":
+            render_source_package_report_page(project_name)
+        else:
+            render_source_ledger_page(project_name)
 
 
 def _render_ingestion_wizard(
@@ -534,30 +317,41 @@ def _render_ingestion_wizard(
     knowledge_category_options: list[str],
     *,
     render_long_reference_importer,
-    expanded: bool,
 ) -> None:
-    st.markdown("### 导入向导")
-    if expanded:
-        st.success("请在下面选择资料来源并开始导入。整本资料建议使用“长篇文本”。")
-    st.caption("先选择资料的输入方式。整本原作等大段文本用“长篇文本”，少量内容可直接粘贴或填写资料卡。")
-    source_choice = st.radio(
-        "资料来源",
-        options=["网络检索", "长篇文本", "粘贴资料", "手动资料卡"],
-        horizontal=True,
-        key=scoped_widget_key("ingestion_source_choice", project_name, story_id),
+    render_section_heading("导入资料", "上传文件和粘贴文本使用同一套解析、拆分与提取流程。")
+    source_choice_key = scoped_widget_key("ingestion_source_choice", project_name, story_id)
+    source_choice_map = {
+        "长篇文本": "上传或粘贴",
+        "长篇文件": "上传或粘贴",
+        "粘贴资料": "上传或粘贴",
+        "直接粘贴": "上传或粘贴",
+        "网络检索": "网络资料",
+        "手动资料卡": "手动条目",
+    }
+    if source_choice_key in st.session_state:
+        raw_source_choice = str(st.session_state.get(source_choice_key) or "")
+        normalized_source_choice = source_choice_map.get(raw_source_choice, raw_source_choice)
+        st.session_state[source_choice_key] = (
+            normalized_source_choice
+            if normalized_source_choice in {"上传或粘贴", "网络资料", "手动条目"}
+            else "上传或粘贴"
+        )
+    source_choice = st.segmented_control(
+        "选择内容来源",
+        options=["上传或粘贴", "网络资料", "手动条目"],
+        default="上传或粘贴" if source_choice_key not in st.session_state else None,
+        key=source_choice_key,
+        width="stretch",
     )
 
-    if source_choice == "网络检索":
-        render_web_research_import(project_name, story_id)
-    elif source_choice == "长篇文本":
+    if source_choice == "上传或粘贴":
         render_long_reference_importer(
             project_name,
             source_type_options,
             knowledge_category_options,
-            expanded=expanded,
         )
-    elif source_choice == "粘贴资料":
-        _render_pasted_ingestion(project_name, story_id, knowledge_category_options)
+    elif source_choice == "网络资料":
+        render_web_research_import(project_name, story_id)
     else:
         _render_manual_retrieval_source_card(project_name, story_id, source_type_options)
 
@@ -580,41 +374,20 @@ def render_retrieval_ingestion_page(
 ):
     current_story_id = str(st.session_state.get("active_story_id") or "default")
     workbench = build_ingestion_workbench(project_name)
-    _render_ingestion_workbench(project_name, current_story_id, workbench)
-    import_hint_key = scoped_session_key("ingestion_import_hint", project_name, current_story_id)
-    prioritize_import = bool(st.session_state.pop(import_hint_key, False)) or workbench.get("overall_status") == "empty"
-
-    def render_wizard() -> None:
-        _render_ingestion_wizard(
-            project_name,
-            current_story_id,
-            source_type_options,
-            knowledge_category_options,
-            render_long_reference_importer=render_long_reference_importer,
-            expanded=prioritize_import,
-        )
-
-    def render_workspace() -> None:
-        _render_ingestion_workspace(
-            project_name,
-            current_story_id,
-            knowledge_category_options,
-            render_ingestion_health_panel=render_ingestion_health_panel,
-            render_ingestion_task_manager=render_ingestion_task_manager,
-            render_source_ledger_page=render_source_ledger_page,
-            render_auto_review_policy_panel=render_auto_review_policy_panel,
-            render_pending_knowledge_queue=render_pending_knowledge_queue,
-            render_auto_review_runs_panel=render_auto_review_runs_panel,
-            render_long_reference_batch_manager=render_long_reference_batch_manager,
-            render_knowledge_organizer=render_knowledge_organizer,
-            render_source_package_report_page=render_source_package_report_page,
-        )
-
-    if prioritize_import:
-        render_wizard()
-        render_workspace()
-    else:
-        render_workspace()
-        st.divider()
-        render_wizard()
-    return
+    _render_ingestion_workspace(
+        project_name,
+        current_story_id,
+        source_type_options,
+        knowledge_category_options,
+        render_long_reference_importer=render_long_reference_importer,
+        render_ingestion_health_panel=render_ingestion_health_panel,
+        render_ingestion_task_manager=render_ingestion_task_manager,
+        render_source_ledger_page=render_source_ledger_page,
+        render_auto_review_policy_panel=render_auto_review_policy_panel,
+        render_pending_knowledge_queue=render_pending_knowledge_queue,
+        render_auto_review_runs_panel=render_auto_review_runs_panel,
+        render_long_reference_batch_manager=render_long_reference_batch_manager,
+        render_knowledge_organizer=render_knowledge_organizer,
+        render_source_package_report_page=render_source_package_report_page,
+        workbench=workbench,
+    )

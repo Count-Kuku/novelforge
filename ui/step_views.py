@@ -61,7 +61,7 @@ def render_retrieval_usage_report(hits: list[dict], title: str = "参考资料�
         priority_sources = report.get("priority_sources", [])
         if priority_sources:
             st.markdown("#### 优先参考资料")
-            st.dataframe(priority_sources, use_container_width=True, hide_index=True)
+            st.dataframe(priority_sources, width="stretch", hide_index=True)
         constraints = report.get("constraints", [])
         if constraints:
             st.markdown("#### 需要优先遵守的约束/设定")

@@ -89,7 +89,7 @@ def _render_prompt_options_overview(all_records: list[tuple[str, dict]]) -> None
     rows = _prompt_option_overview_rows(all_records, query, capability_filter)
     st.caption(f"共找到 {len(rows)} 个提示词选项。")
     if rows:
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     else:
         st.info("没有匹配的提示词选项。")
 

@@ -246,7 +246,7 @@ def _render_action_notice(bundle: dict, action: str) -> None:
     if cancel_col.button(
         "取消",
         key=scoped_widget_key("creative_cancel_action", session_id, action),
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state[action_mode_key(session_id)] = "continue"
         st.rerun()
@@ -337,7 +337,7 @@ def render_composer(
             story_id,
             session_id or "new",
         ),
-        use_container_width=True,
+        width="stretch",
         type="primary",
     ):
         _run_generation(

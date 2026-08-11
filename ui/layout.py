@@ -1,49 +1,63 @@
-"""Top-level Streamlit layout and style helpers."""
+"""NovelForge 的全局视觉系统与通用页面组件。"""
 from __future__ import annotations
 
 import html
+from collections.abc import Iterable, Sequence
 
 import streamlit as st
 
-def apply_app_style():
+
+def apply_app_style() -> None:
+    """应用统一的桌面端、窄屏和交互状态样式。"""
+
     st.markdown(
         """
         <style>
         :root {
             color-scheme: light;
-            --nf-bg: #f6f7fb;
+            --nf-bg: #f4f7fb;
             --nf-panel: #ffffff;
-            --nf-panel-soft: #f9fafb;
-            --nf-border: #dde3eb;
-            --nf-text: #172033;
+            --nf-panel-soft: #f8fafc;
+            --nf-panel-muted: #f1f5f9;
+            --nf-border: #e2e8f0;
+            --nf-border-strong: #cbd5e1;
+            --nf-text: #182230;
             --nf-muted: #667085;
-            --nf-accent: #356ac3;
-            --nf-accent-strong: #244f9e;
+            --nf-subtle: #98a2b3;
+            --nf-accent: #315fba;
+            --nf-accent-strong: #244a93;
             --nf-accent-soft: #edf4ff;
-            --nf-green: #3f7d68;
-            --nf-warm: #a86618;
+            --nf-success: #19715a;
+            --nf-success-soft: #ecfdf3;
+            --nf-warning: #9a5b13;
+            --nf-warning-soft: #fff8e8;
             --nf-danger: #b42318;
-            --nf-shadow: 0 14px 36px rgba(16, 24, 40, 0.08);
-            --nf-shadow-soft: 0 8px 22px rgba(16, 24, 40, 0.05);
-            --nf-page-top-offset: 0.75rem;
-            --nf-top-safe-space: 0.85rem;
+            --nf-danger-soft: #fff1f0;
+            --nf-radius-sm: 8px;
+            --nf-radius: 12px;
+            --nf-radius-lg: 16px;
+            --nf-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
+            --nf-shadow: 0 8px 24px rgba(16, 24, 40, 0.06);
+        }
+
+        html, body, .stApp,
+        .stApp button, .stApp input, .stApp textarea, .stApp select {
+            font-family: Inter, "SF Pro Text", "Segoe UI", "Microsoft YaHei UI",
+                "Microsoft YaHei", system-ui, sans-serif;
         }
 
         .stApp {
-            background:
-                linear-gradient(180deg, rgba(255,255,255,0.96), rgba(246,247,251,0.98)),
-                var(--nf-bg);
             color: var(--nf-text);
+            background:
+                radial-gradient(circle at 85% -10%, rgba(49, 95, 186, 0.08), transparent 30rem),
+                var(--nf-bg);
         }
 
-        .stApp *,
-        .stApp *::before,
-        .stApp *::after {
+        .stApp *, .stApp *::before, .stApp *::after {
             box-sizing: border-box;
         }
 
-        #MainMenu,
-        footer,
+        #MainMenu, footer,
         [data-testid="stHeader"],
         [data-testid="stToolbar"],
         [data-testid="stDecoration"],
@@ -51,1996 +65,883 @@ def apply_app_style():
             display: none !important;
             visibility: hidden !important;
             height: 0 !important;
-            min-height: 0 !important;
         }
 
-        [data-testid="stSidebar"] {
-            background: #f8fafc;
-            border-right: 1px solid var(--nf-border);
-        }
-
-        [data-testid="stSidebar"] * {
-            color: var(--nf-text);
-        }
-
-        [data-testid="stSidebar"] .stCaption,
-        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-            color: var(--nf-muted);
-        }
-
-        [data-testid="stSidebar"] [data-baseweb="select"] > div,
-        [data-testid="stSidebar"] input,
-        [data-testid="stSidebar"] textarea {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-            color: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] [data-baseweb="select"] *,
-        [data-testid="stSidebar"] [data-baseweb="select"] div,
-        [data-testid="stSidebar"] [data-baseweb="select"] span,
-        [data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stMarkdownContainer"],
-        [data-testid="stSidebar"] [data-baseweb="select"] [data-testid="stMarkdownContainer"] *,
-        [data-testid="stSidebar"] [data-baseweb="select"] [role="button"],
-        [data-testid="stSidebar"] [data-baseweb="select"] [role="button"] *,
-        [data-testid="stSidebar"] [data-baseweb="select"] svg,
-        [data-testid="stSidebar"] [data-baseweb="select"] svg path,
-        [data-testid="stSidebar"] input,
-        [data-testid="stSidebar"] textarea,
-        [data-testid="stSidebar"] input::placeholder,
-        [data-testid="stSidebar"] textarea::placeholder {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] .stButton > button {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-            color: var(--nf-text) !important;
-            font-weight: 650 !important;
-        }
-
-        [data-testid="stSidebar"] button,
-        [data-testid="stSidebar"] [data-testid="stPopover"] button {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-            color: var(--nf-text) !important;
-            font-weight: 650 !important;
-            opacity: 1 !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] .stButton > button *,
-        [data-testid="stSidebar"] .stButton > button p,
-        [data-testid="stSidebar"] .stButton > button span,
-        [data-testid="stSidebar"] button *,
-        [data-testid="stSidebar"] button p,
-        [data-testid="stSidebar"] button span,
-        [data-testid="stSidebar"] button svg,
-        [data-testid="stSidebar"] button svg path {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            opacity: 1 !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] .stButton > button:hover {
-            background: var(--nf-accent-soft) !important;
-            border-color: var(--nf-accent) !important;
-            color: var(--nf-accent-strong) !important;
-        }
-
-        [data-testid="stSidebar"] button:hover,
-        [data-testid="stSidebar"] button:hover * {
-            color: var(--nf-accent-strong) !important;
-            fill: var(--nf-accent-strong) !important;
-            -webkit-text-fill-color: var(--nf-accent-strong) !important;
-        }
-
-        [data-testid="stSidebar"] .stButton > button:disabled,
-        [data-testid="stSidebar"] .stButton > button[disabled],
-        [data-testid="stSidebar"] .stButton > button:disabled *,
-        [data-testid="stSidebar"] .stButton > button[disabled] *,
-        [data-testid="stSidebar"] button:disabled,
-        [data-testid="stSidebar"] button[disabled],
-        [data-testid="stSidebar"] button:disabled *,
-        [data-testid="stSidebar"] button[disabled] * {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-            color: var(--nf-text) !important;
-            opacity: 1 !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
+        /* 页面框架 */
         .block-container {
-            max-width: 1240px;
-            padding-top: var(--nf-page-top-offset);
-            padding-bottom: 4rem;
-            padding-left: 2rem;
-            padding-right: 2rem;
+            max-width: 1280px;
+            padding: 1rem 2rem 4rem;
         }
 
-        h1, h2, h3 {
-            letter-spacing: 0;
+        [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
+            gap: 0.72rem;
         }
 
-        h2, h3 {
-            margin-top: 0.55rem;
-            margin-bottom: 0.45rem;
+        h1, h2, h3, h4, h5 {
+            color: var(--nf-text);
+            letter-spacing: -0.015em;
+        }
+
+        h1 { font-size: 1.65rem; }
+        h2 { font-size: 1.35rem; }
+        h3 { font-size: 1.15rem; }
+        h4, h5 { font-size: 1rem; }
+
+        p, li {
+            line-height: 1.62;
         }
 
         hr {
-            margin: 1.2rem 0;
-            border-color: var(--nf-border);
+            margin: 1.15rem 0;
+            border: 0;
+            border-top: 1px solid var(--nf-border);
         }
 
-        div[data-testid="stMetric"] {
-            background: var(--nf-panel);
-            border: 1px solid var(--nf-border);
-            border-radius: 8px;
-            padding: 0.95rem 1rem;
-            box-shadow: var(--nf-shadow-soft);
+        /* 侧栏 */
+        [data-testid="stSidebar"] {
+            min-width: 284px;
+            background: rgba(248, 250, 252, 0.97);
+            border-right: 1px solid var(--nf-border);
         }
 
-        div[data-testid="stMetric"] label {
-            color: var(--nf-muted);
+        [data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+            padding-top: 0.75rem;
         }
 
-        .nf-hero {
-            background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
-            border: 1px solid var(--nf-border);
-            border-left: 4px solid var(--nf-accent);
-            border-radius: 8px;
-            padding: 1rem 1.1rem 0.95rem;
-            box-shadow: var(--nf-shadow-soft);
-            margin-top: var(--nf-top-safe-space) !important;
-            margin-bottom: 1rem;
+        .nf-sidebar-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            padding: 0.35rem 0.15rem 0.75rem;
         }
 
-        .nf-kicker {
-            color: var(--nf-accent-strong);
-            font-size: 0.78rem;
-            font-weight: 700;
-            letter-spacing: 0;
-            margin-bottom: 0.25rem;
+        .nf-sidebar-mark {
+            display: grid;
+            place-items: center;
+            width: 2.15rem;
+            height: 2.15rem;
+            border-radius: 11px;
+            color: #fff;
+            background: linear-gradient(145deg, var(--nf-accent), #6e56cf);
+            box-shadow: 0 6px 18px rgba(49, 95, 186, 0.24);
+            font-size: 0.92rem;
+            font-weight: 800;
         }
 
-        .nf-title {
+        .nf-sidebar-title {
             color: var(--nf-text);
-            font-size: 1.35rem;
-            line-height: 1.25;
-            font-weight: 750;
-            margin: 0;
+            font-size: 1.02rem;
+            font-weight: 780;
+            line-height: 1.2;
         }
 
-        .nf-subtitle {
+        .nf-sidebar-meta {
             color: var(--nf-muted);
-            margin-top: 0.35rem;
-            margin-bottom: 0;
+            font-size: 0.76rem;
+            line-height: 1.4;
+            margin-top: 0.12rem;
+        }
+
+        .nf-sidebar-note {
+            margin: 0.45rem 0;
+            padding: 0.7rem 0.78rem;
+            color: var(--nf-text);
+            background: var(--nf-accent-soft);
+            border: 1px solid #cfe0fb;
+            border-radius: var(--nf-radius-sm);
+            font-size: 0.82rem;
+            line-height: 1.5;
+        }
+
+        [data-testid="stSidebar"] hr {
+            margin: 0.8rem 0;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {
+            color: var(--nf-muted) !important;
+            font-size: 0.76rem;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stRadio"] > label p {
+            color: var(--nf-muted) !important;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] {
+            gap: 0.16rem;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label {
+            min-height: 2.25rem;
+            padding: 0.38rem 0.5rem;
+            border-radius: var(--nf-radius-sm);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] label:hover {
+            background: var(--nf-panel-muted);
+        }
+
+        /* 紧凑页头 */
+        .nf-page-header {
+            position: relative;
+            overflow: hidden;
+            padding: 1.05rem 1.2rem 0.95rem;
+            margin: 0 0 0.85rem;
+            background: rgba(255, 255, 255, 0.94);
+            border: 1px solid var(--nf-border);
+            border-radius: var(--nf-radius-lg);
+            box-shadow: var(--nf-shadow-sm);
+        }
+
+        .nf-page-header::before {
+            content: "";
+            position: absolute;
+            inset: 0 auto 0 0;
+            width: 4px;
+            background: linear-gradient(180deg, var(--nf-accent), #7157ca);
+        }
+
+        .nf-page-eyebrow {
+            color: var(--nf-accent-strong);
+            font-size: 0.72rem;
+            font-weight: 780;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .nf-page-title {
+            color: var(--nf-text);
+            margin-top: 0.18rem;
+            font-size: 1.48rem;
+            font-weight: 790;
+            line-height: 1.25;
+            letter-spacing: -0.025em;
+        }
+
+        .nf-page-description {
+            max-width: 58rem;
+            margin-top: 0.28rem;
+            color: var(--nf-muted);
+            font-size: 0.9rem;
             line-height: 1.55;
         }
 
-        .nf-header-meta {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(156px, 1fr));
-            gap: 0.45rem;
-            margin-top: 0.75rem;
+        .nf-page-context {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.38rem;
+            margin-top: 0.68rem;
         }
 
-        .nf-header-meta span {
-            display: grid;
-            grid-template-columns: auto minmax(0, 1fr);
+        .nf-page-context span {
+            display: inline-flex;
             align-items: center;
-            gap: 0.45rem;
+            gap: 0.32rem;
             min-width: 0;
-            min-height: 2rem;
-            padding: 0.28rem 0.7rem;
-            border: 1px solid var(--nf-border);
-            border-radius: 8px;
-            background: var(--nf-panel-soft);
+            padding: 0.24rem 0.52rem;
             color: var(--nf-muted);
-            font-size: 0.82rem;
-            line-height: 1.25;
+            background: var(--nf-panel-soft);
+            border: 1px solid var(--nf-border);
+            border-radius: 999px;
+            font-size: 0.75rem;
+            line-height: 1.35;
+        }
+
+        .nf-page-context b {
+            max-width: 15rem;
+            overflow: hidden;
+            color: var(--nf-text);
+            font-weight: 680;
+            text-overflow: ellipsis;
             white-space: nowrap;
         }
 
-        .nf-header-meta b {
-            min-width: 0;
-            color: var(--nf-text);
-            font-weight: 650;
-            text-align: right;
-            white-space: normal;
-            overflow-wrap: anywhere;
-            word-break: break-word;
-        }
-
-        .nf-card-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-            gap: 0.8rem;
-            margin: 1rem 0;
-        }
-
-        .nf-card {
-            background: var(--nf-panel);
-            border: 1px solid var(--nf-border);
-            border-radius: 8px;
-            padding: 1rem;
-            box-shadow: var(--nf-shadow-soft);
-        }
-
-        .nf-card-title {
-            font-weight: 700;
-            color: var(--nf-text);
-            margin-bottom: 0.35rem;
-        }
-
-        .nf-card-copy {
-            color: var(--nf-muted);
-            font-size: 0.92rem;
-            line-height: 1.55;
-        }
-
+        /* 区块与步骤 */
         .nf-section-heading {
-            margin: 1.15rem 0 0.65rem;
-            padding-top: 0.15rem;
+            margin: 1.15rem 0 0.48rem;
         }
 
         .nf-section-title {
             display: flex;
             align-items: center;
-            gap: 0.55rem;
+            gap: 0.5rem;
             color: var(--nf-text);
-            font-size: 1rem;
-            font-weight: 750;
-            line-height: 1.35;
-            margin: 0;
+            font-size: 1.06rem;
+            font-weight: 760;
+            line-height: 1.4;
         }
 
         .nf-section-title::before {
             content: "";
             width: 0.22rem;
             height: 1rem;
-            border-radius: 8px;
+            flex: 0 0 auto;
+            border-radius: 999px;
             background: var(--nf-accent);
-            display: inline-block;
         }
 
         .nf-section-caption {
+            max-width: 60rem;
+            margin: 0.22rem 0 0 0.72rem;
             color: var(--nf-muted);
-            font-size: 0.9rem;
-            line-height: 1.55;
-            margin-top: 0.25rem;
+            font-size: 0.86rem;
+            line-height: 1.52;
         }
 
-        .nf-action-card-body {
-            display: flex;
-            flex-direction: column;
-            gap: 0.45rem;
-            margin-bottom: 0.75rem;
+        .nf-step-heading {
+            display: grid;
+            grid-template-columns: 2rem minmax(0, 1fr);
+            gap: 0.68rem;
+            align-items: start;
+            margin: 1rem 0 0.55rem;
         }
 
-        .nf-action-title {
+        .nf-step-number {
+            display: grid;
+            place-items: center;
+            width: 2rem;
+            height: 2rem;
+            color: #fff;
+            background: var(--nf-accent);
+            border-radius: 999px;
+            font-size: 0.82rem;
+            font-weight: 800;
+        }
+
+        .nf-step-title {
             color: var(--nf-text);
             font-size: 1rem;
-            font-weight: 750;
+            font-weight: 760;
             line-height: 1.35;
         }
 
-        .nf-action-copy {
+        .nf-step-copy {
+            margin-top: 0.12rem;
             color: var(--nf-muted);
-            font-size: 0.9rem;
-            line-height: 1.55;
-        }
-
-        .nf-status-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 0.65rem;
-            margin-top: 0.75rem;
-        }
-
-        .nf-status-item {
-            border: 1px solid var(--nf-border);
-            border-radius: 8px;
-            background: var(--nf-panel-soft);
-            padding: 0.7rem 0.8rem;
-        }
-
-        .nf-status-label {
-            color: var(--nf-muted);
-            font-size: 0.78rem;
-            line-height: 1.25;
-            margin-bottom: 0.25rem;
-        }
-
-        .nf-status-value {
-            color: var(--nf-text);
-            font-size: 0.94rem;
-            font-weight: 700;
-            line-height: 1.35;
-            overflow-wrap: anywhere;
-        }
-
-        .active-profile-card {
-            border-left: 4px solid var(--nf-accent) !important;
-        }
-
-        .nf-sidebar-title {
-            font-size: 1.05rem;
-            font-weight: 750;
-            margin: 0.2rem 0 0.2rem;
-        }
-
-        .nf-sidebar-meta {
-            color: var(--nf-muted);
-            font-size: 0.82rem;
-            line-height: 1.45;
-            margin-bottom: 0.8rem;
-        }
-
-        .nf-sidebar-note {
-            margin: 0.65rem 0 0.45rem;
-            padding: 0.65rem 0.75rem;
-            border-radius: 8px;
-            border: 1px solid #c9ddf5;
-            background: #eaf4ff;
-            color: var(--nf-text);
             font-size: 0.84rem;
             line-height: 1.5;
         }
 
-        .nf-sidebar-note strong {
+        /* 卡片与状态 */
+        .nf-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.72rem;
+            margin: 0.75rem 0;
+        }
+
+        .nf-card,
+        .nf-status-item,
+        .nf-empty-state,
+        .nf-action-summary {
+            background: var(--nf-panel);
+            border: 1px solid var(--nf-border);
+            border-radius: var(--nf-radius);
+            box-shadow: var(--nf-shadow-sm);
+        }
+
+        .nf-card { padding: 0.9rem; }
+
+        .nf-card-title,
+        .nf-action-title {
             color: var(--nf-text);
+            font-size: 0.95rem;
+            font-weight: 740;
+            line-height: 1.4;
+        }
+
+        .nf-card-copy,
+        .nf-action-copy {
+            margin-top: 0.26rem;
+            color: var(--nf-muted);
+            font-size: 0.84rem;
+            line-height: 1.5;
+        }
+
+        .nf-action-card-body {
+            min-height: 5.6rem;
+            padding: 0.12rem 0 0.3rem;
+        }
+
+        .nf-status-grid,
+        .nf-stat-strip {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 0.55rem;
+        }
+
+        .nf-status-grid { margin-top: 0.7rem; }
+
+        .nf-status-item,
+        .nf-stat-item {
+            min-width: 0;
+            padding: 0.68rem 0.75rem;
+            background: var(--nf-panel-soft);
+            border: 1px solid var(--nf-border);
+            border-radius: var(--nf-radius-sm);
+        }
+
+        .nf-status-label,
+        .nf-stat-label {
+            color: var(--nf-muted);
+            font-size: 0.73rem;
+            line-height: 1.3;
+        }
+
+        .nf-status-value,
+        .nf-stat-value {
+            margin-top: 0.2rem;
+            overflow-wrap: anywhere;
+            color: var(--nf-text);
+            font-size: 1.05rem;
+            font-weight: 760;
+            line-height: 1.3;
+        }
+
+        .nf-stat-hint {
+            margin-top: 0.15rem;
+            color: var(--nf-subtle);
+            font-size: 0.7rem;
+            line-height: 1.35;
+        }
+
+        .nf-empty-state {
+            padding: 1.35rem 1rem;
+            text-align: center;
+            background: var(--nf-panel-soft);
+        }
+
+        .nf-empty-icon {
+            display: grid;
+            place-items: center;
+            width: 2.4rem;
+            height: 2.4rem;
+            margin: 0 auto 0.55rem;
+            color: var(--nf-accent-strong);
+            background: var(--nf-accent-soft);
+            border-radius: 999px;
+            font-weight: 800;
+        }
+
+        .nf-empty-title {
+            color: var(--nf-text);
+            font-weight: 740;
+        }
+
+        .nf-empty-copy {
+            max-width: 36rem;
+            margin: 0.25rem auto 0;
+            color: var(--nf-muted);
+            font-size: 0.84rem;
+            line-height: 1.55;
+        }
+
+        .nf-action-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.8rem;
+            padding: 0.68rem 0.8rem;
+            border-left: 4px solid var(--nf-accent);
+        }
+
+        .nf-action-summary[data-tone="warning"] {
+            background: var(--nf-warning-soft);
+            border-left-color: var(--nf-warning);
+        }
+
+        .nf-action-summary[data-tone="danger"] {
+            background: var(--nf-danger-soft);
+            border-left-color: var(--nf-danger);
+        }
+
+        .nf-action-summary-label {
+            color: var(--nf-muted);
+            font-size: 0.74rem;
             font-weight: 700;
         }
 
-        .stButton > button {
-            border-radius: 8px;
-            border: 1px solid var(--nf-border);
-            background: var(--nf-panel) !important;
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
+        .nf-action-summary-value {
+            margin-top: 0.1rem;
+            color: var(--nf-text);
+            font-size: 0.9rem;
+            font-weight: 720;
         }
 
-        .stApp .stButton button,
+        .nf-action-summary-note {
+            color: var(--nf-muted);
+            font-size: 0.76rem;
+            text-align: right;
+        }
+
+        .nf-selection-summary {
+            padding: 0.55rem 0.7rem;
+            color: var(--nf-text);
+            background: var(--nf-accent-soft);
+            border: 1px solid #d5e3fb;
+            border-radius: var(--nf-radius-sm);
+            font-size: 0.84rem;
+            line-height: 1.5;
+        }
+
+        .nf-preset-card {
+            min-height: 0;
+        }
+
+        .nf-preset-card-title { font-weight: 750; }
+        .nf-preset-card-copy { margin-top: 0.3rem; font-size: 0.85rem; line-height: 1.5; }
+        .nf-preset-card-effect { margin-top: 0.3rem; color: var(--nf-muted); font-size: 0.78rem; line-height: 1.45; }
+        .active-profile-card { border-color: #b9cdf4 !important; box-shadow: 0 0 0 2px var(--nf-accent-soft); }
+        .nf-button-align-spacer { min-height: 1.56rem; }
+
+        /* Streamlit 容器、列和表单 */
+        [data-testid="stHorizontalBlock"] {
+            gap: 0.72rem;
+            align-items: stretch;
+        }
+
+        [data-testid="stColumn"] {
+            min-width: 0;
+        }
+
+        [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
+            height: 100%;
+        }
+
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            border-color: var(--nf-border) !important;
+            border-radius: var(--nf-radius) !important;
+            background: var(--nf-panel);
+            box-shadow: var(--nf-shadow-sm);
+        }
+
+        [data-testid="stForm"] {
+            padding: 0.9rem !important;
+            background: var(--nf-panel) !important;
+            border: 1px solid var(--nf-border) !important;
+            border-radius: var(--nf-radius) !important;
+        }
+
+        /* 标签和页签 */
+        [data-baseweb="tab-list"] {
+            gap: 0.25rem;
+            padding: 0.24rem;
+            overflow-x: auto !important;
+            background: var(--nf-panel-muted);
+            border: 1px solid var(--nf-border);
+            border-radius: 10px;
+            scrollbar-width: none;
+        }
+
+        [data-baseweb="tab-list"]::-webkit-scrollbar { display: none; }
+
+        [data-baseweb="tab"] {
+            flex: 1 1 0;
+            min-width: max-content;
+            min-height: 2.35rem;
+            padding: 0.42rem 0.75rem;
+            border-radius: 8px;
+        }
+
+        [data-baseweb="tab"][aria-selected="true"] {
+            background: var(--nf-panel);
+            box-shadow: var(--nf-shadow-sm);
+        }
+
+        [data-baseweb="tab-highlight"], [data-baseweb="tab-border"] {
+            display: none;
+        }
+
+        [data-testid="stButtonGroup"] [data-baseweb="button-group"],
+        [data-testid="stSegmentedControl"] [data-baseweb="button-group"],
+        [data-testid="stPills"] [data-baseweb="button-group"] {
+            gap: 0.25rem;
+            padding: 0.22rem;
+            background: var(--nf-panel-muted);
+            border: 1px solid var(--nf-border);
+            border-radius: 10px;
+        }
+
+        /* 按钮 */
         .stApp [data-testid="stButton"] button,
         .stApp [data-testid="stFormSubmitButton"] button,
         .stApp button[data-testid^="stBaseButton"] {
-            border-radius: 8px;
-            border: 1px solid var(--nf-border) !important;
-            background: var(--nf-panel) !important;
+            min-height: 2.45rem;
+            border: 1px solid var(--nf-border-strong) !important;
+            border-radius: var(--nf-radius-sm) !important;
             color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
+            background: var(--nf-panel) !important;
+            box-shadow: var(--nf-shadow-sm);
+            font-weight: 670 !important;
+            transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
         }
 
-        .stButton > button[kind="primary"],
-        .stButton > button[data-kind="primary"],
-        .stApp .stButton button[kind="primary"],
-        .stApp .stButton button[data-kind="primary"],
-        .stApp [data-testid="stButton"] button[kind="primary"],
-        .stApp [data-testid="stButton"] button[data-kind="primary"],
-        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"],
-        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"],
-        .stApp button[data-testid^="stBaseButton"][kind="primary"],
-        .stApp button[data-testid^="stBaseButton"][data-kind="primary"] {
-            background: var(--nf-accent) !important;
-            color: #ffffff !important;
-            border-color: var(--nf-accent-strong) !important;
-            font-weight: 650 !important;
-        }
-
-        .stButton > button[kind="primary"] *,
-        .stButton > button[data-kind="primary"] *,
-        .stButton > button[kind="primary"] [data-testid="stMarkdownContainer"],
-        .stButton > button[data-kind="primary"] [data-testid="stMarkdownContainer"],
-        .stButton > button[kind="primary"] [data-testid="stMarkdownContainer"] *,
-        .stButton > button[data-kind="primary"] [data-testid="stMarkdownContainer"] *,
-        .stApp .stButton button[kind="primary"] *,
-        .stApp .stButton button[data-kind="primary"] *,
-        .stApp [data-testid="stButton"] button[kind="primary"] *,
-        .stApp [data-testid="stButton"] button[data-kind="primary"] *,
-        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"] *,
-        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"] *,
-        .stApp button[data-testid^="stBaseButton"][kind="primary"] *,
-        .stApp button[data-testid^="stBaseButton"][data-kind="primary"] * {
-            color: #ffffff !important;
-            fill: #ffffff !important;
-            stroke: #ffffff !important;
-            -webkit-text-fill-color: #ffffff !important;
-        }
-
-        .stButton > button[kind="primary"]:hover,
-        .stButton > button[data-kind="primary"]:hover,
-        .stApp .stButton button[kind="primary"]:hover,
-        .stApp .stButton button[data-kind="primary"]:hover,
-        .stApp [data-testid="stButton"] button[kind="primary"]:hover,
-        .stApp [data-testid="stButton"] button[data-kind="primary"]:hover,
-        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:hover,
-        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"]:hover,
-        .stApp button[data-testid^="stBaseButton"][kind="primary"]:hover,
-        .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:hover {
-            background: var(--nf-accent-strong) !important;
-            color: #ffffff !important;
-            border-color: #3869a8 !important;
-        }
-
-        .stButton > button:hover,
-        .stApp .stButton button:hover,
         .stApp [data-testid="stButton"] button:hover,
         .stApp [data-testid="stFormSubmitButton"] button:hover,
         .stApp button[data-testid^="stBaseButton"]:hover {
-            border-color: var(--nf-accent);
-            color: var(--nf-accent);
+            color: var(--nf-accent-strong) !important;
+            background: var(--nf-accent-soft) !important;
+            border-color: #9eb9e9 !important;
         }
 
-        .stButton > button:disabled,
-        .stButton > button[disabled],
-        .stButton > button:disabled *,
-        .stButton > button[disabled] *,
-        .stApp .stButton button:disabled,
-        .stApp .stButton button[disabled],
-        .stApp .stButton button:disabled *,
-        .stApp .stButton button[disabled] *,
-        .stApp [data-testid="stButton"] button:disabled,
-        .stApp [data-testid="stButton"] button[disabled],
-        .stApp [data-testid="stButton"] button:disabled *,
-        .stApp [data-testid="stButton"] button[disabled] *,
-        .stApp [data-testid="stFormSubmitButton"] button:disabled,
-        .stApp [data-testid="stFormSubmitButton"] button[disabled],
-        .stApp [data-testid="stFormSubmitButton"] button:disabled *,
-        .stApp [data-testid="stFormSubmitButton"] button[disabled] *,
+        .stApp button[data-testid^="stBaseButton"][kind="primary"],
+        .stApp button[data-testid^="stBaseButton"][data-kind="primary"],
+        .stApp [data-testid="stButton"] button[kind="primary"],
+        .stApp [data-testid="stButton"] button[data-kind="primary"],
+        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"],
+        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"] {
+            color: #fff !important;
+            background: linear-gradient(180deg, #3c6bc4 0%, var(--nf-accent) 100%) !important;
+            border-color: var(--nf-accent-strong) !important;
+            box-shadow: 0 6px 16px rgba(49, 95, 186, 0.2);
+        }
+
+        .stApp button[data-testid^="stBaseButton"][kind="primary"] *,
+        .stApp button[data-testid^="stBaseButton"][data-kind="primary"] *,
+        .stApp [data-testid="stButton"] button[kind="primary"] *,
+        .stApp [data-testid="stButton"] button[data-kind="primary"] *,
+        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"] * {
+            color: #fff !important;
+            fill: #fff !important;
+            -webkit-text-fill-color: #fff !important;
+        }
+
+        .stApp button[data-testid^="stBaseButton"][kind="primary"]:hover,
+        .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:hover,
+        .stApp [data-testid="stButton"] button[kind="primary"]:hover,
+        .stApp [data-testid="stButton"] button[data-kind="primary"]:hover {
+            color: #fff !important;
+            background: var(--nf-accent-strong) !important;
+        }
+
+        .stApp [data-testid="stButtonGroup"] button[kind="segmented_controlActive"],
+        .stApp [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_controlActive"] {
+            color: #fff !important;
+            background: var(--nf-accent) !important;
+            border-color: var(--nf-accent-strong) !important;
+            box-shadow: 0 4px 12px rgba(49, 95, 186, 0.18) !important;
+        }
+
+        .stApp [data-testid="stButtonGroup"] button[kind="segmented_controlActive"] *,
+        .stApp [data-testid="stButtonGroup"] button[data-testid="stBaseButton-segmented_controlActive"] * {
+            color: #fff !important;
+            fill: #fff !important;
+            -webkit-text-fill-color: #fff !important;
+        }
+
         .stApp button[data-testid^="stBaseButton"]:disabled,
         .stApp button[data-testid^="stBaseButton"][disabled],
-        .stApp button[data-testid^="stBaseButton"]:disabled *,
-        .stApp button[data-testid^="stBaseButton"][disabled] * {
-            background: #f2f4f7 !important;
-            color: #667085 !important;
-            opacity: 1 !important;
-            -webkit-text-fill-color: #667085 !important;
+        .stApp [data-testid="stButton"] button:disabled,
+        .stApp [data-testid="stFormSubmitButton"] button:disabled,
+        .stApp button[kind="primary"]:disabled {
+            color: #7a8494 !important;
+            background: #eef1f5 !important;
+            border-color: #d9e0e8 !important;
+            box-shadow: none !important;
+            cursor: not-allowed !important;
         }
 
-        div[data-testid="stExpander"] {
-            border: 1px solid var(--nf-border);
-            border-radius: 8px;
-            background: var(--nf-panel) !important;
-            color: var(--nf-text) !important;
-            overflow: hidden;
+        .stApp button:focus-visible,
+        .stApp input:focus-visible,
+        .stApp textarea:focus-visible {
+            outline: 3px solid rgba(49, 95, 186, 0.2) !important;
+            outline-offset: 1px;
         }
 
-        div[data-testid="stExpander"] details,
-        div[data-testid="stExpander"] details > summary,
-        div[data-testid="stExpander"] [data-testid="stExpanderToggleIcon"],
-        div[data-testid="stExpander"] [data-testid="stMarkdownContainer"],
-        div[data-testid="stExpander"] [data-testid="stMarkdownContainer"] *,
-        div[data-testid="stExpander"] p,
-        div[data-testid="stExpander"] span,
-        div[data-testid="stExpander"] label {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        div[data-testid="stExpander"] details > summary {
-            background: #f8fafc !important;
-            border-bottom: 1px solid var(--nf-border);
-        }
-
-        div[data-testid="stExpander"] details[open] > summary {
-            background: var(--nf-accent-soft) !important;
-        }
-
-        .stApp label,
-        .stApp [data-testid="stWidgetLabel"],
-        .stApp [data-testid="stMarkdownContainer"],
-        .stApp [data-testid="stMarkdownContainer"] p,
-        .stApp [role="radiogroup"] label,
-        .stApp [data-testid="stCheckbox"] label {
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
+        /* 输入控件 */
         .stApp input,
         .stApp textarea,
-        .stApp [data-baseweb="select"] > div {
-            background: #ffffff !important;
+        .stApp [data-baseweb="select"] > div,
+        .stApp [data-baseweb="base-input"] {
             color: var(--nf-text) !important;
-            border-color: var(--nf-border) !important;
+            background: var(--nf-panel) !important;
+            border-color: var(--nf-border-strong) !important;
+            border-radius: var(--nf-radius-sm) !important;
             -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        .stApp [data-baseweb="select"] svg,
-        .stApp [data-baseweb="select"] svg *,
-        .stApp div[data-testid="stExpander"] svg,
-        .stApp div[data-testid="stExpander"] svg *,
-        .stApp [data-testid="stPopover"] > button svg,
-        .stApp [data-testid="stPopover"] > button svg * {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            stroke: var(--nf-text) !important;
-        }
-
-        div[data-baseweb="popover"] [role="listbox"],
-        div[data-baseweb="popover"] [role="option"] {
-            background: #ffffff !important;
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        .stApp .stCodeBlock,
-        .stApp [data-testid="stCodeBlock"],
-        .stApp pre,
-        .stApp .stCodeBlock pre,
-        .stApp [data-testid="stCodeBlock"] pre,
-        .stApp pre code,
-        .stApp .stCodeBlock code,
-        .stApp [data-testid="stCodeBlock"] code {
-            background: #f8fafc !important;
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        .stApp .stCodeBlock pre,
-        .stApp [data-testid="stCodeBlock"] pre,
-        .stApp pre {
-            border-radius: 8px !important;
-            border: 1px solid var(--nf-border) !important;
-            padding: 1rem 1.1rem !important;
-            line-height: 1.55 !important;
-        }
-
-        .stApp pre *,
-        .stApp pre span,
-        .stApp pre .token,
-        .stApp pre code *,
-        div[data-testid="stExpander"] pre *,
-        div[data-testid="stExpander"] pre span,
-        div[data-testid="stExpander"] pre .token {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            stroke: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        .stApp .stCodeBlock *,
-        .stApp [data-testid="stCodeBlock"] *,
-        div[data-testid="stExpander"] .stCodeBlock *,
-        div[data-testid="stExpander"] [data-testid="stCodeBlock"] * {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            stroke: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        .stApp [data-testid="stJson"],
-        .stApp [data-testid="stJson"] > div,
-        .stApp [data-testid="stJson"] .react-json-view,
-        .stApp [data-testid="stDataFrame"],
-        .stApp [data-testid="stDataFrame"] > div {
-            background: #ffffff !important;
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        .stApp [data-testid="stJson"] *,
-        .stApp [data-testid="stDataFrame"] *,
-        .stApp table,
-        .stApp table * {
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        .stApp table,
-        .stApp thead,
-        .stApp tbody,
-        .stApp tr,
-        .stApp th,
-        .stApp td {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
         }
 
         .stApp input::placeholder,
         .stApp textarea::placeholder {
-            color: #98a2b3 !important;
-            -webkit-text-fill-color: #98a2b3 !important;
+            color: var(--nf-subtle) !important;
+            -webkit-text-fill-color: var(--nf-subtle) !important;
         }
 
-        .stApp .stMultiSelect {
-            margin-bottom: 0.85rem;
+        .stApp [data-testid="stWidgetLabel"] p {
+            color: var(--nf-text) !important;
+            font-size: 0.82rem;
+            font-weight: 650;
+        }
+
+        .stApp [data-testid="stCaptionContainer"] p,
+        .stApp .stCaption p {
+            color: var(--nf-muted) !important;
+            line-height: 1.5;
         }
 
         .stApp .stMultiSelect [data-baseweb="select"] > div {
-            align-items: flex-start !important;
-            min-height: 2.75rem !important;
-            max-height: 8.75rem !important;
-            padding: 0.35rem 2.7rem 0.35rem 0.55rem !important;
-            overflow-x: hidden !important;
-            overflow-y: auto !important;
+            min-height: 2.55rem;
+            max-height: 8.5rem;
+            overflow-y: auto;
         }
 
-        .stApp .stMultiSelect [data-baseweb="select"] > div > div {
-            align-items: flex-start !important;
-            align-content: flex-start !important;
-            row-gap: 0.18rem !important;
-            max-width: 100% !important;
-            overflow: visible !important;
+        .stApp .stMultiSelect [data-baseweb="tag"] {
+            color: var(--nf-accent-strong) !important;
+            background: var(--nf-accent-soft) !important;
+            border: 1px solid #cfe0fb;
+            border-radius: 6px;
         }
 
-        .stApp [data-baseweb="tag"] {
-            display: inline-flex !important;
-            align-items: center !important;
-            min-width: 3rem !important;
-            min-height: 1.75rem !important;
-            margin: 0.12rem 0.25rem 0.12rem 0.28rem !important;
-            padding: 0.18rem 0.5rem 0.18rem 0.72rem !important;
-            background: var(--nf-accent) !important;
-            color: #ffffff !important;
-            border-color: var(--nf-accent-strong) !important;
-            border-radius: 8px !important;
-            overflow: visible !important;
-            -webkit-text-fill-color: #ffffff !important;
+        .stApp .stMultiSelect [data-baseweb="tag"] * {
+            color: var(--nf-accent-strong) !important;
+            fill: var(--nf-accent-strong) !important;
         }
 
-        .stApp [data-baseweb="tag"] *,
-        .stApp [data-baseweb="tag"] svg,
-        .stApp [data-baseweb="tag"] svg * {
-            color: #ffffff !important;
-            fill: #ffffff !important;
-            stroke: #ffffff !important;
-            overflow: visible !important;
-            text-overflow: clip !important;
-            white-space: nowrap !important;
-            -webkit-text-fill-color: #ffffff !important;
+        .stApp button[aria-label^="Help for"] {
+            width: 1rem !important;
+            min-width: 1rem !important;
+            min-height: 1rem !important;
+            padding: 0 !important;
+            border: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
         }
 
-        .stAlert,
-        .stAlert div,
-        .stAlert p,
-        .stAlert span,
-        div[data-testid="stAlert"] div,
-        div[data-testid="stAlert"] p,
-        div[data-testid="stAlert"] span {
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        label[data-baseweb="radio"] {
-            gap: 0.45rem !important;
-        }
-
-        label[data-baseweb="radio"]:has(input:checked) > div:first-child {
-            background: var(--nf-accent) !important;
-            border-color: var(--nf-accent-strong) !important;
-        }
-
-        label[data-baseweb="radio"]:has(input:checked) > div:first-child > div {
-            background: #ffffff !important;
-            border-color: #ffffff !important;
-        }
-
-        label[data-baseweb="radio"]:not(:has(input:checked)) > div:first-child {
-            background: rgba(255, 255, 255, 0.14) !important;
-            border-color: rgba(238, 247, 246, 0.55) !important;
-        }
-
-        label[data-baseweb="checkbox"] {
-            gap: 0.45rem !important;
-        }
-
-        label[data-baseweb="checkbox"] > div:first-child {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-            color: var(--nf-text) !important;
-        }
-
-        label[data-baseweb="checkbox"] > span:first-child {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-            color: var(--nf-text) !important;
-        }
-
-        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child {
-            background: var(--nf-accent) !important;
-            border-color: var(--nf-accent-strong) !important;
-        }
-
-        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
-            background: var(--nf-accent) !important;
-            border-color: var(--nf-accent-strong) !important;
-        }
-
-        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child svg,
-        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child svg *,
-        label[data-baseweb="checkbox"]:has(input:checked) > div:first-child path,
-        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child svg,
-        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child svg *,
-        label[data-baseweb="checkbox"]:has(input:checked) > span:first-child path {
-            color: #ffffff !important;
-            fill: #ffffff !important;
-            stroke: #ffffff !important;
-        }
-
-        .stApp input[type="checkbox"],
-        .stApp input[type="radio"] {
-            accent-color: var(--nf-accent);
-        }
-
-        [data-testid="stSidebar"],
-        [data-testid="stSidebar"] .nf-sidebar-title,
-        [data-testid="stSidebar"] .nf-sidebar-meta,
-        [data-testid="stSidebar"] .nf-sidebar-note,
-        [data-testid="stSidebar"] .nf-sidebar-note *,
-        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
-        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
-        [data-testid="stSidebar"] [data-testid="stWidgetLabel"],
-        [data-testid="stSidebar"] label,
-        [data-testid="stSidebar"] [role="radiogroup"] label,
-        [data-testid="stSidebar"] [role="radiogroup"] label *,
-        [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] .stCaption,
-        [data-testid="stSidebar"] .nf-sidebar-meta,
-        [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
-        [data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {
-            color: var(--nf-muted) !important;
-            -webkit-text-fill-color: var(--nf-muted) !important;
-        }
-
-        [data-testid="stSidebar"] .nf-sidebar-note,
-        [data-testid="stSidebar"] .nf-sidebar-note * {
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] .nf-sidebar-note strong {
-            color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] [data-baseweb="select"] > div,
-        [data-testid="stSidebar"] [data-baseweb="select"] *,
-        [data-testid="stSidebar"] input,
-        [data-testid="stSidebar"] textarea,
-        [data-testid="stSidebar"] button,
-        [data-testid="stSidebar"] button *,
-        [data-testid="stSidebar"] button [data-testid="stMarkdownContainer"],
-        [data-testid="stSidebar"] button [data-testid="stMarkdownContainer"] *,
-        [data-testid="stSidebar"] button [data-testid="stMarkdownContainer"] p,
-        [data-testid="stSidebar"] [data-testid="stPopover"] button,
-        [data-testid="stSidebar"] [data-testid="stPopover"] button *,
-        [data-testid="stSidebar"] [data-testid="stPopover"] button [data-testid="stMarkdownContainer"],
-        [data-testid="stSidebar"] [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] *,
-        [data-testid="stSidebar"] [data-testid="stPopover"] button [data-testid="stMarkdownContainer"] p,
-        [data-testid="stSidebar"] .stButton > button,
-        [data-testid="stSidebar"] .stButton > button *,
-        [data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"],
-        [data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"] *,
-        [data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"] p {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
-        }
-
-        [data-testid="stSidebar"] input::placeholder,
-        [data-testid="stSidebar"] textarea::placeholder {
-            color: #98a2b3 !important;
-            -webkit-text-fill-color: #98a2b3 !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"],
-        html body .stApp [data-testid="stButton"] button[data-testid^="stBaseButton"],
-        html body .stApp [data-testid="stFormSubmitButton"] button[data-testid^="stBaseButton"] {
-            background: #ffffff !important;
+        /* 展开区、提示、指标和数据 */
+        div[data-testid="stExpander"] {
+            overflow: hidden;
+            background: var(--nf-panel) !important;
             border: 1px solid var(--nf-border) !important;
+            border-radius: var(--nf-radius) !important;
+            box-shadow: var(--nf-shadow-sm);
+        }
+
+        div[data-testid="stExpander"] details > summary {
+            min-height: 2.75rem;
+            padding: 0.15rem 0.2rem;
             color: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
+            background: var(--nf-panel-soft) !important;
         }
 
-        html body .stApp button[data-testid^="stBaseButton"] *,
-        html body .stApp [data-testid="stButton"] button[data-testid^="stBaseButton"] *,
-        html body .stApp [data-testid="stFormSubmitButton"] button[data-testid^="stBaseButton"] * {
-            color: var(--nf-text) !important;
-            fill: var(--nf-text) !important;
-            stroke: var(--nf-text) !important;
-            -webkit-text-fill-color: var(--nf-text) !important;
+        div[data-testid="stExpander"] details > summary:hover,
+        div[data-testid="stExpander"] details[open] > summary {
+            background: var(--nf-accent-soft) !important;
         }
 
-        html body .stApp button[data-testid^="stBaseButton"][kind="primary"],
-        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"] {
-            background: var(--nf-accent) !important;
-            border-color: var(--nf-accent-strong) !important;
-            color: #ffffff !important;
-            -webkit-text-fill-color: #ffffff !important;
+        div[data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+            padding-top: 0.55rem;
         }
 
-        html body .stApp button[data-testid^="stBaseButton"][kind="primary"] *,
-        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"] * {
-            color: #ffffff !important;
-            fill: #ffffff !important;
-            stroke: #ffffff !important;
-            -webkit-text-fill-color: #ffffff !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"]:disabled,
-        html body .stApp button[data-testid^="stBaseButton"][disabled],
-        html body .stApp button[data-testid^="stBaseButton"]:disabled *,
-        html body .stApp button[data-testid^="stBaseButton"][disabled] * {
-            background: #f2f4f7 !important;
-            border-color: var(--nf-border) !important;
-            color: #667085 !important;
-            opacity: 1 !important;
-            -webkit-text-fill-color: #667085 !important;
-        }
-
-        html body .stApp label[data-baseweb="checkbox"] > div:first-child {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-        }
-
-        html body .stApp label[data-baseweb="checkbox"] > span:first-child {
-            background: #ffffff !important;
-            border-color: var(--nf-border) !important;
-        }
-
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child {
-            background: var(--nf-accent) !important;
-            border-color: var(--nf-accent-strong) !important;
-        }
-
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
-            background: var(--nf-accent) !important;
-            border-color: var(--nf-accent-strong) !important;
-        }
-
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child::after {
-            content: "" !important;
-            display: block !important;
-            position: absolute !important;
-            left: 50% !important;
-            top: 46% !important;
-            width: 0.34rem !important;
-            height: 0.62rem !important;
-            border-right: 2px solid #ffffff !important;
-            border-bottom: 2px solid #ffffff !important;
-            transform: translate(-50%, -55%) rotate(45deg) !important;
-        }
-
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child *,
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child svg,
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > div:first-child path,
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child *,
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child svg,
-        html body .stApp label[data-baseweb="checkbox"]:has(input:checked) > span:first-child path {
-            color: #ffffff !important;
-            fill: #ffffff !important;
-            stroke: #ffffff !important;
-        }
-
-        html body .stApp .stMultiSelect [data-baseweb="select"] > div {
-            align-items: flex-start !important;
-            min-height: 2.75rem !important;
-            max-height: 8.75rem !important;
-            padding: 0.35rem 2.7rem 0.35rem 0.65rem !important;
-            overflow-x: hidden !important;
-            overflow-y: auto !important;
-        }
-
-        html body .stApp .stMultiSelect [data-baseweb="select"] > div > div {
-            align-items: flex-start !important;
-            align-content: flex-start !important;
-            row-gap: 0.18rem !important;
-            max-width: 100% !important;
-            overflow: visible !important;
-        }
-
-        html body .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] {
-            max-width: 100% !important;
-            margin-left: 0.45rem !important;
-            padding-left: 0.78rem !important;
-            overflow: hidden !important;
-        }
-
-        .nf-discussion-brief {
-            display: grid;
-            gap: 0.5rem;
-            margin: 0.15rem 0 0.78rem;
+        div[data-testid="stMetric"] {
+            min-height: 5.4rem;
             padding: 0.72rem 0.78rem;
-            border: 1px solid #dbe5f2;
-            border-radius: 8px;
-            background: #f8fbff;
+            background: var(--nf-panel);
+            border: 1px solid var(--nf-border);
+            border-radius: var(--nf-radius);
+            box-shadow: var(--nf-shadow-sm);
+        }
+
+        div[data-testid="stMetric"] label,
+        div[data-testid="stMetric"] [data-testid="stMetricLabel"] p {
+            color: var(--nf-muted) !important;
+            font-size: 0.76rem !important;
+        }
+
+        div[data-testid="stMetricValue"] {
+            color: var(--nf-text) !important;
+            font-size: 1.28rem !important;
+            font-weight: 760;
+        }
+
+        .stApp [data-testid="stAlert"] {
+            border-radius: var(--nf-radius-sm);
+            border-width: 1px;
+        }
+
+        .stApp [data-testid="stDataFrame"],
+        .stApp [data-testid="stTable"] {
+            overflow: hidden;
+            border: 1px solid var(--nf-border) !important;
+            border-radius: var(--nf-radius-sm);
+        }
+
+        .stApp [data-testid="stFileUploader"] section {
+            padding: 0.8rem;
+            background: var(--nf-panel-soft);
+            border-color: var(--nf-border-strong);
+            border-radius: var(--nf-radius);
+        }
+
+        .stApp pre,
+        .stApp [data-testid="stCodeBlock"] pre {
+            color: var(--nf-text) !important;
+            background: #f8fafc !important;
+            border: 1px solid var(--nf-border) !important;
+            border-radius: var(--nf-radius-sm) !important;
+        }
+
+        /* 对话工作区 */
+        .nf-discussion-brief {
+            padding: 0.8rem;
+            margin-bottom: 0.55rem;
+            background: var(--nf-panel-soft);
+            border: 1px solid var(--nf-border);
+            border-radius: var(--nf-radius-sm);
         }
 
         .nf-discussion-brief-title {
             color: var(--nf-accent-strong);
-            font-size: 0.84rem;
-            font-weight: 750;
-            line-height: 1.3;
+            font-size: 0.78rem;
+            font-weight: 760;
         }
 
         .nf-discussion-chip-row {
             display: flex;
             flex-wrap: wrap;
-            gap: 0.38rem;
+            gap: 0.3rem;
+            margin-top: 0.45rem;
         }
 
         .nf-discussion-chip {
-            display: inline-flex;
-            align-items: center;
-            min-height: 1.78rem;
-            padding: 0.18rem 0.58rem;
-            border: 1px solid #d5deea;
-            border-radius: 8px;
-            background: #ffffff;
+            padding: 0.22rem 0.5rem;
             color: var(--nf-text);
-            font-size: 0.86rem;
-            line-height: 1.35;
+            background: var(--nf-panel);
+            border: 1px solid var(--nf-border);
+            border-radius: 999px;
+            font-size: 0.74rem;
         }
 
         .nf-discussion-impact {
             display: grid;
             grid-template-columns: auto minmax(0, 1fr);
             gap: 0.45rem;
-            align-items: start;
+            margin-top: 0.5rem;
             color: var(--nf-muted);
-            font-size: 0.86rem;
-            line-height: 1.45;
+            font-size: 0.78rem;
         }
 
-        .nf-discussion-impact span {
+        .nf-discussion-impact b { color: var(--nf-text); }
+        .nf-discussion-note, .nf-discussion-empty-hint {
+            margin-top: 0.4rem;
             color: var(--nf-muted);
-            font-weight: 650;
-            white-space: nowrap;
-        }
-
-        .nf-discussion-impact b {
-            color: var(--nf-text);
-            font-weight: 650;
-            overflow-wrap: anywhere;
-        }
-
-        .nf-discussion-note {
-            color: var(--nf-muted);
-            font-size: 0.86rem;
-            line-height: 1.45;
-        }
-
-        .nf-discussion-empty-hint {
-            margin: 0.72rem 0 0.72rem !important;
-            color: var(--nf-muted);
-            font-size: 0.92rem;
-            line-height: 1.55;
-        }
-        .stApp [class*="st-key-nf-discussion-shell-"] {
-            display: block;
-            margin: 0.85rem 0 1.2rem;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] > div,
-        .stApp [class*="st-key-nf-discussion-output-"] > div,
-        .stApp [class*="st-key-nf-discussion-input-"] [data-testid="stVerticalBlockBorderWrapper"],
-        .stApp [class*="st-key-nf-discussion-output-"] [data-testid="stVerticalBlockBorderWrapper"] {
-            width: 100% !important;
-            max-width: none !important;
-            min-width: 0 !important;
-        }
-        .stApp [class*="st-key-nf-discussion-input-"] {
-            position: relative;
-            z-index: 1;
-            overflow: visible;
-            background: rgba(255, 255, 255, 0.98) !important;
-            box-shadow: 0 12px 28px rgba(16, 24, 40, 0.08) !important;
-        }
-        .stApp [class*="st-key-nf-discussion-output-"] {
-            max-height: 68vh;
-            overflow-y: auto;
-            scrollbar-gutter: stable;
-            background: #ffffff !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] textarea {
-            min-height: 5rem !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] [data-testid="stTextArea"] {
-            padding: 0.1rem 0.1rem 0.28rem;
-        }
-
-        .stApp [data-baseweb="textarea"] {
-            width: 100%;
-            overflow: visible !important;
-        }
-
-        .stApp [data-baseweb="textarea"] > div {
-            border: 1px solid var(--nf-border) !important;
-            border-radius: 8px !important;
-            background: #ffffff !important;
-            box-shadow: none !important;
-            overflow: visible !important;
-        }
-
-        .stApp [data-baseweb="textarea"]:focus-within > div {
-            border-color: var(--nf-accent) !important;
-            box-shadow: 0 0 0 2px rgba(53, 106, 195, 0.12) !important;
-        }
-
-        .stApp [data-baseweb="textarea"] textarea,
-        .stApp [data-baseweb="textarea"] textarea:focus {
-            border: 0 !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            outline: 0 !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-output-"] .stChatMessage,
-        .stApp [class*="st-key-nf-discussion-input-"] .stChatMessage {
-            margin-bottom: 0.55rem;
-        }
-
-        .stApp [data-testid="stVerticalBlockBorderWrapper"] {
-            border: 1px solid var(--nf-border) !important;
-            border-radius: 8px !important;
-            background: #ffffff !important;
-            box-shadow: var(--nf-shadow-soft);
-        }
-
-        .stApp [data-testid="stVerticalBlockBorderWrapper"]:hover {
-            border-color: #c5d1e0 !important;
-        }
-
-        .stApp [data-baseweb="tab-list"] {
-            gap: 0.35rem;
-            background: #eef2f6;
-            border: 1px solid var(--nf-border);
-            border-radius: 8px;
-            padding: 0.25rem;
-        }
-
-        .stApp [data-baseweb="tab"] {
-            border-radius: 8px;
-            color: var(--nf-muted) !important;
-            font-weight: 650;
-            min-height: 2.35rem;
-        }
-
-        .stApp [aria-selected="true"][data-baseweb="tab"] {
-            background: #ffffff;
-            color: var(--nf-accent-strong) !important;
-            box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
-        }
-
-        .stApp input,
-        .stApp textarea,
-        .stApp [data-baseweb="select"] > div {
-            border-radius: 8px !important;
-            min-height: 2.45rem !important;
-            box-shadow: none !important;
-        }
-
-        .stApp textarea {
-            line-height: 1.6 !important;
-        }
-
-        .stApp input:focus,
-        .stApp textarea:focus,
-        .stApp [data-baseweb="select"] > div:focus-within {
-            border-color: var(--nf-accent) !important;
-            box-shadow: 0 0 0 2px rgba(53, 106, 195, 0.12) !important;
-        }
-
-        .stApp .stButton button,
-        .stApp [data-testid="stButton"] button,
-        .stApp [data-testid="stFormSubmitButton"] button,
-        .stApp button[data-testid^="stBaseButton"] {
-            min-height: 2.45rem;
-            font-weight: 650 !important;
-            transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 120ms ease;
-        }
-
-        .stApp .stButton button:hover,
-        .stApp [data-testid="stButton"] button:hover,
-        .stApp [data-testid="stFormSubmitButton"] button:hover,
-        .stApp button[data-testid^="stBaseButton"]:hover {
-            transform: translateY(-1px);
-        }
-
-        [data-testid="stSidebar"] [role="radiogroup"] label {
-            border-radius: 8px;
-            padding: 0.32rem 0.45rem;
-        }
-
-        [data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {
-            background: #edf4ff;
-            color: var(--nf-accent-strong) !important;
-            font-weight: 700;
-        }
-
-
-        [data-testid="stSidebar"] label[data-baseweb="radio"]:not(:has(input:checked)) > div:first-child,
-        [data-testid="stSidebar"] [role="radiogroup"] label:not(:has(input:checked)) > div:first-child {
-            background: #ffffff !important;
-            border: 1.5px solid #111827 !important;
-        }
-
-        [data-testid="stSidebar"] hr {
-            margin: 0.85rem 0;
-        }
-
-        div[data-testid="stExpander"] {
-            margin: 0.65rem 0;
-            box-shadow: var(--nf-shadow-soft);
-        }
-
-        div[data-testid="stExpander"] details > summary {
-            min-height: 2.55rem;
-            align-items: center;
-        }
-
-
-        /* UI polish pass */
-        .stApp {
-            --nf-border-strong: #cbd5e1;
-            --nf-panel-hover: #fbfdff;
-            --nf-control-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
-            --nf-control-shadow-hover: 0 8px 18px rgba(16, 24, 40, 0.08);
-        }
-
-        .block-container > div {
-            gap: 0.72rem;
-        }
-
-        .nf-section-heading {
-            margin: 1.35rem 0 0.72rem;
-            padding: 0.15rem 0 0.1rem;
-        }
-
-        .nf-section-title {
-            font-size: 1.03rem;
-            letter-spacing: 0;
-        }
-
-        .nf-section-caption {
-            max-width: 72rem;
-            color: #6b7280;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"],
-        html body .stApp [data-testid="stButton"] button,
-        html body .stApp [data-testid="stFormSubmitButton"] button,
-        .stApp .stButton > button {
-            min-height: 2.58rem !important;
-            padding: 0.48rem 0.85rem !important;
-            border-radius: 8px !important;
-            border-color: var(--nf-border-strong) !important;
-            background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%) !important;
-            box-shadow: var(--nf-control-shadow) !important;
-            line-height: 1.25 !important;
-            white-space: normal !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"] p,
-        html body .stApp [data-testid="stButton"] button p,
-        html body .stApp [data-testid="stFormSubmitButton"] button p,
-        .stApp .stButton > button p {
-            line-height: 1.25 !important;
-            margin: 0 !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"]:hover,
-        html body .stApp [data-testid="stButton"] button:hover,
-        html body .stApp [data-testid="stFormSubmitButton"] button:hover,
-        .stApp .stButton > button:hover {
-            background: var(--nf-panel-hover) !important;
-            border-color: var(--nf-accent) !important;
-            color: var(--nf-accent-strong) !important;
-            box-shadow: var(--nf-control-shadow-hover) !important;
-            transform: translateY(-1px);
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"][kind="primary"],
-        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"],
-        .stApp [data-testid="stButton"] button[kind="primary"],
-        .stApp [data-testid="stButton"] button[data-kind="primary"],
-        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"],
-        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"] {
-            background: linear-gradient(180deg, var(--nf-accent) 0%, var(--nf-accent-strong) 100%) !important;
-            border-color: var(--nf-accent-strong) !important;
-            color: #ffffff !important;
-            box-shadow: 0 8px 18px rgba(53, 106, 195, 0.22) !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"][kind="primary"]:hover,
-        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:hover,
-        .stApp [data-testid="stButton"] button[kind="primary"]:hover,
-        .stApp [data-testid="stButton"] button[data-kind="primary"]:hover,
-        .stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:hover,
-        .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"]:hover {
-            background: linear-gradient(180deg, #315fb0 0%, #244f9e 100%) !important;
-            box-shadow: 0 10px 22px rgba(53, 106, 195, 0.28) !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"]:disabled,
-        html body .stApp button[data-testid^="stBaseButton"][disabled],
-        .stApp [data-testid="stButton"] button:disabled,
-        .stApp [data-testid="stFormSubmitButton"] button:disabled {
-            box-shadow: none !important;
-            transform: none !important;
-        }
-
-        div[data-testid="stExpander"] {
-            border-color: var(--nf-border-strong) !important;
-            border-radius: 8px !important;
-            background: #ffffff !important;
-            box-shadow: 0 8px 22px rgba(16, 24, 40, 0.055) !important;
-            margin: 0.82rem 0 !important;
-        }
-
-        div[data-testid="stExpander"] details > summary {
-            min-height: 2.85rem !important;
-            padding: 0.62rem 0.85rem !important;
-            background: linear-gradient(180deg, #fbfcfe 0%, #f7f9fc 100%) !important;
-            border-bottom: 1px solid transparent !important;
-        }
-
-        div[data-testid="stExpander"] details > summary:hover {
-            background: #f3f7fd !important;
-        }
-
-        div[data-testid="stExpander"] details[open] > summary {
-            background: #edf4ff !important;
-            border-bottom-color: #d7e2f0 !important;
-        }
-
-        div[data-testid="stExpander"] details > summary p,
-        div[data-testid="stExpander"] details > summary span {
-            font-weight: 720 !important;
-            line-height: 1.35 !important;
-        }
-
-        div[data-testid="stExpander"] [data-testid="stExpanderDetails"] {
-            padding: 0.85rem 1rem 1rem !important;
-            background: #ffffff !important;
-        }
-
-        .stApp [data-testid="stStatus"] {
-            border: 1px solid #d8e2ee !important;
-            border-radius: 8px !important;
-            background: #ffffff !important;
-            box-shadow: 0 10px 24px rgba(16, 24, 40, 0.065) !important;
-            overflow: hidden !important;
-        }
-
-        .stApp [data-testid="stStatus"] details > summary {
-            min-height: 2.85rem !important;
-            background: #f7faff !important;
-            border-bottom: 1px solid #e3eaf3 !important;
-            font-weight: 720 !important;
-        }
-
-        .stApp [data-testid="stStatus"] [data-testid="stMarkdownContainer"] p {
-            line-height: 1.55 !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-shell-"] {
-            display: grid !important;
-            gap: 0.78rem !important;
-            width: 100% !important;
-            max-width: none !important;
-            justify-self: stretch !important;
-            margin: 0.9rem 0 1.25rem !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"],
-        .stApp [class*="st-key-nf-discussion-output-"] {
-            display: block !important;
-            box-sizing: border-box !important;
-            width: 100% !important;
-            max-width: none !important;
-            min-width: 0 !important;
-            justify-self: stretch !important;
-            align-self: stretch !important;
-            padding: 1.2rem 1.35rem !important;
-            border: 1px solid #d6dee9 !important;
-            border-radius: 8px !important;
-            box-shadow: 0 10px 26px rgba(16, 24, 40, 0.06) !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] {
-            background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%) !important;
-            overflow: visible !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-output-"] {
-            background: #ffffff !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] h5,
-        .stApp [class*="st-key-nf-discussion-output-"] h5,
-        .stApp [class*="st-key-nf-discussion-output-"] h3 {
-            margin-top: 0.1rem !important;
-            margin-bottom: 0.55rem !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] [data-testid="stVerticalBlockBorderWrapper"] {
-            border-color: #e0e7f0 !important;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.68) !important;
-            background: #fbfdff !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] div[data-testid="stChatMessage"],
-        .stApp [class*="st-key-nf-discussion-output-"] div[data-testid="stChatMessage"],
-        .stApp [class*="st-key-nf-discussion-input-"] .stChatMessage,
-        .stApp [class*="st-key-nf-discussion-output-"] .stChatMessage {
-            border: 1px solid #e3eaf3 !important;
-            border-radius: 8px !important;
-            background: #fbfdff !important;
-            padding: 0.62rem 0.72rem !important;
-            margin-bottom: 0.58rem !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"] textarea {
-            min-height: 6.25rem !important;
-        }
-
-        .stApp [data-baseweb="textarea"] > div,
-        .stApp input,
-        .stApp [data-baseweb="select"] > div {
-            border-color: #d5deea !important;
-            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.035) !important;
-        }
-
-        .stApp [data-baseweb="textarea"]:focus-within > div,
-        .stApp input:focus,
-        .stApp [data-baseweb="select"] > div:focus-within {
-            border-color: var(--nf-accent) !important;
-            box-shadow: 0 0 0 3px rgba(53, 106, 195, 0.13) !important;
-        }
-
-        .stApp [data-testid="stVerticalBlockBorderWrapper"] {
-            border-color: #d9e2ec !important;
-            box-shadow: 0 8px 22px rgba(16, 24, 40, 0.052) !important;
-        }
-
-        .stApp [data-baseweb="tab-list"] {
-            background: #f0f4f8 !important;
-            border-color: #d8e2ee !important;
-            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.55) !important;
-        }
-
-        .stApp [data-baseweb="tab"] {
-            min-height: 2.45rem !important;
-            padding: 0.35rem 0.82rem !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] > div {
-            align-items: center !important;
-            min-height: 2.8rem !important;
-            max-height: 8.75rem !important;
-            padding: 0.38rem 2.7rem 0.38rem 0.62rem !important;
-            overflow-x: hidden !important;
-            overflow-y: auto !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] > div > div {
-            display: flex !important;
-            flex-wrap: wrap !important;
-            align-items: center !important;
-            align-content: center !important;
-            gap: 0.38rem 0.48rem !important;
-            min-height: 1.9rem !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            overflow: visible !important;
-        }
-
-        html body .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] {
-            order: 1 !important;
-            display: inline-flex !important;
-            align-items: center !important;
-            flex: 0 0 auto !important;
-            min-width: 0 !important;
-            max-width: 100% !important;
-            min-height: 1.88rem !important;
-            height: 1.88rem !important;
-            margin: 0 !important;
-            padding: 0 0.54rem 0 0.7rem !important;
-            line-height: 1.88rem !important;
-            overflow: hidden !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] *,
-        .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] span,
-        .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] button {
-            line-height: 1.2 !important;
-            margin-top: 0 !important;
-            margin-bottom: 0 !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] > div > div > div:not([data-baseweb="tag"]) {
-            order: 2 !important;
-            display: flex !important;
-            align-items: center !important;
-            flex: 1 0 6.5rem !important;
-            min-width: 4rem !important;
-            min-height: 1.88rem !important;
-            height: 1.88rem !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            border: 0 !important;
-            background: transparent !important;
-            box-shadow: none !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] input,
-        .stApp .stMultiSelect [data-baseweb="select"] input:focus {
-            width: 100% !important;
-            min-height: 1.88rem !important;
-            height: 1.88rem !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            border: 0 !important;
-            outline: 0 !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            line-height: 1.88rem !important;
-        }
-        .stApp pre,
-        .stApp .stCodeBlock pre,
-        .stApp [data-testid="stCodeBlock"] pre {
-            background: #f8fafc !important;
-            border-color: #d9e2ec !important;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65) !important;
-        }
-
-        /* Final alignment pass: keep Streamlit wrappers from shrinking to content width. */
-        .stApp [data-testid="stVerticalBlock"],
-        .stApp [data-testid="stVerticalBlock"] > div,
-        .stApp [data-testid="stHorizontalBlock"],
-        .stApp [data-testid="stElementContainer"],
-        .stApp [data-testid="stVerticalBlockBorderWrapper"],
-        .stApp [data-testid="stVerticalBlockBorderWrapper"] > div,
-        .stApp [data-testid="stForm"],
-        .stApp [data-testid="stForm"] > div,
-        .stApp [data-testid="stTextArea"],
-        .stApp [data-testid="stTextInput"],
-        .stApp [data-testid="stSelectbox"],
-        .stApp [data-testid="stMultiSelect"],
-        .stApp .stMultiSelect {
-            width: 100% !important;
-            min-width: 0 !important;
-            max-width: 100% !important;
-        }
-
-        .stApp [data-testid="stColumn"],
-        .stApp [data-testid="stColumn"] > div {
-            min-width: 0 !important;
-            max-width: 100% !important;
-        }
-
-        .stApp [data-testid="stVerticalBlock"] {
-            align-items: stretch !important;
-        }
-
-        .stApp [data-testid="stButton"],
-        .stApp [data-testid="stFormSubmitButton"] {
-            min-width: 0 !important;
-            max-width: 100% !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"],
-        html body .stApp [data-testid="stButton"] button,
-        html body .stApp [data-testid="stFormSubmitButton"] button {
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            gap: 0.38rem !important;
-            text-align: center !important;
-            vertical-align: middle !important;
-            overflow-wrap: anywhere !important;
-        }
-
-        html body .stApp button[data-testid^="stBaseButton"] p,
-        html body .stApp [data-testid="stButton"] button p,
-        html body .stApp [data-testid="stFormSubmitButton"] button p {
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            min-height: 1.2em !important;
-            margin: 0 !important;
-            text-align: center !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-shell-"],
-        .stApp [class*="st-key-nf-discussion-shell-"] > div,
-        .stApp [class*="st-key-nf-discussion-shell-"] [data-testid="stVerticalBlock"],
-        .stApp [class*="st-key-nf-discussion-shell-"] [data-testid="stVerticalBlock"] > div,
-        .stApp [class*="st-key-nf-discussion-shell-"] [data-testid="stElementContainer"],
-        .stApp [class*="st-key-nf-discussion-input-"],
-        .stApp [class*="st-key-nf-discussion-output-"],
-        .stApp [class*="st-key-nf-discussion-input-"] > div,
-        .stApp [class*="st-key-nf-discussion-output-"] > div,
-        .stApp [class*="st-key-nf-discussion-input-"] [data-testid="stVerticalBlockBorderWrapper"],
-        .stApp [class*="st-key-nf-discussion-output-"] [data-testid="stVerticalBlockBorderWrapper"] {
-            width: 100% !important;
-            inline-size: 100% !important;
-            min-width: 0 !important;
-            max-width: 100% !important;
-            max-inline-size: 100% !important;
-            flex: 1 1 auto !important;
-            justify-self: stretch !important;
-            align-self: stretch !important;
-        }
-
-        .stApp [data-testid="stElementContainer"]:has([class*="st-key-nf-discussion-shell-"]),
-        .stApp [data-testid="stElementContainer"]:has([class*="st-key-nf-discussion-input-"]),
-        .stApp [data-testid="stElementContainer"]:has([class*="st-key-nf-discussion-output-"]),
-        .stApp [data-testid="stVerticalBlock"]:has([class*="st-key-nf-discussion-shell-"]),
-        .stApp [data-testid="stVerticalBlock"]:has([class*="st-key-nf-discussion-input-"]),
-        .stApp [data-testid="stVerticalBlock"]:has([class*="st-key-nf-discussion-output-"]) {
-            display: block !important;
-            width: 100% !important;
-            inline-size: 100% !important;
-            min-width: 0 !important;
-            max-width: 100% !important;
-            max-inline-size: 100% !important;
-            flex: 1 1 auto !important;
-            align-self: stretch !important;
-            justify-self: stretch !important;
-        }
-        .stApp [class*="st-key-nf-discussion-shell-"] {
-            margin-top: 0.7rem !important;
-            margin-bottom: 1rem !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-input-"],
-        .stApp [class*="st-key-nf-discussion-output-"] {
-            overflow: visible !important;
-        }
-
-        .stApp [class*="st-key-nf-discussion-output-"] {
-            overflow-y: auto !important;
-        }
-
-        .nf-discussion-brief {
-            gap: 0.42rem !important;
-            margin: 0.1rem 0 0.65rem !important;
-            padding: 0.62rem 0.68rem !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] > div {
-            align-items: center !important;
-            padding-left: 0.7rem !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] > div > div {
-            align-items: center !important;
-            align-content: center !important;
-            gap: 0.38rem 0.48rem !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] > div > div div:not([data-baseweb="tag"]) {
-            border: 0 !important;
-            outline: 0 !important;
-            box-shadow: none !important;
-            background: transparent !important;
-        }
-
-        html body .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] {
-            margin: 0 !important;
-            transform: none !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] [data-baseweb="tag"] button {
-            display: inline-flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            width: 1.18rem !important;
-            height: 1.18rem !important;
-            min-width: 1.18rem !important;
-            min-height: 1.18rem !important;
-            margin-left: 0.28rem !important;
-            padding: 0 !important;
-        }
-
-        .stApp .stMultiSelect [data-baseweb="select"] input,
-        .stApp .stMultiSelect [data-baseweb="select"] input:focus {
-            border: 0 !important;
-            outline: 0 !important;
-            box-shadow: none !important;
-            background: transparent !important;
-        }
-
-        /* Main content vertical rhythm: keep labels, controls, and button text optically centered. */
-        .stApp [data-testid="stMain"] [data-testid="stWidgetLabel"] {
-            min-height: 1.28rem !important;
-            margin: 0 0 0.3rem !important;
-            display: flex !important;
-            align-items: flex-end !important;
-            line-height: 1.28 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stWidgetLabel"] p,
-        .stApp [data-testid="stMain"] [data-testid="stWidgetLabel"] label,
-        .stApp [data-testid="stMain"] [data-testid="stWidgetLabel"] span {
-            margin: 0 !important;
-            line-height: 1.28 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stTextInput"],
-        .stApp [data-testid="stMain"] [data-testid="stNumberInput"],
-        .stApp [data-testid="stMain"] [data-testid="stSelectbox"],
-        .stApp [data-testid="stMain"] [data-testid="stTextArea"],
-        .stApp [data-testid="stMain"] [data-testid="stMultiSelect"] {
-            margin-bottom: 0.48rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stElementContainer"]:has(> [data-testid="stTextInput"]),
-        .stApp [data-testid="stMain"] [data-testid="stElementContainer"]:has(> [data-testid="stNumberInput"]),
-        .stApp [data-testid="stMain"] [data-testid="stElementContainer"]:has(> [data-testid="stSelectbox"]),
-        .stApp [data-testid="stMain"] [data-testid="stElementContainer"]:has(> [data-testid="stTextArea"]),
-        .stApp [data-testid="stMain"] [data-testid="stElementContainer"]:has(> [data-testid="stMultiSelect"]) {
-            padding-bottom: 0.42rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stTextInput"] input,
-        .stApp [data-testid="stMain"] [data-testid="stNumberInput"] input {
-            min-height: 2.56rem !important;
-            padding-top: 0.58rem !important;
-            padding-bottom: 0.58rem !important;
-            line-height: 1.34 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div {
-            min-height: 2.56rem !important;
-            display: flex !important;
-            align-items: center !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stSelectbox"] [data-baseweb="select"] > div > div {
-            align-items: center !important;
-            min-height: 1.4rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stNumberInput"] button {
-            min-height: 2.56rem !important;
-            align-items: center !important;
-            justify-content: center !important;
-            padding-top: 0 !important;
-            padding-bottom: 0 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stTextArea"] [data-baseweb="textarea"] > div {
-            align-items: flex-start !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stTextArea"] textarea {
-            padding-top: 0.78rem !important;
-            padding-bottom: 0.78rem !important;
-            line-height: 1.55 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stButton"],
-        .stApp [data-testid="stMain"] [data-testid="stFormSubmitButton"] {
-            margin-top: 0.08rem !important;
-            margin-bottom: 0.52rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stElementContainer"]:has(> [data-testid="stButton"]),
-        .stApp [data-testid="stMain"] [data-testid="stElementContainer"]:has(> [data-testid="stFormSubmitButton"]) {
-            padding-top: 0.08rem !important;
-            padding-bottom: 0.5rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stButton"] button,
-        .stApp [data-testid="stMain"] [data-testid="stFormSubmitButton"] button,
-        .stApp [data-testid="stMain"] button[data-testid^="stBaseButton"] {
-            min-height: 2.56rem !important;
-            padding-top: 0.56rem !important;
-            padding-bottom: 0.56rem !important;
-            line-height: 1.24 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stButton"] button p,
-        .stApp [data-testid="stMain"] [data-testid="stFormSubmitButton"] button p,
-        .stApp [data-testid="stMain"] button[data-testid^="stBaseButton"] p {
-            line-height: 1.24 !important;
-        }
-
-        .stApp [data-testid="stMain"] [class*="st-key-nf-discussion-input-"] {
-            padding-top: 1.15rem !important;
-            padding-bottom: 1.18rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [class*="st-key-nf-discussion-input-"] [data-testid="stTextArea"] {
-            margin-bottom: 0.55rem !important;
-        }
-
-        /*
-         * Cohesive layout system.
-         *
-         * Streamlit 1.5x exposes columns as `stColumn`.  Older rules in this
-         * stylesheet targeted `column`, so the column itself stretched while
-         * bordered cards and controls kept their content width/height.  Keep
-         * these selectors at the end of the theme so every page shares the
-         * same alignment contract.
-         */
-        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
-            align-items: stretch !important;
-            column-gap: 0.9rem !important;
-            row-gap: 0.8rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stColumn"] {
-            display: flex !important;
-            align-self: stretch !important;
-            min-width: 0 !important;
-            max-width: 100% !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stColumn"] > [data-testid="stVerticalBlock"] {
-            flex: 1 1 auto !important;
-            width: 100% !important;
-            min-width: 0 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stButton"],
-        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stFormSubmitButton"],
-        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stButton"] > button,
-        .stApp [data-testid="stMain"] [data-testid="stColumn"] [data-testid="stFormSubmitButton"] > button {
-            width: 100% !important;
-            min-width: 0 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stWidgetLabel"] {
-            display: flex !important;
-            align-items: flex-end !important;
-            min-height: 2.45rem !important;
-            margin-bottom: 0.32rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stWidgetLabel"] p {
-            margin: 0 !important;
-            line-height: 1.35 !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stMetric"] {
-            height: 100% !important;
-            min-height: 6.8rem !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title),
-        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title) > [data-testid="stVerticalBlock"],
-        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title) > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
-        .stApp [data-testid="stMain"] [data-testid="stColumn"]:has(.nf-action-title) > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"] {
-            height: 100% !important;
-        }
-
-        .nf-action-card-body {
-            min-height: 4.65rem !important;
-            margin-bottom: 0.7rem !important;
-        }
-
-        .nf-card,
-        .nf-hero,
-        .nf-status-item,
-        .stApp [data-testid="stVerticalBlockBorderWrapper"],
-        .stApp [data-testid="stLayoutWrapper"]:has(> [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] .nf-action-title) {
-            border-radius: 10px !important;
-        }
-
-        .nf-card {
-            padding: 1.1rem !important;
-        }
-
-        .nf-card-copy,
-        .nf-action-copy,
-        .nf-section-caption,
-        .nf-subtitle {
-            text-wrap: pretty;
-        }
-
-        .stApp [data-testid="stMain"] [data-baseweb="tab-list"] {
-            display: flex !important;
-            flex-wrap: wrap !important;
-            width: 100% !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-baseweb="tab"] {
-            flex: 1 1 8.5rem !important;
-            justify-content: center !important;
-            text-align: center !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stFileUploader"] section {
-            border: 1px dashed #b8c6d8 !important;
-            border-radius: 10px !important;
-            background: #fbfdff !important;
-        }
-
-        .stApp [data-testid="stMain"] [data-testid="stDataFrame"],
-        .stApp [data-testid="stMain"] [data-testid="stTable"] {
-            overflow: hidden !important;
-            border: 1px solid var(--nf-border) !important;
-            border-radius: 10px !important;
-        }
-
-        .nf-muted-note {
-            margin: 0.55rem 0 0.8rem;
-            padding: 0.72rem 0.85rem;
-            border: 1px solid #d8e3ef;
-            border-radius: 10px;
-            background: #f8fbff;
-            color: var(--nf-muted);
-            font-size: 0.88rem;
-            line-height: 1.55;
-        }
-
-        .nf-preset-card {
-            display: flex;
-            flex-direction: column;
-            gap: 0.55rem;
-            min-height: 11.8rem;
-        }
-
-        .nf-preset-card-title {
-            color: var(--nf-text);
-            font-size: 1rem;
-            font-weight: 750;
-            line-height: 1.4;
-        }
-
-        .nf-preset-card-copy {
-            color: var(--nf-text);
-            font-size: 0.9rem;
-            line-height: 1.55;
-        }
-
-        .nf-preset-card-effect {
-            color: var(--nf-muted);
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             line-height: 1.5;
         }
 
-        .nf-button-align-spacer {
-            min-height: 2.77rem;
+        .stApp [class*="st-key-nf-discussion-shell-"] {
+            display: grid;
+            gap: 0.7rem;
         }
 
-        .stApp button[aria-label^="Help for"],
-        .stApp button[aria-label^="Help for"] svg {
-            width: 1rem !important;
-            min-width: 1rem !important;
-            height: 1rem !important;
-            min-height: 1rem !important;
-            padding: 0 !important;
-            border: 0 !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            transform: none !important;
+        .stApp [class*="st-key-nf-discussion-input-"] > div,
+        .stApp [class*="st-key-nf-discussion-output-"] > div {
+            height: 100%;
         }
 
-        .stApp button[aria-label^="Help for"] svg,
-        .stApp button[aria-label^="Help for"] svg * {
-            color: var(--nf-muted) !important;
-            fill: none !important;
-            stroke: var(--nf-muted) !important;
+        .stApp [class*="st-key-nf-discussion-input-"] textarea {
+            min-height: 8.5rem;
         }
 
-        /* A disabled primary action should look unavailable, not like a faded active action. */
-        html body .stApp button[data-testid^="stBaseButton"][kind="primary"]:disabled,
-        html body .stApp button[data-testid^="stBaseButton"][kind="primary"][disabled],
-        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:disabled,
-        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"][disabled],
-        html body .stApp [data-testid="stButton"] button[kind="primary"]:disabled,
-        html body .stApp [data-testid="stButton"] button[kind="primary"][disabled],
-        html body .stApp [data-testid="stButton"] button[data-kind="primary"]:disabled,
-        html body .stApp [data-testid="stButton"] button[data-kind="primary"][disabled],
-        html body .stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:disabled,
-        html body .stApp [data-testid="stFormSubmitButton"] button[kind="primary"][disabled],
-        html body .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"]:disabled,
-        html body .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"][disabled] {
-            background: #eef1f5 !important;
-            border-color: #d9e0e8 !important;
-            color: #7a8494 !important;
-            box-shadow: none !important;
-            cursor: not-allowed !important;
+        .stApp [class*="st-key-nf-discussion-output-"] {
+            max-height: 44rem;
+            overflow-y: auto;
         }
 
-        html body .stApp button[data-testid^="stBaseButton"][kind="primary"]:disabled *,
-        html body .stApp button[data-testid^="stBaseButton"][data-kind="primary"]:disabled *,
-        html body .stApp [data-testid="stButton"] button[kind="primary"]:disabled *,
-        html body .stApp [data-testid="stButton"] button[data-kind="primary"]:disabled *,
-        html body .stApp [data-testid="stFormSubmitButton"] button[kind="primary"]:disabled *,
-        html body .stApp [data-testid="stFormSubmitButton"] button[data-kind="primary"]:disabled * {
-            color: #7a8494 !important;
-            -webkit-text-fill-color: #7a8494 !important;
-        }
-
-        @media (max-width: 760px) {
+        /* 窄屏 */
+        @media (max-width: 900px) {
             .block-container {
-                padding-top: 0.65rem;
-                padding-left: 1rem;
-                padding-right: 1rem;
+                padding: 0.75rem 1rem 3rem;
             }
 
-            .nf-discussion-impact {
-                grid-template-columns: 1fr;
-                gap: 0.12rem;
-            }
-            .stApp [class*="st-key-nf-discussion-input-"] {
-                overflow: visible;
-            }
-            .stApp [class*="st-key-nf-discussion-output-"] {
-                max-height: 62vh;
+            .nf-page-header {
+                padding: 0.9rem 0.95rem 0.85rem;
             }
 
-            .nf-hero {
-                margin-top: 0.75rem !important;
-                padding: 0.85rem;
+            .nf-page-title { font-size: 1.28rem; }
+            .nf-page-context b { max-width: 10rem; }
+
+            [data-testid="stMain"] [data-testid="stHorizontalBlock"] {
+                flex-wrap: wrap;
             }
 
-            .nf-title {
-                font-size: 1.2rem;
+            [data-testid="stMain"] [data-testid="stColumn"] {
+                flex: 1 1 15rem !important;
+                width: 100% !important;
+                min-width: min(15rem, 100%) !important;
             }
 
-            .nf-header-meta {
-                grid-template-columns: 1fr;
-            }
-
-            .stApp [data-testid="stMain"] [data-testid="stHorizontalBlock"] [data-testid="stWidgetLabel"] {
-                min-height: auto !important;
-            }
-
-            .stApp [data-testid="stMain"] [data-baseweb="tab-list"] {
-                flex-wrap: nowrap !important;
-                justify-content: flex-start !important;
+            [data-baseweb="tab-list"] {
+                justify-content: flex-start;
                 overflow-x: auto !important;
-                scrollbar-width: none;
             }
 
-            .stApp [data-testid="stMain"] [data-baseweb="tab-list"]::-webkit-scrollbar {
-                display: none;
+            [data-baseweb="tab"] {
+                flex: 0 0 auto;
             }
 
-            .stApp [data-testid="stMain"] [data-baseweb="tab"] {
-                flex: 0 0 auto !important;
-                min-width: 6.5rem !important;
-                padding-inline: 0.75rem !important;
+            .nf-stat-strip,
+            .nf-status-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
             }
+
+            .nf-action-summary {
+                align-items: flex-start;
+                flex-direction: column;
+            }
+
+            .nf-action-summary-note { text-align: left; }
+            .nf-discussion-impact { grid-template-columns: 1fr; }
+        }
+
+        @media (max-width: 560px) {
+            .nf-page-context { display: grid; grid-template-columns: 1fr 1fr; }
+            .nf-page-context span { min-width: 0; }
+            .nf-stat-strip, .nf-status-grid { grid-template-columns: 1fr 1fr; }
+            .nf-section-caption { margin-left: 0; }
+            [data-testid="stMain"] [data-testid="stColumn"] { flex-basis: 100% !important; }
+
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
-def render_app_header(project_name: str | None, page: str, memory: dict | None):
+
+def render_app_header(project_name: str | None, page: str, memory: dict | None) -> None:
+    """显示紧凑且一致的页面标题和项目上下文。"""
+
     try:
-        from ui.navigation import PAGE_DESCRIPTIONS
+        from ui.navigation import PAGE_DESCRIPTIONS, PAGE_LABELS
     except Exception:
         PAGE_DESCRIPTIONS = {}
+        PAGE_LABELS = {}
 
-    title = html.escape(str((memory or {}).get("title") or project_name or "未选择项目"))
-    genre = html.escape(str((memory or {}).get("genre") or "未设置类型"))
-    canon_mode = html.escape(str((memory or {}).get("canon_mode") or "未设置参考方式"))
-    page_label = html.escape(str(page))
-    page_description = html.escape(str(PAGE_DESCRIPTIONS.get(page, "")))
-    project_label = html.escape(str(project_name or "-"))
+    payload = dict(memory or {})
+    project_label = str(project_name or "未选择项目")
+    title = str(payload.get("title") or project_name or "未命名作品")
+    genre = str(payload.get("genre") or "未设置类型")
+    canon_mode = str(payload.get("canon_mode") or "未设置参考方式")
+    description = str(PAGE_DESCRIPTIONS.get(page, ""))
+    page_label = str(PAGE_LABELS.get(page, page))
+    context_items = [
+        ("项目", project_label),
+        ("作品", title),
+        ("类型", genre),
+        ("参考", canon_mode),
+    ]
+    context_html = "".join(
+        f"<span>{html.escape(label)} <b>{html.escape(value)}</b></span>"
+        for label, value in context_items
+    )
     st.markdown(
         f"""
-        <div class="nf-hero">
-            <div class="nf-kicker">NovelForge</div>
-            <div class="nf-title">{page_label}</div>
-            {f'<div class="nf-subtitle">{page_description}</div>' if page_description else ''}
-            <div class="nf-header-meta">
-                <span>作品名称 <b>{title}</b></span>
-                <span>项目文件 <b>{project_label}</b></span>
-                <span>作品类型 <b>{genre}</b></span>
-                <span>原作参考 <b>{canon_mode}</b></span>
-            </div>
+        <div class="nf-page-header">
+            <div class="nf-page-eyebrow">NovelForge · Workspace</div>
+            <div class="nf-page-title">{html.escape(page_label)}</div>
+            {f'<div class="nf-page-description">{html.escape(description)}</div>' if description else ''}
+            <div class="nf-page-context">{context_html}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2048,14 +949,102 @@ def render_app_header(project_name: str | None, page: str, memory: dict | None):
 
 
 def render_section_heading(title: str, caption: str = "") -> None:
-    safe_title = html.escape(str(title))
-    safe_caption = html.escape(str(caption or ""))
+    """显示统一的内容区块标题。"""
+
     st.markdown(
         f"""
         <div class="nf-section-heading">
-            <div class="nf-section-title">{safe_title}</div>
-            {f'<div class="nf-section-caption">{safe_caption}</div>' if safe_caption else ''}
+            <div class="nf-section-title" role="heading" aria-level="2">{html.escape(str(title))}</div>
+            {f'<div class="nf-section-caption">{html.escape(str(caption))}</div>' if caption else ''}
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_step_heading(step: int | str, title: str, caption: str = "") -> None:
+    """显示导入、规划等流程中的单个步骤。"""
+
+    st.markdown(
+        f"""
+        <div class="nf-step-heading">
+            <div class="nf-step-number">{html.escape(str(step))}</div>
+            <div>
+                <div class="nf-step-title">{html.escape(str(title))}</div>
+                {f'<div class="nf-step-copy">{html.escape(str(caption))}</div>' if caption else ''}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_stat_strip(items: Sequence[tuple[str, object] | tuple[str, object, str]]) -> None:
+    """用紧凑状态条展示少量关键指标。"""
+
+    blocks: list[str] = []
+    for item in items:
+        label, value = item[0], item[1]
+        hint = item[2] if len(item) > 2 else ""
+        blocks.append(
+            "".join(
+                [
+                    '<div class="nf-stat-item">',
+                    f'<div class="nf-stat-label">{html.escape(str(label))}</div>',
+                    f'<div class="nf-stat-value">{html.escape(str(value))}</div>',
+                    f'<div class="nf-stat-hint">{html.escape(str(hint))}</div>' if hint else "",
+                    "</div>",
+                ]
+            )
+        )
+    st.markdown(f'<div class="nf-stat-strip">{"".join(blocks)}</div>', unsafe_allow_html=True)
+
+
+def render_empty_state(title: str, description: str, *, icon: str = "＋") -> None:
+    """显示不包含无效控件的统一空状态。"""
+
+    st.markdown(
+        f"""
+        <div class="nf-empty-state">
+            <div class="nf-empty-icon">{html.escape(str(icon))}</div>
+            <div class="nf-empty-title">{html.escape(str(title))}</div>
+            <div class="nf-empty-copy">{html.escape(str(description))}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_action_summary(
+    label: str,
+    value: str,
+    *,
+    note: str = "",
+    tone: str = "default",
+) -> None:
+    """在主操作旁显示其范围、成本或保存结果。"""
+
+    safe_tone = tone if tone in {"default", "warning", "danger"} else "default"
+    st.markdown(
+        f"""
+        <div class="nf-action-summary" data-tone="{safe_tone}">
+            <div>
+                <div class="nf-action-summary-label">{html.escape(str(label))}</div>
+                <div class="nf-action-summary-value">{html.escape(str(value))}</div>
+            </div>
+            {f'<div class="nf-action-summary-note">{html.escape(str(note))}</div>' if note else ''}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_selection_summary(parts: Iterable[str]) -> None:
+    """显示当前筛选或处理范围，避免用大量已选标签表达。"""
+
+    text = " · ".join(str(part) for part in parts if str(part).strip())
+    if text:
+        st.markdown(
+            f'<div class="nf-selection-summary">{html.escape(text)}</div>',
+            unsafe_allow_html=True,
+        )

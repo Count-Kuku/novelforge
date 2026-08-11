@@ -9,17 +9,6 @@ import novelforge.services.project_manager as project_manager_module
 project_manager_module = importlib.reload(project_manager_module)
 import novelforge.workflows.skills as skills_module
 from novelforge.domain.setting_knowledge import build_generation_setting_context
-from ui.evaluation import render_evaluation_page
-from ui.discussion_assets_panel import render_discussion_asset_candidates
-from ui.knowledge_management import (
-    render_auto_review_policy_panel,
-    render_auto_review_runs_panel,
-    render_ingestion_health_panel,
-    render_knowledge_organizer,
-    render_pending_knowledge_queue,
-    render_source_ledger_page,
-    render_source_package_report_page,
-)
 from ui.labels import (
     KNOWLEDGE_CATEGORY_LABELS,
 )
@@ -30,25 +19,33 @@ from ui import (
     chapter_page as ui_chapter_page,
     creative_profile_page as ui_creative_profile_page,
     discussion as ui_discussion,
+    discussion_assets_panel as ui_discussion_assets_panel,
+    evaluation as ui_evaluation,
     free_writing as ui_free_writing,
+    ingestion_batch_guard as ui_ingestion_batch_guard,
+    ingestion_task_estimate as ui_ingestion_task_estimate,
+    ingestion_tasks as ui_ingestion_tasks,
+    knowledge_management as ui_knowledge_management,
     layout as ui_layout,
+    llm_settings as ui_llm_settings,
+    long_reference_batch as ui_long_reference_batch,
+    long_reference_importer as ui_long_reference_importer,
+    navigation as ui_navigation,
     outline_page as ui_outline_page,
     prompt_option_tools as ui_prompt_option_tools,
+    prompt_options_page as ui_prompt_options_page,
     project_overview as ui_project_overview,
     resource_browser_state as ui_resource_browser_state,
     resource_management as ui_resource_management,
+    retrieval_center_page as ui_retrieval_center_page,
+    retrieval_ingestion_page as ui_retrieval_ingestion_page,
+    rules_page as ui_rules_page,
     settings_page as ui_settings_page,
+    step_views as ui_step_views,
     streaming as ui_streaming,
     volume_outline_page as ui_volume_outline_page,
+    web_research as ui_web_research,
 )
-from ui.llm_settings import render_llm_settings_page
-from ui.long_reference_batch import render_long_reference_batch_manager
-from ui.long_reference_importer import render_long_reference_importer
-from ui.ingestion_tasks import render_ingestion_task_manager
-from ui.prompt_options_page import render_prompt_options_page
-from ui.retrieval_center_page import render_retrieval_center_page
-from ui.retrieval_ingestion_page import render_retrieval_ingestion_page
-from ui.rules_page import render_rules_page
 from novelforge.workflows.ingestion_task_dispatcher import (
     ensure_ingestion_task_dispatcher,
     get_ingestion_task_dispatcher_status,
@@ -72,8 +69,16 @@ def _reload_live_ui_modules() -> dict[str, object]:
     importlib.reload(ui_streaming)
     importlib.reload(ui_resource_browser_state)
     layout_helpers = importlib.reload(ui_layout)
+    importlib.reload(ui_step_views)
+    importlib.reload(ui_ingestion_batch_guard)
+    importlib.reload(ui_ingestion_task_estimate)
+    importlib.reload(ui_web_research)
     prompt_option_helpers = importlib.reload(ui_prompt_option_tools)
     importlib.reload(ui_discussion)
+    # Streamlit keeps imported modules alive between script reruns. Reload the
+    # navigation contract before app_shell so a long-running process cannot
+    # combine an old navigation module with a newly edited shell module.
+    importlib.reload(ui_navigation)
     return {
         "app_shell": importlib.reload(ui_app_shell),
         "layout": layout_helpers,
@@ -81,10 +86,21 @@ def _reload_live_ui_modules() -> dict[str, object]:
         "settings": importlib.reload(ui_settings_page),
         "chapter": importlib.reload(ui_chapter_page),
         "creative_profile": importlib.reload(ui_creative_profile_page),
+        "discussion_assets": importlib.reload(ui_discussion_assets_panel),
+        "evaluation": importlib.reload(ui_evaluation),
         "free_writing": ui_free_writing.reload_components(),
+        "ingestion_tasks": importlib.reload(ui_ingestion_tasks),
+        "knowledge_management": importlib.reload(ui_knowledge_management),
+        "llm_settings": importlib.reload(ui_llm_settings),
+        "long_reference_batch": importlib.reload(ui_long_reference_batch),
+        "long_reference_importer": importlib.reload(ui_long_reference_importer),
         "outline": importlib.reload(ui_outline_page),
         "prompt_option_tools": prompt_option_helpers,
+        "prompt_options_page": importlib.reload(ui_prompt_options_page),
         "project_overview": importlib.reload(ui_project_overview),
+        "retrieval_center": importlib.reload(ui_retrieval_center_page),
+        "retrieval_ingestion": importlib.reload(ui_retrieval_ingestion_page),
+        "rules": importlib.reload(ui_rules_page),
         "volume_outline": importlib.reload(ui_volume_outline_page),
         "arc_outline": importlib.reload(ui_arc_outline_page),
         "chapter_outline": importlib.reload(ui_chapter_outline_page),
@@ -96,7 +112,7 @@ def render_memory_page(project_name: str, memory: dict, embedded: bool = False):
     ui_settings_page.render_setting_items_editor(project_name, current_story_id, "story")
 
 
-def render_retrieval_page(project_name: str, mode: str = "center"):
+def render_retrieval_page(project_name: str, ui_modules: dict[str, object], mode: str = "center"):
     current_story_id = st.session_state.get("active_story_id", "default")
 
     source_type_options = {
@@ -112,24 +128,25 @@ def render_retrieval_page(project_name: str, mode: str = "center"):
     knowledge_category_options = list(KNOWLEDGE_CATEGORY_LABELS.keys())
 
     if mode == "ingestion":
-        render_retrieval_ingestion_page(
+        knowledge_management = ui_modules["knowledge_management"]
+        ui_modules["retrieval_ingestion"].render_retrieval_ingestion_page(
             project_name,
             source_type_options,
             knowledge_category_options,
-            render_long_reference_importer=render_long_reference_importer,
-            render_ingestion_task_manager=render_ingestion_task_manager,
-            render_ingestion_health_panel=render_ingestion_health_panel,
-            render_source_ledger_page=render_source_ledger_page,
-            render_auto_review_policy_panel=render_auto_review_policy_panel,
-            render_pending_knowledge_queue=render_pending_knowledge_queue,
-            render_auto_review_runs_panel=render_auto_review_runs_panel,
-            render_long_reference_batch_manager=render_long_reference_batch_manager,
-            render_knowledge_organizer=render_knowledge_organizer,
-            render_source_package_report_page=render_source_package_report_page,
+            render_long_reference_importer=ui_modules["long_reference_importer"].render_long_reference_importer,
+            render_ingestion_task_manager=ui_modules["ingestion_tasks"].render_ingestion_task_manager,
+            render_ingestion_health_panel=knowledge_management.render_ingestion_health_panel,
+            render_source_ledger_page=knowledge_management.render_source_ledger_page,
+            render_auto_review_policy_panel=knowledge_management.render_auto_review_policy_panel,
+            render_pending_knowledge_queue=knowledge_management.render_pending_knowledge_queue,
+            render_auto_review_runs_panel=knowledge_management.render_auto_review_runs_panel,
+            render_long_reference_batch_manager=ui_modules["long_reference_batch"].render_long_reference_batch_manager,
+            render_knowledge_organizer=knowledge_management.render_knowledge_organizer,
+            render_source_package_report_page=knowledge_management.render_source_package_report_page,
         )
         return
 
-    render_retrieval_center_page(project_name, current_story_id)
+    ui_modules["retrieval_center"].render_retrieval_center_page(project_name, current_story_id)
 
 
 def main():
@@ -169,11 +186,14 @@ def main():
     if not project_name and page != "模型配置":
         st.stop()
     elif page == "模型配置":
-        render_llm_settings_page()
+        ui_modules["llm_settings"].render_llm_settings_page()
     elif page == "项目总览":
         ui_modules["project_overview"].render_project_overview_page(project_name)
     elif page == "创作配置":
-        ui_modules["creative_profile"].render_creative_profile_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["creative_profile"].render_creative_profile_page(
+            project_name,
+            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
+        )
     elif page == "核心设定":
         ui_modules["settings"].render_settings_page(project_name, render_memory_page=render_memory_page)
     elif page == "自由创作":
@@ -184,25 +204,37 @@ def main():
     elif page == "项目资源":
         ui_modules["resource_management"].render_resource_management_page(project_name)
     elif page == "资料导入":
-        render_retrieval_page(project_name, mode="ingestion")
+        render_retrieval_page(project_name, ui_modules, mode="ingestion")
     elif page == "检索中心":
-        render_retrieval_page(project_name, mode="center")
+        render_retrieval_page(project_name, ui_modules, mode="center")
     elif page == "生成规则":
-        render_rules_page(project_name)
+        ui_modules["rules"].render_rules_page(project_name)
     elif page == "提示词选项":
-        render_prompt_options_page(project_name)
+        ui_modules["prompt_options_page"].render_prompt_options_page(project_name)
     elif page == "生成大纲":
-        ui_modules["outline"].render_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["outline"].render_outline_page(
+            project_name,
+            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
+        )
     elif page == "分卷大纲":
-        ui_modules["volume_outline"].render_volume_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["volume_outline"].render_volume_outline_page(
+            project_name,
+            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
+        )
     elif page == "剧情段大纲":
-        ui_modules["arc_outline"].render_arc_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["arc_outline"].render_arc_outline_page(
+            project_name,
+            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
+        )
     elif page == "生成细纲":
-        ui_modules["chapter_outline"].render_chapter_outline_page(project_name, render_discussion_asset_candidates=render_discussion_asset_candidates)
+        ui_modules["chapter_outline"].render_chapter_outline_page(
+            project_name,
+            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
+        )
     elif page == "正文生成":
         ui_modules["chapter"].render_chapter_page(project_name)
     elif page == "章节评价":
-        render_evaluation_page(
+        ui_modules["evaluation"].render_evaluation_page(
             project_name,
             ui_modules["prompt_option_tools"]._render_prompt_option_capability_tools,
         )

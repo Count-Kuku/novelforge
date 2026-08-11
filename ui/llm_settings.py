@@ -17,6 +17,7 @@ from novelforge.services.memory import (
     upsert_llm_profile,
 )
 from ui.common import confirmed_button, scoped_widget_key
+from ui.layout import render_stat_strip
 from ui.llm_usage import render_usage_dashboard
 
 
@@ -82,7 +83,7 @@ def _render_llm_profile_actions(selected_profile_id: str, selected_profile: dict
     if action_col1.button(
         "切换生效",
         key=scoped_widget_key("switch_llm_profile", selected_profile_id),
-        use_container_width=True,
+        width="stretch",
     ):
         try:
             set_active_llm_profile(selected_profile_id)
@@ -93,7 +94,7 @@ def _render_llm_profile_actions(selected_profile_id: str, selected_profile: dict
     if action_col2.button(
         "测试连接",
         key=scoped_widget_key("test_llm_connection", selected_profile_id),
-        use_container_width=True,
+        width="stretch",
     ):
         if not selected_profile.get("api_key"):
             st.error("当前方案没有填写接口密钥，无法测试。")
@@ -157,7 +158,7 @@ def _render_provider_quick_fill(profile_id: str) -> None:
             st.button(
                 provider_labels.get(provider_name, provider_name),
                 key=_profile_widget_key(f"fill_provider_{idx}", profile_id),
-                use_container_width=True,
+                width="stretch",
                 help=f"{provider['base_url']} / {provider['model_name']}",
                 on_click=lambda p=provider, pid=profile_id: (
                     st.session_state.update({
@@ -636,10 +637,10 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             preflight_confirmation_cost_cny,
             preflight_require_confirmation,
         )
-        if test_col.form_submit_button("测试并保存", use_container_width=True):
+        if test_col.form_submit_button("测试并保存", width="stretch"):
             _handle_test_and_save_profile(payload, auto_activate=auto_activate)
 
-        if save_col.form_submit_button("直接保存", use_container_width=True):
+        if save_col.form_submit_button("直接保存", width="stretch"):
             _handle_direct_save_profile(payload, auto_activate=auto_activate)
 
 
@@ -678,9 +679,25 @@ def _render_saved_llm_profiles(profiles: list[dict], active_profile: dict) -> No
 
 
 def _render_active_llm_settings(settings: dict) -> None:
-    st.markdown("### 当前生效配置")
+    st.markdown("### 当前生效方案")
     masked_key = _mask_api_key(settings.get("api_key", ""))
-    st.code(json.dumps({
+    with st.container(border=True):
+        st.markdown(f"**{settings.get('profile_name') or '未命名方案'}**")
+        st.caption(
+            f"{PROVIDER_TYPE_OPTIONS.get(settings.get('provider_type', 'auto'), settings.get('provider_type', 'auto'))} · "
+            f"{settings.get('model_name') or '未设置对话模型'} · "
+            f"密钥 {'已设置' if masked_key else '未设置'}"
+        )
+        render_stat_strip(
+            [
+                ("对话模型", settings.get("model_name") or "-", "生成内容"),
+                ("向量模型", settings.get("embedding_model_name") or "-", "检索资料"),
+                ("主显示币种", settings.get("display_currency", "CNY"), "费用预估"),
+                ("执行前预估", "开启" if settings.get("preflight_enabled", True) else "关闭", "Token 与费用"),
+            ]
+        )
+    with st.expander("查看完整配置与文件路径", expanded=False):
+        st.code(json.dumps({
         "方案标识": settings.get("profile_id", ""),
         "方案名称": settings.get("profile_name", ""),
         "模型服务网址": settings.get("base_url", ""),
@@ -708,18 +725,25 @@ def _render_active_llm_settings(settings: dict) -> None:
         "超阈值必须确认": settings.get("preflight_require_confirmation", False),
         "环境配置文件": settings.get("env_path", ""),
         "方案保存文件": settings.get("profiles_path", ""),
-    }, ensure_ascii=False, indent=2), language="json")
+        }, ensure_ascii=False, indent=2), language="json")
 
 
 def render_llm_settings_page():
-    st.caption("可以保存多套模型服务方案并随时切换。当前启用的方案会同步到项目根目录 `.env`。")
-
     profiles, active_profile, settings, _, _ = _load_llm_profile_state()
-    selected_profile = _render_llm_profile_management(profiles, active_profile)
-    _render_provider_quick_fill(str(selected_profile.get("id") or ""))
-    _render_llm_profile_form(selected_profile, active_profile)
-    _render_saved_llm_profiles(profiles, active_profile)
-    _render_active_llm_settings(settings)
-    st.markdown("### 全局模型用量")
-    with st.expander("查看所有项目的用量详情", expanded=False):
+    view = st.segmented_control(
+        "模型设置视图",
+        options=["当前方案", "已保存方案", "用量与费用"],
+        default="当前方案",
+        key="llm_settings_view",
+        label_visibility="collapsed",
+    )
+    if view == "当前方案":
+        _render_active_llm_settings(settings)
+        selected_profile = _render_llm_profile_management(profiles, active_profile)
+        _render_provider_quick_fill(str(selected_profile.get("id") or ""))
+        _render_llm_profile_form(selected_profile, active_profile)
+    elif view == "已保存方案":
+        _render_saved_llm_profiles(profiles, active_profile)
+    else:
+        st.markdown("### 全局模型用量")
         render_usage_dashboard(key_prefix="global_llm_usage")

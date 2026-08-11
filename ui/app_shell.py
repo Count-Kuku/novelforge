@@ -1,6 +1,7 @@
 """Application shell helpers: project initialization and sidebar navigation."""
 from __future__ import annotations
 
+import importlib
 import logging
 
 import streamlit as st
@@ -23,13 +24,32 @@ from novelforge.services.memory import (
 from novelforge.services.project_manager import get_project_summary
 from ui.common import scoped_widget_key
 from ui.llm_usage import render_sidebar_usage_summary
-from ui.navigation import (
-    ADVANCED_PAGE_GROUPS,
-    DEFAULT_PAGE,
-    LEGACY_PAGE_ALIASES,
-    PAGE_DESCRIPTIONS,
-    page_groups_for_story as navigation_page_groups_for_story,
+from ui import navigation as _navigation
+
+
+_NAVIGATION_CONTRACT = (
+    "ADVANCED_PAGE_GROUPS",
+    "DEFAULT_PAGE",
+    "LEGACY_PAGE_ALIASES",
+    "PAGE_DESCRIPTIONS",
+    "PAGE_GROUP_LABELS",
+    "PAGE_ICONS",
+    "PAGE_LABELS",
+    "page_groups_for_story",
 )
+if not all(hasattr(_navigation, name) for name in _NAVIGATION_CONTRACT):
+    # A running Streamlit process may keep the pre-refactor module object in
+    # sys.modules. Repair it before binding the shell's navigation constants.
+    _navigation = importlib.reload(_navigation)
+
+ADVANCED_PAGE_GROUPS = _navigation.ADVANCED_PAGE_GROUPS
+DEFAULT_PAGE = _navigation.DEFAULT_PAGE
+LEGACY_PAGE_ALIASES = _navigation.LEGACY_PAGE_ALIASES
+PAGE_DESCRIPTIONS = _navigation.PAGE_DESCRIPTIONS
+PAGE_GROUP_LABELS = _navigation.PAGE_GROUP_LABELS
+PAGE_ICONS = _navigation.PAGE_ICONS
+PAGE_LABELS = _navigation.PAGE_LABELS
+navigation_page_groups_for_story = _navigation.page_groups_for_story
 
 
 LOGGER = logging.getLogger("novelforge.ui.app_shell")
@@ -158,7 +178,7 @@ def render_new_project_dialog(existing_projects: list[str]):
     candidate_name = st.text_input("\u9879\u76ee\u540d", key=NEW_PROJECT_INPUT_KEY).strip()
     col1, col2 = st.columns(2)
 
-    if col1.button("\u786e\u8ba4\u521b\u5efa", use_container_width=True):
+    if col1.button("\u786e\u8ba4\u521b\u5efa", width="stretch"):
         if not candidate_name:
             st.error("\u9879\u76ee\u540d\u4e0d\u80fd\u4e3a\u7a7a\u3002")
             return
@@ -182,7 +202,7 @@ def render_new_project_dialog(existing_projects: list[str]):
         _close_new_project_dialog()
         st.rerun()
 
-    if col2.button("\u53d6\u6d88", use_container_width=True):
+    if col2.button("\u53d6\u6d88", width="stretch"):
         _close_new_project_dialog()
         st.rerun()
 
@@ -237,8 +257,13 @@ def copy_story_workspace_settings(project_name: str, source_story_id: str, targe
 def _render_sidebar_brand() -> None:
     st.sidebar.markdown(
         """
-        <div class="nf-sidebar-title">NovelForge</div>
-        <div class="nf-sidebar-meta">长篇创作工作台</div>
+        <div class="nf-sidebar-brand">
+            <div class="nf-sidebar-mark">NF</div>
+            <div>
+                <div class="nf-sidebar-title">NovelForge</div>
+                <div class="nf-sidebar-meta">长篇创作工作台</div>
+            </div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -264,7 +289,6 @@ def _render_project_switcher(project_name: str | None, projects: list[str]) -> N
         selected_project = st.sidebar.selectbox(
             "\u5feb\u901f\u5207\u6362",
             options=options,
-            index=options.index(current_value),
             format_func=lambda value: "\u8bf7\u9009\u62e9\u9879\u76ee" if not value else value,
             key="project_switcher",
         )
@@ -289,7 +313,7 @@ def _render_project_switcher(project_name: str | None, projects: list[str]) -> N
 
 
 def _render_new_project_entry(projects: list[str]) -> None:
-    if st.sidebar.button("新建项目", use_container_width=True):
+    if st.sidebar.button("新建项目", width="stretch"):
         _open_new_project_dialog()
     if st.session_state.get(NEW_PROJECT_DIALOG_FLAG):
         render_new_project_dialog(projects)
@@ -315,7 +339,6 @@ def _render_story_switcher(project_name: str, stories: list[dict]) -> None:
         selected_story = st.sidebar.selectbox(
             "切换故事",
             options=story_options,
-            index=story_options.index(active_id) if active_id in story_options else 0,
             format_func=lambda sid: story_labels.get(sid, sid),
             key=switcher_key,
         )
@@ -328,11 +351,11 @@ def _render_story_switcher(project_name: str, stories: list[dict]) -> None:
 
 
 def _render_new_story_popover(project_name: str) -> None:
-    with st.sidebar.popover("新故事", use_container_width=True):
+    with st.sidebar.popover("新故事", width="stretch"):
         new_story_name = st.text_input("故事名称", key="new_story_name_input")
         new_story_desc = st.text_area("故事描述", key="new_story_desc_input", height=80, placeholder="例如：原作线续写、平行世界、角色穿越...")
         copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True, key="sidebar_copy_from")
-        if st.button("创建故事", key="sidebar_create_story", use_container_width=True):
+        if st.button("创建故事", key="sidebar_create_story", width="stretch"):
             if new_story_name.strip():
                 meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
                 if copy_from:
@@ -381,6 +404,7 @@ def _render_navigation_radios(visible_page_groups: dict[str, list[str]], active_
         options=group_names,
         index=group_names.index(active_group),
         key=f"active_page_group_{nav_revision}",
+        format_func=lambda group: PAGE_GROUP_LABELS.get(group, group),
     )
     group_pages = visible_page_groups[selected_group]
     if active_page not in group_pages:
@@ -391,7 +415,7 @@ def _render_navigation_radios(visible_page_groups: dict[str, list[str]], active_
         options=group_pages,
         index=group_pages.index(active_page),
         key=f"active_page_in_group_{selected_group}_{nav_revision}",
-        format_func=lambda page: page,
+        format_func=lambda page: f"{PAGE_ICONS.get(page, '•')}  {PAGE_LABELS.get(page, page)}",
     )
     st.session_state["active_page"] = selected_page
     return selected_group, selected_page

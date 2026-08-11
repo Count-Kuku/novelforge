@@ -18,6 +18,7 @@ from novelforge.services.retrieval_eval import (
 )
 from ui.common import confirmed_button, scoped_session_key, scoped_widget_key
 from ui.labels import label_retrieval_mode, label_scope, label_source_type
+from ui.layout import render_section_heading
 from ui.step_views import render_step_json_expander
 
 
@@ -182,7 +183,7 @@ def _render_eval_case_editor(project_name: str, story_id: str, cases: list[dict]
     with st.expander("新增 / 更新评测用例", expanded=False):
         edit_case_id, current_case = _render_eval_case_selector(project_name, story_id, cases)
         payload = _render_eval_case_form_payload(project_name, story_id, current_case, edit_case_id, source_type_candidates)
-        if st.button("保存评测用例", key=scoped_widget_key("save_rag_eval_case", project_name, story_id, edit_case_id), use_container_width=True):
+        if st.button("保存评测用例", key=scoped_widget_key("save_rag_eval_case", project_name, story_id, edit_case_id), width="stretch"):
             try:
                 saved = upsert_retrieval_eval_case(project_name, payload)
                 st.success(f"已保存评测用例：{saved.get('name')}")
@@ -203,7 +204,7 @@ def _render_eval_cases_table(cases: list[dict]) -> None:
         }
         for case in cases
     ]
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
 
 def _render_eval_case_actions(project_name: str, story_id: str, cases: list[dict]) -> None:
@@ -215,7 +216,7 @@ def _render_eval_case_actions(project_name: str, story_id: str, cases: list[dict
         format_func=lambda value: _eval_case_label(cases, value),
         key=scoped_widget_key("rag_eval_selected_case", project_name, story_id),
     )
-    if action_col_b.button("运行所选用例", key=scoped_widget_key("run_selected_rag_eval", project_name, story_id), use_container_width=True):
+    if action_col_b.button("运行所选用例", key=scoped_widget_key("run_selected_rag_eval", project_name, story_id), width="stretch"):
         selected_case = next((case for case in cases if case.get("case_id") == selected_case_id), None)
         if selected_case:
             scoped_case = {**selected_case, "story_id": str(selected_case.get("story_id") or story_id)}
@@ -234,7 +235,7 @@ def _render_eval_case_actions(project_name: str, story_id: str, cases: list[dict
         if delete_retrieval_eval_case(project_name, selected_case_id):
             st.success("已删除评测用例。")
             st.rerun()
-    if st.button("运行全部启用评测用例", key=scoped_widget_key("run_all_rag_eval", project_name, story_id), use_container_width=True):
+    if st.button("运行全部启用评测用例", key=scoped_widget_key("run_all_rag_eval", project_name, story_id), width="stretch"):
         scoped_cases = [
             {**case, "story_id": str(case.get("story_id") or story_id)}
             for case in cases
@@ -316,7 +317,7 @@ def _render_last_eval_run(project_name: str, story_id: str, runs: list[dict]) ->
             st.info("这条历史运行创建于排名指标升级前，Recall@K、MRR 和 nDCG@K 未记录。")
         result_rows = _eval_result_rows(last_run)
         if result_rows:
-            st.dataframe(result_rows, use_container_width=True, hide_index=True)
+            st.dataframe(result_rows, width="stretch", hide_index=True)
         render_step_json_expander("评测运行原始数据", last_run)
 
 
@@ -336,14 +337,15 @@ def _render_retrieval_feedback(feedback_items: list[dict]) -> None:
                 }
                 for item in reversed(feedback_items[-50:])
             ],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
 
 def render_retrieval_eval_workbench(project_name: str, story_id: str, manifest):
     cases, runs, feedback_items, source_type_candidates = _load_eval_workbench_state(project_name, story_id, manifest)
-    with st.expander("检索评测与反馈", expanded=False):
+    render_section_heading("检索质量评测", "用固定问题检查是否能找到预期资料，并根据反馈持续调整排序。")
+    with st.container(border=True):
         st.caption("用固定测试问题评估匹配是否命中预期资料；检索反馈会影响后续排序，适合持续调教项目资料库。")
         _render_eval_metrics(cases, runs, feedback_items)
         _render_eval_case_editor(project_name, story_id, cases, source_type_candidates)

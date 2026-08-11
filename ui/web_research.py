@@ -139,7 +139,7 @@ def _render_manual_web_research_import(project_name: str, story_id: str) -> None
     )
     if st.button(
         "搜索网页",
-        use_container_width=True,
+        width="stretch",
         type="primary",
         key=scoped_widget_key("web_research_search", *state_scope),
     ):
@@ -183,7 +183,7 @@ def _render_manual_web_research_import(project_name: str, story_id: str) -> None
     st.info("默认可信度只用于批量初始标记；后续多 Agent 版本会按来源逐页评估。")
     if st.button(
         f"抓取并导入选中网页（{len(selected)}）",
-        use_container_width=True,
+        width="stretch",
         disabled=not selected,
         key=scoped_widget_key("web_research_import_selected", *state_scope),
     ):
@@ -222,7 +222,7 @@ def _render_manual_web_research_import(project_name: str, story_id: str) -> None
     imported_rows = last_import.get("imported", []) if isinstance(last_import, dict) else []
     if imported_rows:
         with st.expander("最近导入的网络资料与正文预览", expanded=True):
-            st.dataframe(imported_rows, use_container_width=True, hide_index=True)
+            st.dataframe(imported_rows, width="stretch", hide_index=True)
             preview_options = {
                 str(item.get("relative_path") or ""): str(item.get("title") or item.get("url") or "网页")
                 for item in imported_rows
@@ -254,7 +254,7 @@ def _render_manual_web_research_import(project_name: str, story_id: str) -> None
             st.success("最近导入的网页已启用，并以不可信外部证据边界参与检索。")
             if st.button(
                 "重新隔离最近导入的网页",
-                use_container_width=True,
+                width="stretch",
                 key=scoped_widget_key("manual_web_quarantine", *state_scope),
             ):
                 set_imported_web_pages_retrieval_status(
@@ -268,7 +268,7 @@ def _render_manual_web_research_import(project_name: str, story_id: str) -> None
             st.warning("最近导入的网页仍在隔离区，不会进入写作检索。")
             if st.button(
                 "确认正文后，启用最近导入的网页",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
                 key=scoped_widget_key("manual_web_activate", *state_scope),
             ):

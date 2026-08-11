@@ -67,14 +67,14 @@ def _render_outline_discussion_summary_panel(project_name: str, story_id: str, d
         scoped_widget_key("outline_discussion_prompt_options", project_name, story_id),
     )
     approve_col, clear_col = st.columns(2)
-    if approve_col.button("保存全书结论", key=scoped_widget_key("approve_outline_discussion", project_name, story_id), use_container_width=True):
+    if approve_col.button("保存全书结论", key=scoped_widget_key("approve_outline_discussion", project_name, story_id), width="stretch"):
         try:
             result = approve_outline_discussion(project_name, discussion_step, story_id=story_id)
             st.success("已保存全书讨论结论。")
             st.rerun()
         except Exception as exc:
             st.error(f"保存失败：{exc}")
-    if clear_col.button("清除全书结论", key=scoped_widget_key("clear_outline_discussion", project_name, story_id), use_container_width=True):
+    if clear_col.button("清除全书结论", key=scoped_widget_key("clear_outline_discussion", project_name, story_id), width="stretch"):
         if clear_outline_discussion_approval(project_name, story_id=story_id):
             st.success("已清除全书讨论结论。")
             st.rerun()
@@ -113,7 +113,7 @@ def _render_outline_discussion_area(project_name: str, story_id: str, user_idea:
         has_started = bool(st.session_state.get(discussion_context["result_key"]) or current_messages)
         send_label = "发送" if has_started else "开始讨论"
         send_col, reset_col = st.columns([3, 1])
-        if send_col.button(send_label, key=scoped_widget_key("send_outline_discussion", project_name, story_id), use_container_width=True):
+        if send_col.button(send_label, key=scoped_widget_key("send_outline_discussion", project_name, story_id), width="stretch"):
             submitted = str(user_input or "").strip()
             if not submitted:
                 st.warning("讨论消息不能为空。")
@@ -155,7 +155,7 @@ def _render_outline_discussion_area(project_name: str, story_id: str, user_idea:
                     st.rerun()
                 except Exception as exc:
                     st.error(f"讨论失败：{exc}")
-        if reset_col.button("重置讨论", key=scoped_widget_key("reset_outline_discussion", project_name, story_id), use_container_width=True):
+        if reset_col.button("重置讨论", key=scoped_widget_key("reset_outline_discussion", project_name, story_id), width="stretch"):
             st.session_state[discussion_context["result_key"]] = {}
             st.session_state[messages_key] = []
             st.session_state[discussion_context["clear_input_flag_key"]] = True
@@ -180,7 +180,7 @@ def _render_outline_generation(project_name: str, story_id: str, user_idea: str)
     step_key = scoped_session_key("outline_step", project_name, story_id)
     outline_key = scoped_session_key("outline", project_name, story_id)
     step_result = st.session_state.get(step_key, {})
-    if st.button("生成全书大纲", key=scoped_widget_key("generate_outline", project_name, story_id), type="primary", use_container_width=True):
+    if st.button("生成全书大纲", key=scoped_widget_key("generate_outline", project_name, story_id), type="primary", width="stretch"):
         result = _run_with_stream(
             "正在生成全书大纲...",
             generate_outline,
@@ -204,23 +204,41 @@ def _render_outline_editor(project_name: str, story_id: str, existing_outline: s
         height=500,
     )
 
-    if st.button("保存大纲", key=scoped_widget_key("save_outline", project_name, story_id), use_container_width=True):
+    if st.button("保存大纲", key=scoped_widget_key("save_outline", project_name, story_id), width="stretch"):
         save_outline(project_name, outline_text, story_id=story_id)
         st.success("大纲已保存")
 
 
 def render_outline_page(project_name: str, *, render_discussion_asset_candidates):
     story_id = st.session_state.get("active_story_id", "default")
-
     existing_outline = load_outline(project_name, story_id=story_id)
-    render_section_heading("小说想法", "先把作品方向放在这里，后续讨论和正式大纲都会围绕这段输入。")
-    with st.container(border=True):
-        user_idea = st.text_area("你的小说想法", key=scoped_widget_key("outline_user_idea", project_name, story_id), height=200)
-    discussion_context = _prepare_outline_discussion_context(project_name, story_id)
-    render_section_heading("讨论全书方向", "先定主线、主题和整体结构，再保存为后续规划依据。")
-    _render_outline_discussion_area(project_name, story_id, user_idea, discussion_context, render_discussion_asset_candidates)
-    _render_outline_prompt_options(project_name, story_id)
+    idea_widget_key = scoped_widget_key("outline_user_idea", project_name, story_id)
+    idea_store_key = scoped_session_key("outline_user_idea_value", project_name, story_id)
+    if idea_widget_key in st.session_state:
+        st.session_state[idea_store_key] = st.session_state[idea_widget_key]
+    elif idea_store_key in st.session_state:
+        st.session_state[idea_widget_key] = st.session_state[idea_store_key]
+    user_idea = str(st.session_state.get(idea_store_key, "") or "")
+    view = st.segmented_control(
+        "全书大纲流程",
+        options=["1 · 记录想法", "2 · 讨论方向", "3 · 生成编辑"],
+        default="1 · 记录想法",
+        key=scoped_widget_key("outline_page_view", project_name, story_id),
+        label_visibility="collapsed",
+    )
+    if view == "1 · 记录想法":
+        render_section_heading("小说想法", "先把作品方向放在这里，后续讨论和正式大纲都会围绕这段输入。")
+        with st.container(border=True):
+            st.text_area("你的小说想法", key=idea_widget_key, height=240)
+        return
+    if view == "2 · 讨论方向":
+        discussion_context = _prepare_outline_discussion_context(project_name, story_id)
+        render_section_heading("讨论全书方向", "先定主线、主题和整体结构，再保存为后续规划依据。")
+        _render_outline_discussion_area(project_name, story_id, user_idea, discussion_context, render_discussion_asset_candidates)
+        return
+
     render_section_heading("生成与编辑", "正式生成会写入下方编辑区，你仍可以手动修改后再保存。")
+    _render_outline_prompt_options(project_name, story_id)
     step_result = _render_outline_generation(project_name, story_id, user_idea)
     _render_outline_editor(project_name, story_id, existing_outline)
     render_step_validation(step_result)

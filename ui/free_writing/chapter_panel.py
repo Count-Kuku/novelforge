@@ -78,7 +78,7 @@ def render_chapter_panel(
                 story_id,
                 session_id,
             ),
-            use_container_width=True,
+            width="stretch",
             type="primary",
         ):
             try:

@@ -221,7 +221,7 @@ def _render_setting_asset_candidate(project_name: str, story_id: str, key_prefix
     if st.button(
         "保存为核心设定",
         key=scoped_widget_key("apply_discussion_setting", key_prefix, item.get("id", "")),
-        use_container_width=True,
+        width="stretch",
     ):
         _apply_setting_candidate(project_name, story_id, item, issues, replace_target, replace_existing)
 
@@ -267,7 +267,7 @@ def _render_prompt_option_asset_candidate(project_name: str, story_id: str, key_
     if st.button(
         "保存为提示词要求",
         key=scoped_widget_key("apply_discussion_prompt_option", key_prefix, option.get("id", "")),
-        use_container_width=True,
+        width="stretch",
     ):
         _apply_prompt_option_candidate(project_name, story_id, option, replace_target, replace_existing, option_enabled)
 
@@ -304,7 +304,7 @@ def _render_rule_asset_candidate(project_name: str, story_id: str, key_prefix: s
     if st.button(
         "保存为故事规则",
         key=scoped_widget_key("apply_discussion_rule", key_prefix, rule.get("id", "")),
-        use_container_width=True,
+        width="stretch",
     ):
         _apply_rule_candidate(project_name, story_id, rule)
 

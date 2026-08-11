@@ -51,11 +51,11 @@ def _render_rules_copy_tools(project_name: str, story_id: str, current_story_nam
 
     st.markdown("##### 当前故事与整个项目")
     col_a, col_c = st.columns(2)
-    if col_a.button("把项目规则复制到当前故事", use_container_width=True):
+    if col_a.button("把项目规则复制到当前故事", width="stretch"):
         merge_project_rules_to_story(project_name, story_id)
         st.success(f"已将项目规则复制到 {current_story_name}")
         st.rerun()
-    if col_c.button("把当前故事规则设为项目默认", use_container_width=True):
+    if col_c.button("把当前故事规则设为项目默认", width="stretch"):
         merge_story_rules_to_project(project_name, story_id)
         st.success(f"已将 {current_story_name} 的规则合并为项目默认规则")
         st.rerun()
@@ -71,7 +71,7 @@ def _render_rules_copy_tools(project_name: str, story_id: str, current_story_nam
             key=f"rules_import_story_{story_id}",
         )
         action_col.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
-        if action_col.button("复制所选故事规则", use_container_width=True, key=f"import_rules_{story_id}"):
+        if action_col.button("复制所选故事规则", width="stretch", key=f"import_rules_{story_id}"):
             save_story_rules(project_name, story_id, load_story_rules(project_name, selected_story))
             imported_name = next((s.get("name", selected_story) for s in other_stories if s.get("story_id") == selected_story), selected_story)
             st.success(f"已从 {imported_name} 导入规则")
@@ -83,20 +83,20 @@ def _render_rules_copy_tools(project_name: str, story_id: str, current_story_nam
         st.caption("全局规则会影响所有项目。建议只放跨项目稳定偏好，例如输出语言、审阅标准、文风禁忌；具体角色、世界观和剧情要求更适合留在项目或故事规则。")
         global_col_a, global_col_b = st.columns(2)
         with global_col_a:
-            if st.button("全局规则合并到项目", use_container_width=True):
+            if st.button("全局规则合并到项目", width="stretch"):
                 merge_global_rules_to_project(project_name)
                 st.success("已将全局规则合并到项目规则")
                 st.rerun()
-            if st.button("项目规则合并到全局", use_container_width=True):
+            if st.button("项目规则合并到全局", width="stretch"):
                 merge_project_rules_to_global(project_name)
                 st.success("已将项目规则合并到全局规则")
                 st.rerun()
         with global_col_b:
-            if st.button("全局规则合并到当前故事", use_container_width=True):
+            if st.button("全局规则合并到当前故事", width="stretch"):
                 merge_global_rules_to_story(project_name, story_id)
                 st.success(f"已将全局规则合并到 {current_story_name}")
                 st.rerun()
-            if st.button("当前故事规则合并到全局", use_container_width=True):
+            if st.button("当前故事规则合并到全局", width="stretch"):
                 merge_story_rules_to_global(project_name, story_id)
                 st.success(f"已将 {current_story_name} 的规则合并到全局规则")
                 st.rerun()
@@ -133,7 +133,7 @@ def _render_rule_conflict_resolution_tools(project_name: str, story_id: str, cur
             key=f"rule_conflict_decision_{story_id}",
             placeholder="例如：当“快节奏推进”和“日常慢热”冲突时，当前故事优先日常慢热，但章节结尾保留推进钩子。",
         )
-        if st.button("保存人工裁决", key=f"save_rule_conflict_{story_id}", use_container_width=True):
+        if st.button("保存人工裁决", key=f"save_rule_conflict_{story_id}", width="stretch"):
             if not decision.strip():
                 st.warning("请先填写裁决内容。")
             else:
@@ -163,7 +163,7 @@ def _render_rule_conflict_resolution_tools(project_name: str, story_id: str, cur
                     st.caption(f"{scope_name} / {item.get('title', '')}")
                     st.write(item.get("decision", ""))
                 with row_cols[1]:
-                    if st.button("删除", key=f"delete_rule_conflict_{layer}_{item.get('id')}", use_container_width=True):
+                    if st.button("删除", key=f"delete_rule_conflict_{layer}_{item.get('id')}", width="stretch"):
                         delete_rule_conflict_resolution(project_name, layer, item.get("id", ""), story_id=story_id)
                         st.success("已删除裁决")
                         st.rerun()
@@ -179,38 +179,47 @@ def render_rules_page(project_name: str):
             current_story_name = s.get("name", story_id)
             break
 
-    st.info("这里保存模型不能违背的长期边界，例如角色底线、世界观事实、禁忌和固定视角。只是想换文风或节奏，请改用“提示词选项”。")
-    st.caption("判断方法：违反后会造成设定错误、剧情矛盾或越过底线的内容，放在生成规则。生效优先级为：故事规则 > 项目规则 > 全局规则。")
+    st.info("这里保存模型不能违背的长期边界；可切换的文风、节奏和描写偏好请放在“写作偏好”。")
+    view = st.segmented_control(
+        "生成规则视图",
+        options=["规则列表", "快速新增", "同步与冲突"],
+        default="规则列表",
+        key=f"rules_page_view_{project_name}_{story_id}",
+        label_visibility="collapsed",
+    )
 
-    with st.expander("快速记录新要求", expanded=True):
-        rule_text = st.text_area(
-            "输入必须长期遵守的要求",
-            height=140,
-            key="rule_capture_text",
-            placeholder="例如：主角不能主动伤害无辜者；全文保持第三人称有限视角；魔法不能复活已彻底死亡的人。",
-            help="适合放硬约束、禁忌、世界观边界和一致性要求。",
-        )
-        col1, col2, col3 = st.columns(3)
-        scope_label = col1.selectbox("适用能力", options=list(RULE_SCOPE_OPTIONS.values()), key="rule_capture_scope")
-        target_label = col2.selectbox("保存位置", options=["故事规则", "项目规则", "全局规则"], key="rule_capture_target")
+    if view == "快速新增":
+        with st.container(border=True):
+            rule_text = st.text_area(
+                "输入必须长期遵守的要求",
+                height=140,
+                key="rule_capture_text",
+                placeholder="例如：主角不能主动伤害无辜者；全文保持第三人称有限视角；魔法不能复活已彻底死亡的人。",
+                help="适合放硬约束、禁忌、世界观边界和一致性要求。",
+            )
+            col1, col2, col3 = st.columns(3)
+            scope_label = col1.selectbox("适用能力", options=list(RULE_SCOPE_OPTIONS.values()), key="rule_capture_scope")
+            target_label = col2.selectbox("保存位置", options=["故事规则", "项目规则", "全局规则"], key="rule_capture_target")
 
-        col3.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
-        if col3.button("保存为长期规则", use_container_width=True):
-            scope = next(key for key, value in RULE_SCOPE_OPTIONS.items() if value == scope_label)
-            target = "story" if target_label == "故事规则" else ("project" if target_label == "项目规则" else "global")
-            try:
-                result = save_rule_text(project_name, scope, target, rule_text, story_id=story_id)
-                if result.get("status") == "saved":
-                    st.success(f"已保存到{target_label} / {scope_label}")
-                    st.rerun()
-                else:
-                    st.warning("未提取到有效规则。")
-            except Exception as exc:
-                st.error(f"保存失败：{exc}")
+            col3.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
+            if col3.button("保存为长期规则", width="stretch"):
+                scope = next(key for key, value in RULE_SCOPE_OPTIONS.items() if value == scope_label)
+                target = "story" if target_label == "故事规则" else ("project" if target_label == "项目规则" else "global")
+                try:
+                    result = save_rule_text(project_name, scope, target, rule_text, story_id=story_id)
+                    if result.get("status") == "saved":
+                        st.success(f"已保存到{target_label} / {scope_label}")
+                        st.rerun()
+                    else:
+                        st.warning("未提取到有效规则。")
+                except Exception as exc:
+                    st.error(f"保存失败：{exc}")
+        return
 
-    _render_rules_copy_tools(project_name, story_id, current_story_name)
-    _render_rule_conflict_resolution_tools(project_name, story_id, current_story_name)
-    st.divider()
+    if view == "同步与冲突":
+        _render_rules_copy_tools(project_name, story_id, current_story_name)
+        _render_rule_conflict_resolution_tools(project_name, story_id, current_story_name)
+        return
 
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)

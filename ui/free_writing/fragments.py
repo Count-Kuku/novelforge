@@ -135,7 +135,7 @@ def render_fragment_actions(
                 story_id,
                 fragment_id,
             ),
-            use_container_width=True,
+            width="stretch",
             type="primary",
         ):
             with st.spinner("正在保留片段并整理可能的新设定..."):
@@ -156,7 +156,7 @@ def render_fragment_actions(
                 story_id,
                 fragment_id,
             ),
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[action_mode_key(session_id)] = "rewrite"
             st.rerun()
@@ -198,7 +198,7 @@ def _render_more_actions(
     frontier: dict,
     can_extract: bool,
 ) -> None:
-    with host.popover("更多", use_container_width=True):
+    with host.popover("更多", width="stretch"):
         if frontier and st.button(
             "从这里写另一个版本",
             key=scoped_widget_key(
@@ -207,7 +207,7 @@ def _render_more_actions(
                 story_id,
                 fragment_id,
             ),
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state[action_mode_key(session_id)] = "branch"
             st.rerun()
@@ -219,7 +219,7 @@ def _render_more_actions(
                 story_id,
                 fragment_id,
             ),
-            use_container_width=True,
+            width="stretch",
         ):
             try:
                 result = run_with_stream(

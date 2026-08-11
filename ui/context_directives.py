@@ -65,7 +65,7 @@ def _render_existing_directives(project_name: str, story_id: str, capability: st
             if toggle_col.button(
                 toggle_label,
                 key=scoped_widget_key("directive_toggle", project_name, story_id, directive_id),
-                use_container_width=True,
+                width="stretch",
             ):
                 updated = dict(directive)
                 updated["enabled"] = not bool(directive.get("enabled", True))
@@ -80,7 +80,7 @@ def _render_existing_directives(project_name: str, story_id: str, capability: st
             if delete_col.button(
                 "删除",
                 key=scoped_widget_key("directive_delete", project_name, story_id, directive_id),
-                use_container_width=True,
+                width="stretch",
             ):
                 delete_context_directive(project_name, directive_id, story_id=story_id)
                 st.rerun()
@@ -134,7 +134,7 @@ def render_context_directive_tools(
                 max_value=100,
                 value=1 if scope == "run" else 0,
             )
-            submitted = st.form_submit_button("保存创作提醒", use_container_width=True)
+            submitted = st.form_submit_button("保存创作提醒", width="stretch")
         if submitted:
             if not content.strip():
                 st.error("请填写具体要求。")

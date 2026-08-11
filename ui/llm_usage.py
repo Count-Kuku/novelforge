@@ -304,7 +304,7 @@ def render_usage_dashboard(
         chart_rows = [{"日期": row["日期"], "Token": row["总 Token"]} for row in daily_table]
         st.line_chart(chart_rows, x="日期", y="Token")
         with st.expander("按日期明细", expanded=False):
-            st.dataframe(daily_table, use_container_width=True, hide_index=True)
+            st.dataframe(daily_table, width="stretch", hide_index=True)
     else:
         st.info("当前范围内还没有模型用量记录。")
 
@@ -320,14 +320,14 @@ def render_usage_dashboard(
         preferences,
     )
     if breakdown:
-        st.dataframe(breakdown, use_container_width=True, hide_index=True)
+        st.dataframe(breakdown, width="stretch", hide_index=True)
 
     with st.expander("最近调用与导出", expanded=False):
         recent = _recent_table(
             list_recent_llm_usage_events(limit=200, **filters), preferences
         )
         if recent:
-            st.dataframe(recent, use_container_width=True, hide_index=True)
+            st.dataframe(recent, width="stretch", hide_index=True)
             st.download_button(
                 "导出当前明细 CSV",
                 data=_csv_bytes(recent),

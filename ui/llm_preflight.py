@@ -8,6 +8,7 @@ from novelforge.core.cost_currency import (
     normalize_cost_currency,
     normalize_usd_to_cny_rate,
 )
+from ui.layout import render_action_summary
 
 def format_tokens(value: object) -> str:
     number = int(value or 0)
@@ -116,7 +117,32 @@ def render_preflight_estimate(
         _cost_ranges(payload)
     )
 
-    with st.expander("执行前 Token 与费用预估", expanded=expanded):
+    token_text = format_tokens(total_range["expected"])
+    if total_range["low"] != total_range["high"]:
+        token_text = f"{format_tokens(total_range['low'])}～{format_tokens(total_range['high'])}"
+    if isinstance(cost_range, dict):
+        low_cost = _cost_text({"expected": cost_range.get("low")}, display_currency)
+        high_cost = _cost_text({"expected": cost_range.get("high")}, display_currency)
+        cost_text = low_cost if low_cost == high_cost else f"{low_cost}～{high_cost}"
+    else:
+        cost_text = "金额未配置"
+    call_count = int(
+        payload.get("estimated_model_calls")
+        or payload.get("llm_call_count")
+        or 0
+    )
+    leading_summary = " · ".join(
+        f"{label} {value}" for label, value in dict(leading_metrics or {}).items()
+    )
+    budget = dict(payload.get("budget") or {})
+    render_action_summary(
+        "执行前预计",
+        f"{call_count} 次模型调用 · {token_text} Token · {cost_text}",
+        note=leading_summary or "详细估算依据可展开查看",
+        tone="warning" if budget.get("warning_reasons") or budget.get("confirmation_required") else "default",
+    )
+
+    with st.expander("查看 Token 与费用明细", expanded=expanded):
         prefix = dict(leading_metrics or {})
         metric_count = len(prefix) + 5
         columns = st.columns(metric_count)
@@ -221,7 +247,6 @@ def render_preflight_estimate(
                 for item in assumptions:
                     st.markdown(f"- {item}")
 
-    budget = dict(payload.get("budget") or {})
     reasons = [
         *list(budget.get("warning_reasons") or []),
         *list(budget.get("confirmation_reasons") or []),

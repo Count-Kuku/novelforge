@@ -175,7 +175,7 @@ def _render_creative_profile_discussion_workspace(
         has_started = bool(st.session_state.get(discussion_result_key) or current_messages)
         send_label = "发送" if has_started else "开始讨论"
         action_col, reset_col = st.columns([3, 1])
-        if action_col.button(send_label, key=scoped_widget_key("send_creative_profile_discussion", project_name, story_id), use_container_width=True):
+        if action_col.button(send_label, key=scoped_widget_key("send_creative_profile_discussion", project_name, story_id), width="stretch"):
             submitted = str(user_input or "").strip()
             if not submitted:
                 st.warning("讨论消息不能为空。")
@@ -216,7 +216,7 @@ def _render_creative_profile_discussion_workspace(
                     st.rerun()
                 except Exception as exc:
                     st.error(f"讨论失败：{exc}")
-        if reset_col.button("重置", key=scoped_widget_key("reset_creative_profile_discussion", project_name, story_id), use_container_width=True):
+        if reset_col.button("重置", key=scoped_widget_key("reset_creative_profile_discussion", project_name, story_id), width="stretch"):
             st.session_state[discussion_result_key] = {}
             st.session_state[discussion_messages_key] = []
             st.session_state[clear_input_flag_key] = True
@@ -233,7 +233,7 @@ def _render_creative_profile_discussion_workspace(
         st.markdown("##### 建议详情")
         _render_discussion_summary(current_step, "")
         st.caption("使用建议会直接保存为正式创作配置；需要细调时，可到下方高级配置修改后再保存。")
-        if st.button("保存", use_container_width=True, type="primary", key=scoped_widget_key("apply_profile_rec", project_name, story_id)):
+        if st.button("保存", width="stretch", type="primary", key=scoped_widget_key("apply_profile_rec", project_name, story_id)):
             if not recommended_profile:
                 st.warning("当前还没有可保存的推荐配置。")
             else:
@@ -387,7 +387,7 @@ def _render_creative_profile_form_fields(project_name: str, story_id: str, form_
         worldline_values = _render_creative_worldline_fields(form_state, profile_keys)
         reference_values = _render_creative_reference_fields(form_state, profile_keys, focus_options)
         form_actions = st.columns([1, 1, 3])
-        submitted = form_actions[0].form_submit_button("保存创作配置", use_container_width=True)
+        submitted = form_actions[0].form_submit_button("保存创作配置", width="stretch")
     return submitted, {
         "story_mode": story_mode,
         "target_length": target_length,
@@ -435,7 +435,7 @@ def _render_creative_profile_recommendation(project_name: str, story_id: str, pr
     }.get(strength, "按当前配置综合参考资料。")
     st.info(strategy_text)
     if profile.get("is_configured"):
-        if st.button("开始生成正文", type="primary", use_container_width=True, key=scoped_widget_key("start_generation_after_profile", project_name, story_id)):
+        if st.button("开始生成正文", type="primary", width="stretch", key=scoped_widget_key("start_generation_after_profile", project_name, story_id)):
             navigate_to("正文生成")
             st.rerun()
     with st.expander("高级：创作配置详细数据", expanded=False):
@@ -448,14 +448,19 @@ def render_creative_profile_page(project_name: str, embedded: bool = False, *, r
     profile = load_creative_profile(project_name, story_id=story_id)
     _init_creative_profile_form_state(project_name, story_id, profile)
     form_state = _get_creative_profile_form_state(project_name, story_id)
-    render_section_heading("用对话确定创作方向", "说明想写什么、篇幅多长以及怎样参考原作，系统会整理成可直接保存的配置建议。")
-    _render_creative_profile_discussion(
-        project_name,
-        story_id,
-        form_state,
+    view = st.segmented_control(
+        "创作方向配置方式",
+        options=["对话引导", "手动配置"],
+        default="对话引导",
+        key=scoped_widget_key("creative_profile_view", project_name, story_id),
+        label_visibility="collapsed",
     )
-    render_section_heading("手动调整", "需要精细控制时，可在这里修改后续规划、正文生成和资料匹配的默认方式。")
-    profile = _render_creative_profile_form(project_name, story_id, form_state)
+    if view == "对话引导":
+        render_section_heading("用对话确定创作方向", "说明想写什么、篇幅多长以及怎样参考原作，系统会整理成可直接保存的建议。")
+        _render_creative_profile_discussion(project_name, story_id, form_state)
+    else:
+        render_section_heading("手动调整", "精细控制后续规划、正文生成和资料匹配的默认方式。")
+        profile = _render_creative_profile_form(project_name, story_id, form_state)
     _render_creative_profile_recommendation(project_name, story_id, profile)
 
 def render_creative_task_wizard(project_name: str, story_id: str = "default"):

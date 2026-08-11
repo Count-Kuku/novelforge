@@ -6,6 +6,8 @@ __pycache__/
 *.pyd
 streamlit-codex.*.log
 launcher.log
+.novelforge-launch.lock
+.novelforge-server.json
 .tmp_streamlit_*.log
 .tmp_*/
 tmp_*/

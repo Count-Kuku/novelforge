@@ -112,7 +112,7 @@ def _render_readonly_resource_detail(project_name: str, story_id: str, resource:
         if st.button(
             "前往自由创作",
             key=scoped_widget_key("browser_goto_creative", project_name, story_id, resource.get("id")),
-            use_container_width=True,
+            width="stretch",
         ):
             navigate_to("自由创作")
         return
@@ -125,7 +125,7 @@ def _render_readonly_resource_detail(project_name: str, story_id: str, resource:
     if st.button(
         "前往资料导入",
         key=scoped_widget_key("browser_goto_ingestion", project_name, story_id, resource.get("id")),
-        use_container_width=True,
+        width="stretch",
     ):
         navigate_to("资料导入")
 
@@ -472,7 +472,7 @@ def _render_visible_resource_groups(project_name: str, story_id: str, browser_it
         for item in group_items:
             selected_flag = selected.get("id") == item.get("id")
             button_label = f"> {item.get('label')}" if selected_flag else item.get("label")
-            if st.button(button_label, key=scoped_widget_key("resource_select", project_name, story_id, item.get("id")), use_container_width=True):
+            if st.button(button_label, key=scoped_widget_key("resource_select", project_name, story_id, item.get("id")), width="stretch"):
                 _set_resource_browser_selection(project_name, story_id, item)
                 st.rerun()
     if not visible_items:

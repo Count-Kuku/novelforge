@@ -150,7 +150,7 @@ def _render_task_creator(project_name: str, story_id: str) -> None:
                 "web_research_budget_confirm", project_name, story_id
             ),
         )
-        submitted = st.form_submit_button("创建后台研究任务", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("创建后台研究任务", type="primary", width="stretch")
 
     if not submitted:
         return
@@ -194,7 +194,7 @@ def _render_task_creator(project_name: str, story_id: str) -> None:
 
 
 def _run_action(label: str, key: str, action, *, wake: bool = False) -> None:
-    if not st.button(label, key=key, use_container_width=True):
+    if not st.button(label, key=key, width="stretch"):
         return
     try:
         action()
@@ -218,7 +218,7 @@ def _render_stage_progress(task: dict) -> None:
                 "错误": step.get("error", ""),
             }
         )
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
 
 
 def _render_evaluation(task: dict) -> None:
@@ -281,7 +281,7 @@ def _render_claim_review(project_name: str, story_id: str, task: dict) -> None:
         f"将选中的 {len(selected_ids)} 条送入待审核设定",
         disabled=not selected_ids,
         type="primary",
-        use_container_width=True,
+        width="stretch",
         key=scoped_widget_key("queue_web_claims", project_name, story_id, task["task_id"]),
     ):
         try:
@@ -336,7 +336,7 @@ def _render_task_detail(project_name: str, story_id: str, task: dict) -> None:
     sources = task.get("result", {}).get("fetched_sources", [])
     if sources:
         with st.expander(f"已保存网页来源（{len(sources)}）", expanded=False):
-            st.dataframe(sources, use_container_width=True, hide_index=True)
+            st.dataframe(sources, width="stretch", hide_index=True)
             preview_map = {
                 str(item.get("relative_path") or ""): str(item.get("title") or item.get("url") or "网页")
                 for item in sources

@@ -162,8 +162,8 @@ def _render_prompt_option_edit_form(project_name: str, story_id: str, layer: str
         tags = st.text_input("标签（逗号分隔）", value=", ".join(option.get("tags", []) or []), key=f"{key_prefix}_tags")
         delete_checked = st.checkbox("删除这个选项", value=False, disabled=bool(option.get("built_in")), key=f"{key_prefix}_delete_checked")
         col_save, col_delete = st.columns(2)
-        save_clicked = col_save.form_submit_button("保存", use_container_width=True)
-        delete_clicked = col_delete.form_submit_button("删除", use_container_width=True, disabled=bool(option.get("built_in")) or not delete_checked)
+        save_clicked = col_save.form_submit_button("保存", width="stretch")
+        delete_clicked = col_delete.form_submit_button("删除", width="stretch", disabled=bool(option.get("built_in")) or not delete_checked)
 
     if save_clicked:
         payload = normalize_prompt_option(
@@ -281,7 +281,7 @@ def _render_prompt_option_inline_tools(
             )
             selected_builtin = next(option for option in builtin_options_for_capability if option.get("id") == builtin_id)
             st.code(selected_builtin.get("content", ""), language="markdown")
-            if st.button("复制到当前故事并启用", key=scoped_widget_key("inline_prompt_option_copy_builtin", key_prefix, project_name, story_id, builtin_id), use_container_width=True):
+            if st.button("复制到当前故事并启用", key=scoped_widget_key("inline_prompt_option_copy_builtin", key_prefix, project_name, story_id, builtin_id), width="stretch"):
                 payload = dict(selected_builtin)
                 payload["scope"] = "story"
                 payload["built_in"] = False

@@ -133,7 +133,7 @@ def _render_task_filters(project_name: str, story_id: str) -> tuple[list[dict], 
     if filter_cols[2].button(
         "刷新",
         key=scoped_widget_key("refresh_source_tasks", project_name, story_id),
-        use_container_width=True,
+        width="stretch",
     ):
         st.rerun()
     include_archived = archive_mode != "活跃任务"
@@ -179,7 +179,7 @@ def _render_task_actions(project_name: str, task: dict) -> None:
         if action_cols[0].button(
             "恢复到任务列表",
             key=scoped_widget_key("restore_source_task", project_name, task_id),
-            use_container_width=True,
+            width="stretch",
         ):
             _execute_task_action(
                 lambda: restore_long_reference_ingestion_task(project_name, task_id),
@@ -190,7 +190,7 @@ def _render_task_actions(project_name: str, task: dict) -> None:
             "永久删除",
             "我确认永久删除这个任务记录",
             scoped_widget_key("delete_source_task", project_name, task_id),
-            use_container_width=True,
+            width="stretch",
         ):
             _execute_task_action(
                 lambda: delete_long_reference_ingestion_task(project_name, task_id),
@@ -202,14 +202,14 @@ def _render_task_actions(project_name: str, task: dict) -> None:
     if status in {"queued", "running"} and action_cols[0].button(
         "暂停",
         key=scoped_widget_key("pause_source_task", project_name, task_id),
-        use_container_width=True,
+        width="stretch",
         disabled=control_pending,
     ):
         _execute_task_action(lambda: pause_long_reference_ingestion_task(project_name, task_id))
     elif status in {"paused", "failed"} and action_cols[0].button(
         "继续后台执行",
         key=scoped_widget_key("resume_source_task", project_name, task_id),
-        use_container_width=True,
+        width="stretch",
         type="primary",
     ):
         _execute_task_action(
@@ -226,7 +226,7 @@ def _render_task_actions(project_name: str, task: dict) -> None:
     if (failed_count or failed_stage_count) and status in {"paused", "failed", "completed_with_errors"} and action_cols[1].button(
         "重试失败项/阶段",
         key=scoped_widget_key("retry_source_task", project_name, task_id),
-        use_container_width=True,
+        width="stretch",
         type="primary" if status == "completed_with_errors" else "secondary",
     ):
         _execute_task_action(
@@ -237,7 +237,7 @@ def _render_task_actions(project_name: str, task: dict) -> None:
     if status in {"queued", "running", "paused", "failed"} and action_cols[2].button(
         "取消未完成项",
         key=scoped_widget_key("cancel_source_task", project_name, task_id),
-        use_container_width=True,
+        width="stretch",
         disabled=control_pending,
     ):
         _execute_task_action(lambda: cancel_long_reference_ingestion_task(project_name, task_id))
@@ -245,7 +245,7 @@ def _render_task_actions(project_name: str, task: dict) -> None:
     if status in {"failed", "completed_with_errors", "completed", "cancelled"} and action_cols[3].button(
         "归档",
         key=scoped_widget_key("archive_source_task", project_name, task_id),
-        use_container_width=True,
+        width="stretch",
     ):
         _execute_task_action(
             lambda: archive_long_reference_ingestion_task(project_name, task_id),
@@ -267,7 +267,7 @@ def _render_task_details(task: dict) -> None:
                     for stage_name, stage in stages.items()
                     if isinstance(stage, dict)
                 ],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
     with st.expander("片段执行明细", expanded=task.get("status") in {"failed", "completed_with_errors"}):
@@ -282,7 +282,7 @@ def _render_task_details(task: dict) -> None:
                 }
                 for item in task.get("items", [])
             ],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
     with st.expander("任务设置与最近结果", expanded=False):
@@ -387,7 +387,7 @@ def render_ingestion_task_manager(project_name: str, story_id: str = "default") 
             "清理 30 天前的归档任务",
             "我确认永久删除 30 天前的全部归档任务记录",
             scoped_widget_key("cleanup_source_tasks", project_name, story_id),
-            use_container_width=False,
+            width="content",
         ):
             try:
                 deleted = cleanup_long_reference_ingestion_tasks(

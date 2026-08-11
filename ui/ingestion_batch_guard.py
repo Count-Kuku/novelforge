@@ -76,6 +76,7 @@ def render_batch_write_guard(
         st.session_state[scoped_widget_key("source_ingestion_task_select", project_name, story_id)] = str(
             conflicts[0].get("task_id") or ""
         )
-        st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "资料任务"
+        st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "处理"
+        st.session_state[scoped_widget_key("ingestion_task_view", project_name, story_id)] = "后台任务"
         st.rerun()
     return True

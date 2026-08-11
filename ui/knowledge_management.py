@@ -72,6 +72,7 @@ from novelforge.domain.knowledge_workflows import (
 )
 from ui.common import confirmed_button, scoped_widget_key
 from ui.knowledge_type_editor import render_typed_knowledge_fields
+from ui.layout import render_empty_state, render_section_heading, render_stat_strip
 from ui.labels import (
     KNOWLEDGE_CATEGORY_LABELS,
     label_authority,
@@ -192,7 +193,7 @@ def _render_pending_auto_review_preview(auto_preview: dict) -> None:
         st.caption("主要保留原因：" + " / ".join(f"{reason}={count}" for reason, count in list(reason_counts.items())[:8]))
     preview_rows = auto_preview.get("rows", [])[:80]
     if preview_rows:
-        st.dataframe(preview_rows, use_container_width=True, hide_index=True)
+        st.dataframe(preview_rows, width="stretch", hide_index=True)
         if len(auto_preview.get("rows", [])) > len(preview_rows):
             st.caption(f"仅展示前 {len(preview_rows)} 条预检结果。")
 
@@ -225,7 +226,7 @@ def _render_pending_auto_review_panel(
                 project_name,
                 "|".join(sorted(auto_candidate_ids)) or "__empty__",
             ),
-            use_container_width=True,
+            width="stretch",
         ):
             if not auto_candidate_ids:
                 st.error("当前范围内没有可审核条目。")
@@ -303,26 +304,53 @@ def _render_pending_raw_json_editor(project_name: str, pending_items: list[dict]
 def render_pending_knowledge_queue(project_name: str):
     pending_items = load_pending_knowledge_items(project_name)
     pending_count = len(pending_items)
-    with st.expander(f"待审核设定（{pending_count}）", expanded=bool(pending_count)):
-        st.caption("提取结果先进入这里。确认后才写入知识库条目并重建检索索引；不合适的条目可以丢弃。")
-        if not pending_items:
-            st.caption("当前没有待审核设定。")
-            return
+    render_section_heading(
+        "待审核知识",
+        "提取结果只有在这里确认后，才会成为写作时可以检索的正式知识。",
+    )
+    if not pending_items:
+        render_empty_state("暂无待审核内容", "新的资料提取结果会自动出现在这里。")
+        return
 
-        quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
-        issue_map = build_pending_issue_map(quality_issues)
-        policy = load_auto_review_policy(project_name)
-        render_pending_triage_dashboard(project_name, pending_items, issue_map, policy)
+    quality_issues = build_pending_knowledge_quality_issues(project_name, pending_items)
+    issue_map = build_pending_issue_map(quality_issues)
+    policy = load_auto_review_policy(project_name)
+    high_risk_count = sum(1 for issue in quality_issues if issue.get("severity") == "高")
+    render_stat_strip(
+        [
+            ("待审核", pending_count, "条"),
+            ("高风险", high_risk_count, "优先处理"),
+            ("自动审核", "已开启" if policy.get("enabled", True) else "未开启", "按当前策略"),
+        ]
+    )
+    view = st.segmented_control(
+        "审核视图",
+        options=["逐条审核", "批量处理", "质检问题", "技术数据"],
+        default="逐条审核",
+        key=scoped_widget_key("pending_knowledge_view", project_name),
+        label_visibility="collapsed",
+    )
+
+    if view == "质检问题":
         render_pending_knowledge_quality_panel(project_name, pending_items)
-        filtered_indices = filter_pending_knowledge_indices(pending_items, issue_map)
-        _render_pending_queue_metrics(pending_items, filtered_indices, issue_map)
-        selected_indices = _render_pending_selection(project_name, pending_items, filtered_indices, issue_map)
-        _render_pending_preview_list(pending_items, filtered_indices, issue_map)
-        render_pending_knowledge_item_editor(project_name, pending_items, filtered_indices)
-        selected_ids = _pending_selected_ids(pending_items, selected_indices)
+        return
+    if view == "技术数据":
+        st.warning("原始数据编辑会跳过普通表单校验，只建议用于故障恢复。")
+        _render_pending_raw_json_editor(project_name, pending_items)
+        return
+
+    filtered_indices = filter_pending_knowledge_indices(pending_items, issue_map)
+    _render_pending_queue_metrics(pending_items, filtered_indices, issue_map)
+    selected_indices = _render_pending_selection(project_name, pending_items, filtered_indices, issue_map)
+    selected_ids = _pending_selected_ids(pending_items, selected_indices)
+    if view == "批量处理":
+        render_pending_triage_dashboard(project_name, pending_items, issue_map, policy)
         _render_pending_auto_review_panel(project_name, pending_items, filtered_indices, selected_indices, issue_map, policy)
         _render_pending_bulk_actions(project_name, selected_ids)
-        _render_pending_raw_json_editor(project_name, pending_items)
+    else:
+        _render_pending_preview_list(pending_items, filtered_indices, issue_map)
+        render_pending_knowledge_item_editor(project_name, pending_items, filtered_indices)
+        _render_pending_bulk_actions(project_name, selected_ids)
 
 
 def render_auto_review_policy_panel(project_name: str):
@@ -386,7 +414,7 @@ def render_auto_review_policy_panel(project_name: str):
             key="auto_review_policy_manual_categories",
             help="这些分类永远不会自动确认，适合硬性约束、世界规则等高影响资料。",
         )
-        if st.button("保存自动审核策略", key="save_auto_review_policy", use_container_width=True):
+        if st.button("保存自动审核策略", key="save_auto_review_policy", width="stretch"):
             saved = save_auto_review_policy(project_name, {
                 "min_confidence": min_confidence,
                 "min_evidence_strength": min_evidence_strength,
@@ -488,7 +516,7 @@ def _auto_review_decision_rows(selected_run: dict) -> list[dict]:
 def _render_auto_review_decisions(selected_run: dict) -> None:
     rows = _auto_review_decision_rows(selected_run)
     if rows:
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
         if len(selected_run.get("decisions", []) or []) > len(rows):
             st.caption(f"仅展示前 {len(rows)} 条决策。")
 
@@ -538,7 +566,7 @@ def _render_manual_review_snapshots(project_name: str, selected_run_id: str, sel
         return
     with st.expander(f"人工复核箱预览（{len(manual_snapshots)}）", expanded=True):
         restored_ids = _restored_manual_review_ids(selected_run)
-        st.dataframe(_manual_review_snapshot_rows(manual_snapshots, restored_ids), use_container_width=True, hide_index=True)
+        st.dataframe(_manual_review_snapshot_rows(manual_snapshots, restored_ids), width="stretch", hide_index=True)
         if len(manual_snapshots) > 120:
             st.caption("仅展示前 120 条，完整快照保存在原始数据里。")
         restorable_snapshots = _restorable_manual_review_snapshots(manual_snapshots, restored_ids)
@@ -560,14 +588,14 @@ def _render_manual_review_snapshots(project_name: str, selected_run_id: str, sel
             "恢复所选到待审核设定",
             key=f"restore_manual_review_selected_{selected_run_id}",
             disabled=not selected_restore_ids,
-            use_container_width=True,
+            width="stretch",
         ):
             _restore_auto_review_snapshots(project_name, selected_run_id, selected_restore_ids)
         if restore_cols[1].button(
             f"恢复全部未恢复（{len(restorable_snapshots)}）",
             key=f"restore_manual_review_all_{selected_run_id}",
             disabled=not restorable_snapshots,
-            use_container_width=True,
+            width="stretch",
         ):
             _restore_auto_review_snapshots(project_name, selected_run_id, [str(item.get("pending_id") or "") for item in restorable_snapshots])
 
@@ -582,7 +610,7 @@ def _render_auto_review_rollback(project_name: str, selected_run_id: str, select
         key=f"rollback_auto_review_confirm_{selected_run_id}",
         placeholder=selected_run_id,
     )
-    if st.button("回退这次处理", key=f"rollback_auto_review_{selected_run_id}", use_container_width=True):
+    if st.button("回退这次处理", key=f"rollback_auto_review_{selected_run_id}", width="stretch"):
         if confirm_text.strip() != selected_run_id:
             st.error("请先输入完整处理记录 ID，避免误回退。")
         else:
@@ -736,8 +764,8 @@ def _render_pending_item_form(project_name: str, item: dict, pending_id: str) ->
         values.update(_render_pending_item_source_fields(item, tags_value))
         values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_confirm = st.columns(2)
-        save_clicked = col_save.form_submit_button("保存修改到待审核设定", use_container_width=True)
-        confirm_clicked = col_confirm.form_submit_button("保存并确认", use_container_width=True)
+        save_clicked = col_save.form_submit_button("保存修改到待审核设定", width="stretch")
+        confirm_clicked = col_confirm.form_submit_button("保存并确认", width="stretch")
     return values, save_clicked, confirm_clicked
 
 
@@ -879,12 +907,12 @@ def _render_confirmed_item_form(project_name: str, category: str, selected_index
         values.update(_render_pending_item_source_fields(item, tags_value))
         values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_delete = st.columns(2)
-        save_clicked = col_save.form_submit_button("保存正式知识并重建索引", use_container_width=True)
+        save_clicked = col_save.form_submit_button("保存正式知识并重建索引", width="stretch")
         delete_confirmed = col_delete.checkbox(
             "确认删除该条正式知识",
             key=scoped_widget_key("delete_confirmed_knowledge_confirm", project_name, category, item_id),
         )
-        delete_clicked = col_delete.form_submit_button("删除该条正式知识", use_container_width=True, disabled=not delete_confirmed)
+        delete_clicked = col_delete.form_submit_button("删除该条正式知识", width="stretch", disabled=not delete_confirmed)
     return values, save_clicked, delete_clicked
 
 
@@ -906,7 +934,7 @@ def _render_return_confirmed_to_pending(project_name: str, category: str, select
         return_clicked = st.button(
             "将该条正式知识退回待审核",
             key=scoped_widget_key("return_confirmed_to_pending", project_name, category, item_id),
-            use_container_width=True,
+            width="stretch",
         )
     if not return_clicked:
         return False
@@ -995,7 +1023,7 @@ def render_confirmed_knowledge_item_editor(
                             "位置": f"{row.get('start_offset', '-')}-{row.get('end_offset', '-')}",
                         }
                         for row in evidence_rows
-                    ], use_container_width=True, hide_index=True)
+                    ], width="stretch", hide_index=True)
                 if revisions:
                     st.dataframe([
                         {
@@ -1006,7 +1034,7 @@ def render_confirmed_knowledge_item_editor(
                             "原因": row.get("reason", ""),
                         }
                         for row in revisions
-                    ], use_container_width=True, hide_index=True)
+                    ], width="stretch", hide_index=True)
         if _render_return_confirmed_to_pending(project_name, category, selected_index, item):
             return
         if not (save_clicked or delete_clicked):
@@ -1084,18 +1112,18 @@ def _render_pending_triage_actions(project_name: str, pending_items: list[dict],
     if action_cols[0].button(
         f"自动确认低风险（{summary['auto_confirm_count']}）",
         key="pending_triage_auto_confirm_all",
-        use_container_width=True,
+        width="stretch",
         disabled=summary["auto_confirm_count"] == 0,
         type="primary" if summary["auto_confirm_count"] else "secondary",
     ):
         _run_pending_triage_auto_confirm(project_name, pending_items)
-    if action_cols[1].button("只看冲突/已存在", key="pending_triage_show_conflicts", use_container_width=True):
+    if action_cols[1].button("只看冲突/已存在", key="pending_triage_show_conflicts", width="stretch"):
         _apply_pending_triage_filter(["fact_conflict", "same_name_conflict", "confirmed_overlap"], "risk_first")
-    if action_cols[2].button("只看低证据", key="pending_triage_show_low_evidence", use_container_width=True):
+    if action_cols[2].button("只看低证据", key="pending_triage_show_low_evidence", width="stretch"):
         _apply_pending_triage_filter(["low_evidence", "low_confidence", "no_evidence"], "low_evidence")
-    if action_cols[3].button("只看重复/别名", key="pending_triage_show_duplicates", use_container_width=True):
+    if action_cols[3].button("只看重复/别名", key="pending_triage_show_duplicates", width="stretch"):
         _apply_pending_triage_filter(["duplicate", "alias_candidate"], "risk_first")
-    if st.button("清空待审核筛选", key="pending_triage_clear_filters", use_container_width=True):
+    if st.button("清空待审核筛选", key="pending_triage_clear_filters", width="stretch"):
         _clear_pending_triage_filters()
 
 
@@ -1121,7 +1149,7 @@ def _render_pending_clear_plan_preview(clear_plan: dict) -> None:
     preview_rows = _pending_clear_plan_preview_rows(clear_plan)
     with st.expander("查看处理方案样例", expanded=False):
         if preview_rows:
-            st.dataframe(preview_rows, use_container_width=True, hide_index=True)
+            st.dataframe(preview_rows, width="stretch", hide_index=True)
             if len(clear_plan.get("decisions", [])) > len(preview_rows):
                 st.caption(f"仅展示前 {len(preview_rows)} 条，完整决策会写入批次记录。")
         else:
@@ -1171,17 +1199,17 @@ def _render_pending_triage_distribution(summary: dict) -> None:
         top_worldlines = sorted(summary["worldline_counts"].items(), key=lambda item: item[1], reverse=True)[:12]
         dist_cols[0].dataframe(
             [{"分类": label_knowledge_category(category), "数量": count} for category, count in top_categories],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         dist_cols[1].dataframe(
             [{"来源": source, "数量": count} for source, count in top_sources],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         dist_cols[2].dataframe(
             [{"资料版本": worldline, "数量": count} for worldline, count in top_worldlines],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1335,7 +1363,7 @@ def _render_pending_quality_alias_action(project_name: str, selected_items: list
     alias_col_a, alias_col_b = st.columns(2)
     canonical_name = alias_col_a.text_input("别名组主名称", value=default_canonical, key="pending_quality_alias_canonical")
     alias_notes = alias_col_b.text_input("别名备注", value="由待审核设定中的疑似别名线索保存。", key="pending_quality_alias_notes")
-    if st.button("保存为实体别名组", key="pending_quality_save_alias_group", use_container_width=True):
+    if st.button("保存为实体别名组", key="pending_quality_save_alias_group", width="stretch"):
         try:
             alias_group = upsert_entity_alias_group(
                 project_name,
@@ -1379,7 +1407,7 @@ def _render_pending_quality_actions(project_name: str, issue: dict, selected_ite
     can_save_alias = issue.get("type") == "alias_candidate" and len(selected_items) >= 2
     if can_save_alias:
         _render_pending_quality_alias_action(project_name, selected_items)
-    if can_merge and st.button("将这组同名内容合并为新的待审核设定", key="pending_quality_merge_issue", use_container_width=True):
+    if can_merge and st.button("将这组同名内容合并为新的待审核设定", key="pending_quality_merge_issue", width="stretch"):
         _merge_pending_quality_issue(project_name, selected_items)
 
 
@@ -1391,7 +1419,7 @@ def render_pending_knowledge_quality_panel(project_name: str, pending_items: lis
             st.caption("当前没有发现明显的重复、冲突或别名线索。")
             return
         type_labels = _pending_quality_type_labels()
-        st.dataframe(_pending_quality_issue_rows(issues, type_labels), use_container_width=True, hide_index=True)
+        st.dataframe(_pending_quality_issue_rows(issues, type_labels), width="stretch", hide_index=True)
         issue = _select_pending_quality_issue(issues, type_labels)
         if issue.get("recommendation"):
             st.info(str(issue.get("recommendation")))
@@ -1418,7 +1446,7 @@ def render_character_entity_card_panel(project_name: str):
     if col_action.button(
         "生成角色资料卡预览",
         key=scoped_widget_key("generate_character_entities", project_name),
-        use_container_width=True,
+        width="stretch",
     ):
         cards = build_character_entity_cards(project_name, max_characters=int(max_characters))
         st.session_state[preview_key] = cards
@@ -1458,7 +1486,7 @@ def render_character_entity_card_panel(project_name: str):
     if col_save.button(
         "保存角色资料卡并更新可匹配资料",
         key=scoped_widget_key("save_character_entities", project_name),
-        use_container_width=True,
+        width="stretch",
     ):
         try:
             parsed = json.loads(raw_cards_json)
@@ -1475,7 +1503,7 @@ def render_character_entity_card_panel(project_name: str):
     if col_clear.button(
         "清空预览",
         key=scoped_widget_key("clear_character_entity_preview", project_name),
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state.pop(preview_key, None)
         st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
@@ -1500,7 +1528,7 @@ def render_setting_entity_card_panel(project_name: str):
     if col_action.button(
         "生成世界设定卡预览",
         key=scoped_widget_key("generate_setting_entities", project_name),
-        use_container_width=True,
+        width="stretch",
     ):
         cards = build_setting_entity_cards(project_name, max_cards=int(max_cards))
         st.session_state[preview_key] = cards
@@ -1519,7 +1547,7 @@ def render_setting_entity_card_panel(project_name: str):
             }
             for card in preview_cards[:12]
         ]
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
         for card in preview_cards[:5]:
             with st.expander(f"{SETTING_ENTITY_CATEGORY_GROUPS.get(card.get('setting_type', ''), card.get('setting_type', '设定'))} / {card.get('name', '未命名设定')}", expanded=False):
                 if card.get("summary"):
@@ -1549,7 +1577,7 @@ def render_setting_entity_card_panel(project_name: str):
     if col_save.button(
         "保存世界设定卡并更新可匹配资料",
         key=scoped_widget_key("save_setting_entities", project_name),
-        use_container_width=True,
+        width="stretch",
     ):
         try:
             parsed = json.loads(raw_cards_json)
@@ -1566,7 +1594,7 @@ def render_setting_entity_card_panel(project_name: str):
     if col_clear.button(
         "清空设定卡预览",
         key=scoped_widget_key("clear_setting_entity_preview", project_name),
-        use_container_width=True,
+        width="stretch",
     ):
         st.session_state.pop(preview_key, None)
         st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
@@ -1632,7 +1660,7 @@ def render_entity_alias_panel(project_name: str):
         if col_save.button(
             "保存别名组",
             key=scoped_widget_key("save_entity_alias_group", project_name, selected_alias_id),
-            use_container_width=True,
+            width="stretch",
         ):
             try:
                 alias_group = upsert_entity_alias_group(
@@ -1671,7 +1699,7 @@ def render_entity_alias_panel(project_name: str):
                 "别名": "、".join(str(value) for value in aliases[:8]),
                 "备注": item.get("notes", ""),
             })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width="stretch", hide_index=True)
     else:
         st.caption("当前还没有实体别名组。")
 
@@ -1869,34 +1897,47 @@ def _render_knowledge_raw_editor(project_name: str, category: str, items: list[d
 
 
 def render_knowledge_organizer(project_name: str, knowledge_category_options: list[str]):
-    with st.expander("知识库条目整理", expanded=False):
-        st.caption("用于处理长篇资料导入后的重复条目。可以按分类查看、合并同名知识，或删除明显错误的条目。")
+    render_section_heading("知识库", "查看、编辑和整理已确认的知识，让后续写作检索更准确。")
+    view = st.segmented_control(
+        "知识管理视图",
+        options=["知识条目", "资料卡与别名", "技术数据"],
+        default="知识条目",
+        key=scoped_widget_key("knowledge_organizer_view", project_name),
+        label_visibility="collapsed",
+    )
+    if view == "资料卡与别名":
         _render_knowledge_organizer_entity_sections(project_name)
-        category = _select_knowledge_organizer_category(project_name, knowledge_category_options)
-        items = load_knowledge_category(project_name, category)
-        if not items:
-            st.caption("当前分类还没有知识库条目。")
-            return
+        return
 
-        duplicate_groups = find_duplicate_knowledge_groups(items)
-        _render_duplicate_group_summary(items, duplicate_groups)
-        candidate_indices = _filter_knowledge_organizer_indices(project_name, category, items)
-        render_confirmed_knowledge_item_editor(project_name, category, items, candidate_indices)
-        selected_indices, selected_items = _select_knowledge_organizer_items(
-            project_name,
-            category,
-            items,
-            candidate_indices,
-            duplicate_groups,
-        )
-        _render_selected_knowledge_items(selected_indices, selected_items)
-        _render_knowledge_merge_editor(project_name, category, selected_indices, selected_items)
-        _render_knowledge_delete_action(project_name, category, selected_indices, selected_items)
+    category = _select_knowledge_organizer_category(project_name, knowledge_category_options)
+    items = load_knowledge_category(project_name, category)
+    if not items:
+        render_empty_state("这个分类还没有知识", "可以先导入资料，再将提取结果确认到知识库。")
+        return
+    if view == "技术数据":
+        st.warning("原始数据编辑适合高级维护，修改后会重建检索索引。")
         _render_knowledge_raw_editor(project_name, category, items)
+        return
+
+    duplicate_groups = find_duplicate_knowledge_groups(items)
+    _render_duplicate_group_summary(items, duplicate_groups)
+    candidate_indices = _filter_knowledge_organizer_indices(project_name, category, items)
+    render_confirmed_knowledge_item_editor(project_name, category, items, candidate_indices)
+    selected_indices, selected_items = _select_knowledge_organizer_items(
+        project_name,
+        category,
+        items,
+        candidate_indices,
+        duplicate_groups,
+    )
+    _render_selected_knowledge_items(selected_indices, selected_items)
+    _render_knowledge_merge_editor(project_name, category, selected_indices, selected_items)
+    _render_knowledge_delete_action(project_name, category, selected_indices, selected_items)
 
 
 def render_source_package_report_page(project_name: str):
-    with st.expander("资料包报告", expanded=False):
+    render_section_heading("资料包", "把已确认的知识整理为一份可阅读、可检索的项目资料总览。")
+    with st.container(border=True):
         preview_key = scoped_widget_key("source_package_report_preview", project_name)
         preview_revision_key = scoped_widget_key("source_package_report_preview_revision", project_name)
         st.caption("基于正式知识条目生成项目资料总览，可保存为分析报告并加入资料检索。")
@@ -1954,28 +1995,34 @@ def render_source_package_report_page(project_name: str):
 
 def render_ingestion_health_panel(project_name: str):
     report = build_ingestion_health_report(project_name)
-    with st.expander("资料健康度总览", expanded=True):
-        cols = st.columns(6)
-        cols[0].metric("健康分", report["score"])
-        cols[1].metric("正式知识", report["confirmed_count"])
-        cols[2].metric("待审核设定", report["pending_count"])
-        cols[3].metric("导入未提取", report["imported_not_extracted"])
-        cols[4].metric("提取失败", report["failed_segments"])
-        cols[5].metric("高风险线索", report["high_risk_issue_count"])
-        entity_cols = st.columns(4)
-        entity_cols[0].metric("角色资料卡", report["character_entity_count"])
-        entity_cols[1].metric("世界设定卡", report["setting_entity_count"])
-        entity_cols[2].metric("别名组", report["alias_group_count"])
-        entity_cols[3].metric("计划模板", report["extraction_plan_template_count"])
-        storage_health = report.get("storage_health", {})
-        storage_cols = st.columns(4)
-        storage_cols[0].metric("类型化覆盖", f"{float(storage_health.get('typed_coverage') or 0):.0%}")
-        storage_cols[1].metric("精确证据锚点", f"{float(storage_health.get('anchored_evidence_coverage') or 0):.0%}")
-        storage_cols[2].metric("来源修订", int(storage_health.get("source_revision_total") or 0))
-        storage_cols[3].metric(
-            "全文索引片段",
-            f"{int(storage_health.get('fts_chunk_total') or 0)}/{int(storage_health.get('retrieval_chunk_total') or 0)}",
+    render_section_heading("资料健康检查", "快速找到未提取、提取失败、证据不足和索引不完整的内容。")
+    with st.container(border=True):
+        render_stat_strip(
+            [
+                ("健康分", report["score"], "100 分制"),
+                ("正式知识", report["confirmed_count"], "条"),
+                ("待审核", report["pending_count"], "条"),
+                ("未提取", report["imported_not_extracted"], "个片段"),
+                ("失败", report["failed_segments"], "个片段"),
+                ("高风险", report["high_risk_issue_count"], "条线索"),
+            ]
         )
+        storage_health = report.get("storage_health", {})
+        with st.expander("查看资料卡与存储质量", expanded=False):
+            render_stat_strip(
+                [
+                    ("角色卡", report["character_entity_count"], "张"),
+                    ("设定卡", report["setting_entity_count"], "张"),
+                    ("别名组", report["alias_group_count"], "组"),
+                    ("类型化", f"{float(storage_health.get('typed_coverage') or 0):.0%}", "覆盖率"),
+                    ("证据锚点", f"{float(storage_health.get('anchored_evidence_coverage') or 0):.0%}", "覆盖率"),
+                    (
+                        "全文索引",
+                        f"{int(storage_health.get('fts_chunk_total') or 0)}/{int(storage_health.get('retrieval_chunk_total') or 0)}",
+                        "片段",
+                    ),
+                ]
+            )
         if report["total_segments"]:
             st.caption(f"长篇片段提取进度：{report['extracted_segments']} / {report['total_segments']}")
         warning_parts = []
@@ -1990,7 +2037,7 @@ def render_ingestion_health_panel(project_name: str):
         col_a, col_b = st.columns(2)
         col_a.dataframe(
             [{"分类": label_knowledge_category(category), "正式知识": report["confirmed_counts"].get(category, 0), "待审核设定": report["pending_counts"].get(category, 0)} for category in KNOWLEDGE_CATEGORY_LABELS],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
         col_b.caption("资料版本分布")
@@ -2015,7 +2062,7 @@ def render_source_record_detail(project_name: str, record: dict):
                     "时间": item.get("created_at", ""),
                 }
                 for item in revisions
-            ], use_container_width=True, hide_index=True)
+            ], width="stretch", hide_index=True)
     if record.get("kind") == "long_batch":
         batch = load_long_reference_batch(project_name, record.get("batch_id", ""))
         if not batch:
@@ -2091,7 +2138,8 @@ def render_source_record_detail(project_name: str, record: dict):
 
 
 def render_source_ledger_page(project_name: str):
-    with st.expander("资料来源台账", expanded=True):
+    render_section_heading("资料库", "按来源追踪原文、切分片段、提取结果和修订历史。")
+    with st.container(border=True):
         records = build_ingestion_source_ledger(project_name)
         if not records:
             st.caption("当前还没有可追踪的资料来源。")
@@ -2145,7 +2193,7 @@ def render_source_ledger_page(project_name: str):
                 "待审核设定": record.get("pending_count", 0),
                 "已确认": record.get("confirmed_count", 0),
             })
-        st.dataframe(table_rows, use_container_width=True, hide_index=True)
+        st.dataframe(table_rows, width="stretch", hide_index=True)
 
         selected_record_id = st.selectbox(
             "查看来源详情",

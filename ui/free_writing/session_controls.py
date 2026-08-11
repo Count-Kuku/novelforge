@@ -79,7 +79,7 @@ def _render_session_management(
     session: dict,
 ) -> None:
     session_id = str(session.get("session_id") or "")
-    with host.popover("管理", use_container_width=True):
+    with host.popover("管理", width="stretch"):
         st.markdown("**会话管理**")
         title = st.text_input(
             "标题",
@@ -120,7 +120,7 @@ def _render_session_management(
                 story_id,
                 session_id,
             ),
-            use_container_width=True,
+            width="stretch",
             type="primary",
         ):
             update_creative_session(
@@ -145,7 +145,7 @@ def _render_session_management(
                 story_id,
                 session_id,
             ),
-            use_container_width=True,
+            width="stretch",
         ):
             update_creative_session(
                 project_name,

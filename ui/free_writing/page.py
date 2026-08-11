@@ -23,11 +23,6 @@ def render_dynamic_generation_page(
 ) -> None:
     story_id = str(st.session_state.get("active_story_id") or "default")
     profile = load_creative_profile(project_name, story_id=story_id) or {}
-    render_section_heading(
-        "自由创作",
-        "写下想发生的场景即可开始；生成后可以继续、重写，并把满意内容整理成章节。",
-    )
-
     session_id = render_session_toolbar(project_name, story_id)
     bundle = (
         load_creative_session_bundle(project_name, session_id, story_id=story_id)

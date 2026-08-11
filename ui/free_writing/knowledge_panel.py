@@ -160,7 +160,7 @@ def _render_candidate_editor(
                     pending_id,
                 ),
             )
-            if st.form_submit_button("保存修改", use_container_width=True):
+            if st.form_submit_button("保存修改", width="stretch"):
                 if not summary.strip():
                     st.warning("设定内容不能为空。")
                 else:
@@ -231,7 +231,7 @@ def _render_selection_actions(
             story_id,
             session_id,
         ),
-        use_container_width=True,
+        width="stretch",
         type="primary",
     ):
         saved_count = confirm_pending_knowledge_items(project_name, selected)

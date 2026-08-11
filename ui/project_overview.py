@@ -63,13 +63,14 @@ def render_project_overview_page(project_name: str):
     with action_col3:
         render_quick_action("自由创作", "自由创作", "输入要求立即生成片段，也可以继续交流、续写并整理新设定。")
 
-    action_col4, action_col5, action_col6 = st.columns(3)
-    with action_col4:
-        render_quick_action("按章节写正文", "正文生成", "根据章节需求或细纲写正式正文，并可自动审阅、整理设定。")
-    with action_col5:
-        render_quick_action("查找项目内容", "项目资源", "集中查找大纲、章节、报告、资料与创作记录。")
-    with action_col6:
-        render_quick_action("调整写作偏好", "提示词选项", "新增、复制或修改可切换的文风、节奏和描写重点。")
+    with st.expander("更多常用入口", expanded=False):
+        action_col4, action_col5, action_col6 = st.columns(3)
+        with action_col4:
+            render_quick_action("按章节写正文", "正文生成", "根据章节需求或细纲写正式正文，并可自动审阅、整理设定。")
+        with action_col5:
+            render_quick_action("查找项目内容", "项目资源", "集中查找大纲、章节、报告、资料与创作记录。")
+        with action_col6:
+            render_quick_action("调整写作偏好", "提示词选项", "新增、复制或修改可切换的文风、节奏和描写重点。")
 
     render_section_heading("项目指标", "点击有数量的指标即可查看对应内容。")
     col1, col2, col3, col4, col5 = st.columns(5)

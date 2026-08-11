@@ -57,6 +57,7 @@ from ui.ingestion_batch_guard import (
     render_batch_mutation_error,
     render_batch_write_guard,
 )
+from ui.layout import render_section_heading, render_selection_summary, render_stat_strip
 from ui.step_views import render_step_json_expander, render_step_validation
 from ui.streaming import run_with_stream as _run_with_stream
 
@@ -96,11 +97,11 @@ def render_extraction_diff_detail(project_name: str, diff: dict, key_prefix: str
         new_ids = [str(item) for item in diff.get("new_pending_ids", []) if str(item).strip()]
         if old_ids or new_ids:
             action_cols = st.columns(2)
-            if action_cols[0].button("采用新版：删除旧待审核设定", key=f"{key_prefix}_accept_new", use_container_width=True):
+            if action_cols[0].button("采用新版：删除旧待审核设定", key=f"{key_prefix}_accept_new", width="stretch"):
                 removed = discard_pending_knowledge_items(project_name, old_ids)
                 st.success(f"已删除旧待审核设定 {removed} 条，保留本次重新整理的结果。")
                 st.rerun()
-            if action_cols[1].button("保留旧版：删除本次新增条目", key=f"{key_prefix}_keep_old", use_container_width=True):
+            if action_cols[1].button("保留旧版：删除本次新增条目", key=f"{key_prefix}_keep_old", width="stretch"):
                 removed = discard_pending_knowledge_items(project_name, new_ids)
                 st.success(f"已删除本次重新整理产生的新增或变化内容 {removed} 条，保留原待审核结果。")
                 st.rerun()
@@ -154,7 +155,7 @@ def render_extraction_coverage_report(project_name: str, batch: dict | None = No
             {"分类": label_knowledge_category(category), "待审核设定": count}
             for category, count in report["category_counts"].items()
         ]
-        st.dataframe(category_rows, use_container_width=True, hide_index=True)
+        st.dataframe(category_rows, width="stretch", hide_index=True)
         if report["missing_categories"]:
             st.warning("缺失分类：" + "、".join(label_knowledge_category(category) for category in report["missing_categories"]))
         if report["weak_categories"]:
@@ -191,12 +192,15 @@ def _load_selected_long_reference_batch(project_name: str) -> tuple[str | None, 
 
 def _render_batch_overview(project_name: str, batch: dict, selected_batch_id: str) -> tuple[list[dict], dict]:
     summary = batch.get("summary", {})
-    cols = st.columns(5)
-    cols[0].metric("总片段", summary.get("segment_count", 0))
-    cols[1].metric("已导入", summary.get("imported_count", 0))
-    cols[2].metric("待导入", summary.get("import_pending_count", 0))
-    cols[3].metric("已提取", summary.get("extract_queued_count", 0))
-    cols[4].metric("失败", summary.get("extract_failed_count", 0))
+    render_stat_strip(
+        [
+            ("总片段", summary.get("segment_count", 0), "个"),
+            ("已导入", summary.get("imported_count", 0), "个"),
+            ("待导入", summary.get("import_pending_count", 0), "个"),
+            ("已提取", summary.get("extract_queued_count", 0), "个"),
+            ("失败", summary.get("extract_failed_count", 0), "个"),
+        ]
+    )
     st.caption(
         f"范围={label_scope(batch.get('scope', 'reference'))} / 可信度={label_authority(batch.get('authority', 'curated'))} / 来源={batch.get('source_origin', '-') or '-'}"
     )
@@ -282,23 +286,48 @@ def _render_batch_segment_selector(
         key=selected_segments_key,
     )
 
-    for index in filtered_indices[:12]:
+    render_selection_summary(
+        [
+            f"已选 {len(selected_indices)} / {len(filtered_indices)} 个片段",
+            "选择范围只影响当前操作",
+        ]
+    )
+    preview_rows = []
+    for index in filtered_indices[:200]:
         segment = segments[index]
-        st.markdown(f"#### {segment.get('index')}. {segment.get('title')}")
-        st.caption(
-            f"字符数={segment.get('char_count')} / 导入={label_batch_segment_status(segment.get('import_status', 'pending'))} / 提取={label_batch_segment_status(segment.get('extract_status', 'pending'))} / 待审核设定={segment.get('queued_knowledge_count', 0)}"
+        preview_rows.append(
+            {
+                "序号": segment.get("index"),
+                "片段": segment.get("title"),
+                "字符": segment.get("char_count"),
+                "导入": label_batch_segment_status(segment.get("import_status", "pending")),
+                "提取": label_batch_segment_status(segment.get("extract_status", "pending")),
+                "待审核": segment.get("queued_knowledge_count", 0),
+                "错误": str(segment.get("extract_error") or "")[:100],
+            }
         )
-        if segment.get("extract_error"):
-            st.warning(segment.get("extract_error"))
-        extract_diff = segment.get("last_extract_diff", {})
-        if isinstance(extract_diff, dict) and extract_diff:
-            st.caption(
-                f"上次提取对比：新增 {extract_diff.get('added_count', 0)} / 匹配 {extract_diff.get('matched_count', 0)} / "
-                f"可能遗漏 {extract_diff.get('missing_count', 0)} / 变化 {extract_diff.get('changed_count', 0)}"
-            )
-            render_extraction_diff_detail(project_name, extract_diff, key_prefix=f"segment_diff_{selected_batch_id}_{index}")
-    if len(filtered_indices) > 12:
-        st.caption(f"仅预览前 12 个匹配片段，共 {len(filtered_indices)} 个。")
+    if preview_rows:
+        st.dataframe(preview_rows, width="stretch", hide_index=True, height=min(420, 42 + len(preview_rows) * 35))
+    if len(filtered_indices) > len(preview_rows):
+        st.caption(f"表格仅显示前 {len(preview_rows)} 个片段，共 {len(filtered_indices)} 个。")
+    diff_indices = [
+        index
+        for index in selected_indices
+        if isinstance(segments[index].get("last_extract_diff"), dict)
+        and segments[index].get("last_extract_diff")
+    ]
+    if diff_indices:
+        with st.expander(f"处理所选片段的提取差异（{len(diff_indices)}）", expanded=False):
+            for index in diff_indices[:12]:
+                segment = segments[index]
+                st.markdown(f"##### {segment.get('index')}. {segment.get('title')}")
+                render_extraction_diff_detail(
+                    project_name,
+                    segment["last_extract_diff"],
+                    key_prefix=f"segment_diff_{selected_batch_id}_{index}",
+                )
+            if len(diff_indices) > 12:
+                st.caption("一次最多显示前 12 个已选片段的差异；可缩小选择范围后继续处理。")
     return filtered_indices, selected_indices
 
 
@@ -439,7 +468,7 @@ def _render_batch_quick_continue(
         expanded=planned_quick_count > 20,
         confirmation_key=f"batch_quick_budget_confirm_{selected_batch_id}",
     )
-    if st.button("继续处理所选片段", key=f"batch_quick_process_{selected_batch_id}", use_container_width=True, type="primary" if unfinished_indices else "secondary"):
+    if st.button("继续处理所选片段", key=f"batch_quick_process_{selected_batch_id}", width="stretch", type="primary" if unfinished_indices else "secondary"):
         if not selected_indices:
             st.error("请先选择片段。")
         elif not quick_continue_categories:
@@ -473,7 +502,8 @@ def _render_batch_quick_continue(
             }
             story_id = str(st.session_state.get("active_story_id") or "default")
             st.session_state[scoped_widget_key("source_ingestion_task_select", project_name, story_id)] = task["task_id"]
-            st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "资料任务"
+            st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = "处理"
+            st.session_state[scoped_widget_key("ingestion_task_view", project_name, story_id)] = "后台任务"
             wake_ingestion_task_dispatcher()
             st.rerun()
     _render_batch_quick_result(selected_batch_id)
@@ -669,7 +699,7 @@ def _render_extraction_plan_template_editor(
     with st.expander("保存当前专家步骤为项目模板", expanded=False):
         template_name = st.text_input("模板名称", value=plan_preset.get("label", "自定义提取计划"), key=f"batch_extract_plan_template_name_{selected_batch_id}")
         template_notes = st.text_area("模板备注", value="", height=80, key=f"batch_extract_plan_template_notes_{selected_batch_id}")
-        if st.button("保存提取计划模板", key=f"batch_save_extract_plan_template_{selected_batch_id}", use_container_width=True):
+        if st.button("保存提取计划模板", key=f"batch_save_extract_plan_template_{selected_batch_id}", width="stretch"):
             try:
                 saved_template = upsert_extraction_plan_template(project_name, template_name, plan_steps, template_notes)
                 st.success(f"已保存项目提取计划模板：{saved_template.get('name')}")
@@ -687,7 +717,7 @@ def _render_extraction_plan_template_editor(
                     }
                     for item in project_plan_templates
                 ],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
             delete_template_id = st.selectbox(
@@ -713,7 +743,7 @@ def _render_extraction_plan_template_editor(
                 height=180,
                 key=f"batch_extract_plan_templates_json_{selected_batch_id}",
             )
-            if st.button("保存模板库 JSON", key=f"batch_save_extract_plan_templates_json_{selected_batch_id}", use_container_width=True):
+            if st.button("保存模板库 JSON", key=f"batch_save_extract_plan_templates_json_{selected_batch_id}", width="stretch"):
                 try:
                     parsed = json.loads(templates_json)
                     if not isinstance(parsed, list):
@@ -781,7 +811,7 @@ def _run_batch_extraction_plan(
     auto_consolidation_limit: int,
     auto_consolidation_categories: list[str],
 ):
-    if not st.button("执行多专家提取计划", key=f"batch_run_extract_plan_{selected_batch_id}", use_container_width=True):
+    if not st.button("执行多专家提取计划", key=f"batch_run_extract_plan_{selected_batch_id}", width="stretch"):
         return
     if not selected_indices:
         st.error("请先选择要处理的片段。")
@@ -883,7 +913,7 @@ def _render_batch_extraction_plan_result(selected_batch_id: str, batch: dict):
                 "失败": len(step.get("failures", [])),
             })
         if step_rows:
-            st.dataframe(step_rows, use_container_width=True, hide_index=True)
+            st.dataframe(step_rows, width="stretch", hide_index=True)
         st.caption(
             f"目标片段数={len(plan_result.get('segment_indices', []))} / "
             f"累计处理={plan_result.get('processed_segments', 0)} / "
@@ -1030,7 +1060,7 @@ def _render_batch_consolidation(
         format_func=label_knowledge_category,
         key=f"batch_consolidation_categories_{selected_batch_id}",
     )
-    if st.button("整理当前批次待审核设定", key=f"batch_consolidate_pending_{selected_batch_id}", use_container_width=True):
+    if st.button("整理当前批次待审核设定", key=f"batch_consolidate_pending_{selected_batch_id}", width="stretch"):
         try:
             consolidation_summary = _run_with_stream(
                 "正在整理当前批次待审核设定...",
@@ -1106,20 +1136,28 @@ def render_long_reference_batch_manager(
     *,
     expanded: bool = False,
 ):
-    with st.expander("长篇资料批次管理", expanded=expanded):
-        selected_batch_id, batch = _load_selected_long_reference_batch(project_name)
-        if not selected_batch_id or not batch:
-            return
+    render_section_heading("长篇资料批次", "继续未完成的提取任务，或对选定片段执行专项整理。")
+    selected_batch_id, batch = _load_selected_long_reference_batch(project_name)
+    if not selected_batch_id or not batch:
+        return
 
-        segments, resume_state = _render_batch_overview(project_name, batch, selected_batch_id)
-        filtered_indices, selected_indices = _render_batch_segment_selector(
-            project_name,
-            selected_batch_id,
-            segments,
-            resume_state,
-        )
-        if _render_batch_write_guard(project_name, selected_batch_id):
-            return
+    segments, resume_state = _render_batch_overview(project_name, batch, selected_batch_id)
+    filtered_indices, selected_indices = _render_batch_segment_selector(
+        project_name,
+        selected_batch_id,
+        segments,
+        resume_state,
+    )
+    if _render_batch_write_guard(project_name, selected_batch_id):
+        return
+    view = st.segmented_control(
+        "批次操作",
+        options=["继续处理", "专项提取", "提取计划", "整理与维护"],
+        default="继续处理",
+        key=scoped_widget_key("long_reference_batch_view", project_name, selected_batch_id),
+        label_visibility="collapsed",
+    )
+    if view == "继续处理":
         _render_batch_quick_continue(
             project_name,
             batch,
@@ -1129,6 +1167,7 @@ def render_long_reference_batch_manager(
             resume_state,
             knowledge_category_options,
         )
+    elif view == "专项提取":
         _render_batch_manual_processing(
             project_name,
             batch,
@@ -1137,6 +1176,7 @@ def render_long_reference_batch_manager(
             selected_indices,
             knowledge_category_options,
         )
+    elif view == "提取计划":
         _render_batch_extraction_plan(
             project_name,
             batch,
@@ -1144,5 +1184,6 @@ def render_long_reference_batch_manager(
             selected_indices,
             knowledge_category_options,
         )
+    else:
         _render_batch_consolidation(project_name, batch, selected_batch_id, knowledge_category_options)
         _render_batch_advanced_actions(project_name, batch, selected_batch_id)

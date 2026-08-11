@@ -28,6 +28,7 @@ from ui.labels import (
     label_scope,
     label_source_type,
 )
+from ui.layout import render_empty_state, render_section_heading, render_stat_strip
 from ui.retrieval_eval_panel import render_retrieval_eval_workbench
 from ui.retrieval_views import render_retrieval_feedback_controls
 from ui.step_views import render_step_json_expander
@@ -79,7 +80,8 @@ def _render_retrieval_index_controls(project_name: str):
 
 
 def _render_retrieval_health_panel(project_name: str):
-    with st.expander("资料检索健康检查", expanded=True):
+    render_section_heading("索引健康", "检查资料是否已完整编入关键词和语义索引。")
+    with st.container(border=True):
         try:
             health = inspect_retrieval_health(project_name)
             status_label = {
@@ -127,7 +129,7 @@ def _render_retrieval_health_panel(project_name: str):
                 if source_counts:
                     st.dataframe(
                         [{"来源类型": label_source_type(key), "片段数": value} for key, value in source_counts.items()],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                 else:
@@ -138,7 +140,7 @@ def _render_retrieval_health_panel(project_name: str):
                 if scope_counts:
                     st.dataframe(
                         [{"范围": label_scope(key), "片段数": value} for key, value in scope_counts.items()],
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                     )
                 else:
@@ -148,7 +150,8 @@ def _render_retrieval_health_panel(project_name: str):
 
 
 def _render_retrieval_source_management(project_name: str, manifest):
-    with st.expander("管理已导入资料", expanded=False):
+    render_section_heading("索引来源", "查看索引中的资料，或删除不再需要的原文。")
+    with st.container(border=True):
         existing_source_files = list_retrieval_source_files(project_name)
         if not existing_source_files:
             st.caption("当前没有已导入的外部资料文件。")
@@ -187,30 +190,30 @@ def _render_retrieval_hits(project_name: str, current_story_id: str, query: str)
     hits_key = scoped_session_key("retrieval_hits", project_name, current_story_id)
     query_key = scoped_session_key("retrieval_last_query", project_name, current_story_id)
     current_hits = st.session_state.get(hits_key, [])
-    for hit in current_hits:
+    if not current_hits and st.session_state.get(query_key):
+        render_empty_state("未找到匹配资料", "可以尝试缩短查询、取消范围限制，或重建完整索引。")
+    for rank, hit in enumerate(current_hits, start=1):
         chunk = hit.get("chunk", {})
-        st.markdown(
-            f"### {label_source_type(chunk.get('source_type', 'unknown'))} / {label_scope(chunk.get('scope', 'project'))} / 检索方式={label_retrieval_mode(hit.get('retrieval_mode', 'lexical'))} / 相关度={hit.get('score', 0):.2f}"
-        )
-        if chunk.get("title"):
-            st.caption(chunk.get("title"))
-        st.write(chunk.get("content", ""))
-        matched_terms = hit.get("matched_terms", [])
-        if matched_terms:
-            st.caption(f"命中词：{', '.join(matched_terms)}")
-        expanded_terms = hit.get("expanded_terms", [])
-        if expanded_terms:
-            st.caption(f"查询扩展：{', '.join(expanded_terms[:12])}")
-        match_reasons = hit.get("match_reasons", [])
-        if match_reasons:
-            st.caption("匹配原因：" + "；".join(match_reasons[:5]))
-        score_breakdown = hit.get("score_breakdown", {})
-        if score_breakdown:
-            breakdown_text = " / ".join(f"{key}={value:.2f}" for key, value in score_breakdown.items())
-            st.caption(f"分数拆解：{breakdown_text}")
-        st.caption(
-            f"关键词分={hit.get('lexical_score', 0):.2f} / 语义分={hit.get('semantic_score', 0):.2f} / 来源={chunk.get('path', '-') }"
-        )
+        with st.container(border=True):
+            st.markdown(f"#### {rank}. {chunk.get('title') or '未命名资料'}")
+            st.caption(
+                f"{label_source_type(chunk.get('source_type', 'unknown'))} · "
+                f"{label_scope(chunk.get('scope', 'project'))} · "
+                f"相关度 {hit.get('score', 0):.2f}"
+            )
+            st.write(chunk.get("content", ""))
+            matched_terms = hit.get("matched_terms", [])
+            if matched_terms:
+                st.caption(f"命中词：{', '.join(matched_terms[:12])}")
+            with st.expander("为什么匹配到这条资料", expanded=False):
+                match_reasons = hit.get("match_reasons", [])
+                if match_reasons:
+                    st.caption("匹配原因：" + "；".join(match_reasons[:5]))
+                st.caption(
+                    f"方式={label_retrieval_mode(hit.get('retrieval_mode', 'lexical'))} / "
+                    f"关键词分={hit.get('lexical_score', 0):.2f} / "
+                    f"语义分={hit.get('semantic_score', 0):.2f} / 来源={chunk.get('path', '-') }"
+                )
 
     render_retrieval_feedback_controls(
         project_name,
@@ -246,7 +249,7 @@ def _render_retrieval_debug_payload(project_name: str, current_story_id: str):
                         }
                         for group in alias_groups
                     ],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
         st.markdown("### 重排前")
@@ -313,7 +316,8 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
     hits_key = scoped_session_key("retrieval_hits", *state_scope)
     last_query_key = scoped_session_key("retrieval_last_query", *state_scope)
     debug_key = scoped_session_key("retrieval_debug", *state_scope)
-    with st.expander("检索预览", expanded=True):
+    render_section_heading("查找资料", "用一个具体问题测试写作时能否准确取回相关知识。")
+    with st.container(border=True):
         query = st.text_area(
             "检索查询",
             height=120,
@@ -381,7 +385,7 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
             value=False,
             key=scoped_widget_key("retrieval_include_debug", *state_scope),
         )
-        if st.button("查找匹配资料", key=scoped_widget_key("run_retrieval", *state_scope), type="primary", use_container_width=True):
+        if st.button("查找匹配资料", key=scoped_widget_key("run_retrieval", *state_scope), type="primary", width="stretch"):
             try:
                 hits = retrieve_context(
                     project_name,
@@ -418,8 +422,23 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
 
 
 def render_retrieval_center_page(project_name: str, current_story_id: str):
-    manifest = _render_retrieval_index_controls(project_name)
-    _render_retrieval_health_panel(project_name)
-    render_retrieval_eval_workbench(project_name, current_story_id, manifest)
-    _render_retrieval_source_management(project_name, manifest)
-    _render_retrieval_preview(project_name, current_story_id, manifest)
+    view = st.segmented_control(
+        "资料检索视图",
+        options=["查找资料", "质量评测", "索引维护"],
+        default="查找资料",
+        key=scoped_widget_key("retrieval_center_view", project_name, current_story_id),
+        label_visibility="collapsed",
+    )
+    manifest = None
+    try:
+        manifest = load_retrieval_index(project_name)
+    except Exception:
+        pass
+    if view == "查找资料":
+        _render_retrieval_preview(project_name, current_story_id, manifest)
+    elif view == "质量评测":
+        render_retrieval_eval_workbench(project_name, current_story_id, manifest)
+    else:
+        manifest = _render_retrieval_index_controls(project_name)
+        _render_retrieval_health_panel(project_name)
+        _render_retrieval_source_management(project_name, manifest)

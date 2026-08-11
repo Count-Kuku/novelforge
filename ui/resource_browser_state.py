@@ -127,11 +127,11 @@ def render_resource_metric_link(
             unsafe_allow_html=True,
         )
         if metric_value > 0 and normalized_groups:
-            if st.button("查看资源", key=button_key, use_container_width=True):
+            if st.button("查看资源", key=button_key, width="stretch"):
                 navigate_to_resource_browser(project_name, normalized_groups, story_id=story_id)
         else:
             disabled_label = "暂无资源" if normalized_groups else "未纳入资源"
-            st.button(disabled_label, key=button_key, disabled=True, use_container_width=True)
+            st.button(disabled_label, key=button_key, disabled=True, width="stretch")
 
 
 def _set_resource_browser_selection(project_name: str, story_id: str, resource: dict):

@@ -140,14 +140,14 @@ def _render_arc_discussion(project_name: str, context: dict, render_discussion_a
             scoped_widget_key("arc_discussion_prompt_options", *arc_scope),
         )
         approve_col, clear_col = st.columns(2)
-        if approve_col.button("保存剧情段结论", key=scoped_widget_key("approve_arc_discussion", *arc_scope), use_container_width=True):
+        if approve_col.button("保存剧情段结论", key=scoped_widget_key("approve_arc_discussion", *arc_scope), width="stretch"):
             try:
                 result = approve_arc_discussion(project_name, arc_no, current_step, story_id=story_id)
                 st.success("已保存剧情段讨论结论。")
                 st.rerun()
             except Exception as exc:
                 st.error(f"保存失败：{exc}")
-        if clear_col.button("清除剧情段结论", key=scoped_widget_key("clear_arc_discussion", *arc_scope), use_container_width=True):
+        if clear_col.button("清除剧情段结论", key=scoped_widget_key("clear_arc_discussion", *arc_scope), width="stretch"):
             if clear_arc_discussion_approval(project_name, arc_no, story_id=story_id):
                 st.success("已清除剧情段讨论结论。")
                 st.rerun()
@@ -179,7 +179,7 @@ def _render_arc_discussion(project_name: str, context: dict, render_discussion_a
         has_started = bool(st.session_state.get(result_key) or current_messages)
         send_label = "发送" if has_started else "开始讨论"
         send_col, reset_col = st.columns([3, 1])
-        if send_col.button(send_label, key=scoped_widget_key("send_arc_discussion", *arc_scope), use_container_width=True):
+        if send_col.button(send_label, key=scoped_widget_key("send_arc_discussion", *arc_scope), width="stretch"):
             submitted = str(user_input or "").strip()
             if not submitted:
                 st.warning("讨论消息不能为空。")
@@ -230,7 +230,7 @@ def _render_arc_discussion(project_name: str, context: dict, render_discussion_a
                     st.rerun()
                 except Exception as exc:
                     st.error(f"讨论失败：{exc}")
-        if reset_col.button("重置", key=scoped_widget_key("reset_arc_discussion", *arc_scope), use_container_width=True):
+        if reset_col.button("重置", key=scoped_widget_key("reset_arc_discussion", *arc_scope), width="stretch"):
             st.session_state[result_key] = {}
             st.session_state[messages_key] = []
             st.session_state[clear_input_flag_key] = True
@@ -277,7 +277,7 @@ def _render_arc_outline_editor(project_name: str, context: dict):
     arc_outline_text_key = context["arc_outline_text_key"]
     arc_outline_editor_key = context["arc_outline_editor_key"]
     existing_outline = context["existing_outline"]
-    if st.button("生成剧情段大纲", key=scoped_widget_key("generate_arc_outline", *arc_scope), type="primary", use_container_width=True):
+    if st.button("生成剧情段大纲", key=scoped_widget_key("generate_arc_outline", *arc_scope), type="primary", width="stretch"):
         try:
             result = _run_with_stream(
                 "正在生成剧情段大纲...",
@@ -309,7 +309,7 @@ def _render_arc_outline_editor(project_name: str, context: dict):
     )
 
     col1, col2 = st.columns(2)
-    if col1.button("保存剧情段大纲", key=scoped_widget_key("save_arc", *arc_scope), use_container_width=True):
+    if col1.button("保存剧情段大纲", key=scoped_widget_key("save_arc", *arc_scope), width="stretch"):
         save_arc_outline(project_name, arc_no, outline_text, story_id=story_id)
         save_arc_metadata(project_name, arc_no, {
             "volume_no": volume_no or None,
@@ -392,7 +392,7 @@ def _render_arc_chapter_plan(project_name: str, context: dict, linked_chapters: 
     )
     plan_requirement = st.text_area("章节分配补充要求", height=120, key=scoped_widget_key("arc_plan_requirement", *arc_scope))
     plan_step = st.session_state.get(arc_chapter_plan_step_key, {})
-    if st.button("生成剧情段章节分配计划", key=scoped_widget_key("generate_arc_chapter_plan", *arc_scope), type="primary", use_container_width=True):
+    if st.button("生成剧情段章节分配计划", key=scoped_widget_key("generate_arc_chapter_plan", *arc_scope), type="primary", width="stretch"):
         try:
             result = _run_with_stream(
                 "正在生成剧情段章节分配计划...",

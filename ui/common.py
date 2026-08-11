@@ -45,7 +45,7 @@ def confirmed_button(
     confirm_label: str,
     key: str,
     *,
-    use_container_width: bool = True,
+    width: str = "stretch",
     type: str = "secondary",
     help_text: str | None = None,
 ) -> bool:
@@ -62,7 +62,7 @@ def confirmed_button(
         label,
         key=key,
         disabled=not confirmed,
-        use_container_width=use_container_width,
+        width=width,
         type=type,
         help=help_text,
         on_click=consume_confirmation,
@@ -82,7 +82,7 @@ def render_quick_action(label: str, page: str, help_text: str):
         if st.button(
             f"打开：{label}",
             key=f"quick_action_{stable_widget_suffix(page)}",
-            use_container_width=True,
+            width="stretch",
         ):
             navigate_to(page)
 
