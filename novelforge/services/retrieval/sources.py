@@ -6,6 +6,7 @@ from novelforge.services import retrieval as _retrieval_api
 
 def ingest_external_source_file(project_name: str, source_name: str, content: str, *, overwrite: bool = True) -> str:
     safe_name = _retrieval_api.re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "_", source_name).strip("_") or "external_source"
+    parsed = {}
     try:
         parsed = _retrieval_api.json.loads(content)
         suffix = ".json" if isinstance(parsed, dict) else ".md"
@@ -18,8 +19,43 @@ def ingest_external_source_file(project_name: str, source_name: str, content: st
         while target.exists():
             target = source_root / f"{safe_name}_{counter:02d}{suffix}"
             counter += 1
+    previous_content = target.read_bytes() if target.exists() and target.is_file() else None
     target.write_text(content, encoding="utf-8")
-    return target.relative_to(source_root).as_posix()
+    relative_path = target.relative_to(source_root).as_posix()
+    parsed_payload = parsed if isinstance(parsed, dict) else {}
+    metadata = parsed_payload.get("metadata") if isinstance(parsed_payload.get("metadata"), dict) else {}
+    authority_name = str(metadata.get("authority") or "unknown").strip().lower()
+    authority_score = {
+        "project": 1.0,
+        "official": 0.9,
+        "curated": 0.75,
+        "community": 0.45,
+        "unknown": 0.0,
+    }.get(authority_name, 0.0)
+    try:
+        _retrieval_api.sync_retrieval_source_file_record(
+            project_name,
+            relative_path=relative_path,
+            title=str(parsed_payload.get("title") or target.name),
+            content_hash=_retrieval_api.sha256(content.encode("utf-8")).hexdigest(),
+            source_type=str(parsed_payload.get("source_type") or "external_source"),
+            authority=authority_score,
+            metadata={
+                **metadata,
+                "relative_path": relative_path,
+                "scope": str(parsed_payload.get("scope") or "reference"),
+                "char_count": len(str(parsed_payload.get("content") or content)),
+            },
+        )
+    except Exception:
+        # Keep the file system and DB source ledger aligned if the authority
+        # write fails after a local overwrite.
+        if previous_content is None:
+            target.unlink(missing_ok=True)
+        else:
+            target.write_bytes(previous_content)
+        raise
+    return relative_path
 
 
 def build_structured_external_source_payload(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 from hashlib import sha256
 from typing import Any
@@ -55,6 +56,18 @@ def _chunk_content_hash(chunk: dict) -> str:
     return sha256(f"{title}\n{content}".encode("utf-8")).hexdigest()
 
 
+def _existing_id(conn: sqlite3.Connection, table: str, column: str, value: Any) -> str | None:
+    clean_value = str(value or "").strip()
+    if not clean_value:
+        return None
+    if table not in {"source_documents", "source_revisions"}:
+        raise ValueError("Unsupported retrieval reference table.")
+    return clean_value if conn.execute(
+        f"SELECT {column} FROM {table} WHERE {column} = ?",
+        (clean_value,),
+    ).fetchone() else None
+
+
 def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) -> dict:
     documents = manifest.get("documents", []) if isinstance(manifest, dict) else []
     chunks = manifest.get("chunks", []) if isinstance(manifest, dict) else []
@@ -68,21 +81,28 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
             continue
         active_doc_ids.append(doc_id)
         metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
+        source_id = _existing_id(conn, "source_documents", "source_id", metadata.get("source_id"))
+        source_revision_id = _existing_id(
+            conn, "source_revisions", "revision_id", metadata.get("source_revision_id")
+        )
+        document_content_hash = sha256(str(doc.get("content") or "").encode("utf-8")).hexdigest()
         conn.execute(
             """
             INSERT INTO retrieval_documents (
                 document_id, story_id, source_id, asset_id, knowledge_id, document_type,
                 scope, title, summary, authority, canon_status, worldline_id,
-                metadata_json, created_at, updated_at, deleted_at
+                metadata_json, source_revision_id, content_hash,
+                created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
             )
             ON CONFLICT(document_id) DO UPDATE SET
                 story_id = excluded.story_id,
+                source_id = excluded.source_id,
                 knowledge_id = excluded.knowledge_id,
                 document_type = excluded.document_type,
                 scope = excluded.scope,
@@ -92,12 +112,15 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
                 canon_status = excluded.canon_status,
                 worldline_id = excluded.worldline_id,
                 metadata_json = excluded.metadata_json,
+                source_revision_id = excluded.source_revision_id,
+                content_hash = excluded.content_hash,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 deleted_at = NULL
             """,
             (
                 doc_id,
                 _story_id_or_none(conn, metadata.get("story_id")),
+                source_id,
                 str(metadata.get("knowledge_id") or doc.get("knowledge_id") or "").strip() or None,
                 str(doc.get("source_type") or "unknown"),
                 str(doc.get("scope") or "project"),
@@ -107,10 +130,13 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
                 str(metadata.get("canon_status") or "").strip() or None,
                 str(metadata.get("worldline_id") or "").strip() or None,
                 _json_dumps(doc),
+                source_revision_id,
+                document_content_hash,
             ),
         )
 
     active_chunk_ids: list[str] = []
+    conn.execute("DELETE FROM retrieval_chunks_fts")
     for chunk in normalized_chunks:
         chunk_id = str(chunk.get("chunk_id") or "").strip()
         document_id = str(chunk.get("document_id") or "").strip()
@@ -125,10 +151,12 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
             """
             INSERT INTO retrieval_chunks (
                 chunk_id, document_id, chunk_index, text, token_count, content_hash,
-                metadata_json, created_at, updated_at, deleted_at
+                metadata_json, parent_chunk_id, previous_chunk_id, next_chunk_id,
+                chunk_level, start_offset, end_offset, source_revision_id,
+                created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, ?, ?, NULL, ?, ?,
+                ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
@@ -139,6 +167,13 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
                 text = excluded.text,
                 content_hash = excluded.content_hash,
                 metadata_json = excluded.metadata_json,
+                parent_chunk_id = excluded.parent_chunk_id,
+                previous_chunk_id = excluded.previous_chunk_id,
+                next_chunk_id = excluded.next_chunk_id,
+                chunk_level = excluded.chunk_level,
+                start_offset = excluded.start_offset,
+                end_offset = excluded.end_offset,
+                source_revision_id = excluded.source_revision_id,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 deleted_at = NULL
             """,
@@ -149,6 +184,28 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
                 str(chunk.get("content") or ""),
                 content_hash,
                 _json_dumps(chunk),
+                str(metadata.get("parent_chunk_id") or "").strip() or None,
+                str(metadata.get("previous_chunk_id") or "").strip() or None,
+                str(metadata.get("next_chunk_id") or "").strip() or None,
+                str(metadata.get("chunk_level") or "child"),
+                metadata.get("start_offset"),
+                metadata.get("end_offset"),
+                _existing_id(conn, "source_revisions", "revision_id", metadata.get("source_revision_id")),
+            ),
+        )
+        tags = chunk.get("tags") if isinstance(chunk.get("tags"), list) else []
+        entity_names = metadata.get("entity_names") if isinstance(metadata.get("entity_names"), list) else []
+        conn.execute(
+            """
+            INSERT INTO retrieval_chunks_fts (chunk_id, title, text, entity_names, source_terms)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                chunk_id,
+                str(chunk.get("title") or ""),
+                str(chunk.get("content") or ""),
+                " ".join(str(value) for value in entity_names),
+                " ".join([str(chunk.get("source_type") or ""), *(str(value) for value in tags)]),
             ),
         )
         # A chunk id is position based and survives edits.  Vectors generated
@@ -219,6 +276,65 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
         """
     )
     return manifest
+
+
+def search_retrieval_chunks_fts(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[dict]:
+    clean_query = " ".join(
+        re.sub(r"[\x00-\x1f\x7f]+", " ", str(query or "")).replace('"', " ").split()
+    )
+    if not clean_query:
+        return []
+    terms = clean_query.split()[:32]
+    match_query = " OR ".join(f'"{term}"' for term in terms)
+    bounded_limit = max(1, min(int(limit or 20), 200))
+    rows = conn.execute(
+        """
+        SELECT chunk_id, bm25(retrieval_chunks_fts, 0.0, 2.0, 1.0, 1.0) AS rank,
+               snippet(retrieval_chunks_fts, 2, '[', ']', '…', 18) AS snippet
+        FROM retrieval_chunks_fts
+        WHERE retrieval_chunks_fts MATCH ?
+        ORDER BY rank, chunk_id
+        LIMIT ?
+        """,
+        (match_query, bounded_limit),
+    ).fetchall()
+    result = [
+        {
+            "chunk_id": row["chunk_id"] if isinstance(row, sqlite3.Row) else row[0],
+            "rank": row["rank"] if isinstance(row, sqlite3.Row) else row[1],
+            "snippet": row["snippet"] if isinstance(row, sqlite3.Row) else row[2],
+        }
+        for row in rows
+    ]
+    if result:
+        return result
+    short_terms = list(dict.fromkeys(term for term in terms if len(term) < 3))
+    if not short_terms:
+        return []
+    predicates = " OR ".join("(text LIKE ? OR metadata_json LIKE ?)" for _ in short_terms)
+    params: list[Any] = []
+    for term in short_terms:
+        pattern = f"%{term}%"
+        params.extend((pattern, pattern))
+    params.append(bounded_limit)
+    fallback_rows = conn.execute(
+        f"""
+        SELECT chunk_id, 0.0 AS rank, substr(text, 1, 180) AS snippet
+        FROM retrieval_chunks
+        WHERE deleted_at IS NULL AND ({predicates})
+        ORDER BY chunk_id
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+    return [
+        {
+            "chunk_id": row["chunk_id"] if isinstance(row, sqlite3.Row) else row[0],
+            "rank": row["rank"] if isinstance(row, sqlite3.Row) else row[1],
+            "snippet": row["snippet"] if isinstance(row, sqlite3.Row) else row[2],
+        }
+        for row in fallback_rows
+    ]
 
 
 def load_retrieval_manifest_payload(conn: sqlite3.Connection, project_name: str) -> dict:

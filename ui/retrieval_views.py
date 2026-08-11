@@ -150,6 +150,8 @@ def render_retrieval_feedback_controls(
                     "scope": chunk.get("scope", ""),
                     "title": chunk.get("title", ""),
                     "path": chunk.get("path", ""),
+                    "content_hash": chunk.get("metadata", {}).get("content_hash", ""),
+                    "source_revision_id": chunk.get("metadata", {}).get("source_revision_id", ""),
                 })
                 st.success(f"已保存反馈：{saved.get('rating')} / {saved.get('title') or saved.get('chunk_id')}")
                 st.rerun()

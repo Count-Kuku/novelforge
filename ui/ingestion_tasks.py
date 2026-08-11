@@ -5,7 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
-from novelforge.services.memory import list_source_ingestion_tasks, load_source_ingestion_task
+from novelforge.services.memory import list_source_ingestion_tasks, load_llm_settings, load_source_ingestion_task
+from novelforge.services.llm_usage import summarize_llm_usage
 from novelforge.workflows.ingestion_task_dispatcher import (
     get_ingestion_task_dispatcher_status,
     wake_ingestion_task_dispatcher,
@@ -22,6 +23,7 @@ from novelforge.workflows.ingestion_tasks import (
 )
 from ui.common import confirmed_button, scoped_widget_key
 from ui.ingestion_task_estimate import render_ingestion_task_estimate
+from ui.llm_usage import format_usage_cost
 
 
 TASK_STATUS_LABELS = {
@@ -295,6 +297,28 @@ def _render_task_details(task: dict) -> None:
         })
 
 
+def _render_actual_usage(project_name: str, task: dict) -> None:
+    task_id = str(task.get("task_id") or "")
+    if not task_id:
+        return
+    try:
+        usage = summarize_llm_usage(project_name=project_name, task_id=task_id)
+    except Exception as exc:
+        st.caption(f"暂时无法读取实际用量：{exc}")
+        return
+    with st.expander("实际 Token 与费用", expanded=bool(usage.get("has_usage"))):
+        if not usage.get("has_usage"):
+            st.caption("任务尚未产生可记录的模型调用。")
+            return
+        cols = st.columns(4)
+        cols[0].metric("模型请求", int(usage.get("request_count") or 0))
+        cols[1].metric("输入 Token", f"{int(usage.get('input_tokens') or 0):,}")
+        cols[2].metric("输出 Token", f"{int(usage.get('output_tokens') or 0):,}")
+        cols[3].metric("实际费用", format_usage_cost(usage, load_llm_settings()))
+        if int(usage.get("embedding_tokens") or 0):
+            st.caption(f"向量 Token：{int(usage.get('embedding_tokens') or 0):,}")
+
+
 def render_ingestion_task_manager(project_name: str, story_id: str = "default") -> None:
     st.markdown("#### 后台资料任务")
     st.caption(
@@ -353,6 +377,7 @@ def render_ingestion_task_manager(project_name: str, story_id: str = "default") 
             expanded=False,
             interactive_confirmation=False,
         )
+    _render_actual_usage(project_name, task)
     _render_task_details(task)
 
     if archive_mode in {"已归档", "全部任务"}:

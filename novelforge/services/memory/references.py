@@ -9,6 +9,8 @@ from storage.repositories.ingestion_batch_mutations import (
     delete_long_reference_batch_row,
     persist_long_reference_batch_row,
 )
+from storage.repositories.retrieval import search_retrieval_chunks_fts
+from storage.repositories.sources import list_source_revision_rows
 
 def long_reference_batches_path(project_name: str) -> _memory_api.Path:
     path = _memory_api.project_path(project_name) / "long_reference_batches"
@@ -82,6 +84,7 @@ def normalize_long_reference_batch(batch: dict | None) -> dict:
         "source_origin": str(raw.get("source_origin") or ""),
         "source_file_name": str(raw.get("source_file_name") or ""),
         "content_fingerprint": str(raw.get("content_fingerprint") or ""),
+        "source_content_hash": str(raw.get("source_content_hash") or ""),
         "content_char_count": int(raw.get("content_char_count") or sum(len(item.get("content", "")) for item in segments)),
         "created_at": str(raw.get("created_at") or now),
         "updated_at": str(raw.get("updated_at") or now),
@@ -101,8 +104,12 @@ def create_long_reference_batch(
     source_origin: str = "",
     source_file_name: str = "",
     content_fingerprint: str = "",
+    source_content_hash: str = "",
     content_char_count: int = 0,
     segments: list[dict],
+    story_id: str = "default",
+    parser_metadata: dict | None = None,
+    source_files: list[dict] | None = None,
 ) -> dict:
     batch = normalize_long_reference_batch({
         "batch_id": f"batch_{_memory_api.uuid4().hex}",
@@ -113,7 +120,11 @@ def create_long_reference_batch(
         "source_origin": source_origin,
         "source_file_name": source_file_name,
         "content_fingerprint": content_fingerprint,
+        "source_content_hash": source_content_hash,
         "content_char_count": content_char_count,
+        "story_id": str(story_id or "default"),
+        "parser_metadata": dict(parser_metadata or {}),
+        "source_files": [dict(item) for item in (source_files or []) if isinstance(item, dict)],
         "segments": segments,
     })
     return save_long_reference_batch(project_name, batch)
@@ -260,6 +271,24 @@ def retrieval_sources_path(project_name: str) -> _memory_api.Path:
     path = retrieval_path(project_name) / "sources"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def search_project_retrieval_fts(project_name: str, query: str, limit: int = 20) -> list[dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: search_retrieval_chunks_fts(conn, query, limit),
+        "retrieval FTS",
+    )
+    return result if isinstance(result, list) else []
+
+
+def load_source_revisions(project_name: str, source_id: str = "") -> list[dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: list_source_revision_rows(conn, source_id),
+        "source revisions",
+    )
+    return result if isinstance(result, list) else []
 
 
 def conflict_resolutions_path(project_name: str) -> _memory_api.Path:
@@ -522,6 +551,8 @@ def append_retrieval_feedback(project_name: str, feedback: dict) -> dict:
         "title": str(payload.get("title") or "").strip(),
         "path": str(payload.get("path") or "").strip(),
         "story_id": str(payload.get("story_id") or "").strip(),
+        "content_hash": str(payload.get("content_hash") or "").strip(),
+        "source_revision_id": str(payload.get("source_revision_id") or "").strip(),
     }
     items = load_retrieval_feedback(project_name)
     items.append(normalized)

@@ -37,6 +37,9 @@ from .knowledge import (
     delete_pending_knowledge_items,
     load_entity_alias_group_rows,
     load_knowledge_category_rows,
+    load_knowledge_revision_rows,
+    load_knowledge_evidence_rows,
+    summarize_knowledge_storage_health,
     load_pending_knowledge_rows,
     sync_entity_alias_groups,
     sync_knowledge_category,
@@ -70,6 +73,7 @@ from .retrieval import (
     load_retrieval_vector_store_payload,
     sync_retrieval_manifest_payload,
     sync_retrieval_vector_store_payload,
+    search_retrieval_chunks_fts,
 )
 from .sources import (
     list_retrieval_source_file_rows,
@@ -79,6 +83,7 @@ from .sources import (
     mark_retrieval_source_file_deleted,
     sync_long_reference_batch,
     sync_retrieval_source_file,
+    list_source_revision_rows,
 )
 from .ingestion_tasks import (
     finalize_source_ingestion_task_row,
@@ -167,6 +172,9 @@ __all__ = [
     "load_rules_payload",
     "load_story_profile_row",
     "load_knowledge_category_rows",
+    "load_knowledge_revision_rows",
+    "load_knowledge_evidence_rows",
+    "summarize_knowledge_storage_health",
     "load_pending_knowledge_rows",
     "load_auto_review_policy_row",
     "load_auto_review_run_rows",
@@ -237,6 +245,8 @@ __all__ = [
     "sync_retrieval_eval_run",
     "sync_retrieval_manifest_payload",
     "sync_retrieval_vector_store_payload",
+    "search_retrieval_chunks_fts",
+    "list_source_revision_rows",
     "sync_stories_index",
     "sync_workflow_run_snapshot",
     "upsert_project_meta",

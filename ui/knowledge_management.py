@@ -14,6 +14,8 @@ from novelforge.services.memory import (
     load_entity_aliases,
     load_knowledge_base,
     load_knowledge_category,
+    load_knowledge_revisions,
+    load_knowledge_evidence,
     load_long_reference_batch,
     load_pending_knowledge_items,
     load_setting_entities,
@@ -44,6 +46,7 @@ from novelforge.domain.knowledge_entities import (
     build_merged_knowledge_item,
     build_setting_entity_cards,
 )
+from novelforge.domain.knowledge_types import validate_typed_knowledge_item
 from novelforge.domain.knowledge_quality import (
     build_pending_issue_map,
     build_pending_knowledge_quality_issues,
@@ -68,6 +71,7 @@ from novelforge.domain.knowledge_workflows import (
     update_pending_knowledge_item,
 )
 from ui.common import confirmed_button, scoped_widget_key
+from ui.knowledge_type_editor import render_typed_knowledge_fields
 from ui.labels import (
     KNOWLEDGE_CATEGORY_LABELS,
     label_authority,
@@ -725,6 +729,7 @@ def _render_pending_item_form(project_name: str, item: dict, pending_id: str) ->
     with st.form(key=scoped_widget_key("pending_item_editor_form", project_name, pending_id)):
         values = {}
         values.update(_render_pending_item_basic_fields(item))
+        values["typed_data"] = render_typed_knowledge_fields(values["category"], item)
         values.update(_render_pending_item_scope_fields(item))
         values.update(_render_pending_item_version_fields(item))
         values.update(_render_pending_item_score_fields(item))
@@ -764,6 +769,8 @@ def _build_pending_item_update(item: dict, values: dict, parsed_json: tuple) -> 
         "name": values["name"].strip(),
         "summary": values["summary"].strip(),
         "details": parsed_details,
+        "typed_data": values.get("typed_data", {}),
+        "schema_version": 2,
         "evidence": parsed_evidence,
         "evidence_contexts": parsed_evidence_contexts,
         "confidence": values["confidence"],
@@ -818,6 +825,11 @@ def render_pending_knowledge_item_editor(project_name: str, pending_items: list[
         if parsed_json is None:
             return
         updated_item = _build_pending_item_update(item, values, parsed_json)
+        if confirm_clicked:
+            typed_errors = validate_typed_knowledge_item(updated_item, values["category"])
+            if typed_errors:
+                st.error("；".join(typed_errors))
+                return
         _save_pending_item_editor_result(project_name, pending_id, updated_item, confirm_clicked)
 
 
@@ -860,6 +872,7 @@ def _render_confirmed_item_form(project_name: str, category: str, selected_index
     with st.form(key=scoped_widget_key("confirmed_item_editor_form", project_name, category, item_id)):
         values = {}
         values.update(_render_confirmed_item_basic_fields(item, category))
+        values["typed_data"] = render_typed_knowledge_fields(values["target_category"], item)
         values.update(_render_pending_item_scope_fields(item))
         values.update(_render_pending_item_version_fields(item))
         values.update(_render_pending_item_score_fields(item))
@@ -922,6 +935,8 @@ def _build_confirmed_item_update(item: dict, values: dict, parsed_json: tuple) -
         "name": values["name"].strip(),
         "summary": values["summary"].strip(),
         "details": parsed_details,
+        "typed_data": values.get("typed_data", {}),
+        "schema_version": 2,
         "evidence": parsed_evidence,
         "evidence_contexts": parsed_evidence_contexts,
         "confidence": values["confidence"],
@@ -965,6 +980,33 @@ def render_confirmed_knowledge_item_editor(
 
         selected_index, item = _select_confirmed_knowledge_item(project_name, category, items, candidate_indices)
         values, save_clicked, delete_clicked = _render_confirmed_item_form(project_name, category, selected_index, item)
+        knowledge_id = str(item.get("id") or item.get("knowledge_id") or "")
+        if knowledge_id:
+            revisions = load_knowledge_revisions(project_name, knowledge_id)
+            evidence_rows = load_knowledge_evidence(project_name, knowledge_id)
+            with st.expander(f"来源证据与修订历史（证据 {len(evidence_rows)} / 修订 {len(revisions)}）", expanded=False):
+                if evidence_rows:
+                    st.dataframe([
+                        {
+                            "状态": row.get("validation_status", ""),
+                            "引文": str(row.get("quote") or "")[:160],
+                            "来源": row.get("source_id", ""),
+                            "片段": row.get("segment_id", ""),
+                            "位置": f"{row.get('start_offset', '-')}-{row.get('end_offset', '-')}",
+                        }
+                        for row in evidence_rows
+                    ], use_container_width=True, hide_index=True)
+                if revisions:
+                    st.dataframe([
+                        {
+                            "版本": row.get("revision_no"),
+                            "类型": row.get("change_type", ""),
+                            "时间": row.get("created_at", ""),
+                            "来源修订": row.get("source_revision_id", ""),
+                            "原因": row.get("reason", ""),
+                        }
+                        for row in revisions
+                    ], use_container_width=True, hide_index=True)
         if _render_return_confirmed_to_pending(project_name, category, selected_index, item):
             return
         if not (save_clicked or delete_clicked):
@@ -979,6 +1021,10 @@ def render_confirmed_knowledge_item_editor(
         if parsed_json is None:
             return
         updated_item = _build_confirmed_item_update(item, values, parsed_json)
+        typed_errors = validate_typed_knowledge_item(updated_item, values["target_category"])
+        if typed_errors:
+            st.error("；".join(typed_errors))
+            return
         _save_confirmed_item_editor_result(project_name, category, selected_index, updated_item, values["target_category"])
 
 
@@ -1921,6 +1967,15 @@ def render_ingestion_health_panel(project_name: str):
         entity_cols[1].metric("世界设定卡", report["setting_entity_count"])
         entity_cols[2].metric("别名组", report["alias_group_count"])
         entity_cols[3].metric("计划模板", report["extraction_plan_template_count"])
+        storage_health = report.get("storage_health", {})
+        storage_cols = st.columns(4)
+        storage_cols[0].metric("类型化覆盖", f"{float(storage_health.get('typed_coverage') or 0):.0%}")
+        storage_cols[1].metric("精确证据锚点", f"{float(storage_health.get('anchored_evidence_coverage') or 0):.0%}")
+        storage_cols[2].metric("来源修订", int(storage_health.get("source_revision_total") or 0))
+        storage_cols[3].metric(
+            "全文索引片段",
+            f"{int(storage_health.get('fts_chunk_total') or 0)}/{int(storage_health.get('retrieval_chunk_total') or 0)}",
+        )
         if report["total_segments"]:
             st.caption(f"长篇片段提取进度：{report['extracted_segments']} / {report['total_segments']}")
         warning_parts = []
@@ -1946,6 +2001,21 @@ def render_ingestion_health_panel(project_name: str):
 
 
 def render_source_record_detail(project_name: str, record: dict):
+    revisions = record.get("revisions") if isinstance(record.get("revisions"), list) else []
+    if revisions:
+        with st.expander(f"来源修订历史（{len(revisions)}）", expanded=False):
+            st.dataframe([
+                {
+                    "修订 ID": item.get("revision_id", ""),
+                    "上一个修订": item.get("previous_revision_id", ""),
+                    "内容指纹": str(item.get("content_hash") or "")[:16],
+                    "解析器": item.get("parser_name", ""),
+                    "文件": item.get("filename", ""),
+                    "字符": item.get("char_count", 0),
+                    "时间": item.get("created_at", ""),
+                }
+                for item in revisions
+            ], use_container_width=True, hide_index=True)
     if record.get("kind") == "long_batch":
         batch = load_long_reference_batch(project_name, record.get("batch_id", ""))
         if not batch:
@@ -2071,6 +2141,7 @@ def render_source_ledger_page(project_name: str):
                 "已导入": record.get("imported_count", 0),
                 "已提取": record.get("extracted_count", 0),
                 "失败": record.get("failed_count", 0),
+                "修订": record.get("revision_count", 0),
                 "待审核设定": record.get("pending_count", 0),
                 "已确认": record.get("confirmed_count", 0),
             })

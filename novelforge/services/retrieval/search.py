@@ -267,6 +267,23 @@ def _retrieval_chunk_content_hash(chunk: _retrieval_api.RetrievalChunk) -> str:
     return _retrieval_api.sha256(f"{chunk.title}\n{chunk.content}".encode("utf-8")).hexdigest()
 
 
+def _reciprocal_rank_fusion(
+    rankings: list[tuple[str, list[str], float]],
+    *,
+    rank_constant: int = 60,
+) -> tuple[dict[str, float], dict[str, dict[str, float]]]:
+    """Fuse independent rank lists without comparing incompatible scores."""
+
+    fused: dict[str, float] = {}
+    breakdown: dict[str, dict[str, float]] = {}
+    for route_name, ranked_ids, weight in rankings:
+        for rank, chunk_id in enumerate(ranked_ids, start=1):
+            contribution = float(weight) / float(rank_constant + rank)
+            fused[chunk_id] = fused.get(chunk_id, 0.0) + contribution
+            breakdown.setdefault(chunk_id, {})[f"rrf_{route_name}"] = contribution * 100.0
+    return fused, breakdown
+
+
 def _build_feedback_stats(
     project_name: str,
     story_id: str | None = "default",
@@ -286,17 +303,42 @@ def _build_feedback_stats(
         if feedback_story_id and feedback_story_id != target_story_id:
             continue
         chunk_id = str(item.get("chunk_id") or "").strip()
+        content_hash = str(item.get("content_hash") or "").strip()
+        source_revision_id = str(item.get("source_revision_id") or "").strip()
         rating = str(item.get("rating") or "").strip()
         if not chunk_id or rating not in weights:
             continue
-        entry = stats.setdefault(chunk_id, {"score": 0.0, "count": 0.0})
-        entry["score"] += weights[rating]
-        entry["count"] += 1
+        if content_hash:
+            hash_entry = stats.setdefault(f"hash:{content_hash}", {"score": 0.0, "count": 0.0})
+            hash_entry["score"] += weights[rating]
+            hash_entry["count"] += 1
+        elif source_revision_id:
+            revision_entry = stats.setdefault(
+                f"revision:{source_revision_id}:{chunk_id}",
+                {"score": 0.0, "count": 0.0},
+            )
+            revision_entry["score"] += weights[rating]
+            revision_entry["count"] += 1
+        else:
+            # Legacy feedback did not carry a stable fingerprint.  Keep its
+            # old chunk-id behavior, but never create this fallback for new
+            # hash/revision-bound feedback: otherwise an edit at the same
+            # position would inherit a stale rating.
+            entry = stats.setdefault(chunk_id, {"score": 0.0, "count": 0.0})
+            entry["score"] += weights[rating]
+            entry["count"] += 1
     return stats
 
 
 def _feedback_bonus_for_chunk(chunk: _retrieval_api.RetrievalChunk, feedback_stats: dict[str, dict[str, float]]) -> float:
-    stat = feedback_stats.get(chunk.chunk_id, {})
+    metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+    content_hash = str(metadata.get("content_hash") or "")
+    source_revision_id = str(metadata.get("source_revision_id") or "")
+    stat = feedback_stats.get(f"hash:{content_hash}", {}) if content_hash else {}
+    if not stat and source_revision_id:
+        stat = feedback_stats.get(f"revision:{source_revision_id}:{chunk.chunk_id}", {})
+    if not stat:
+        stat = feedback_stats.get(chunk.chunk_id, {})
     score = float(stat.get("score", 0.0) or 0.0)
     if not score:
         return 0.0
@@ -380,6 +422,33 @@ def _diversify_hits(
         if len(selected) >= top_k:
             break
     return selected
+
+
+def _expand_parent_context(hit: _retrieval_api.RetrievalHit, *, max_chars: int = 2600) -> _retrieval_api.RetrievalHit:
+    metadata = hit.chunk.metadata if isinstance(hit.chunk.metadata, dict) else {}
+    parent = str(metadata.get("parent_content") or "").strip()
+    child = hit.chunk.content.strip()
+    if not parent or parent == child or len(parent) <= len(child):
+        return hit
+    if len(parent) > max_chars:
+        start = metadata.get("parent_anchor_offset")
+        try:
+            anchor = max(int(start), 0) if start is not None else max(parent.find(child), 0)
+        except (TypeError, ValueError):
+            anchor = max(parent.find(child), 0)
+        window_start = max(anchor - max_chars // 3, 0)
+        parent = parent[window_start:window_start + max_chars].strip()
+        if window_start:
+            parent = "…" + parent
+        if window_start + max_chars < len(str(metadata.get("parent_content") or "")):
+            parent += "…"
+    expanded_metadata = {
+        **metadata,
+        "retrieved_child_content": child,
+        "context_expanded": True,
+    }
+    expanded_chunk = hit.chunk.model_copy(update={"content": parent, "metadata": expanded_metadata})
+    return hit.model_copy(update={"chunk": expanded_chunk})
 
 
 def resolve_retrieval_params(
@@ -521,7 +590,16 @@ def _run_retrieval(
             )
             semantic_scores = {}
 
-    initial_hits: list[_retrieval_api.RetrievalHit] = []
+    try:
+        fts_ranking = [
+            str(item.get("chunk_id") or "")
+            for item in _retrieval_api.search_project_retrieval_fts(project_name, query, max(top_k * 6, 30))
+            if str(item.get("chunk_id") or "")
+        ]
+    except Exception:
+        fts_ranking = []
+
+    scored_candidates: list[dict] = []
     if query_terms or retrieval_mode != "lexical":
         for chunk in filtered_chunks:
             if query_terms:
@@ -536,34 +614,67 @@ def _run_retrieval(
                 lexical_score, matched_terms, score_breakdown, match_reasons = (0.0, [], {}, [])
             semantic_score = semantic_scores.get(chunk.chunk_id, 0.0)
 
-            if retrieval_mode == "lexical":
-                final_score = lexical_score
-            elif retrieval_mode == "semantic":
-                final_score = semantic_score
-            else:
-                final_score = lexical_score + semantic_score * 4.0
-
-            if final_score <= 0:
-                continue
             if semantic_score > 0:
-                score_breakdown["semantic"] = semantic_score * (1.0 if retrieval_mode == "semantic" else 4.0)
+                score_breakdown["semantic"] = semantic_score
                 match_reasons.append(f"语义相似度：{semantic_score:.2f}")
-            initial_hits.append(_retrieval_api.RetrievalHit(
+            scored_candidates.append({
+                "chunk": chunk,
+                "lexical_score": lexical_score,
+                "semantic_score": semantic_score,
+                "matched_terms": matched_terms,
+                "score_breakdown": score_breakdown,
+                "match_reasons": match_reasons,
+            })
+
+    lexical_ranking = [
+        item["chunk"].chunk_id
+        for item in sorted(scored_candidates, key=lambda item: (-item["lexical_score"], item["chunk"].chunk_id))
+        if item["lexical_score"] > 0
+    ]
+    semantic_ranking = [
+        item["chunk"].chunk_id
+        for item in sorted(scored_candidates, key=lambda item: (-item["semantic_score"], item["chunk"].chunk_id))
+        if item["semantic_score"] > 0
+    ]
+    candidate_chunk_ids = {item["chunk"].chunk_id for item in scored_candidates}
+    fused_scores, fused_breakdown = _reciprocal_rank_fusion([
+        ("lexical", lexical_ranking, 1.0),
+        ("fts", [value for value in fts_ranking if value in candidate_chunk_ids], 1.0),
+        ("semantic", semantic_ranking, 1.0),
+    ]) if retrieval_mode == "hybrid" else ({}, {})
+
+    initial_hits: list[_retrieval_api.RetrievalHit] = []
+    for item in scored_candidates:
+        chunk = item["chunk"]
+        lexical_score = item["lexical_score"]
+        semantic_score = item["semantic_score"]
+        if retrieval_mode == "lexical":
+            final_score = lexical_score
+        elif retrieval_mode == "semantic":
+            final_score = semantic_score
+        else:
+            final_score = fused_scores.get(chunk.chunk_id, 0.0) * 100.0
+        if final_score <= 0:
+            continue
+        score_breakdown = {**item["score_breakdown"], **fused_breakdown.get(chunk.chunk_id, {})}
+        if retrieval_mode == "hybrid":
+            score_breakdown["rrf_total"] = final_score
+        initial_hits.append(_retrieval_api.RetrievalHit(
                 chunk=chunk,
                 score=final_score,
                 lexical_score=lexical_score,
                 semantic_score=semantic_score,
                 retrieval_mode=retrieval_mode if semantic_scores else "lexical",
-                matched_terms=matched_terms,
+                matched_terms=item["matched_terms"],
                 expanded_terms=query_plan["expanded_terms"],
-                match_reasons=match_reasons,
+                match_reasons=item["match_reasons"],
                 score_breakdown=score_breakdown,
             ))
 
     initial_hits.sort(key=lambda item: (-item.score, -item.semantic_score, -item.lexical_score, item.chunk.chunk_id))
     feedback_stats = _build_feedback_stats(project_name, story_id)
     reranked_hits = _rerank_hits(initial_hits, feedback_stats)
-    diversified_hits = _diversify_hits(reranked_hits, top_k)
+    diversified_hits = [_expand_parent_context(hit) for hit in _diversify_hits(reranked_hits, top_k)]
     return {
         "query": query,
         "base_query_terms": query_plan["base_terms"],

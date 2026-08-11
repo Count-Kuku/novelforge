@@ -2,6 +2,8 @@ import hashlib
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from novelforge.domain.knowledge_types import validate_typed_knowledge_item
+
 from novelforge.services.memory import (
     KNOWLEDGE_CATEGORIES,
     confirm_pending_knowledge_items_with_records,
@@ -78,6 +80,14 @@ def evaluate_pending_auto_review_decision(item: dict, issue_map: dict, policy: d
     active_policy = dict(policy or {})
     pending_id = str(item.get("pending_id") or "")
     category = str(item.get("category") or "")
+    typed_errors = validate_typed_knowledge_item(item, category)
+    if typed_errors:
+        return {
+            "pending_id": pending_id,
+            "decision": "blocked",
+            "grade": "C",
+            "reason": "；".join(typed_errors),
+        }
     manual_categories = set(active_policy.get("manual_review_categories", []) if isinstance(active_policy.get("manual_review_categories", []), list) else [])
     if category in manual_categories:
         return {

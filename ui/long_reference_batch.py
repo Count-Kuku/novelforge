@@ -815,6 +815,7 @@ def _run_batch_extraction_plan(
             categories=auto_consolidation_categories,
             consolidation_mode=auto_consolidation_mode,
             limit=int(auto_consolidation_limit),
+            story_id=str(updated_batch.get("story_id") or "default"),
             preview_language="json",
         )
         plan_summary["auto_consolidation"] = {
@@ -1039,6 +1040,7 @@ def _render_batch_consolidation(
                 categories=consolidation_categories,
                 consolidation_mode=consolidation_mode,
                 limit=int(consolidation_limit),
+                story_id=str(batch.get("story_id") or "default"),
                 preview_language="json",
             )
             if consolidation_summary.get("result"):

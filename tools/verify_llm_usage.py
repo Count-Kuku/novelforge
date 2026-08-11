@@ -158,7 +158,7 @@ def verify_context_attribution() -> None:
 def verify_repository() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    check(ensure_schema(conn) == CURRENT_SCHEMA_VERSION == 10, "数据库迁移升级到版本 10")
+    check(ensure_schema(conn) == CURRENT_SCHEMA_VERSION == 11, "数据库迁移升级到版本 11")
     base = build_llm_usage_event(
         usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
         profile=_profile(),

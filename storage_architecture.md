@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`10`
+当前代码期望的 SQLite schema version：`11`
 
 ## 权威存储边界
 
@@ -89,6 +89,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `008_workflow_runtime` | 后台任务 worker、租约、心跳、控制、估算、优先级和归档 |
 | `009_runtime_hardening` | 项目维护锁、向量构建统计，以及旧任务残留租约清理 |
 | `010_llm_usage` | 追加式 LLM 用量事件、价格快照，以及项目/故事/任务/操作索引 |
+| `011_ingestion_knowledge_retrieval_upgrade` | 来源/知识修订、类型化知识、精确证据锚点、父子检索关系、稳定反馈绑定和可查询 FTS5 |
 
 ## 表分组
 
@@ -126,24 +127,26 @@ DB-only 错误语义并提前删除待迁移镜像。
 
 ### 来源与知识
 
-- `source_documents`：资料来源、权威、类型、hash 和来源资产。
-- `source_segments`：长篇分段、导入/提取状态和片段元数据。
-- `knowledge_items`：已确认结构化知识。
-- `pending_knowledge_items`：待审核知识和质量状态。
-- `knowledge_evidence`：知识到来源、片段和检索 chunk 的证据关系；网络研究结论还会在 `location_json` 中保存 URL、原文引文和定位信息。
+- `source_documents`：资料来源、权威、类型、hash、来源资产和当前活动修订。
+- `source_revisions`：以 `(source_id, content_hash)` 唯一确定的不可变来源版本，保存解析器、文件哈希、字符数和上一修订；批次去重指纹不替代精确原文哈希，重复保存任务状态不会覆盖既有修订元数据。
+- `source_segments`：长篇分段、导入/提取状态、来源修订、标题路径、内容类型和起止字符。
+- `knowledge_items`：已确认结构化知识；`schema_version/structured_json` 保存分类专属稳定字段。
+- `pending_knowledge_items`：待审核知识、质量状态、类型化字段和来源修订。
+- `knowledge_revisions`：正式知识每次创建/内容更新的追加快照；恢复旧版也必须追加新快照。
+- `knowledge_evidence`：知识到来源、修订、片段和检索 chunk 的证据关系，保存引文 hash、字符锚点、前后文和验证状态；网络研究结论还会在 `location_json` 中保存 URL 与来源信息。
 - `entity_alias_groups`：主名称、别名和实体类型。
 - `auto_review_policy`、`auto_review_runs`：自动审核策略、批处理记录和回退快照。
 
 ### 检索
 
 - `retrieval_documents`：可检索文档的来源、作用域、权威和世界线元数据。
-- `retrieval_chunks`：稳定 chunk、正文、内容 hash 和顺序。
+- `retrieval_chunks`：稳定子 chunk、正文、内容 hash、父/前/后关系、位置和来源修订。
 - `retrieval_vectors`：embedding 模型、维度、向量 blob 和内容 hash。
 - `retrieval_vector_store_meta`：最近一次向量构建模式、复用/生成/删除数量。
-- `retrieval_feedback`：有用、优先、无关、错误等用户反馈。
+- `retrieval_feedback`：有用、优先、无关、错误等用户反馈；同时绑定内容 hash 和来源修订，片段内容改变后不误用旧反馈。
 - `retrieval_eval_cases`、`retrieval_eval_runs`：固定评测用例和运行结果。
 - `retrieval_conflict_resolutions`：项目资料与原作/参考资料冲突的持久裁决。
-- `retrieval_chunks_fts`：schema 中预留的 FTS5 表；当前应用层词法检索尚未以它作为主要查询后端。
+- `retrieval_chunks_fts`：独立 FTS5 trigram 表，索引 chunk ID、标题、正文、实体名和来源词；由 manifest 同步事务完整刷新，作为 RRF 的 BM25 排名通道。
 
 检索文档、chunk 和向量可以从权威资料重建；用户反馈、评测用例/结果和冲突裁决不可当作缓存清除。
 

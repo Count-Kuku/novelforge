@@ -54,6 +54,8 @@ from novelforge.services.memory import (
     retrieval_sources_path,
     save_retrieval_manifest,
     save_retrieval_vectors,
+    sync_retrieval_source_file_record,
+    search_project_retrieval_fts,
     story_path,
 )
 from novelforge.core.schemas import RetrievalChunk, RetrievalDocument, RetrievalHit, RetrievalIndexManifest, RetrievalVectorStore
@@ -388,7 +390,17 @@ STRUCTURED_SOURCE_TYPES = {
 
 
 def _normalize_whitespace(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    """Normalize inline whitespace without destroying document structure.
+
+    Markdown headings and paragraph boundaries are semantic input to the
+    chunker.  Collapsing every whitespace character into a space previously
+    turned ``# Summary``/``# Details`` into one heading and produced an empty
+    external-source index.
+    """
+
+    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t\f\v]+", " ", line).rstrip() for line in normalized.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
 def _tokenize(text: str) -> list[str]:
@@ -437,10 +449,20 @@ def _split_markdown_sections(text: str) -> list[tuple[str, str]]:
     sections: list[tuple[str, list[str]]] = []
     current_title = ""
     current_lines: list[str] = []
+    fence = ""
 
     for line in lines:
         stripped = line.strip()
-        if stripped.startswith("#"):
+        fence_match = re.match(r"^(`{3,}|~{3,})", stripped)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if not fence:
+                fence = marker
+            elif fence == marker:
+                fence = ""
+            current_lines.append(line)
+            continue
+        if not fence and re.match(r"^ {0,3}#{1,6}\s+", line):
             if current_title or current_lines:
                 sections.append((current_title, current_lines))
             current_title = stripped.lstrip("#").strip()
@@ -475,25 +497,23 @@ def _chunk_by_paragraphs(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overla
 
     for block in blocks:
         block_length = len(block)
+        if block_length > chunk_size:
+            if current:
+                combined = "\n\n".join(current).strip()
+                if combined:
+                    chunks.append(combined)
+                current = []
+                current_length = 0
+            chunks.extend(_split_long_text(block, chunk_size=chunk_size, overlap=overlap))
+            continue
         if current and current_length + block_length + 2 > chunk_size:
             combined = "\n\n".join(current).strip()
             if combined:
                 chunks.append(combined)
 
-            if overlap > 0 and current:
-                overlap_blocks = []
-                overlap_length = 0
-                for item in reversed(current):
-                    item_length = len(item)
-                    if overlap_blocks and overlap_length + item_length > overlap:
-                        break
-                    overlap_blocks.insert(0, item)
-                    overlap_length += item_length
-                current = overlap_blocks[:]
-                current_length = sum(len(item) for item in current)
-            else:
-                current = []
-                current_length = 0
+            overlap_text = combined[-min(max(int(overlap or 0), 0), chunk_size):].strip() if overlap > 0 else ""
+            current = [overlap_text] if overlap_text and len(overlap_text) + 2 + block_length <= chunk_size else []
+            current_length = len(overlap_text) if current else 0
 
         current.append(block)
         current_length += block_length + 2
@@ -503,7 +523,11 @@ def _chunk_by_paragraphs(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overla
         if combined:
             chunks.append(combined)
 
-    return chunks or _split_long_text(text, chunk_size=chunk_size, overlap=overlap)
+    deduplicated_adjacent: list[str] = []
+    for chunk in chunks:
+        if not deduplicated_adjacent or chunk != deduplicated_adjacent[-1]:
+            deduplicated_adjacent.append(chunk)
+    return deduplicated_adjacent or _split_long_text(text, chunk_size=chunk_size, overlap=overlap)
 
 
 def _chunk_markdown_sections(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP) -> list[tuple[str, str]]:

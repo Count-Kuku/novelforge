@@ -13,10 +13,14 @@ from novelforge.domain.extraction_presets import (
     default_extraction_categories,
 )
 from novelforge.services.memory import create_long_reference_batch, load_long_reference_batch
+from novelforge.services.document_parsing import (
+    DocumentParsingError,
+    combine_parsed_documents,
+    parse_document_bytes,
+)
 from novelforge.workflows.source_workflows import (
     calculate_text_fingerprint,
     consolidate_batch_pending_items,
-    decode_uploaded_text,
     extract_long_reference_segments_to_queue,
     find_matching_long_reference_batches,
     import_long_reference_segments,
@@ -170,22 +174,49 @@ def _render_long_reference_source_inputs(source_type_options: dict, state_scope:
         )
         long_origin = col_b.text_input("来源说明/链接（可选）", key=_long_reference_key("long_reference_origin", state_scope))
         max_chars = st.slider("没有章节标题时，每段最多字数", min_value=2000, max_value=12000, value=6000, step=1000, key=_long_reference_key("long_reference_max_chars", state_scope))
-    uploaded_file = st.file_uploader("上传 txt/md 文件", type=["txt", "md"], key=_long_reference_key("long_reference_file", state_scope))
-    uploaded_text = decode_uploaded_text(uploaded_file)
+    uploaded_files = st.file_uploader(
+        "上传资料文件（支持多选）",
+        type=["txt", "md", "markdown", "docx", "epub", "pdf"],
+        accept_multiple_files=True,
+        key=_long_reference_key("long_reference_file", state_scope),
+        help="可一次上传多份资料。系统会保留 Markdown/Word/EPUB 的标题层级；PDF 按页提取文本，扫描版 PDF 会提示需要 OCR。",
+    )
+    uploaded_files = list(uploaded_files or [])
+    parsed_documents = []
+    parse_errors: list[str] = []
+    for uploaded_file in uploaded_files:
+        try:
+            parsed_documents.append(parse_document_bytes(uploaded_file.name, uploaded_file.getvalue()))
+        except DocumentParsingError as exc:
+            parse_errors.append(str(exc))
+    uploaded_text = combine_parsed_documents(parsed_documents)
     upload_signature_key = _long_reference_key("long_reference_uploaded_signature", state_scope)
     text_key = _long_reference_key("long_reference_text", state_scope)
     segments_key = _long_reference_key("long_reference_segments", state_scope)
     batch_id_key = _long_reference_key("long_reference_batch_id", state_scope)
-    if uploaded_file is not None:
-        upload_signature = hashlib.sha1(uploaded_file.getvalue()).hexdigest()
+    if uploaded_files:
+        digest = hashlib.sha256()
+        for uploaded_file in uploaded_files:
+            digest.update(uploaded_file.name.encode("utf-8", errors="ignore"))
+            digest.update(b"\0")
+            digest.update(uploaded_file.getvalue())
+        upload_signature = digest.hexdigest()
         if st.session_state.get(upload_signature_key) != upload_signature:
             st.session_state[upload_signature_key] = upload_signature
             st.session_state[text_key] = uploaded_text
             st.session_state.pop(segments_key, None)
             st.session_state.pop(batch_id_key, None)
-        st.caption(f"已读取文件：{uploaded_file.name} / {len(uploaded_file.getvalue())} 字节 / 解码后 {len(uploaded_text)} 字符")
+        total_bytes = sum(len(item.getvalue()) for item in uploaded_files)
+        st.caption(f"已读取 {len(parsed_documents)}/{len(uploaded_files)} 个文件 / {total_bytes} 字节 / 提取后 {len(uploaded_text)} 字符")
+        for document in parsed_documents:
+            st.caption(
+                f"{document.filename}：{document.parser_name} / {len(document.sections)} 个结构段"
+                + (f" / 提示：{'；'.join(document.warnings)}" if document.warnings else "")
+            )
+        for error in parse_errors:
+            st.error(error)
         if not uploaded_text.strip():
-            st.warning("文件已上传，但没有解码出文本内容。请确认文件不是二进制格式，或尝试另存为 UTF-8/UTF-16 txt。")
+            st.warning("文件已上传，但没有提取出正文。扫描版 PDF 需先 OCR；加密或损坏的文件请转换后重试。")
     pasted_text = st.text_area(
         "或直接粘贴资料正文",
         value=st.session_state.get(text_key, uploaded_text),
@@ -199,30 +230,51 @@ def _render_long_reference_source_inputs(source_type_options: dict, state_scope:
         "long_source_type": long_source_type,
         "long_origin": long_origin,
         "max_chars": max_chars,
-        "uploaded_file": uploaded_file,
+        "uploaded_files": uploaded_files,
         "uploaded_text": uploaded_text,
+        "parsed_documents": [item.to_dict() for item in parsed_documents],
+        "parse_errors": parse_errors,
         "pasted_text": pasted_text,
     }
 
 
-def _long_reference_fallback_title(long_title: str, uploaded_file) -> str:
-    return long_title.strip() or (uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料")
+def _long_reference_fallback_title(long_title: str, uploaded_files) -> str:
+    files = list(uploaded_files or [])
+    if long_title.strip():
+        return long_title.strip()
+    if len(files) == 1:
+        return files[0].name.rsplit(".", 1)[0]
+    if files:
+        return f"{files[0].name.rsplit('.', 1)[0]} 等 {len(files)} 份资料"
+    return "长篇资料"
 
 
 def _render_long_reference_split_controls(
     long_title: str,
-    uploaded_file,
+    uploaded_files,
     pasted_text: str,
     max_chars: int,
+    source_type: str,
     state_scope: StateScope,
 ) -> list[dict] | None:
     segments_key = _long_reference_key("long_reference_segments", state_scope)
     batch_id_key = _long_reference_key("long_reference_batch_id", state_scope)
-    # 自动切分：有文本且尚未切分时自动执行，省去手动点"预览切分"的步骤
-    if pasted_text.strip() and segments_key not in st.session_state:
-        title = _long_reference_fallback_title(long_title, uploaded_file)
-        segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
+    split_signature_key = _long_reference_key("long_reference_split_signature", state_scope)
+    split_signature = hashlib.sha256(
+        f"{long_title}\0{max_chars}\0{source_type}\0{pasted_text}".encode("utf-8")
+    ).hexdigest()
+    # 文本、标题、模板或上限变化后立即废弃旧预览，避免把新原文哈希
+    # 与旧片段/旧证据位置保存到同一批次。
+    if pasted_text.strip() and st.session_state.get(split_signature_key) != split_signature:
+        title = _long_reference_fallback_title(long_title, uploaded_files)
+        segments = split_long_reference_text(
+            title,
+            pasted_text,
+            max_chars=max_chars,
+            source_type=source_type,
+        )
         st.session_state[segments_key] = segments
+        st.session_state[split_signature_key] = split_signature
         st.session_state.pop(batch_id_key, None)
         if segments:
             st.caption(f"已自动切分为 {len(segments)} 个资料片段。如需调整切分参数，修改后点击“重新生成切分预览”。")
@@ -232,12 +284,18 @@ def _render_long_reference_split_controls(
         help="修改资料或切分参数后，重新生成片段预览。已有片段将被替换。",
         key=_long_reference_key("long_reference_resplit", state_scope),
     ):
-        title = _long_reference_fallback_title(long_title, uploaded_file)
+        title = _long_reference_fallback_title(long_title, uploaded_files)
         if not pasted_text.strip():
-            st.error("没有可处理的文本内容。请上传 txt/md 文件，或把文本粘贴到输入框中。")
+            st.error("没有可处理的文本内容。请上传资料文件，或把文本粘贴到输入框中。")
             return None
-        segments = split_long_reference_text(title, pasted_text, max_chars=max_chars)
+        segments = split_long_reference_text(
+            title,
+            pasted_text,
+            max_chars=max_chars,
+            source_type=source_type,
+        )
         st.session_state[segments_key] = segments
+        st.session_state[split_signature_key] = split_signature
         st.session_state.pop(batch_id_key, None)
         if segments:
             st.success(f"已切分为 {len(segments)} 个资料片段。")
@@ -249,13 +307,14 @@ def _render_long_reference_split_controls(
 
 def _render_long_reference_segment_preview(
     project_name: str,
-    uploaded_file,
+    uploaded_files,
     pasted_text: str,
     segments: list[dict],
     state_scope: StateScope,
 ) -> dict:
     total_chars = sum(int(item.get("char_count", 0)) for item in segments)
-    source_file_name = uploaded_file.name if uploaded_file else ""
+    files = list(uploaded_files or [])
+    source_file_name = files[0].name if len(files) == 1 else "；".join(item.name for item in files)
     content_fingerprint = calculate_text_fingerprint(pasted_text)
     matching_batches = find_matching_long_reference_batches(
         project_name,
@@ -324,8 +383,8 @@ def _get_or_create_long_reference_preview_batch(batch_context: dict) -> dict:
         existing = load_long_reference_batch(batch_context["project_name"], batch_id)
         if existing:
             return existing
-    uploaded_file = batch_context["uploaded_file"]
-    fallback_title = uploaded_file.name.rsplit(".", 1)[0] if uploaded_file else "长篇资料"
+    uploaded_files = list(batch_context.get("uploaded_files") or [])
+    fallback_title = _long_reference_fallback_title("", uploaded_files)
     batch = create_long_reference_batch(
         batch_context["project_name"],
         title=batch_context["long_title"].strip() or fallback_title,
@@ -335,8 +394,19 @@ def _get_or_create_long_reference_preview_batch(batch_context: dict) -> dict:
         source_origin=batch_context["long_origin"].strip(),
         source_file_name=batch_context["source_file_name"],
         content_fingerprint=batch_context["content_fingerprint"],
-        content_char_count=len(normalize_text_for_fingerprint(batch_context["pasted_text"])),
+        source_content_hash=batch_context["source_content_hash"],
+        content_char_count=len(batch_context["pasted_text"]),
         segments=batch_context["segments"],
+        story_id=batch_context.get("story_id", "default"),
+        parser_metadata={"documents": batch_context.get("parsed_documents", [])},
+        source_files=[
+            {
+                "name": item.name,
+                "size": len(item.getvalue()),
+                "sha256": hashlib.sha256(item.getvalue()).hexdigest(),
+            }
+            for item in uploaded_files
+        ],
     )
     st.session_state[batch_id_key] = batch.get("batch_id")
     return batch
@@ -621,6 +691,7 @@ def _render_long_reference_stepwise_processing(
                     extraction_mode=shared_extraction_mode,
                     custom_instructions=shared_custom_instructions,
                     progress_callback=progress_callback,
+                    story_id=str(st.session_state.get("active_story_id") or "default"),
                 )
                 manual_result_key = _long_reference_key("long_reference_manual_extract_result", state_scope)
                 st.session_state[manual_result_key] = {
@@ -637,6 +708,7 @@ def _render_long_reference_stepwise_processing(
                         categories=shared_categories,
                         consolidation_mode="balanced",
                         limit=max(20, min(120, queued_total)),
+                        story_id=str(st.session_state.get("active_story_id") or "default"),
                         preview_language="json",
                     )
                     st.success(
@@ -675,14 +747,15 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
         long_source_type = source_inputs["long_source_type"]
         long_origin = source_inputs["long_origin"]
         max_chars = source_inputs["max_chars"]
-        uploaded_file = source_inputs["uploaded_file"]
+        uploaded_files = source_inputs["uploaded_files"]
         pasted_text = source_inputs["pasted_text"]
 
         segments = _render_long_reference_split_controls(
             long_title,
-            uploaded_file,
+            uploaded_files,
             pasted_text,
             max_chars,
+            long_source_type,
             state_scope,
         )
         if not segments:
@@ -690,7 +763,7 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
 
         preview_state = _render_long_reference_segment_preview(
             project_name,
-            uploaded_file,
+            uploaded_files,
             pasted_text,
             segments,
             state_scope,
@@ -706,9 +779,12 @@ def render_long_reference_importer(project_name: str, source_type_options: dict,
             "long_authority": long_authority,
             "long_source_type": long_source_type,
             "long_origin": long_origin,
-            "uploaded_file": uploaded_file,
+            "uploaded_files": uploaded_files,
+            "parsed_documents": source_inputs.get("parsed_documents", []),
+            "story_id": current_story_id,
             "source_file_name": source_file_name,
             "content_fingerprint": content_fingerprint,
+            "source_content_hash": hashlib.sha256(pasted_text.encode("utf-8")).hexdigest(),
             "pasted_text": pasted_text,
             "segments": segments,
             "state_scope": state_scope,

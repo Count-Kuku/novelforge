@@ -19,17 +19,19 @@ NovelForge is a local LLM writing workspace for long-form fiction and fan fictio
 
 ### Sources And Knowledge
 
-- Pasted sources, manual source cards, and long-form TXT/Markdown ingestion.
+- Pasted sources, manual source cards, and multi-file TXT/Markdown/DOCX/EPUB/text-layer PDF ingestion.
 - Recoverable Brave Search research agents with official/wiki/community/fanon planning, parallel discovery, safe fetching, claim extraction, cross-source verification, and human review.
-- Chapter-heading or length-based splitting with batch and segment checkpoints.
+- Structure-aware heading, chapter, scene, paragraph, and sentence splitting with source offsets, fingerprints, and segment checkpoints.
 - General, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction modes.
 - Multi-specialist plans, pending review, automatic review policy, conflict/duplicate checks, and batch rollback.
+- Category-specific typed fields and immutable revisions for confirmed knowledge.
 - Confirmed knowledge, character/setting entity cards, alias groups, and source-package reports.
-- A source ledger that traces knowledge back to source documents, segments, and evidence locations.
+- A source ledger that traces knowledge back to source revisions, segments, and exact evidence locations.
 
 ### RAG
 
-- Lexical, semantic, and hybrid retrieval; lexical retrieval remains available when embeddings fail.
+- FTS5/BM25, application lexical ranking, and semantic ranking fused with RRF; full-text retrieval remains available when embeddings fail.
+- Precise child chunks are retrieved first and expanded with bounded parent context; feedback binds to content fingerprints.
 - Story, source-version/worldline, source-type, and authority filtering or weighting.
 - Chinese phrase matching, entity-alias expansion, user feedback, conflict decisions, and result diversification.
 - Retrieval health checks, debug views, source-usage reports, and explainable prompt evidence.
@@ -94,7 +96,7 @@ The source-ingestion page contains workspaces for durable tasks, source ledger, 
 
 ### Source Processing
 
-1. Upload or paste TXT/Markdown, or choose network search to create an automatic research task or manually select public pages.
+1. Upload one or more TXT/Markdown/DOCX/EPUB/PDF files, or paste text. Scanned PDFs require OCR first. Network search can create an automatic research task or import selected public pages.
 2. Select indexing, knowledge extraction, and optional automatic-review behavior.
 3. Review segment, call, token, and cost estimates.
 4. Create the background task and monitor it in `资料任务` (Source Tasks); the browser page may be closed.
@@ -177,8 +179,8 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 
 ## Current Limits And Priorities
 
-- Parent/child chunks, type-specific splitters, multi-query planning, and RRF-style rank fusion remain the next RAG priorities.
-- Stable ingestion supports pasted text, TXT, Markdown, and public static web pages; dynamically rendered pages, EPUB, DOCX, PDF, and folder ingestion are not yet provided.
+- Structure-aware splitting, parent/child context, and FTS/lexical/semantic RRF fusion are complete; quota-controlled query routing for characters, relationships, timelines, and hard constraints is the next RAG priority.
+- Stable ingestion supports pasted text, TXT, Markdown, DOCX, EPUB, text-layer PDF, and public static web pages; scanned-PDF OCR, dynamically rendered pages, and recursive folder ingestion are not yet provided.
 - Durable source tasks depend on the NovelForge application process; they are not a resident service or distributed queue.
 - A dedicated vector database and GraphRAG will be evaluated only after the current local SQLite/retrieval path shows a measured scale bottleneck.
 - Web research now includes durable tasks, claim extraction, cross-source verification, evaluation, and human review. LangGraph only coordinates parallel dispatch inside one search step; SQLite `workflow_runs/workflow_steps` remains authoritative.
@@ -186,7 +188,7 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 ## Development Documentation
 
 - [project.md](./project.md): current architecture, module responsibilities, development boundaries, technical debt, and priorities.
-- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v10, migrations, task leases, and recovery.
+- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v11, migrations, task leases, and recovery.
 - [docs/releases](./docs/releases): immutable release history.
 
 Completed one-off plans are not kept as permanent documentation. Their lasting results belong in the fact documents above so the repository has one current source of truth.

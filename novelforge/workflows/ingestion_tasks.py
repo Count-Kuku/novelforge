@@ -425,6 +425,7 @@ def run_long_reference_ingestion_task(
                 run_key=task_id,
                 task_id=task_id,
                 worker_id=owner,
+                story_id=str(task.get("story_id") or "default"),
             )
     except _IngestionTaskControlSignal as signal:
         latest_batch = load_long_reference_batch(project_name, task.get("batch_id", "")) or batch

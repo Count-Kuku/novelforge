@@ -320,6 +320,15 @@ class KnowledgeEvidence(NovelForgeSchema):
     source_title: str = ""
     quote: str = ""
     note: str = ""
+    source_id: str = ""
+    source_revision_id: str = ""
+    segment_id: str = ""
+    chunk_id: str = ""
+    start_offset: int | None = None
+    end_offset: int | None = None
+    prefix: str = ""
+    suffix: str = ""
+    validation_status: str = "unverified"
 
 
 class ExtractedKnowledgeItem(NovelForgeSchema):
@@ -340,6 +349,8 @@ class ExtractedKnowledgeItem(NovelForgeSchema):
     name: str
     summary: str = ""
     details: dict[str, str] = Field(default_factory=dict)
+    typed_data: dict[str, Any] = Field(default_factory=dict)
+    schema_version: int = Field(default=2, ge=1)
     evidence: list[KnowledgeEvidence] = Field(default_factory=list)
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     importance: float = Field(default=0.5, ge=0.0, le=1.0)

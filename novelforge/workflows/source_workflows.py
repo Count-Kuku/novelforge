@@ -22,6 +22,7 @@ from novelforge.domain.knowledge_workflows import (
     safe_confidence,
     summarize_item_evidence,
 )
+from novelforge.domain.reference_chunking import split_reference_text
 from novelforge.domain.ingestion_workbench import (
     build_ingestion_workbench_summary,
     summarize_long_reference_resume_state,
@@ -38,6 +39,8 @@ from novelforge.services.memory import (
     load_knowledge_base,
     load_pending_knowledge_items,
     load_setting_entities,
+    load_source_revisions,
+    load_knowledge_storage_health,
     queue_pending_knowledge_items,
     retrieval_sources_path,
     save_extraction_plan_templates,
@@ -228,112 +231,25 @@ def find_matching_long_reference_batches(
     return sorted(matches, key=lambda item: item.get("match_score", 0), reverse=True)
 
 
-def split_long_reference_text(source_title: str, raw_text: str, max_chars: int = 6000) -> list[dict]:
-    text = raw_text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not text:
-        return []
+def split_long_reference_text(
+    source_title: str,
+    raw_text: str,
+    max_chars: int = 6000,
+    *,
+    source_type: str = "external_source",
+) -> list[dict]:
+    """兼容旧调用的结构感知切分入口。
 
-    lines = text.splitlines()
-    chapter_starts = [
-        index for index, line in enumerate(lines)
-        if CHAPTER_TITLE_PATTERN.match(line.strip())
-    ]
+    新实现会优先保留 Markdown 层级、章节标题和场景分隔，并为每个片段记录
+    原文字符锚点、内容哈希及前后片段关系，供证据定位和父子检索使用。
+    """
 
-    segments: list[dict] = []
-    if chapter_starts:
-        if chapter_starts[0] > 0:
-            preface = "\n".join(lines[:chapter_starts[0]]).strip()
-            if preface:
-                segments.append({
-                    "title": f"{source_title} 序言/简介",
-                    "content": preface,
-                    "split_method": "章节标题",
-                    "chapter_index": 0,
-                    "char_count": len(preface),
-                })
-        for item_index, start in enumerate(chapter_starts):
-            end = chapter_starts[item_index + 1] if item_index + 1 < len(chapter_starts) else len(lines)
-            title = lines[start].strip() or f"{source_title} 第 {item_index + 1} 段"
-            content = "\n".join(lines[start:end]).strip()
-            if content:
-                segments.append({
-                    "title": title,
-                    "content": content,
-                    "split_method": "章节标题",
-                    "chapter_index": item_index + 1,
-                    "char_count": len(content),
-                })
-
-    if not segments:
-        paragraphs = [item.strip() for item in re.split(r"\n\s*\n+", text) if item.strip()]
-        current: list[str] = []
-        current_length = 0
-        for paragraph in paragraphs or [text]:
-            paragraph_length = len(paragraph)
-            if current and current_length + paragraph_length + 2 > max_chars:
-                content = "\n\n".join(current).strip()
-                segments.append({
-                    "title": f"{source_title} 片段 {len(segments) + 1:03d}",
-                    "content": content,
-                    "split_method": "字数切分",
-                    "chapter_index": len(segments) + 1,
-                    "char_count": len(content),
-                })
-                current = []
-                current_length = 0
-            if paragraph_length > max_chars:
-                for start in range(0, paragraph_length, max_chars):
-                    piece = paragraph[start:start + max_chars].strip()
-                    if piece:
-                        segments.append({
-                            "title": f"{source_title} 片段 {len(segments) + 1:03d}",
-                            "content": piece,
-                            "split_method": "字数切分",
-                            "chapter_index": len(segments) + 1,
-                            "char_count": len(piece),
-                        })
-                continue
-            current.append(paragraph)
-            current_length += paragraph_length + 2
-        if current:
-            content = "\n\n".join(current).strip()
-            segments.append({
-                "title": f"{source_title} 片段 {len(segments) + 1:03d}",
-                "content": content,
-                "split_method": "字数切分",
-                "chapter_index": len(segments) + 1,
-                "char_count": len(content),
-            })
-
-    # Chapter headings are useful boundaries, but a single chapter can still
-    # be much larger than an LLM context. Apply the same hard size bound to
-    # every preliminary segment.
-    bounded_segments: list[dict] = []
-    for segment in segments:
-        content = str(segment.get("content") or "").strip()
-        if len(content) <= max_chars:
-            bounded_segments.append(segment)
-            continue
-        pieces = [content[start:start + max_chars].strip() for start in range(0, len(content), max_chars)]
-        pieces = [piece for piece in pieces if piece]
-        for part_index, piece in enumerate(pieces, start=1):
-            item = dict(segment)
-            item["title"] = f"{segment.get('title') or source_title}（{part_index}/{len(pieces)}）"
-            item["content"] = piece
-            item["split_method"] = f"{segment.get('split_method') or '字数切分'}+字数切分"
-            item["part_index"] = part_index
-            item["part_count"] = len(pieces)
-            item["char_count"] = len(piece)
-            bounded_segments.append(item)
-
-    normalized = []
-    for index, segment in enumerate(bounded_segments, start=1):
-        item = dict(segment)
-        item["index"] = index
-        item["title"] = item.get("title") or f"{source_title} 片段 {index:03d}"
-        item["char_count"] = len(item.get("content", ""))
-        normalized.append(item)
-    return normalized
+    return split_reference_text(
+        source_title,
+        raw_text,
+        max_chars=max_chars,
+        source_type=source_type,
+    )
 
 
 def build_long_reference_source_name(base_title: str, segment: dict, fallback_order: int, batch_id: str = "") -> str:
@@ -393,6 +309,14 @@ def import_long_reference_segments(
                 "source_origin": batch.get("source_origin", ""),
                 "long_reference": True,
                 "batch_id": batch.get("batch_id", ""),
+                "source_id": batch.get("source_id", f"long_batch_{batch.get('batch_id', '')}"),
+                "source_revision_id": batch.get("source_revision_id", ""),
+                "segment_id": segment.get("segment_id", ""),
+                "story_id": batch.get("story_id", "default"),
+                "heading_path": segment.get("heading_path", []),
+                "content_kind": segment.get("content_kind", "section"),
+                "start_offset": segment.get("start_offset"),
+                "end_offset": segment.get("end_offset"),
                 "part_index": segment.get("index"),
                 "part_count": len(segments),
                 "split_method": segment.get("split_method"),
@@ -532,6 +456,7 @@ def extract_pasted_reference_to_pending(
     origin: str = "",
     auto_confirm_safe_items: bool = False,
     stream_callback=None,
+    story_id: str = "default",
 ) -> dict:
     before_pending_ids = {str(item.get("pending_id") or "") for item in load_pending_knowledge_items(project_name)}
     result = extract_reference_knowledge(
@@ -540,11 +465,17 @@ def extract_pasted_reference_to_pending(
         text,
         enabled_categories,
         extraction_mode=extraction_mode,
+        story_id=story_id,
         custom_instructions=custom_instructions,
         stream_callback=stream_callback,
     )
     payload = result.get("data", {}).get("knowledge_extraction", {})
     items = payload.get("items", []) if isinstance(payload, dict) else []
+    items = [
+        {**item, "story_id": str(story_id or "default")}
+        for item in items
+        if isinstance(item, dict)
+    ]
     queued_count = queue_pending_knowledge_items(
         project_name,
         items,
@@ -588,6 +519,7 @@ def extract_long_reference_segments_to_queue(
     stream_callback=None,
     task_id: str = "",
     worker_id: str = "",
+    story_id: str = "default",
 ) -> tuple[dict, int, int, list[str]]:
     queued_total = 0
     processed = 0
@@ -630,6 +562,7 @@ def extract_long_reference_segments_to_queue(
                 segment.get("content", ""),
                 enabled_categories,
                 extraction_mode=extraction_mode,
+                story_id=story_id,
                 custom_instructions=custom_instructions,
                 stream_callback=stream_callback,
                 task_id=task_id,
@@ -653,10 +586,19 @@ def extract_long_reference_segments_to_queue(
                 enriched["source_segment_id"] = str(segment.get("segment_id") or "")
                 enriched["source_segment_index"] = segment.get("index")
                 enriched["source_segment_title"] = str(segment.get("title") or "")
+                enriched["source_id"] = str(batch.get("source_id") or f"long_batch_{batch.get('batch_id', '')}")
+                enriched["source_revision_id"] = str(batch.get("source_revision_id") or "")
+                enriched["story_id"] = str(story_id or "default")
+                enriched["source_start_offset"] = segment.get("start_offset")
+                enriched["source_end_offset"] = segment.get("end_offset")
                 enriched["version_scope"] = str(enriched.get("version_scope") or ("canon" if batch.get("scope") == "canon" else "project_main"))
                 enriched["worldline_id"] = str(enriched.get("worldline_id") or DEFAULT_WORLDLINE_ID)
                 enriched["worldline_label"] = str(enriched.get("worldline_label") or DEFAULT_WORLDLINE_LABEL)
-                evidence_contexts = locate_evidence_contexts(segment.get("content", ""), enriched.get("evidence", []))
+                evidence_contexts = locate_evidence_contexts(
+                    segment.get("content", ""),
+                    enriched.get("evidence", []),
+                    base_offset=int(segment.get("start_offset") or 0),
+                )
                 if evidence_contexts:
                     enriched["evidence_contexts"] = evidence_contexts
                 enriched_items.append(enriched)
@@ -730,7 +672,7 @@ def extract_long_reference_segments_to_queue(
     return batch, processed, queued_total, failed_titles
 
 
-def locate_evidence_contexts(raw_text: str, evidence: list) -> list[dict]:
+def locate_evidence_contexts(raw_text: str, evidence: list, *, base_offset: int = 0) -> list[dict]:
     if not raw_text or not isinstance(evidence, list):
         return []
     paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n+", raw_text) if paragraph.strip()]
@@ -757,6 +699,10 @@ def locate_evidence_contexts(raw_text: str, evidence: list) -> list[dict]:
             contexts.append({
                 "quote": quote[:180],
                 "char_index": char_index if char_index >= 0 else None,
+                "start_offset": base_offset + char_index if char_index >= 0 else None,
+                "end_offset": base_offset + char_index + len(quote_short) if char_index >= 0 else None,
+                "prefix": raw_text[max(0, char_index - 80):char_index] if char_index >= 0 else "",
+                "suffix": raw_text[char_index + len(quote_short):char_index + len(quote_short) + 80] if char_index >= 0 else "",
                 "paragraph_index": paragraph_index,
                 "context": (raw_text[start:end] if char_index >= 0 else paragraph_text[:260]).strip(),
             })
@@ -935,6 +881,7 @@ def run_long_reference_extraction_plan(
             extraction_mode=str(preset.get("mode") or "general"),
             progress_callback=step_progress,
             stream_callback=stream_callback,
+            story_id=str(current_batch.get("story_id") or "default"),
         )
         completed_work += len(target_indices)
         step_summary = {
@@ -1171,6 +1118,15 @@ def build_ingestion_health_report(project_name: str) -> dict:
     score -= min(20, imported_not_extracted)
     score -= min(20, len(high_risk_issues) * 2)
     score -= min(15, low_evidence + low_confidence + no_evidence)
+    storage_health = load_knowledge_storage_health(project_name)
+    confirmed_total = int(storage_health.get("confirmed_total") or 0)
+    evidence_total = int(storage_health.get("evidence_total") or 0)
+    storage_health["typed_coverage"] = (
+        int(storage_health.get("typed_total") or 0) / confirmed_total if confirmed_total else 0.0
+    )
+    storage_health["anchored_evidence_coverage"] = (
+        int(storage_health.get("anchored_evidence_total") or 0) / evidence_total if evidence_total else 0.0
+    )
     return {
         "score": max(0, score),
         "batch_count": len(batches),
@@ -1195,6 +1151,7 @@ def build_ingestion_health_report(project_name: str) -> dict:
         "setting_entity_count": len(load_setting_entities(project_name)),
         "alias_group_count": len(load_entity_aliases(project_name)),
         "extraction_plan_template_count": len(load_extraction_plan_templates(project_name)),
+        "storage_health": storage_health,
     }
 
 
@@ -1294,9 +1251,22 @@ def read_retrieval_source_payload(project_name: str, relative_path: str) -> dict
 
 def build_ingestion_source_ledger(project_name: str) -> list[dict]:
     knowledge_counts = summarize_source_knowledge_counts(project_name)
+    revisions = load_source_revisions(project_name)
+    revisions_by_source: dict[str, list[dict]] = {}
+    revisions_by_path: dict[str, list[dict]] = {}
+    for revision in revisions:
+        if not isinstance(revision, dict):
+            continue
+        revisions_by_source.setdefault(str(revision.get("source_id") or ""), []).append(revision)
+        metadata = revision.get("metadata") if isinstance(revision.get("metadata"), dict) else {}
+        relative_path = str(metadata.get("relative_path") or "").replace("\\", "/")
+        if relative_path:
+            revisions_by_path.setdefault(relative_path, []).append(revision)
     records: list[dict] = []
 
     for batch in list_long_reference_batches(project_name):
+        batch_source_id = str(batch.get("source_id") or f"long_batch_{batch.get('batch_id', '')}")
+        source_revisions = revisions_by_source.get(batch_source_id, [])
         summary = batch.get("summary", {})
         key = (str(batch.get("title") or ""), str(batch.get("source_origin") or ""))
         source_counts = knowledge_counts.get(key, {})
@@ -1318,6 +1288,10 @@ def build_ingestion_source_ledger(project_name: str) -> list[dict]:
             "confirmed_count": int(source_counts.get("confirmed") or 0),
             "batch_id": batch.get("batch_id", ""),
             "file_name": batch.get("file_name", ""),
+            "source_id": batch_source_id,
+            "source_revision_id": batch.get("source_revision_id", ""),
+            "revision_count": len(source_revisions),
+            "revisions": source_revisions,
         })
 
     for relative_path in list_retrieval_source_files(project_name):
@@ -1327,6 +1301,7 @@ def build_ingestion_source_ledger(project_name: str) -> list[dict]:
         origin = str(metadata.get("source_origin") or payload.get("source_origin") or "")
         key = (title, origin)
         source_counts = knowledge_counts.get(key, {})
+        source_revisions = revisions_by_path.get(relative_path, [])
         records.append({
             "id": f"source:{relative_path}",
             "kind": "retrieval_source",
@@ -1345,6 +1320,10 @@ def build_ingestion_source_ledger(project_name: str) -> list[dict]:
             "confirmed_count": int(source_counts.get("confirmed") or 0),
             "relative_path": relative_path,
             "char_count": int(payload.get("_raw_char_count") or len(str(payload.get("content") or ""))),
+            "source_id": source_revisions[0].get("source_id", "") if source_revisions else "",
+            "source_revision_id": source_revisions[0].get("revision_id", "") if source_revisions else "",
+            "revision_count": len(source_revisions),
+            "revisions": source_revisions,
         })
 
     existing_ids = {record["id"] for record in records}
@@ -1395,6 +1374,9 @@ def enrich_consolidated_knowledge_items(items: list[dict], source_items: list[di
             enriched["source_segment_ids"] = source_segment_ids
         if not enriched.get("source_segment_titles"):
             enriched["source_segment_titles"] = source_segment_titles
+        for field in ("story_id", "source_id", "source_revision_id"):
+            if not enriched.get(field):
+                enriched[field] = next((source.get(field) for source in source_items if source.get(field)), "")
         tags = merge_list_values([enriched.get("tags", []), [f"整理:{KNOWLEDGE_CONSOLIDATION_MODE_LABELS.get(consolidation_mode, consolidation_mode)}"]])
         enriched["tags"] = tags
         enriched_items.append(enriched)
@@ -1410,6 +1392,7 @@ def consolidate_batch_pending_items(
     limit: int,
     stream_callback=None,
     task_id: str = "",
+    story_id: str = "default",
 ) -> dict:
     batch_pending_items = get_batch_pending_knowledge_items(project_name, batch)
     target_items = [
@@ -1431,6 +1414,7 @@ def consolidate_batch_pending_items(
         target_items,
         enabled_categories=categories,
         consolidation_mode=consolidation_mode,
+        story_id=story_id,
         stream_callback=stream_callback,
         task_id=task_id,
     )
@@ -1579,6 +1563,7 @@ def run_long_reference_quick_process(
     run_key: str = "",
     task_id: str = "",
     worker_id: str = "",
+    story_id: str = "default",
 ) -> tuple[dict, dict]:
     from novelforge.workflows.long_reference_quick_process import (
         run_long_reference_quick_process as _run_long_reference_quick_process,
@@ -1601,4 +1586,5 @@ def run_long_reference_quick_process(
         run_key=run_key,
         task_id=task_id,
         worker_id=worker_id,
+        story_id=story_id,
     )

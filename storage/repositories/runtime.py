@@ -309,9 +309,9 @@ def append_retrieval_feedback_row(conn: sqlite3.Connection, feedback: dict) -> d
         """
         INSERT INTO retrieval_feedback (
             feedback_id, chunk_id, story_id, task_type, feedback_type, reason,
-            weight, created_at, payload_json
+            weight, created_at, payload_json, content_hash, source_revision_id
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(feedback_id) DO UPDATE SET
             chunk_id = excluded.chunk_id,
             story_id = excluded.story_id,
@@ -319,7 +319,9 @@ def append_retrieval_feedback_row(conn: sqlite3.Connection, feedback: dict) -> d
             feedback_type = excluded.feedback_type,
             reason = excluded.reason,
             weight = excluded.weight,
-            payload_json = excluded.payload_json
+            payload_json = excluded.payload_json,
+            content_hash = excluded.content_hash,
+            source_revision_id = excluded.source_revision_id
         """,
             (
             feedback_id,
@@ -331,6 +333,8 @@ def append_retrieval_feedback_row(conn: sqlite3.Connection, feedback: dict) -> d
             _float_or_default(payload.get("weight"), 0.0),
             str(payload.get("created_at") or ""),
             _json_dumps(payload),
+            str(payload.get("content_hash") or "").strip() or None,
+            str(payload.get("source_revision_id") or "").strip() or None,
         ),
     )
     return payload
@@ -340,7 +344,7 @@ def load_retrieval_feedback_rows(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
         SELECT feedback_id, chunk_id, story_id, task_type, feedback_type, reason, weight,
-               created_at, payload_json
+               created_at, payload_json, content_hash, source_revision_id
         FROM retrieval_feedback
         ORDER BY created_at, feedback_id
         """
@@ -360,6 +364,8 @@ def load_retrieval_feedback_rows(conn: sqlite3.Connection) -> list[dict]:
         payload.setdefault("note", row["reason"] if isinstance(row, sqlite3.Row) else row[5])
         payload.setdefault("weight", row["weight"] if isinstance(row, sqlite3.Row) else row[6])
         payload.setdefault("created_at", row["created_at"] if isinstance(row, sqlite3.Row) else row[7])
+        payload.setdefault("content_hash", row["content_hash"] if isinstance(row, sqlite3.Row) else row[9])
+        payload.setdefault("source_revision_id", row["source_revision_id"] if isinstance(row, sqlite3.Row) else row[10])
         items.append(payload)
     return items
 

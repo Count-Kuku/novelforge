@@ -38,7 +38,7 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 工作台。�
 - 后台资料任务是应用进程内 worker，不是独立系统服务。关闭浏览器页面不影响任务；停止 NovelForge 进程会中断执行，重新启动应用后由租约恢复机制继续。
 - 尚未实现跨机器分布式 worker，也不会强制终止正在进行的第三方模型 HTTP 请求。
 - GraphRAG 表结构已经预留，但图谱构建与图扩展检索尚未成为正式工作流。
-- EPUB、DOCX、PDF 和目录批量导入尚未作为稳定入口提供。
+- 扫描版 PDF 不执行自动 OCR；当前 PDF 入口只提取文件中已有的文本层，并对高空白页比例给出提示。
 - 网络研究只支持公开静态文本页面；不执行 JavaScript、不登录网站、不绕过付费墙。LangGraph 只负责单次搜索步骤内的并行分派，SQLite 始终负责持久恢复。
 
 ## 总体架构
@@ -178,6 +178,9 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 | 模块 | 职责 |
 |---|---|
 | `novelforge/domain/ingestion_workbench.py` | 汇总批次状态、风险和推荐下一步 |
+| `novelforge/domain/reference_chunking.py` | Markdown/章节/场景/句子边界切分、位置锚点和内容指纹 |
+| `novelforge/domain/knowledge_types.py` | 各知识分类的稳定字段定义、旧详情迁移和必填校验 |
+| `novelforge/services/document_parsing.py` | TXT/Markdown/DOCX/EPUB/PDF 安全解析和结构保留 |
 | `novelforge/domain/ingestion_tasks.py` | 任务/分段状态规范化、转换和检查点对账 |
 | `novelforge/domain/ingestion_task_estimates.py` | 调用数、Token 和费用的纯计算估算 |
 | `novelforge/domain/llm_preflight.py` | 通用阶段、区间、费用、置信度和预算纯计算模型 |
@@ -196,6 +199,11 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 | `ui/ingestion_tasks.py` | 任务筛选、进度、控制和历史管理 |
 | `ui/ingestion_task_estimate.py` | 导入入口共用的执行前估算展示 |
 | `ui/llm_preflight.py` | 写作、资料和研究入口共用的执行前区间展示与预算确认 |
+| `ui/knowledge_type_editor.py` | 按知识分类编辑角色、关系、时间线、规则、文风等专属字段 |
+
+资料导入的稳定入口支持一次选择多份 `txt/md/markdown/docx/epub/pdf`。压缩容器格式在解析前检查成员数量、单成员大小、解压总大小和路径穿越；DOCX 读取 OpenXML 标题样式与表格，EPUB 按 OPF spine 顺序解析 XHTML，PDF 按页提取文本。解析产物统一转换为带标题层级的文本，再按结构标题、中文/英文章节、场景分隔、段落和句子边界切分。每个片段保存 `heading_path/content_kind/start_offset/end_offset/content_hash/previous_index/next_index`，硬字符上限始终生效。
+
+来源和知识采用可追溯修订模型：用于重复批次提示的规范化 `content_fingerprint` 与用于证据定位的精确 `source_content_hash` 相互独立；`source_documents.active_revision_id` 指向以来源与精确内容 hash 唯一确定的不可变 `source_revisions`，任务状态变化不会覆盖修订快照。片段绑定来源修订。正式知识保存 `schema_version + structured_json`，并在内容变化时追加 `knowledge_revisions` 快照。证据保存真实 `source_id/segment_id/chunk_id/source_revision_id`，以及引文 hash、起止字符、前后文和验证状态。旧知识仍可读取，保存时由类型归一化器升级为 schema v2。
 
 ### 检索
 
@@ -204,7 +212,7 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 - `documents.py`：从项目、故事、知识、资料和创作产物收集检索文档。
 - `common.py`：公共模型、分词、通用切分和检索配置。
 - `index.py`：文档切分、manifest 构建、增量向量生成和健康检查。
-- `search.py`：查询扩展、作用域过滤、词法/语义评分、反馈、重排和多样化。
+- `search.py`：查询扩展、作用域过滤、FTS/应用层词法/语义多路排名、RRF、反馈、重排和多样化。
 - `sources.py`：外部资料保存与整理。
 
 当前检索流程：
@@ -212,16 +220,18 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 ```text
 项目与资料变更
   -> 收集 RetrievalDocument
-  -> 按内容类型切分 RetrievalChunk
+  -> 按内容类型生成可召回子片段，并保存父段落/相邻片段关系
   -> 写入 SQLite manifest/chunks
   -> 按内容哈希复用或生成 embedding
   -> 查询扩展与 story/worldline/source 过滤
-  -> 词法/语义候选评分
+  -> FTS5 BM25、应用层词法与语义候选分别排名
+  -> RRF 融合独立名次
+  -> 子片段命中后按预算补回父段落上下文
   -> 权威、反馈、冲突和多样化重排
   -> 预算裁剪与证据格式化
 ```
 
-`retrieval_chunks_fts` 已在 schema 中预留，但当前词法检索仍主要由应用层分词和评分完成，不能把 FTS 表的存在表述为已经完成的 FTS 查询后端。
+`retrieval_chunks_fts` 使用 FTS5 trigram 索引标题、正文、实体名和来源词，可处理中文子串；短于三个字符的查询使用受限 `LIKE` 回退。混合检索把 FTS/BM25、应用层词法与向量相似度视为独立排名，使用 RRF 融合，避免比较不同量纲的原始分数。反馈优先绑定片段内容 hash 和来源修订，内容已变化时不会把旧评价误套到新文本。
 
 ### 统一上下文装配
 
@@ -338,6 +348,7 @@ queued -> running -> completed
 .\.venv\Scripts\python.exe tools\verify_db_storage.py
 
 # 资料任务与工作台
+.\.venv\Scripts\python.exe tools\verify_ingestion_knowledge_upgrade.py
 .\.venv\Scripts\python.exe tools\verify_ingestion_tasks.py
 .\.venv\Scripts\python.exe tools\verify_ingestion_task_runtime.py
 .\.venv\Scripts\python.exe tools\verify_ingestion_task_hardening.py
@@ -364,19 +375,16 @@ queued -> running -> completed
 
 ### P0：RAG 与资料导入
 
-1. 父子级切分：子片段负责召回，按预算补充章节/场景/资料卡父上下文和相邻片段。
-2. 类型专用切分器：分别处理小说正文、角色卡、关系、时间线、世界规则和文风资料。
-3. 多路查询规划：把角色、关系、时间线、硬约束、章节进度和文风拆成受配额控制的子查询。
-4. 稳定排名融合：用 RRF 或等价方法融合词法/语义排名，避免直接叠加不同量纲的原始分数。
-5. 证据闭环：将反馈绑定到稳定内容指纹或来源级信号，并保存来源修订、片段范围和索引版本。
-6. 格式扩展：在可预览、可修正解析结果的前提下支持 EPUB、DOCX、可提取文本 PDF 和目录批量导入。
+1. 为扫描版 PDF 增加显式、可关闭的 OCR 作业；OCR 结果必须可预览并保存页级置信度，不能覆盖原始文件。
+2. 在现有确定性别名扩展上增加受配额控制的多查询路由，把角色、关系、时间线、硬约束、章节进度和文风分开召回并继续使用 RRF。
+3. 用真实长篇项目建立导入/检索基准集，持续评测章节边界准确率、证据锚点有效率、Recall@K、MRR 与上下文冗余率。
+4. 增加来源修订差异视图和知识修订恢复操作；恢复必须生成新修订，不改写历史快照。
 
 ### P1：可维护性与操作体验
 
 1. 拆分当前超过约 1000 行且职责混杂的 memory、UI、prompt 和 source workflow 模块。
 2. 抽取大纲/分卷/剧情段/章节讨论页的重复交互骨架。
-3. 为资料任务增加真实调用用量记录，与创建时估算并列展示。
-4. 给后台任务增加更明确的应用关闭提示、失败通知和运行日志入口。
+3. 给后台任务增加更明确的应用关闭提示、失败通知和运行日志入口。
 
 ### P2：规模化与编排
 
@@ -391,9 +399,9 @@ queued -> running -> completed
 |---|---|---|
 | 模块体量 | `memory/core.py`、部分 memory/UI/prompt/source 模块仍超过 1000 行 | 按资产、配置、故事、资料和展示职责继续拆分 |
 | UI 复用 | 多类讨论页仍有相似布局、表单解析和保存操作 | 抽取共享讨论 renderer 和动作 helper |
-| 检索融合 | hybrid 仍直接组合词法分数与缩放后的语义分数 | 引入排名级融合并用固定评测集验收 |
-| 切分 | 当前按 Markdown、段落或长度切分，缺少父子上下文 | 建立类型感知、可追溯的层级切分模型 |
-| FTS | FTS5 表已创建但未成为当前词法查询后端 | 在规模数据基准下决定接入或移除预留 |
+| 多查询路由 | 当前已融合 FTS、词法和语义排名，但只有单次语义查询 | 增加确定性任务路由与受配额子查询，避免无限增加 Embedding 调用 |
+| OCR | 扫描 PDF 没有文本层时只能提示 | 增加可选 OCR、页级质量和人工预览，不对数字 PDF 重复 OCR |
+| 修订操作 | 来源与知识修订可查看，但尚不能从界面恢复旧版 | 以“旧快照复制为新修订”实现可审计恢复 |
 | 兼容层 | DB-first 已完成，但仍保留旧 JSON 导入和可选镜像代码 | 等兼容窗口结束后分阶段收缩 |
 | 任务运行时 | worker 与应用进程同生命周期 | 只有明确需要常驻执行时再独立进程化 |
 | 网络研究 | 当前只抓取公开静态文本，搜索 Provider 为 Brave Search | 根据真实失败样本评估动态渲染抓取和更多 Provider；不以绕过登录或反爬为目标 |

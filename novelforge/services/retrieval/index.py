@@ -5,23 +5,61 @@ from __future__ import annotations
 from novelforge.services import retrieval as _retrieval_api
 
 def chunk_document(document: _retrieval_api.RetrievalDocument) -> list[_retrieval_api.RetrievalChunk]:
+    parts: list[tuple[str, str, str, int]]
     if document.source_type in _retrieval_api.STRUCTURED_SOURCE_TYPES or document.source_type.startswith("knowledge_") or document.source_type.startswith("entity_"):
-        parts = [(document.title, document.content.strip())] if document.content.strip() else []
+        parent = document.content.strip()
+        parts = [
+            (document.title, chunk, parent, 1)
+            for chunk in _retrieval_api._chunk_by_paragraphs(parent)
+        ] if parent else []
     elif document.source_type.startswith("analysis_"):
-        parts = _retrieval_api._chunk_markdown_sections(document.content)
+        parts = []
+        for section_index, (title, body) in enumerate(_retrieval_api._split_markdown_sections(document.content), start=1):
+            parts.extend(
+                (title, chunk, body.strip(), section_index)
+                for chunk in _retrieval_api._chunk_by_paragraphs(body)
+                if chunk.strip()
+            )
     elif document.source_type in {"outline", "chapter_outline", "arc_chapter_plan", "evaluation_chapter", "review_markdown", "external_source", "external_character_sheet", "external_location_sheet", "external_organization_sheet", "external_timeline_note", "external_canon_event", "external_world_rule", "external_artifact_note"}:
-        parts = _retrieval_api._chunk_markdown_sections(document.content)
+        parts = []
+        for section_index, (title, body) in enumerate(_retrieval_api._split_markdown_sections(document.content), start=1):
+            parts.extend(
+                (title, chunk, body.strip(), section_index)
+                for chunk in _retrieval_api._chunk_by_paragraphs(body)
+                if chunk.strip()
+            )
     elif document.source_type == "chapter_content":
-        parts = [(document.title, chunk) for chunk in _retrieval_api._chunk_by_paragraphs(document.content)]
+        parts = [(document.title, chunk, document.content.strip(), 1) for chunk in _retrieval_api._chunk_by_paragraphs(document.content)]
     else:
-        parts = [(document.title, chunk) for chunk in _retrieval_api._split_long_text(document.content)]
+        parts = [(document.title, chunk, document.content.strip(), 1) for chunk in _retrieval_api._split_long_text(document.content)]
 
     if not parts:
         return []
 
     result = []
-    for index, (section_title, chunk_text) in enumerate(parts, start=1):
+    parent_search_cursors: dict[tuple[int, str], int] = {}
+    for index, (section_title, chunk_text, full_parent_content, section_index) in enumerate(parts, start=1):
         chunk_title = section_title or document.title
+        parent_content = full_parent_content or document.content.strip()
+        parent_seed = f"{section_index}\n{chunk_title}\n{parent_content}".encode("utf-8")
+        parent_id = f"{document.doc_id}#parent-{_retrieval_api.sha256(parent_seed).hexdigest()[:12]}"
+        parent_key = (section_index, parent_id)
+        search_from = max(
+            parent_search_cursors.get(parent_key, 0) - _retrieval_api.DEFAULT_CHUNK_OVERLAP,
+            0,
+        )
+        content_start = parent_content.find(chunk_text, search_from) if parent_content else -1
+        if content_start < 0 and parent_content:
+            content_start = parent_content.find(chunk_text)
+        if content_start >= 0:
+            parent_search_cursors[parent_key] = content_start + len(chunk_text)
+        parent_window_start = 0
+        parent_window = parent_content
+        if len(parent_window) > 6000:
+            anchor = max(content_start, 0)
+            parent_window_start = min(max(anchor - 2000, 0), len(parent_content) - 6000)
+            parent_window = parent_content[parent_window_start:parent_window_start + 6000]
+        parent_anchor_offset = parent_window.find(chunk_text) if parent_window else -1
         result.append(_retrieval_api.RetrievalChunk(
             chunk_id=f"{document.doc_id}#chunk{index:03d}",
             document_id=document.doc_id,
@@ -38,8 +76,20 @@ def chunk_document(document: _retrieval_api.RetrievalDocument) -> list[_retrieva
                 "chunk_index": index,
                 "chunk_total": len(parts),
                 "section_title": section_title,
+                "chunk_level": "child",
+                "parent_chunk_id": parent_id,
+                "parent_title": chunk_title,
+                "parent_content": parent_window,
+                "parent_window_start": parent_window_start,
+                "parent_anchor_offset": parent_anchor_offset if parent_anchor_offset >= 0 else None,
+                "content_hash": _retrieval_api.sha256(f"{chunk_title}\n{chunk_text}".encode("utf-8")).hexdigest(),
+                "start_offset": content_start if content_start >= 0 else None,
+                "end_offset": content_start + len(chunk_text) if content_start >= 0 else None,
             },
         ))
+    for index, chunk in enumerate(result):
+        chunk.metadata["previous_chunk_id"] = result[index - 1].chunk_id if index > 0 else ""
+        chunk.metadata["next_chunk_id"] = result[index + 1].chunk_id if index + 1 < len(result) else ""
     return result
 
 

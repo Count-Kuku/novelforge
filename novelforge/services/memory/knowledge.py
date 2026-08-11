@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 from novelforge.services import memory as _memory_api
+from novelforge.domain.knowledge_types import normalize_typed_knowledge_item
+from storage.repositories.knowledge import (
+    load_knowledge_evidence_rows,
+    load_knowledge_revision_rows,
+    summarize_knowledge_storage_health,
+)
 
 def knowledge_dir_path(project_name: str) -> _memory_api.Path:
     path = _memory_api.project_path(project_name) / "knowledge"
@@ -84,7 +90,7 @@ def load_knowledge_category(project_name: str, category: str) -> list[dict]:
 
 def save_knowledge_category(project_name: str, category: str, items: list[dict]):
     path = knowledge_category_path(project_name, category)
-    normalized = [item for item in items if isinstance(item, dict)]
+    normalized = [normalize_typed_knowledge_item(item, category) for item in items if isinstance(item, dict)]
     _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_knowledge_category_to_db_best_effort(project_name, category, normalized)
     _memory_api.sync_project_retrieval_assets(project_name)
@@ -95,6 +101,33 @@ def load_knowledge_base(project_name: str) -> dict[str, list[dict]]:
         category: load_knowledge_category(project_name, category)
         for category in _memory_api.KNOWLEDGE_CATEGORIES
     }
+
+
+def load_knowledge_revisions(project_name: str, knowledge_id: str) -> list[dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: load_knowledge_revision_rows(conn, knowledge_id),
+        "knowledge revisions",
+    )
+    return result if isinstance(result, list) else []
+
+
+def load_knowledge_evidence(project_name: str, knowledge_id: str) -> list[dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: load_knowledge_evidence_rows(conn, knowledge_id),
+        "knowledge evidence",
+    )
+    return result if isinstance(result, list) else []
+
+
+def load_knowledge_storage_health(project_name: str) -> dict:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        summarize_knowledge_storage_health,
+        "knowledge storage health",
+    )
+    return result if isinstance(result, dict) else {}
 
 
 def load_character_entities(project_name: str) -> list[dict]:
@@ -205,7 +238,11 @@ def load_pending_knowledge_items(project_name: str) -> list[dict]:
 
 def save_pending_knowledge_items(project_name: str, items: list[dict]):
     path = pending_knowledge_path(project_name)
-    normalized = [item for item in items if isinstance(item, dict)]
+    normalized = [
+        normalize_typed_knowledge_item(item, str(item.get("category") or ""))
+        for item in items
+        if isinstance(item, dict)
+    ]
     _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_pending_knowledge_to_db_best_effort(project_name, normalized)
 
@@ -316,7 +353,7 @@ def queue_pending_knowledge_items(
         name = str(item.get("name") or "").strip()
         if category not in _memory_api.KNOWLEDGE_CATEGORIES or not name:
             continue
-        normalized = dict(item)
+        normalized = normalize_typed_knowledge_item(item, category)
         pending_id = str(normalized.get("pending_id") or f"pending_{_memory_api.uuid4().hex}")
         normalized["pending_id"] = pending_id
         normalized["category"] = category
@@ -433,6 +470,7 @@ def _append_knowledge_items_in_transaction(
             normalized.pop("knowledge_id", None)
             used_ids.add(requested_id)
             normalized["category"] = category
+            normalized = normalize_typed_knowledge_item(normalized, category)
             normalized["scope"] = scope
             normalized["authority"] = authority
             normalized["source_title"] = source_title or normalized.get("source_title", "")

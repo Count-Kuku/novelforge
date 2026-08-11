@@ -55,6 +55,58 @@ def _item_summary(item: dict) -> str:
     return ""
 
 
+def _existing_id(conn: sqlite3.Connection, table: str, column: str, value: Any) -> str | None:
+    clean_value = str(value or "").strip()
+    if not clean_value:
+        return None
+    if table not in {"source_documents", "source_segments", "retrieval_chunks", "source_revisions"}:
+        raise ValueError("Unsupported reference table.")
+    row = conn.execute(
+        f"SELECT {column} FROM {table} WHERE {column} = ?",
+        (clean_value,),
+    ).fetchone()
+    return clean_value if row else None
+
+
+def _sync_knowledge_revision(
+    conn: sqlite3.Connection,
+    *,
+    knowledge_id: str,
+    item: dict,
+    previous_snapshot: str | None,
+) -> None:
+    snapshot = _json_dumps(item)
+    if previous_snapshot == snapshot:
+        return
+    row = conn.execute(
+        "SELECT COALESCE(MAX(revision_no), 0) FROM knowledge_revisions WHERE knowledge_id = ?",
+        (knowledge_id,),
+    ).fetchone()
+    revision_no = int(row[0] or 0) + 1
+    revision_id = f"knowledge_revision_{sha256(f'{knowledge_id}|{revision_no}|{snapshot}'.encode('utf-8')).hexdigest()[:24]}"
+    source_revision_id = _existing_id(
+        conn, "source_revisions", "revision_id", item.get("source_revision_id")
+    )
+    conn.execute(
+        """
+        INSERT INTO knowledge_revisions (
+            revision_id, knowledge_id, revision_no, change_type, snapshot_json,
+            source_revision_id, reason, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        """,
+        (
+            revision_id,
+            knowledge_id,
+            revision_no,
+            "create" if previous_snapshot is None else "update",
+            snapshot,
+            source_revision_id,
+            str(item.get("revision_reason") or item.get("confirmation_note") or ""),
+        ),
+    )
+
+
 def _sync_item_evidence(
     conn: sqlite3.Connection,
     *,
@@ -73,6 +125,7 @@ def _sync_item_evidence(
         conn.execute("DELETE FROM knowledge_evidence WHERE knowledge_id = ?", (knowledge_id,))
     if pending_id:
         conn.execute("DELETE FROM knowledge_evidence WHERE pending_id = ?", (pending_id,))
+    contexts = item.get("evidence_contexts") if isinstance(item.get("evidence_contexts"), list) else []
     for index, raw_item in enumerate(raw_evidence, start=1):
         if isinstance(raw_item, str):
             raw_item = {"quote": raw_item}
@@ -81,22 +134,101 @@ def _sync_item_evidence(
         quote = str(raw_item.get("quote") or "").strip()
         if not quote:
             continue
+        positional_context = contexts[index - 1] if index <= len(contexts) and isinstance(contexts[index - 1], dict) else {}
+        positional_quote = str(positional_context.get("quote") or "").strip()
+        context = positional_context if positional_quote and (positional_quote in quote or quote in positional_quote) else next(
+            (
+                value for value in contexts
+                if isinstance(value, dict)
+                and str(value.get("quote") or "").strip()
+                and (
+                    str(value.get("quote") or "").strip() in quote
+                    or quote in str(value.get("quote") or "").strip()
+                )
+            ),
+            {},
+        )
         location = {
             key: raw_item.get(key)
             for key in (
-                "source_title",
-                "note",
-                "source_url",
-                "source_kind",
-                "authority",
-                "content_hash",
-                "location",
-                "source_relative_path",
-                "claim_id",
-                "stance",
+                "source_title", "note", "source_url", "source_kind", "authority",
+                "content_hash", "location", "source_relative_path", "claim_id", "stance",
             )
             if raw_item.get(key) is not None and raw_item.get(key) != ""
         }
+        source_id = _existing_id(
+            conn, "source_documents", "source_id", raw_item.get("source_id") or item.get("source_id")
+        )
+        segment_id = _existing_id(
+            conn, "source_segments", "segment_id", raw_item.get("segment_id") or item.get("source_segment_id")
+        )
+        chunk_id = _existing_id(
+            conn, "retrieval_chunks", "chunk_id", raw_item.get("chunk_id") or item.get("source_chunk_id")
+        )
+        source_revision_id = _existing_id(
+            conn, "source_revisions", "revision_id", raw_item.get("source_revision_id") or item.get("source_revision_id")
+        )
+        if segment_id:
+            segment_row = conn.execute(
+                "SELECT source_id, source_revision_id FROM source_segments WHERE segment_id = ? AND deleted_at IS NULL",
+                (segment_id,),
+            ).fetchone()
+            if segment_row:
+                source_id = str(segment_row[0] or "") or source_id
+                source_revision_id = source_revision_id or str(segment_row[1] or "") or None
+        if chunk_id:
+            chunk_row = conn.execute(
+                """
+                SELECT doc.source_id, COALESCE(chunk.source_revision_id, doc.source_revision_id)
+                FROM retrieval_chunks AS chunk
+                JOIN retrieval_documents AS doc ON doc.document_id = chunk.document_id
+                WHERE chunk.chunk_id = ? AND chunk.deleted_at IS NULL AND doc.deleted_at IS NULL
+                """,
+                (chunk_id,),
+            ).fetchone()
+            if chunk_row:
+                chunk_source_id = str(chunk_row[0] or "")
+                chunk_revision_id = str(chunk_row[1] or "")
+                if source_id and chunk_source_id and source_id != chunk_source_id:
+                    chunk_id = None
+                else:
+                    source_id = source_id or chunk_source_id or None
+                    source_revision_id = source_revision_id or chunk_revision_id or None
+        if source_revision_id:
+            revision_row = conn.execute(
+                "SELECT source_id FROM source_revisions WHERE revision_id = ?",
+                (source_revision_id,),
+            ).fetchone()
+            revision_source_id = str(revision_row[0] or "") if revision_row else ""
+            if source_id and revision_source_id and source_id != revision_source_id:
+                source_revision_id = None
+            elif revision_source_id:
+                source_id = source_id or revision_source_id
+
+        context_start = context.get("start_offset", context.get("char_index"))
+        context_end = context.get("end_offset")
+        start_offset = context_start if context_start is not None else raw_item.get("start_offset")
+        end_offset = context_end if context_end is not None else raw_item.get("end_offset")
+        try:
+            start_offset = int(start_offset) if start_offset is not None else None
+        except (TypeError, ValueError):
+            start_offset = None
+        try:
+            end_offset = int(end_offset) if end_offset is not None else (start_offset + len(quote) if start_offset is not None else None)
+        except (TypeError, ValueError):
+            end_offset = start_offset + len(quote) if start_offset is not None else None
+        if start_offset is not None and (start_offset < 0 or end_offset is None or end_offset < start_offset):
+            start_offset = None
+            end_offset = None
+        prefix = str(raw_item.get("prefix") or context.get("prefix") or "")[-160:]
+        suffix = str(raw_item.get("suffix") or context.get("suffix") or "")[:160]
+        quote_hash = sha256(quote.encode("utf-8")).hexdigest()
+        requested_validation = str(raw_item.get("validation_status") or "").strip().lower()
+        has_stable_provenance = bool(source_revision_id and source_id)
+        if start_offset is not None and has_stable_provenance:
+            validation_status = requested_validation or "anchored"
+        else:
+            validation_status = "quote_only"
         owner = knowledge_id or pending_id or "unknown"
         digest = sha256(
             f"{owner}|{index}|{quote}|{_json_dumps(location)}".encode("utf-8")
@@ -105,33 +237,36 @@ def _sync_item_evidence(
             """
             INSERT INTO knowledge_evidence (
                 evidence_id, knowledge_id, pending_id, source_id, segment_id,
-                chunk_id, quote, location_json, confidence, evidence_strength
+                chunk_id, quote, location_json, confidence, evidence_strength,
+                source_revision_id, quote_hash, start_offset, end_offset, prefix,
+                suffix, validation_status
             )
-            VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(evidence_id) DO UPDATE SET
                 knowledge_id = excluded.knowledge_id,
                 pending_id = excluded.pending_id,
+                source_id = excluded.source_id,
+                segment_id = excluded.segment_id,
+                chunk_id = excluded.chunk_id,
                 quote = excluded.quote,
                 location_json = excluded.location_json,
                 confidence = excluded.confidence,
-                evidence_strength = excluded.evidence_strength
+                evidence_strength = excluded.evidence_strength,
+                source_revision_id = excluded.source_revision_id,
+                quote_hash = excluded.quote_hash,
+                start_offset = excluded.start_offset,
+                end_offset = excluded.end_offset,
+                prefix = excluded.prefix,
+                suffix = excluded.suffix,
+                validation_status = excluded.validation_status
             """,
             (
-                f"evidence_{digest}",
-                knowledge_id,
-                pending_id,
-                quote,
-                _json_dumps(location),
-                _float_or_none(
-                    raw_item.get("confidence")
-                    if raw_item.get("confidence") is not None
-                    else item.get("confidence")
-                ),
-                _float_or_none(
-                    raw_item.get("evidence_strength")
-                    if raw_item.get("evidence_strength") is not None
-                    else item.get("evidence_strength")
-                ),
+                f"evidence_{digest}", knowledge_id, pending_id, source_id, segment_id,
+                chunk_id, quote, _json_dumps(location),
+                _float_or_none(raw_item.get("confidence") if raw_item.get("confidence") is not None else item.get("confidence")),
+                _float_or_none(raw_item.get("evidence_strength") if raw_item.get("evidence_strength") is not None else item.get("evidence_strength")),
+                source_revision_id, quote_hash, start_offset, end_offset, prefix, suffix,
+                validation_status,
             ),
         )
 
@@ -146,16 +281,27 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             knowledge_id = _stable_id(f"knowledge_{clean_category}", item, index)
         active_ids.append(knowledge_id)
         story_id = _story_id_or_none(conn, item.get("story_id"))
+        previous = conn.execute(
+            "SELECT content_json FROM knowledge_items WHERE knowledge_id = ?",
+            (knowledge_id,),
+        ).fetchone()
+        previous_snapshot = str(previous[0]) if previous else None
+        source_id = _existing_id(conn, "source_documents", "source_id", item.get("source_id"))
+        segment_id = _existing_id(
+            conn, "source_segments", "segment_id", item.get("source_segment_id") or item.get("segment_id")
+        )
+        typed_data = item.get("typed_data") if isinstance(item.get("typed_data"), dict) else {}
         conn.execute(
             """
             INSERT INTO knowledge_items (
                 knowledge_id, story_id, category, name, title, summary, content_json,
                 canon_status, worldline_id, worldline_name, confidence, importance,
                 evidence_strength, source_id, segment_id, extraction_mode, setting_scope,
-                setting_role, injection_policy, created_at, updated_at, deleted_at
+                setting_role, injection_policy, status, schema_version, structured_json,
+                created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
@@ -173,10 +319,15 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 confidence = excluded.confidence,
                 importance = excluded.importance,
                 evidence_strength = excluded.evidence_strength,
+                source_id = excluded.source_id,
+                segment_id = excluded.segment_id,
                 extraction_mode = excluded.extraction_mode,
                 setting_scope = excluded.setting_scope,
                 setting_role = excluded.setting_role,
                 injection_policy = excluded.injection_policy,
+                status = excluded.status,
+                schema_version = excluded.schema_version,
+                structured_json = excluded.structured_json,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 deleted_at = NULL
             """,
@@ -194,11 +345,22 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 _float_or_none(item.get("confidence")),
                 _float_or_none(item.get("importance")),
                 _float_or_none(item.get("evidence_strength")),
+                source_id,
+                segment_id,
                 str(item.get("extraction_mode") or "").strip() or None,
                 str(item.get("setting_scope") or "").strip() or None,
                 str(item.get("setting_role") or "").strip() or None,
                 str(item.get("injection_policy") or "").strip() or None,
+                str(item.get("status") or "confirmed"),
+                int(item.get("schema_version") or 1),
+                _json_dumps(typed_data),
             ),
+        )
+        _sync_knowledge_revision(
+            conn,
+            knowledge_id=knowledge_id,
+            item=item,
+            previous_snapshot=previous_snapshot,
         )
         _upsert_graph_node_for_knowledge(
             conn,
@@ -345,6 +507,66 @@ def load_knowledge_category_rows(conn: sqlite3.Connection, category: str) -> lis
             payload["knowledge_id"] = knowledge_id
         items.append(payload)
     return items
+
+
+def load_knowledge_revision_rows(conn: sqlite3.Connection, knowledge_id: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT revision_id, knowledge_id, revision_no, change_type, snapshot_json,
+               source_revision_id, reason, created_at
+        FROM knowledge_revisions
+        WHERE knowledge_id = ?
+        ORDER BY revision_no DESC
+        """,
+        (str(knowledge_id or "").strip(),),
+    ).fetchall()
+    result: list[dict] = []
+    for row in rows:
+        values = dict(row) if isinstance(row, sqlite3.Row) else {
+            "revision_id": row[0], "knowledge_id": row[1], "revision_no": row[2],
+            "change_type": row[3], "snapshot_json": row[4], "source_revision_id": row[5],
+            "reason": row[6], "created_at": row[7],
+        }
+        values["snapshot"] = _json_loads_dict(values.pop("snapshot_json", "{}"))
+        result.append(values)
+    return result
+
+
+def load_knowledge_evidence_rows(conn: sqlite3.Connection, knowledge_id: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT evidence_id, source_id, segment_id, chunk_id, source_revision_id,
+               quote, quote_hash, start_offset, end_offset, prefix, suffix,
+               validation_status, location_json, confidence, evidence_strength, created_at
+        FROM knowledge_evidence
+        WHERE knowledge_id = ?
+        ORDER BY created_at, evidence_id
+        """,
+        (str(knowledge_id or "").strip(),),
+    ).fetchall()
+    result: list[dict] = []
+    for row in rows:
+        values = dict(row) if isinstance(row, sqlite3.Row) else {}
+        values["location"] = _json_loads_dict(values.pop("location_json", "{}"))
+        result.append(values)
+    return result
+
+
+def summarize_knowledge_storage_health(conn: sqlite3.Connection) -> dict:
+    def scalar(sql: str) -> int:
+        row = conn.execute(sql).fetchone()
+        return int(row[0] or 0) if row else 0
+
+    return {
+        "confirmed_total": scalar("SELECT COUNT(*) FROM knowledge_items WHERE deleted_at IS NULL"),
+        "typed_total": scalar("SELECT COUNT(*) FROM knowledge_items WHERE deleted_at IS NULL AND schema_version >= 2 AND structured_json <> '{}'"),
+        "evidence_total": scalar("SELECT COUNT(*) FROM knowledge_evidence WHERE knowledge_id IS NOT NULL"),
+        "anchored_evidence_total": scalar("SELECT COUNT(*) FROM knowledge_evidence WHERE knowledge_id IS NOT NULL AND validation_status = 'anchored' AND start_offset IS NOT NULL"),
+        "source_revision_total": scalar("SELECT COUNT(*) FROM source_revisions"),
+        "knowledge_revision_total": scalar("SELECT COUNT(*) FROM knowledge_revisions"),
+        "retrieval_chunk_total": scalar("SELECT COUNT(*) FROM retrieval_chunks WHERE deleted_at IS NULL"),
+        "fts_chunk_total": scalar("SELECT COUNT(*) FROM retrieval_chunks_fts"),
+    }
 
 
 def upsert_knowledge_category_item(
@@ -659,6 +881,14 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
         active_ids.append(pending_id)
         category = str(item.get("category") or "").strip()
         story_id = _story_id_or_none(conn, item.get("story_id"))
+        source_id = _existing_id(conn, "source_documents", "source_id", item.get("source_id"))
+        segment_id = _existing_id(
+            conn, "source_segments", "segment_id", item.get("source_segment_id") or item.get("segment_id")
+        )
+        source_revision_id = _existing_id(
+            conn, "source_revisions", "revision_id", item.get("source_revision_id")
+        )
+        typed_data = item.get("typed_data") if isinstance(item.get("typed_data"), dict) else {}
         quality_payload = {
             key: item.get(key)
             for key in ("quality", "quality_issues", "risk_label", "risk_reasons")
@@ -670,10 +900,11 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
                 pending_id, story_id, category, name, title, summary, content_json,
                 canon_status, worldline_id, confidence, importance, evidence_strength,
                 source_id, segment_id, extraction_mode, quality_json, status,
+                schema_version, structured_json, source_revision_id,
                 created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
@@ -690,9 +921,14 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
                 confidence = excluded.confidence,
                 importance = excluded.importance,
                 evidence_strength = excluded.evidence_strength,
+                source_id = excluded.source_id,
+                segment_id = excluded.segment_id,
                 extraction_mode = excluded.extraction_mode,
                 quality_json = excluded.quality_json,
                 status = excluded.status,
+                schema_version = excluded.schema_version,
+                structured_json = excluded.structured_json,
+                source_revision_id = excluded.source_revision_id,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 deleted_at = NULL
             """,
@@ -709,9 +945,14 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
                 _float_or_none(item.get("confidence")),
                 _float_or_none(item.get("importance")),
                 _float_or_none(item.get("evidence_strength")),
+                source_id,
+                segment_id,
                 str(item.get("extraction_mode") or "").strip() or None,
                 _json_dumps(quality_payload),
                 str(item.get("status") or "pending"),
+                int(item.get("schema_version") or 1),
+                _json_dumps(typed_data),
+                source_revision_id,
             ),
         )
         _sync_item_evidence(conn, item=item, pending_id=pending_id)
