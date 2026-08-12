@@ -8,6 +8,7 @@ import streamlit as st
 
 from novelforge.domain.setting_knowledge import list_setting_items
 from novelforge.services.memory import update_creative_session
+from novelforge.services.model_readiness import require_chat_ready
 from novelforge.workflows.interactive_writing import (
     create_writing_session,
     generate_writing_fragment,
@@ -365,6 +366,7 @@ def _run_generation(
     session_options: dict,
 ) -> None:
     try:
+        require_chat_ready(action="自由创作")
         effective_session_id = session_id
         if not bundle:
             created = create_writing_session(

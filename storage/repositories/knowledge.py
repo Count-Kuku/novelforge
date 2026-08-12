@@ -275,6 +275,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
     clean_category = str(category or "").strip()
     normalized_items = [dict(item) for item in items if isinstance(item, dict)]
     active_ids: list[str] = []
+    graph_edges_by_owner = _active_graph_edges_by_owner(conn)
     for index, item in enumerate(normalized_items, start=1):
         knowledge_id = str(item.get("id") or item.get("knowledge_id") or "").strip()
         if not knowledge_id:
@@ -369,6 +370,10 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             item=item,
             story_id=story_id,
         )
+        # A knowledge item owns at most one active projected relationship edge.
+        # Clear the previous projection first so edits, category moves and
+        # incomplete relationship data cannot leave stale edges behind.
+        _soft_delete_graph_edge_ids(conn, graph_edges_by_owner.pop(knowledge_id, []))
         if clean_category == "relationships":
             _upsert_graph_relationship_edges(
                 conn,
@@ -423,6 +428,8 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             """,
             (clean_category,),
         )
+    if clean_category == "relationships":
+        _soft_delete_inactive_graph_edges(conn)
     return normalized_items
 
 
@@ -739,12 +746,15 @@ def _upsert_named_entity_node(
 
 def _relationship_fields(item: dict) -> tuple[str, str, str]:
     details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+    typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
     source = (
         item.get("source")
         or item.get("from")
         or item.get("subject")
         or item.get("character_a")
         or item.get("person_a")
+        or typed_data.get("subject")
+        or typed_data.get("source")
         or details.get("source")
         or details.get("from")
         or details.get("subject")
@@ -758,6 +768,8 @@ def _relationship_fields(item: dict) -> tuple[str, str, str]:
         or item.get("object")
         or item.get("character_b")
         or item.get("person_b")
+        or typed_data.get("object")
+        or typed_data.get("target")
         or details.get("target")
         or details.get("to")
         or details.get("object")
@@ -768,7 +780,10 @@ def _relationship_fields(item: dict) -> tuple[str, str, str]:
     relation = (
         item.get("relation")
         or item.get("relationship")
+        or item.get("relation_type")
         or item.get("type")
+        or typed_data.get("relation_type")
+        or typed_data.get("relation")
         or details.get("relation")
         or details.get("relationship")
         or details.get("关系")
@@ -804,6 +819,63 @@ def _infer_relationship_from_text(item: dict) -> tuple[str, str, str]:
             right = match.group(1).strip() or right
         return left[:80], right[:80], relation or "related_to"
     return "", "", ""
+
+
+def _soft_delete_graph_edge_ids(conn: sqlite3.Connection, edge_ids: list[str]) -> None:
+    clean_ids = [str(edge_id).strip() for edge_id in edge_ids if str(edge_id).strip()]
+    if not clean_ids:
+        return
+    placeholders = ",".join("?" for _ in clean_ids)
+    conn.execute(
+        f"""
+        UPDATE graph_edges
+        SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE edge_id IN ({placeholders}) AND deleted_at IS NULL
+        """,
+        tuple(clean_ids),
+    )
+
+
+def _active_graph_edge_owners(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    owners: list[tuple[str, str]] = []
+    rows = conn.execute(
+        "SELECT edge_id, metadata_json FROM graph_edges WHERE deleted_at IS NULL"
+    ).fetchall()
+    for row in rows:
+        metadata = _json_loads_dict(row[1])
+        knowledge_id = str(metadata.get("knowledge_id") or "").strip()
+        if knowledge_id:
+            owners.append((str(row[0]), knowledge_id))
+    return owners
+
+
+def _active_graph_edges_by_owner(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    by_owner: dict[str, list[str]] = {}
+    for edge_id, owner_id in _active_graph_edge_owners(conn):
+        by_owner.setdefault(owner_id, []).append(edge_id)
+    return by_owner
+
+
+def _soft_delete_inactive_graph_edges(conn: sqlite3.Connection) -> None:
+    active_relationship_ids = {
+        str(row[0])
+        for row in conn.execute(
+            """
+            SELECT knowledge_id
+            FROM knowledge_items
+            WHERE category = 'relationships' AND deleted_at IS NULL
+            """
+        ).fetchall()
+    }
+    _soft_delete_graph_edge_ids(
+        conn,
+        [
+            edge_id
+            for edge_id, owner_id in _active_graph_edge_owners(conn)
+            if owner_id not in active_relationship_ids
+        ],
+    )
 
 
 def _upsert_graph_relationship_edges(

@@ -31,6 +31,7 @@ from novelforge.services.memory import (
     set_source_ingestion_task_archived,
 )
 from novelforge.services.llm_estimation import load_stage_calibration
+from novelforge.services.model_readiness import require_chat_ready
 from novelforge.workflows.long_reference_quick_process import run_long_reference_quick_process
 from novelforge.workflows.ingestion_task_results import build_ingestion_task_result
 
@@ -111,6 +112,8 @@ def create_long_reference_ingestion_task(
     priority: int = 0,
 ) -> dict:
     planned_indices = list(segment_indices)[: max(0, int(extract_limit))]
+    if planned_indices and enabled_categories:
+        require_chat_ready(action="资料提取任务")
     configuration = {
         "enabled_categories": list(enabled_categories),
         "extraction_mode": str(extraction_mode),

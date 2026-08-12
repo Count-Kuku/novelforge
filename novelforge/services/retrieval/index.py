@@ -292,6 +292,7 @@ def inspect_retrieval_health(project_name: str) -> dict:
 
     store = load_vector_store(project_name)
     active_embedding_model = _retrieval_api._active_embedding_model_name()
+    active_embedding_mode = _retrieval_api._active_embedding_mode()
     vector_health = _vector_health_summary(manifest, store)
     vector_ids = vector_health["vector_ids"]
     missing_vector_count = vector_health["missing_vector_count"]
@@ -300,8 +301,12 @@ def inspect_retrieval_health(project_name: str) -> dict:
 
     if manifest.chunk_count and not manifest.embedding_enabled:
         issues.append({
-            "severity": "medium",
-            "message": f"当前索引没有启用语义向量，混合检索会退回关键词检索。当前配置的向量模型：{active_embedding_model or '-'}。",
+            "severity": "low" if active_embedding_mode == "disabled" else "medium",
+            "message": (
+                "语义向量已由用户关闭，当前明确使用关键词检索。"
+                if active_embedding_mode == "disabled"
+                else f"当前索引没有启用语义向量，混合检索会退回关键词检索。当前配置的向量模型：{active_embedding_model or '-'}。"
+            ),
         })
     elif manifest.embedding_enabled and missing_vector_count:
         issues.append({
@@ -369,6 +374,7 @@ def inspect_retrieval_health(project_name: str) -> dict:
         "current_document_count": len(current_documents),
         "current_chunk_count": len(current_chunks),
         "embedding_enabled": manifest.embedding_enabled,
+        "embedding_mode": active_embedding_mode,
         "embedding_model": manifest.embedding_model,
         "active_embedding_model": active_embedding_model,
         "vector_store_present": bool(store),
@@ -419,7 +425,7 @@ def build_retrieval_index(project_name: str) -> _retrieval_api.RetrievalIndexMan
 
 def rebuild_retrieval_assets(project_name: str, *, build_vectors: bool = True) -> _retrieval_api.RetrievalIndexManifest:
     manifest = build_retrieval_index(project_name)
-    if not build_vectors:
+    if not build_vectors or not _retrieval_api._active_embedding_model_name():
         return manifest
     try:
         build_vector_store(project_name, manifest)

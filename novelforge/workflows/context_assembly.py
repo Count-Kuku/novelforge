@@ -515,6 +515,8 @@ def assemble_generation_context(
         story_id=story_id,
         source_type_strategy=source_type_strategy,
         explicit_knowledge_ids=manual_knowledge_ids,
+        reference_focus=list(profile.get("reference_focus") or []),
+        reference_strength=str(profile.get("reference_strength") or "").strip() or None,
     )
     deduped_hits: list[RetrievalHit] = []
     for hit in hits:

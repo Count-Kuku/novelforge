@@ -135,7 +135,7 @@ def verify_injection_policy(project_name: str, story_id: str) -> None:
     empty_intersection = debug_retrieve_context(
         project_name,
         "天空城",
-        allowed_source_types=["knowledge_world_rules"],
+        allowed_source_types=["review_issue"],
         retrieval_profile="drafting",
         source_type_strategy="intersect",
         retrieval_mode="lexical",
@@ -153,6 +153,20 @@ def verify_source_type_strategy(project_name: str, story_id: str) -> None:
     )
     check("entity_character_card" in union_params["allowed_source_types"], "union 保留 Profile 人物实体卡")
     check("chapter_summary" in union_params["allowed_source_types"], "union 保留显式来源")
+    check("knowledge_world_rules" in union_params["allowed_source_types"], "drafting Profile 包含普通世界规则")
+    check("knowledge_timeline_events" in union_params["allowed_source_types"], "drafting Profile 包含时间线事件")
+
+    strict_timeline_params = resolve_retrieval_params(
+        reference_focus=["时间线"],
+        reference_strength="严格原作",
+        retrieval_profile="drafting",
+    )
+    check(strict_timeline_params["top_k"] == 15, "严格原作会提高实际检索数量")
+    check(strict_timeline_params["allowed_scopes"] == ["canon", "reference"], "严格原作会限制权威资料范围")
+    check(
+        "knowledge_timeline_events" in strict_timeline_params["allowed_source_types"],
+        "时间线重点会限制实际检索来源",
+    )
 
     intersect_params = resolve_retrieval_params(
         allowed_source_types=["chapter_summary", "entity_character_card"],
