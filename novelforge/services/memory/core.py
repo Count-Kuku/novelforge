@@ -393,11 +393,19 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
         "name": name,
         "base_url": str(raw.get("base_url") or DEFAULT_LLM_BASE_URL),
         "api_key": str(raw.get("api_key") or ""),
+        "api_key_ref": str(raw.get("api_key_ref") or "").strip(),
+        "api_key_fingerprint": str(raw.get("api_key_fingerprint") or "").strip(),
+        "api_key_last_four": str(raw.get("api_key_last_four") or "").strip(),
+        "api_key_backend": str(raw.get("api_key_backend") or "").strip(),
         "model_name": str(raw.get("model_name") or DEFAULT_LLM_MODEL),
         "embedding_mode": embedding_mode,
         "embedding_model_name": embedding_model_name,
         "embedding_base_url": str(raw.get("embedding_base_url") or "").strip(),
         "embedding_api_key": str(raw.get("embedding_api_key") or ""),
+        "embedding_api_key_ref": str(raw.get("embedding_api_key_ref") or "").strip(),
+        "embedding_api_key_fingerprint": str(raw.get("embedding_api_key_fingerprint") or "").strip(),
+        "embedding_api_key_last_four": str(raw.get("embedding_api_key_last_four") or "").strip(),
+        "embedding_api_key_backend": str(raw.get("embedding_api_key_backend") or "").strip(),
         "provider_type": provider_type,
         "cost_tracking_mode": cost_tracking_mode,
         **currency_preferences,
@@ -451,6 +459,39 @@ def _normalize_llm_profiles_payload(payload: dict | None) -> dict:
         "active_profile_id": active_profile_id,
         "profiles": normalized_profiles,
     }
+
+
+def _hydrate_llm_profiles_payload(payload: dict) -> dict:
+    from novelforge.services.credentials import hydrate_llm_profiles_payload
+
+    try:
+        return hydrate_llm_profiles_payload(payload, _normalize_llm_profiles_payload)
+    except Exception as exc:
+        logging.getLogger("novelforge.credentials").warning(
+            "Failed to hydrate model credentials: %s", exc
+        )
+        return _normalize_llm_profiles_payload(payload)
+
+
+def _persist_llm_profiles_payload(payload: dict) -> dict:
+    from novelforge.services.credentials import (
+        scrub_legacy_model_environment_secrets,
+        secure_llm_profiles_payload,
+    )
+
+    normalized = _normalize_llm_profiles_payload(payload)
+    secured = secure_llm_profiles_payload(normalized)
+    if _global_db_marked_unavailable():
+        raise RuntimeError("系统凭据已保存，但全局数据库不可用，模型方案未写入。")
+    try:
+        with open_global_db(Path("data")) as conn:
+            sync_global_setting(conn, "llm_profiles", secured)
+            conn.commit()
+    except Exception as exc:
+        raise RuntimeError("全局数据库写入失败，未清理旧密钥来源。") from exc
+    _write_json_mirror(LLM_PROFILES_PATH, secured)
+    scrub_legacy_model_environment_secrets(ENV_PATH)
+    return secured
 
 
 def _load_env_llm_profile() -> dict:
@@ -508,7 +549,13 @@ def load_llm_profiles() -> dict:
         "LLM profiles",
     )
     if isinstance(db_payload, dict):
-        return _normalize_llm_profiles_payload(db_payload)
+        normalized = _normalize_llm_profiles_payload(db_payload)
+        if any(
+            profile.get("api_key") or profile.get("embedding_api_key")
+            for profile in normalized.get("profiles", [])
+        ):
+            db_payload = _persist_llm_profiles_payload(normalized)
+        return _hydrate_llm_profiles_payload(db_payload)
 
     LLM_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not LLM_PROFILES_PATH.exists():
@@ -517,8 +564,8 @@ def load_llm_profiles() -> dict:
             "active_profile_id": env_profile["id"],
             "profiles": [env_profile],
         }
-        save_llm_profiles(payload)
-        return payload
+        secured = _persist_llm_profiles_payload(payload)
+        return _hydrate_llm_profiles_payload(secured)
 
     try:
         raw_payload = json.loads(LLM_PROFILES_PATH.read_text(encoding="utf-8"))
@@ -526,21 +573,12 @@ def load_llm_profiles() -> dict:
         raw_payload = _default_llm_profile_payload()
 
     payload = _normalize_llm_profiles_payload(raw_payload)
-    if payload != raw_payload:
-        save_llm_profiles(payload)
-    elif db_payload is None:
-        _sync_global_to_db_best_effort(
-            lambda conn: sync_global_setting(conn, "llm_profiles", payload)
-        )
-    return payload
+    secured = _persist_llm_profiles_payload(payload)
+    return _hydrate_llm_profiles_payload(secured)
 
 
 def save_llm_profiles(payload: dict):
-    normalized_payload = _normalize_llm_profiles_payload(payload)
-    _write_json_mirror(LLM_PROFILES_PATH, normalized_payload)
-    _sync_global_to_db_best_effort(
-        lambda conn: sync_global_setting(conn, "llm_profiles", normalized_payload)
-    )
+    _persist_llm_profiles_payload(payload)
 
 
 def get_active_llm_profile() -> dict:
@@ -558,12 +596,17 @@ def load_llm_settings() -> dict:
         "profile_id": str(active_profile.get("id") or ""),
         "profile_name": str(active_profile.get("name") or DEFAULT_LLM_PROFILE_NAME),
         "api_key": str(active_profile.get("api_key") or ""),
+        "api_key_ref": str(active_profile.get("api_key_ref") or ""),
+        "api_key_last_four": str(active_profile.get("api_key_last_four") or ""),
+        "api_key_backend": str(active_profile.get("api_key_backend") or ""),
         "base_url": str(active_profile.get("base_url") or DEFAULT_LLM_BASE_URL),
         "model_name": str(active_profile.get("model_name") or DEFAULT_LLM_MODEL),
         "embedding_mode": str(active_profile.get("embedding_mode") or "disabled"),
         "embedding_model_name": str(active_profile.get("embedding_model_name") or ""),
         "embedding_base_url": str(active_profile.get("embedding_base_url") or ""),
         "embedding_api_key": str(active_profile.get("embedding_api_key") or ""),
+        "embedding_api_key_ref": str(active_profile.get("embedding_api_key_ref") or ""),
+        "embedding_api_key_last_four": str(active_profile.get("embedding_api_key_last_four") or ""),
         "provider_type": str(active_profile.get("provider_type") or "auto"),
         "cost_tracking_mode": str(active_profile.get("cost_tracking_mode") or "auto"),
         **cost_display_preferences(active_profile),
@@ -616,17 +659,17 @@ def _serialize_env_value(value: str) -> str:
 def save_llm_settings(settings: dict):
     provider_type = str(settings.get("provider_type", "auto") or "auto").strip().lower()
     base_url = str(settings.get("base_url", "") or "")
-    api_key = str(settings.get("api_key", "") or "")
-    deepseek_key = api_key if provider_type == "deepseek" or "api.deepseek.com" in base_url.lower() else ""
     normalized = {
-        "LLM_API_KEY": api_key,
-        "DEEPSEEK_API_KEY": deepseek_key,
+        # Secrets live in the system credential manager.  Blank legacy entries
+        # also scrub keys left behind by older releases.
+        "LLM_API_KEY": "",
+        "DEEPSEEK_API_KEY": "",
         "LLM_BASE_URL": base_url,
         "LLM_MODEL": str(settings.get("model_name", "") or ""),
         "LLM_EMBEDDING_MODEL": str(settings.get("embedding_model_name", "") or ""),
         "LLM_EMBEDDING_MODE": str(settings.get("embedding_mode", "disabled") or "disabled"),
         "LLM_EMBEDDING_BASE_URL": str(settings.get("embedding_base_url", "") or ""),
-        "LLM_EMBEDDING_API_KEY": str(settings.get("embedding_api_key", "") or ""),
+        "LLM_EMBEDDING_API_KEY": "",
         "LLM_PROVIDER_TYPE": str(settings.get("provider_type", "auto") or "auto"),
         "LLM_COST_TRACKING_MODE": str(settings.get("cost_tracking_mode", "auto") or "auto"),
         "LLM_PRICING_CURRENCY": str(settings.get("pricing_currency", "USD") or "USD"),
@@ -704,7 +747,21 @@ def set_active_llm_profile(profile_id: str):
 def upsert_llm_profile(profile: dict) -> dict:
     payload = load_llm_profiles()
     target_id = str(profile.get("id") or "").strip()
-    normalized = _normalize_llm_profile(profile, target_id or f"profile_{len(payload.get('profiles', [])) + 1:03d}")
+    existing_profile = next(
+        (item for item in payload.get("profiles", []) if item.get("id") == target_id),
+        {},
+    )
+    merged_profile = {**existing_profile, **dict(profile or {})}
+    for secret_field in ("api_key", "embedding_api_key"):
+        if not str(profile.get(secret_field) or "").strip() and existing_profile:
+            merged_profile[secret_field] = existing_profile.get(secret_field, "")
+            for suffix in ("ref", "fingerprint", "last_four", "backend"):
+                ref_field = f"{secret_field}_{suffix}"
+                merged_profile[ref_field] = existing_profile.get(ref_field, "")
+    normalized = _normalize_llm_profile(
+        merged_profile,
+        target_id or f"profile_{len(payload.get('profiles', [])) + 1:03d}",
+    )
 
     updated_profiles: list[dict] = []
     replaced = False
@@ -729,6 +786,7 @@ def upsert_llm_profile(profile: dict) -> dict:
 def delete_llm_profile(profile_id: str) -> dict:
     payload = load_llm_profiles()
     target_id = str(profile_id or "").strip()
+    removed_profiles = [profile for profile in payload.get("profiles", []) if profile.get("id") == target_id]
     remaining_profiles = [profile for profile in payload.get("profiles", []) if profile.get("id") != target_id]
     if len(remaining_profiles) == len(payload.get("profiles", [])):
         raise ValueError("LLM profile not found.")
@@ -739,6 +797,13 @@ def delete_llm_profile(profile_id: str) -> dict:
     if payload.get("active_profile_id") == target_id:
         payload["active_profile_id"] = remaining_profiles[0]["id"]
     save_llm_profiles(payload)
+    from novelforge.services.credentials import delete_system_credential
+
+    for removed in removed_profiles:
+        for field in ("api_key_ref", "embedding_api_key_ref"):
+            credential_ref = str(removed.get(field) or "").strip()
+            if credential_ref:
+                delete_system_credential(credential_ref)
     active_profile = get_active_llm_profile()
     save_llm_settings(active_profile)
     return payload

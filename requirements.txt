@@ -1,6 +1,7 @@
 openai
 streamlit
 python-dotenv
+keyring>=25.0
 pydantic
 httpx
 langgraph>=1.2,<2

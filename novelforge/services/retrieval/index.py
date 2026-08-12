@@ -497,7 +497,19 @@ def load_retrieval_index(project_name: str) -> _retrieval_api.RetrievalIndexMani
         return build_retrieval_index(project_name)
     try:
         manifest = _retrieval_api.RetrievalIndexManifest.model_validate_json(content)
-        if _manifest_needs_story_scope_rebuild(manifest):
+        retrieval_stale = False
+        try:
+            from novelforge.services.memory import load_knowledge_center_index_state
+
+            state = load_knowledge_center_index_state(project_name)
+            retrieval_stale = (
+                str(state.get("retrieval_status") or "") in {"queued", "running"}
+                or int(state.get("requested_revision") or 0)
+                > int(state.get("indexed_revision") or 0)
+            )
+        except Exception:
+            pass
+        if retrieval_stale or _manifest_needs_story_scope_rebuild(manifest):
             return build_retrieval_index(project_name)
         return _refresh_manifest_knowledge_metadata(project_name, manifest)
     except Exception:

@@ -8,7 +8,13 @@ from urllib.parse import urlparse
 import streamlit as st
 
 from novelforge.core.llm import PROVIDER_PRESETS, test_llm_capabilities
+from novelforge.services.capabilities import build_default_capability_registry
 from novelforge.services.model_readiness import get_model_readiness
+from novelforge.services.provider_adapters import (
+    PROVIDER_PRESET_VERSION,
+    discover_provider_models,
+)
+from novelforge.services.credentials import build_credential_ref, store_system_credential
 from novelforge.services.memory import (
     delete_llm_profile,
     get_active_llm_profile,
@@ -101,7 +107,7 @@ def _render_llm_profile_actions(selected_profile_id: str, selected_profile: dict
         st.caption("暂无可操作的配置方案。")
         return
 
-    action_col1, action_col2 = st.columns(2)
+    action_col1, action_col2, action_col3 = st.columns(3)
     if action_col1.button(
         "切换生效",
         key=scoped_widget_key("switch_llm_profile", selected_profile_id),
@@ -131,11 +137,37 @@ def _render_llm_profile_actions(selected_profile_id: str, selected_profile: dict
                         embedding_model_name=str(selected_profile.get("embedding_model_name") or ""),
                         embedding_base_url=str(selected_profile.get("embedding_base_url") or ""),
                         embedding_api_key=str(selected_profile.get("embedding_api_key") or ""),
+                        provider_type=str(selected_profile.get("provider_type") or "auto"),
                     )
                     upsert_llm_profile({**selected_profile, **result})
                     _render_capability_result(result)
                 except Exception as exc:
                     st.error(str(exc))
+    if action_col3.button(
+        "发现模型",
+        key=scoped_widget_key("discover_llm_models", selected_profile_id),
+        width="stretch",
+    ):
+        try:
+            with st.spinner("正在读取供应商模型列表..."):
+                discovered = discover_provider_models(
+                    base_url=str(selected_profile.get("base_url") or ""),
+                    api_key=str(selected_profile.get("api_key") or ""),
+                    provider_type=str(selected_profile.get("provider_type") or "auto"),
+                )
+            st.session_state[scoped_widget_key("discovered_models", selected_profile_id)] = discovered
+        except Exception as exc:
+            st.error(f"模型发现失败：{exc}")
+    discovered = st.session_state.get(
+        scoped_widget_key("discovered_models", selected_profile_id), {}
+    )
+    if discovered:
+        models = list(discovered.get("models") or [])
+        st.caption(
+            f"预设版本 {discovered.get('preset_version', PROVIDER_PRESET_VERSION)} · "
+            f"发现 {len(models)} 个模型"
+        )
+        st.code("\n".join(models[:100]) or "未返回模型", language=None)
     with st.expander("删除当前配置方案", expanded=False):
         if confirmed_button(
             st,
@@ -369,7 +401,8 @@ def _handle_test_and_save_profile(payload: dict, *, auto_activate: bool) -> None
                 embedding_mode=payload.get("embedding_mode", "disabled"),
                 embedding_model_name=payload.get("embedding_model_name", ""),
                 embedding_base_url=payload.get("embedding_base_url", ""),
-                embedding_api_key=payload.get("embedding_api_key", ""),
+                    embedding_api_key=payload.get("embedding_api_key", ""),
+                    provider_type=payload.get("provider_type", "auto"),
             )
         _render_capability_result(result)
         if result.get("chat_status") != "ready":
@@ -424,9 +457,14 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
         col_ak, col_mn = st.columns(2)
         api_key = col_ak.text_input(
             "接口密钥",
-            value=selected_profile.get("api_key", ""),
+            value="",
+            placeholder=(
+                f"已安全保存 ···{selected_profile.get('api_key_last_four')}，留空保持不变"
+                if selected_profile.get("api_key_ref") else "输入 API Key"
+            ),
             type="password",
             key=_profile_widget_key("llm_api_key", selected_profile_id),
+            help="密钥保存到系统凭据管理器；数据库和配置文件只记录引用、指纹与末四位。",
         )
         model_name = col_mn.text_input(
             "聊天模型名",
@@ -462,7 +500,11 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
         )
         embedding_api_key = st.text_input(
             "独立向量服务密钥",
-            value=selected_profile.get("embedding_api_key", ""),
+            value="",
+            placeholder=(
+                f"已安全保存 ···{selected_profile.get('embedding_api_key_last_four')}，留空保持不变"
+                if selected_profile.get("embedding_api_key_ref") else "独立服务需要时填写"
+            ),
             type="password",
             key=_profile_widget_key("llm_embedding_api_key", selected_profile_id),
             help="只有使用独立向量服务时需要填写；不会拿聊天密钥去探测其它供应商。",
@@ -735,6 +777,12 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             preflight_confirmation_cost_cny,
             preflight_require_confirmation,
         )
+        if not payload["api_key"]:
+            payload["api_key"] = str(selected_profile.get("api_key") or "")
+        if not payload["embedding_api_key"]:
+            payload["embedding_api_key"] = str(
+                selected_profile.get("embedding_api_key") or ""
+            )
         if test_col.form_submit_button("测试并保存", width="stretch"):
             _handle_test_and_save_profile(payload, auto_activate=auto_activate)
 
@@ -753,7 +801,11 @@ def _render_saved_llm_profiles(profiles: list[dict], active_profile: dict) -> No
     for profile in profiles:
         is_active = profile.get("id") == active_profile.get("id")
         label = profile.get("name", profile.get("id", ""))
-        preview_key = _mask_api_key(str(profile.get("api_key", "") or ""))
+        preview_key = (
+            f"***{profile.get('api_key_last_four')}"
+            if profile.get("api_key_last_four")
+            else _mask_api_key(str(profile.get("api_key", "") or ""))
+        )
         card_class = "nf-card active-profile-card" if is_active else "nf-card"
         st.markdown(
             f"""
@@ -778,7 +830,11 @@ def _render_saved_llm_profiles(profiles: list[dict], active_profile: dict) -> No
 
 def _render_active_llm_settings(settings: dict) -> None:
     st.markdown("### 当前生效方案")
-    masked_key = _mask_api_key(settings.get("api_key", ""))
+    masked_key = (
+        f"***{settings.get('api_key_last_four')}"
+        if settings.get("api_key_last_four")
+        else _mask_api_key(settings.get("api_key", ""))
+    )
     readiness = get_model_readiness(settings)
     chat_label = {
         "ready": "可用",
@@ -844,11 +900,55 @@ def _render_active_llm_settings(settings: dict) -> None:
         }, ensure_ascii=False, indent=2), language="json")
 
 
+def _render_capability_center() -> None:
+    st.markdown("### 能力中心")
+    st.caption(f"供应商预设版本：{PROVIDER_PRESET_VERSION}。各工作流只声明自身所需能力。")
+    snapshot = build_default_capability_registry().snapshot()
+    labels = {
+        "chat": "对话生成",
+        "embedding": "语义向量",
+        "search": "网络搜索",
+        "ocr": "本地 OCR",
+    }
+    for capability in ("chat", "embedding", "search", "ocr"):
+        item = snapshot.get(capability, {})
+        with st.container(border=True):
+            st.markdown(
+                f"**{labels[capability]}** · "
+                f"{'可用' if item.get('available') else '不可用 / 可降级'}"
+            )
+            st.caption(str(item.get("message") or "暂无状态说明。"))
+    with st.expander("配置网络搜索能力", expanded=not snapshot.get("search", {}).get("available")):
+        brave_key = st.text_input(
+            "Brave Search API Key",
+            type="password",
+            value="",
+            placeholder="已保存时留空即可",
+            key="capability_center_brave_key",
+            help="密钥写入系统凭据管理器，数据库只保存引用、指纹和末四位。",
+        )
+        if st.button("安全保存搜索密钥", key="save_brave_search_credential"):
+            if not brave_key.strip():
+                st.warning("请输入 Brave Search API Key。")
+            else:
+                try:
+                    store_system_credential(
+                        brave_key.strip(),
+                        purpose="web-search",
+                        owner_id="brave",
+                        credential_ref=build_credential_ref("web-search", "brave"),
+                    )
+                    st.success("搜索密钥已保存到系统凭据管理器。")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"搜索密钥保存失败：{exc}")
+
+
 def render_llm_settings_page():
     profiles, active_profile, settings, _, _ = _load_llm_profile_state()
     view = st.segmented_control(
         "模型设置视图",
-        options=["当前方案", "已保存方案", "用量与费用"],
+        options=["当前方案", "能力中心", "已保存方案", "用量与费用"],
         default="当前方案",
         key="llm_settings_view",
         label_visibility="collapsed",
@@ -858,6 +958,8 @@ def render_llm_settings_page():
         selected_profile = _render_llm_profile_management(profiles, active_profile)
         _render_provider_quick_fill(str(selected_profile.get("id") or ""))
         _render_llm_profile_form(selected_profile, active_profile)
+    elif view == "能力中心":
+        _render_capability_center()
     elif view == "已保存方案":
         _render_saved_llm_profiles(profiles, active_profile)
     else:

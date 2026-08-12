@@ -357,6 +357,18 @@ def assemble_generation_context(
     retrieval_session_id: str = "",
     retrieval_turn_id: str = "",
 ) -> ContextAssembly:
+    if top_k is None:
+        try:
+            from novelforge.services.automatic_configuration import load_automatic_configuration
+
+            automatic = load_automatic_configuration(project_name, story_id, "creative_writing")
+            configured_top_k = automatic.get("settings", {}).get("retrieval_top_k")
+            if configured_top_k:
+                top_k = int(configured_top_k)
+        except Exception:
+            # Retrieval stays operational with its task-profile defaults when
+            # automatic configuration has not been initialized yet.
+            pass
     normalized_guidance = dict(generation_guidance or {})
     if manual_knowledge_ids is None and "manual_knowledge_ids" in normalized_guidance:
         manual_knowledge_ids = list(normalized_guidance.get("manual_knowledge_ids") or [])

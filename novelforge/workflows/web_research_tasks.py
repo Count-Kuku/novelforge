@@ -379,6 +379,9 @@ def run_web_research_task(
     verifier=verify_research_claims,
     rebuild_func=rebuild_retrieval_assets,
 ) -> tuple[dict, dict]:
+    from novelforge.services.capabilities import require_operation_capabilities
+
+    require_operation_capabilities("web_research", action="网络研究任务")
     owner = worker_id or f"manual-web:{os.getpid()}:{uuid4().hex[:10]}"
     task = _claim_for_execution(project_name, task_id, owner, lease_seconds, lease_already_claimed)
     if task.get("status") == "completed" and not task.get("worker_id"):

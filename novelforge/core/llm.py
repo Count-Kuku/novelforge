@@ -526,6 +526,7 @@ def test_llm_capabilities(
     embedding_model_name: str = "",
     embedding_base_url: str = "",
     embedding_api_key: str = "",
+    provider_type: str = "auto",
 ) -> dict:
     """Test chat and embedding independently without hiding partial readiness."""
 
@@ -555,43 +556,56 @@ def test_llm_capabilities(
             vector_url = str(base_url or "").strip()
             vector_key = str(api_key or "").strip()
         if not vector_url or not vector_key:
-            return {
-                "chat_status": chat_status,
-                "chat_status_message": chat_message,
-                "embedding_status": "failed",
-                "embedding_status_message": "向量服务地址或密钥不完整，资料检索将使用关键词模式。",
-                "capabilities_verified_at": verified_at,
-            }
-        try:
-            openai_client_class = _require_openai()
-            vector_client = openai_client_class(
-                api_key=vector_key,
-                base_url=vector_url,
-                http_client=httpx.Client(
-                    trust_env=_should_trust_env_proxy(),
-                    timeout=httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0),
-                ),
-            )
-            response = vector_client.embeddings.create(
-                model=str(embedding_model_name).strip(),
-                input="NovelForge capability check",
-            )
-            _extract_embedding(response)
-            embedding_status = "ready"
-            embedding_message = "语义向量连接成功。"
-        except Exception as exc:
             embedding_status = "failed"
-            embedding_message = _format_llm_error(
-                exc,
-                action="向量连接测试",
-                base_url=vector_url,
-                model_name=str(embedding_model_name).strip(),
-            )
+            embedding_message = "向量服务地址或密钥不完整，资料检索将使用关键词模式。"
+        else:
+            try:
+                openai_client_class = _require_openai()
+                vector_client = openai_client_class(
+                    api_key=vector_key,
+                    base_url=vector_url,
+                    http_client=httpx.Client(
+                        trust_env=_should_trust_env_proxy(),
+                        timeout=httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0),
+                    ),
+                )
+                response = vector_client.embeddings.create(
+                    model=str(embedding_model_name).strip(),
+                    input="NovelForge capability check",
+                )
+                _extract_embedding(response)
+                embedding_status = "ready"
+                embedding_message = "语义向量连接成功。"
+            except Exception as exc:
+                embedding_status = "failed"
+                embedding_message = _format_llm_error(
+                    exc,
+                    action="向量连接测试",
+                    base_url=vector_url,
+                    model_name=str(embedding_model_name).strip(),
+                )
 
-    return {
+    result = {
         "chat_status": chat_status,
         "chat_status_message": chat_message,
         "embedding_status": embedding_status,
         "embedding_status_message": embedding_message,
         "capabilities_verified_at": verified_at,
     }
+    from novelforge.services.provider_adapters import (
+        capability_invalidation_hints,
+        negotiate_provider_capabilities,
+    )
+
+    result["negotiated_capabilities"] = negotiate_provider_capabilities(
+        provider_type=provider_type,
+        chat_status=chat_status,
+        embedding_status=embedding_status,
+    )
+    result["capability_invalidation_hints"] = capability_invalidation_hints(
+        chat_status=chat_status,
+        chat_message=chat_message,
+        embedding_status=embedding_status,
+        embedding_message=embedding_message,
+    )
+    return result

@@ -58,7 +58,16 @@ def _search_brave(
     api_key: str,
     client: httpx.Client | None,
 ) -> WebSearchResult:
-    token = str(api_key or os.getenv("BRAVE_SEARCH_API_KEY", "")).strip()
+    if api_key:
+        token = str(api_key).strip()
+    else:
+        from novelforge.services.credentials import resolve_or_migrate_environment_credential
+
+        token = resolve_or_migrate_environment_credential(
+            purpose="web-search",
+            owner_id="brave",
+            environment_key="BRAVE_SEARCH_API_KEY",
+        )
     if not token:
         raise WebSearchConfigurationError(
             "Brave Search API Key 为空。请设置 BRAVE_SEARCH_API_KEY。"

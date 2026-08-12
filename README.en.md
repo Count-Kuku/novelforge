@@ -125,7 +125,7 @@ Copy-Item .env.example .env
 
 Editing `.env` is optional; model profiles can also be configured and tested in the application.
 
-Common environment values:
+Common non-secret environment values, plus legacy one-time key imports:
 
 ```env
 LLM_API_KEY=
@@ -139,7 +139,7 @@ LLM_PRICING_CURRENCY=USD
 LLM_DISPLAY_CURRENCY=CNY
 LLM_USD_TO_CNY_RATE=7.142857
 
-# Optional: web discovery on the source-ingestion page
+# Legacy import: migrated to the system credential manager and scrubbed
 BRAVE_SEARCH_API_KEY=
 
 # Optional local cost estimation, per 1M tokens in LLM_PRICING_CURRENCY
@@ -152,9 +152,9 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 
 When prices are empty or `0`, NovelForge still records tokens but does not guess a cost. If the provider does not return cost directly, local amounts are estimates from the event's price snapshot rather than provider invoices. Model Settings separately controls the price-entry currency, primary display currency, and USD-to-CNY factor. The DeepSeek preset factor aligns its official Chinese and English price tables; it is not a live foreign-exchange quote. Update values, verification dates, and sources when either pricing or conversion policy changes.
 
-`BRAVE_SEARCH_API_KEY` is sent only to the Brave Search API. Web research fetches public HTTP/HTTPS static-text pages without website login, browser cookies, or paywall bypass. Automatic research is recoverable in the background; the manual path still requires result selection.
+Model, embedding, and Brave Search keys are configured in the UI and stored in Windows Credential Manager or the system keyring. SQLite and configuration mirrors retain only the credential reference, SHA-256 fingerprint, and last four characters. Legacy `.env` keys are one-time migration sources and are scrubbed after successful migration. `BRAVE_SEARCH_API_KEY` is sent only to Brave Search.
 
-`.env` bootstraps the default model profile on first launch. After model profiles have been written to `data/global.db`, the database is authoritative; update models and rates in `模型配置` (Model Settings), because editing `.env` alone does not override a saved profile.
+`.env` only bootstraps non-secret model parameters and migrates legacy keys on first launch. After model profiles have been written to `data/global.db`, the database is authoritative; update models and rates in `模型配置` (Model Settings), because editing `.env` alone does not override a saved profile.
 
 ## Data And Backups
 

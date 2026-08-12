@@ -56,6 +56,10 @@ def get_model_readiness(profile: dict | None = None) -> dict:
 
 
 def require_chat_ready(profile: dict | None = None, *, action: str = "当前操作") -> dict:
+    if profile is None:
+        from novelforge.services.capabilities import require_operation_capabilities
+
+        require_operation_capabilities("creative_writing", action=action)
     readiness = get_model_readiness(profile)
     if readiness["chat_status"] == "failed":
         raise RuntimeError(

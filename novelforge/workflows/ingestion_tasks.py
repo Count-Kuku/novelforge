@@ -111,8 +111,24 @@ def create_long_reference_ingestion_task(
     story_id: str = "",
     priority: int = 0,
 ) -> dict:
+    from novelforge.services.automatic_configuration import configure_operation_automatically
+
+    automatic = configure_operation_automatically(
+        project_name,
+        story_id,
+        "source_ingestion",
+        goal=custom_instructions,
+        source_chars=int(batch.get("content_char_count") or 0),
+    )
+    automatic_settings = dict(automatic.get("settings") or {})
+    if not enabled_categories:
+        enabled_categories = list(automatic_settings.get("extraction_categories") or [])
+    if int(extract_limit) <= 0:
+        extract_limit = int(automatic_settings.get("batch_size") or len(segment_indices))
     planned_indices = list(segment_indices)[: max(0, int(extract_limit))]
     if planned_indices and enabled_categories:
+        # Keep this compatibility seam patchable by existing integrations;
+        # require_chat_ready delegates to the central capability registry.
         require_chat_ready(action="资料提取任务")
     configuration = {
         "enabled_categories": list(enabled_categories),

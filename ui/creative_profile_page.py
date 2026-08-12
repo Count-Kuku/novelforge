@@ -13,6 +13,13 @@ from novelforge.domain.creative_profile_workflows import (
     recommended_workflow_for_profile,
 )
 from novelforge.services.memory import list_stories, load_creative_profile, save_creative_profile
+from novelforge.services.automatic_configuration import (
+    AUTO_CONFIGURATION_FIELDS,
+    configure_operation_automatically,
+    estimate_project_source_chars,
+    list_automatic_configuration_revisions,
+    load_automatic_configuration,
+)
 from novelforge.workflows.skills import (
     discuss_creative_profile,
     discuss_creative_profile_turn,
@@ -442,6 +449,71 @@ def _render_creative_profile_recommendation(project_name: str, story_id: str, pr
         with st.expander("高级：创作配置详细数据", expanded=False):
             st.json({key: value for key, value in profile.items() if key != "notes"})
 
+
+def _render_automatic_configuration_panel(project_name: str, story_id: str, profile: dict) -> None:
+    render_section_heading("自动配置", "系统按目标、资料规模、历史成本和质量反馈调整运行参数；锁定项不会被覆盖。")
+    state = load_automatic_configuration(project_name, story_id, "creative_writing")
+    settings = dict(state.get("settings") or {})
+    locked_fields = list(state.get("locked_fields") or [])
+    field_labels = {
+        "retrieval_depth": "检索深度",
+        "retrieval_top_k": "检索候选数",
+        "extraction_categories": "资料提取类别",
+        "context_budget": "上下文预算",
+        "batch_size": "批量大小",
+    }
+    goal = " ".join(
+        str(profile.get(field) or "")
+        for field in ("task_type", "target_length", "target_word_count", "notes")
+    ).strip()
+    selected_locks = st.multiselect(
+        "锁定参数",
+        options=list(AUTO_CONFIGURATION_FIELDS),
+        default=[item for item in locked_fields if item in AUTO_CONFIGURATION_FIELDS],
+        format_func=lambda value: field_labels.get(value, value),
+        key=scoped_widget_key("automatic_configuration_locks", project_name, story_id),
+        help="锁定后的值由用户掌控，后续自动调整不会覆盖。",
+    )
+    if st.button(
+        "重新评估自动配置",
+        key=scoped_widget_key("recompute_automatic_configuration", project_name, story_id),
+    ):
+        result = configure_operation_automatically(
+            project_name,
+            story_id,
+            "creative_writing",
+            goal=goal,
+            source_chars=estimate_project_source_chars(project_name),
+            locked_fields=selected_locks,
+        )
+        settings = dict(result.get("settings") or {})
+        if result.get("diff"):
+            st.success("自动配置已更新，并记录了调整原因与前后差异。")
+        else:
+            st.info("当前配置已经适合现有信号，没有需要调整的未锁定项。")
+    if not settings:
+        st.caption("首次开始对话式创作时会自动生成；也可现在点击重新评估。")
+        return
+    render_items = [
+        f"{field_labels[field]}：{settings.get(field)}"
+        for field in AUTO_CONFIGURATION_FIELDS
+        if field in settings
+    ]
+    st.info(" · ".join(render_items))
+    revisions = list_automatic_configuration_revisions(
+        project_name, story_id, "creative_writing", limit=1
+    )
+    if revisions:
+        latest = revisions[0]
+        reasons = list(latest.get("reasons") or [])
+        if reasons:
+            st.caption("调整依据：" + "；".join(str(item) for item in reasons))
+        with st.expander("查看最近一次前后差异", expanded=False):
+            for field, change in dict(latest.get("diff") or {}).items():
+                st.write(
+                    f"{field_labels.get(field, field)}：{change.get('before')} → {change.get('after')}"
+                )
+
 def render_creative_profile_page(project_name: str, embedded: bool = False, *, render_discussion_asset_candidates):
     story_id, current_story_name = _current_creative_story(project_name)
     _render_creative_profile_header(current_story_name, embedded)
@@ -463,6 +535,7 @@ def render_creative_profile_page(project_name: str, embedded: bool = False, *, r
         render_section_heading("手动调整", "精细控制后续规划、正文生成和资料匹配的默认方式。")
         profile = _render_creative_profile_form(project_name, story_id, form_state)
     _render_creative_profile_recommendation(project_name, story_id, profile)
+    _render_automatic_configuration_panel(project_name, story_id, profile)
 
 def render_creative_task_wizard(project_name: str, story_id: str = "default"):
     st.markdown("### 创作任务向导")

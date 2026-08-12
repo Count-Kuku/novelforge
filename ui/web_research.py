@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import streamlit as st
 
 from novelforge.core.schemas import FetchedWebPage, WebSearchResult
@@ -22,6 +20,7 @@ from novelforge.services.web_research import (
 from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_authority, label_scope
 from ui.web_research_tasks import render_web_research_task_manager
+from novelforge.services.credentials import system_credential_available
 
 
 def _search_result_key(project_name: str, story_id: str) -> str:
@@ -97,8 +96,8 @@ def _render_manual_web_research_import(project_name: str, story_id: str) -> None
         "搜索公开网页，检查结果后抓取正文并导入当前项目。"
         "首版不会登录网站、绕过付费墙，也不会自动确认网络设定。"
     )
-    if not os.getenv("BRAVE_SEARCH_API_KEY", "").strip():
-        st.warning("尚未配置 BRAVE_SEARCH_API_KEY。配置后才能调用 Brave Search。")
+    if not system_credential_available(purpose="web-search", owner_id="brave"):
+        st.warning("尚未配置网络搜索能力。请在“模型与费用 → 能力中心”安全保存 Brave Search 密钥。")
 
     provider_options = available_web_search_providers()
     provider = st.selectbox(

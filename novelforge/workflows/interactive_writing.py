@@ -17,6 +17,11 @@ from novelforge.core.llm_usage import llm_usage_scope
 from novelforge.core.token_estimation import estimate_chat_input_tokens, estimate_text_tokens
 from novelforge.domain.llm_preflight import parse_requested_output_range
 from novelforge.services.llm_estimation import build_calibrated_preflight
+from novelforge.services.automatic_configuration import (
+    configure_operation_automatically,
+    estimate_project_source_chars,
+)
+from novelforge.services.capabilities import require_operation_capabilities
 from novelforge.services.memory import (
     accept_creative_fragment,
     begin_creative_turn,
@@ -548,7 +553,7 @@ def preview_writing_context(
     prompt_option_ids: list[str] | None = None,
     manual_knowledge_ids: list[str] | None = None,
     branch_from_fragment_id: str | None = None,
-    context_budget: int = 12_000,
+    context_budget: int | None = None,
     turn_attachment_blocks: list[dict] | None = None,
 ):
     bundle = _bundle_or_raise(project_name, story_id, session_id)
@@ -574,6 +579,15 @@ def preview_writing_context(
         user_message,
         context_head_id=branch["context_head_id"],
     )
+    if context_budget is None:
+        automatic = configure_operation_automatically(
+            project_name,
+            story_id,
+            "creative_writing",
+            goal=f"{session.get('session_goal', '')} {user_message}",
+            source_chars=estimate_project_source_chars(project_name) + len(str(query or "")),
+        )
+        context_budget = int(automatic.get("settings", {}).get("context_budget") or 12_000)
     return assemble_generation_context(
         project_name,
         story_id=story_id,
@@ -611,6 +625,7 @@ def generate_writing_fragment(
     branch_from_fragment_id: str | None = None,
     stream_callback=None,
 ) -> dict:
+    require_operation_capabilities("creative_writing", action="对话式创作")
     bundle = _bundle_or_raise(project_name, story_id, session_id)
     session = bundle.get("session", {}) or {}
     branch = _resolve_generation_branch(

@@ -32,6 +32,14 @@ from .creative_sessions import (
     update_creative_fragment_row,
     update_creative_session_row,
 )
+from .capabilities import (
+    list_automatic_configuration_revision_rows,
+    load_automatic_configuration_state_row,
+    load_credential_reference_row,
+    mark_credential_reference_deleted_row,
+    save_automatic_configuration_row,
+    upsert_credential_reference_row,
+)
 from .creative_attachments import (
     claim_turn_creative_attachment_rows,
     list_creative_attachment_rows,
@@ -173,6 +181,12 @@ from .stories import list_story_rows, purge_story_scoped_rows, set_active_story_
 from .story_copy import clone_story_storage_rows
 
 __all__ = [
+    "list_automatic_configuration_revision_rows",
+    "load_automatic_configuration_state_row",
+    "load_credential_reference_row",
+    "mark_credential_reference_deleted_row",
+    "save_automatic_configuration_row",
+    "upsert_credential_reference_row",
     "get_project_meta",
     "project_maintenance_mode",
     "begin_creative_turn_row",

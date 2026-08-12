@@ -125,7 +125,7 @@ Copy-Item .env.example .env
 
 也可以不编辑 `.env`，启动后在 `模型配置` 页面填写并测试连接。
 
-常用环境变量：
+常用非敏感环境变量，以及仅用于旧版本兼容的一次性密钥导入项：
 
 ```env
 LLM_API_KEY=
@@ -143,7 +143,7 @@ LLM_PRICING_CURRENCY=USD
 LLM_DISPLAY_CURRENCY=CNY
 LLM_USD_TO_CNY_RATE=7.142857
 
-# 可选：资料导入页的网络检索
+# 旧版本兼容：首次启动后迁移到系统凭据管理器并从 .env 清空
 BRAVE_SEARCH_API_KEY=
 
 # 可选本地费用估算，单位由 LLM_PRICING_CURRENCY 决定 / 1M tokens
@@ -156,9 +156,9 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 
 价格留空或填 `0` 时，系统仍记录 Token，但不会猜测费用。供应商未直接返回费用时，本地金额只是按价格快照计算的估算，不是实际账单。`模型配置` 可分别设置价格币种、主显示币种和美元兑人民币换算系数；DeepSeek 用户可直接填写官方人民币单价。DeepSeek 预设系数用于对齐其官方中英文价目，不代表实时外汇牌价。价格或换算口径变化后，应同时更新数值、核对日期和来源。
 
-`BRAVE_SEARCH_API_KEY` 只传给 Brave Search API。网络研究仅抓取公开的 HTTP/HTTPS 静态文本页面，不登录网站、不携带浏览器 Cookie、不绕过付费墙。自动研究任务可在后台恢复；手动搜索入口仍要求先勾选结果。
+模型、向量和 Brave Search 密钥默认在界面中配置并保存到 Windows Credential Manager 或系统 keyring；SQLite 与配置镜像只保存凭据引用、SHA-256 指纹和末四位。`.env` 中的旧密钥只作为一次性迁移来源，迁移成功后会自动清空。`BRAVE_SEARCH_API_KEY` 只传给 Brave Search API。网络研究仅抓取公开的 HTTP/HTTPS 静态文本页面，不登录网站、不携带浏览器 Cookie、不绕过付费墙。
 
-`.env` 用于首次启动时引导默认模型方案。模型方案写入 `data/global.db` 后，数据库是后续读取的权威来源；此时请在 `模型配置` 页面修改模型和费率，单独编辑 `.env` 不会覆盖已经保存的方案。
+`.env` 只用于首次启动时引导非敏感模型参数及迁移旧密钥。模型方案写入 `data/global.db` 后，数据库是后续读取的权威来源；此时请在 `模型配置` 页面修改模型和费率，单独编辑 `.env` 不会覆盖已经保存的方案。
 
 `LLM_EMBEDDING_MODE` 支持 `disabled`、`same_provider`、`separate_provider` 和 `local`。DeepSeek/OpenRouter 默认采用 `disabled`，避免把聊天密钥和不兼容的向量模型组合在一起；只有向量能力通过独立验证后才启用语义排名。
 
