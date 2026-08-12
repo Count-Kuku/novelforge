@@ -7,6 +7,7 @@ import streamlit as st
 
 from novelforge.services.project_manager import delete_project, get_project_summary, rename_project
 from novelforge.services.memory import set_active_project_name
+from novelforge.services.model_readiness import get_model_readiness
 from ui.common import render_quick_action
 from ui.layout import render_section_heading
 from ui.llm_usage import render_usage_dashboard
@@ -53,6 +54,21 @@ def render_project_overview_page(project_name: str):
     summary = get_project_summary(project_name, story_id=story_id)
 
     _render_overview_status(summary, project_name)
+
+    readiness = get_model_readiness()
+    if readiness.get("chat_status") in {"missing", "failed"}:
+        st.error(
+            f"模型尚未就绪：{readiness.get('chat_message') or '请先完成模型接入。'}"
+            "前往“模型与费用”修复后即可继续当前项目。"
+        )
+    elif readiness.get("chat_status") == "unverified":
+        st.info("对话模型配置尚未验证；建议先在“模型与费用”中测试连接。")
+    if readiness.get("retrieval_mode") == "lexical":
+        st.caption(
+            f"资料检索：关键词模式。{readiness.get('embedding_message') or ''}"
+        )
+    else:
+        st.caption("资料检索：语义 + 关键词混合模式。")
 
     render_section_heading("下一步做什么", "第一次使用可先确定创作方向和整理资料；想直接写，也可以进入自由创作。")
     action_col1, action_col2, action_col3 = st.columns(3)

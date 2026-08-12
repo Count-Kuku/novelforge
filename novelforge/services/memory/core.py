@@ -163,12 +163,16 @@ LLM_PROVIDER_TYPES = {
     "siliconflow", "ollama", "openai_compatible",
 }
 LLM_COST_TRACKING_MODES = {"auto", "provider_reported", "manual", "tokens_only"}
+LLM_EMBEDDING_MODES = {"disabled", "same_provider", "separate_provider", "local"}
 MANAGED_ENV_KEYS = [
     "LLM_API_KEY",
     "DEEPSEEK_API_KEY",
     "LLM_BASE_URL",
     "LLM_MODEL",
     "LLM_EMBEDDING_MODEL",
+    "LLM_EMBEDDING_MODE",
+    "LLM_EMBEDDING_BASE_URL",
+    "LLM_EMBEDDING_API_KEY",
     "LLM_PROVIDER_TYPE",
     "LLM_COST_TRACKING_MODE",
     "LLM_INPUT_PRICE_PER_MILLION",
@@ -352,6 +356,19 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
     cost_tracking_mode = str(raw.get("cost_tracking_mode") or "auto").strip().lower() or "auto"
     if cost_tracking_mode not in LLM_COST_TRACKING_MODES:
         cost_tracking_mode = "auto"
+    raw_embedding_mode = str(raw.get("embedding_mode") or "").strip().lower()
+    if raw_embedding_mode in LLM_EMBEDDING_MODES:
+        embedding_mode = raw_embedding_mode
+    elif provider_type in {"deepseek", "openrouter"} or any(
+        marker in str(raw.get("base_url") or "").lower()
+        for marker in ("api.deepseek.com", "openrouter.ai")
+    ):
+        embedding_mode = "disabled"
+    else:
+        embedding_mode = "same_provider"
+    embedding_model_name = str(raw.get("embedding_model_name") or "").strip()
+    if embedding_mode != "disabled" and not embedding_model_name:
+        embedding_model_name = DEFAULT_EMBEDDING_MODEL
     currency_preferences = cost_display_preferences(raw)
 
     return {
@@ -360,7 +377,10 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
         "base_url": str(raw.get("base_url") or DEFAULT_LLM_BASE_URL),
         "api_key": str(raw.get("api_key") or ""),
         "model_name": str(raw.get("model_name") or DEFAULT_LLM_MODEL),
-        "embedding_model_name": str(raw.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+        "embedding_mode": embedding_mode,
+        "embedding_model_name": embedding_model_name,
+        "embedding_base_url": str(raw.get("embedding_base_url") or "").strip(),
+        "embedding_api_key": str(raw.get("embedding_api_key") or ""),
         "provider_type": provider_type,
         "cost_tracking_mode": cost_tracking_mode,
         **currency_preferences,
@@ -371,6 +391,11 @@ def _normalize_llm_profile(profile: dict | None, fallback_id: str) -> dict:
         "embedding_price_per_million": safe_rate(raw.get("embedding_price_per_million")),
         "pricing_updated_at": str(raw.get("pricing_updated_at") or "").strip(),
         "pricing_source_url": str(raw.get("pricing_source_url") or "").strip(),
+        "chat_status": str(raw.get("chat_status") or "unverified").strip() or "unverified",
+        "embedding_status": str(raw.get("embedding_status") or "unverified").strip() or "unverified",
+        "capabilities_verified_at": str(raw.get("capabilities_verified_at") or "").strip(),
+        "chat_status_message": str(raw.get("chat_status_message") or "").strip(),
+        "embedding_status_message": str(raw.get("embedding_status_message") or "").strip(),
         "preflight_enabled": bool(raw.get("preflight_enabled", True)),
         "preflight_warning_tokens": int(safe_rate(raw.get("preflight_warning_tokens", 50000))),
         "preflight_confirmation_tokens": int(
@@ -427,7 +452,12 @@ def _load_env_llm_profile() -> dict:
         or file_values.get("LLM_EMBEDDING_MODEL")
         or os.getenv("EMBEDDING_MODEL")
         or file_values.get("EMBEDDING_MODEL")
-        or DEFAULT_EMBEDDING_MODEL
+        or ""
+    )
+    embedding_mode = (
+        os.getenv("LLM_EMBEDDING_MODE")
+        or file_values.get("LLM_EMBEDDING_MODE")
+        or ""
     )
     return _normalize_llm_profile(
         {
@@ -437,6 +467,9 @@ def _load_env_llm_profile() -> dict:
             "api_key": api_key,
             "model_name": model_name,
             "embedding_model_name": embedding_model_name,
+            "embedding_mode": embedding_mode,
+            "embedding_base_url": os.getenv("LLM_EMBEDDING_BASE_URL") or file_values.get("LLM_EMBEDDING_BASE_URL") or "",
+            "embedding_api_key": os.getenv("LLM_EMBEDDING_API_KEY") or file_values.get("LLM_EMBEDDING_API_KEY") or "",
             "provider_type": os.getenv("LLM_PROVIDER_TYPE") or file_values.get("LLM_PROVIDER_TYPE") or "auto",
             "cost_tracking_mode": os.getenv("LLM_COST_TRACKING_MODE") or file_values.get("LLM_COST_TRACKING_MODE") or "auto",
             "pricing_currency": os.getenv("LLM_PRICING_CURRENCY") or file_values.get("LLM_PRICING_CURRENCY") or "USD",
@@ -510,7 +543,10 @@ def load_llm_settings() -> dict:
         "api_key": str(active_profile.get("api_key") or ""),
         "base_url": str(active_profile.get("base_url") or DEFAULT_LLM_BASE_URL),
         "model_name": str(active_profile.get("model_name") or DEFAULT_LLM_MODEL),
-        "embedding_model_name": str(active_profile.get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL),
+        "embedding_mode": str(active_profile.get("embedding_mode") or "disabled"),
+        "embedding_model_name": str(active_profile.get("embedding_model_name") or ""),
+        "embedding_base_url": str(active_profile.get("embedding_base_url") or ""),
+        "embedding_api_key": str(active_profile.get("embedding_api_key") or ""),
         "provider_type": str(active_profile.get("provider_type") or "auto"),
         "cost_tracking_mode": str(active_profile.get("cost_tracking_mode") or "auto"),
         **cost_display_preferences(active_profile),
@@ -521,6 +557,11 @@ def load_llm_settings() -> dict:
         "embedding_price_per_million": float(active_profile.get("embedding_price_per_million") or 0),
         "pricing_updated_at": str(active_profile.get("pricing_updated_at") or ""),
         "pricing_source_url": str(active_profile.get("pricing_source_url") or ""),
+        "chat_status": str(active_profile.get("chat_status") or "unverified"),
+        "embedding_status": str(active_profile.get("embedding_status") or "unverified"),
+        "capabilities_verified_at": str(active_profile.get("capabilities_verified_at") or ""),
+        "chat_status_message": str(active_profile.get("chat_status_message") or ""),
+        "embedding_status_message": str(active_profile.get("embedding_status_message") or ""),
         "preflight_enabled": bool(active_profile.get("preflight_enabled", True)),
         "preflight_warning_tokens": int(active_profile.get("preflight_warning_tokens") or 0),
         "preflight_confirmation_tokens": int(
@@ -556,12 +597,19 @@ def _serialize_env_value(value: str) -> str:
 
 
 def save_llm_settings(settings: dict):
+    provider_type = str(settings.get("provider_type", "auto") or "auto").strip().lower()
+    base_url = str(settings.get("base_url", "") or "")
+    api_key = str(settings.get("api_key", "") or "")
+    deepseek_key = api_key if provider_type == "deepseek" or "api.deepseek.com" in base_url.lower() else ""
     normalized = {
-        "LLM_API_KEY": str(settings.get("api_key", "") or ""),
-        "DEEPSEEK_API_KEY": str(settings.get("api_key", "") or ""),
-        "LLM_BASE_URL": str(settings.get("base_url", "") or ""),
+        "LLM_API_KEY": api_key,
+        "DEEPSEEK_API_KEY": deepseek_key,
+        "LLM_BASE_URL": base_url,
         "LLM_MODEL": str(settings.get("model_name", "") or ""),
         "LLM_EMBEDDING_MODEL": str(settings.get("embedding_model_name", "") or ""),
+        "LLM_EMBEDDING_MODE": str(settings.get("embedding_mode", "disabled") or "disabled"),
+        "LLM_EMBEDDING_BASE_URL": str(settings.get("embedding_base_url", "") or ""),
+        "LLM_EMBEDDING_API_KEY": str(settings.get("embedding_api_key", "") or ""),
         "LLM_PROVIDER_TYPE": str(settings.get("provider_type", "auto") or "auto"),
         "LLM_COST_TRACKING_MODE": str(settings.get("cost_tracking_mode", "auto") or "auto"),
         "LLM_PRICING_CURRENCY": str(settings.get("pricing_currency", "USD") or "USD"),

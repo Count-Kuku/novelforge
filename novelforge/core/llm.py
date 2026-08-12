@@ -6,6 +6,7 @@ import logging
 import math
 import os
 from collections.abc import Callable
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
@@ -18,7 +19,6 @@ load_dotenv()
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
 DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 LOGGER = logging.getLogger("novelforge.llm")
 
 APIConnectionError = None
@@ -93,7 +93,32 @@ def _get_model_name() -> str:
 
 
 def _get_embedding_model_name() -> str:
-    return load_llm_settings().get("embedding_model_name", DEFAULT_EMBEDDING_MODEL)
+    settings = load_llm_settings()
+    if str(settings.get("embedding_mode") or "disabled") == "disabled":
+        return ""
+    if str(settings.get("embedding_status") or "unverified") != "ready":
+        return ""
+    return str(settings.get("embedding_model_name") or "")
+
+
+def _get_embedding_client_config() -> tuple[str, str]:
+    settings = load_llm_settings()
+    mode = str(settings.get("embedding_mode") or "disabled")
+    if mode == "disabled":
+        raise RuntimeError("向量生成已关闭；当前资料检索使用关键词模式。")
+    if str(settings.get("embedding_status") or "unverified") != "ready":
+        raise RuntimeError("向量服务尚未验证可用；当前资料检索使用关键词模式。")
+    if mode in {"separate_provider", "local"}:
+        api_key = str(settings.get("embedding_api_key") or "").strip()
+        base_url = str(settings.get("embedding_base_url") or "").strip()
+        if mode == "local" and not api_key:
+            api_key = "local"
+    else:
+        api_key = str(settings.get("api_key") or "").strip()
+        base_url = str(settings.get("base_url") or "").strip()
+    if not api_key or not base_url:
+        raise RuntimeError("向量服务配置不完整；当前资料检索使用关键词模式。")
+    return api_key, base_url
 
 
 def _should_trust_env_proxy() -> bool:
@@ -358,18 +383,19 @@ def call_llm(
 
 def get_embedding(text: str) -> list[float]:
     profile = load_llm_settings()
-    if not _get_api_key():
-        raise RuntimeError("向量生成失败：接口密钥为空。请先在“模型配置”里填写 API Key。")
+    api_key, base_url = _get_embedding_client_config()
     _require_openai()
 
-    requested_model = str(_get_embedding_model_name() or DEFAULT_EMBEDDING_MODEL)
+    requested_model = str(_get_embedding_model_name() or "")
+    if not requested_model:
+        raise RuntimeError("向量生成失败：未设置语义向量模型；当前资料检索使用关键词模式。")
 
     cleaned = text.strip()
     if not cleaned:
         raise ValueError("Embedding input text cannot be empty.")
 
     try:
-        response = _get_client().embeddings.create(
+        response = _get_client_for_config(api_key, base_url, _should_trust_env_proxy()).embeddings.create(
             model=requested_model,
             input=cleaned,
         )
@@ -390,7 +416,8 @@ PROVIDER_PRESETS = {
     "DeepSeek": {
         "base_url": "https://api.deepseek.com",
         "model_name": "deepseek-v4-flash",
-        "embedding_model_name": "text-embedding-3-small",
+        "embedding_mode": "disabled",
+        "embedding_model_name": "",
         "provider_type": "deepseek",
         "cost_tracking_mode": "manual",
         "pricing_currency": "CNY",
@@ -409,6 +436,7 @@ PROVIDER_PRESETS = {
     "OpenAI": {
         "base_url": "https://api.openai.com/v1",
         "model_name": "gpt-4o",
+        "embedding_mode": "same_provider",
         "embedding_model_name": "text-embedding-3-small",
         "provider_type": "openai",
         "cost_tracking_mode": "manual",
@@ -416,13 +444,15 @@ PROVIDER_PRESETS = {
     "OpenRouter": {
         "base_url": "https://openrouter.ai/api/v1",
         "model_name": "auto",
-        "embedding_model_name": "text-embedding-3-small",
+        "embedding_mode": "disabled",
+        "embedding_model_name": "",
         "provider_type": "openrouter",
         "cost_tracking_mode": "provider_reported",
     },
     "阿里云通义千问 (Qwen)": {
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "model_name": "qwen-plus",
+        "embedding_mode": "same_provider",
         "embedding_model_name": "text-embedding-v3",
         "provider_type": "qwen",
         "cost_tracking_mode": "manual",
@@ -430,6 +460,7 @@ PROVIDER_PRESETS = {
     "硅基流动 (SiliconFlow)": {
         "base_url": "https://api.siliconflow.cn/v1",
         "model_name": "deepseek-v4-flash",
+        "embedding_mode": "same_provider",
         "embedding_model_name": "BAAI/bge-m3",
         "provider_type": "siliconflow",
         "cost_tracking_mode": "manual",
@@ -437,6 +468,8 @@ PROVIDER_PRESETS = {
     "本地 Ollama": {
         "base_url": "http://localhost:11434/v1",
         "model_name": "llama3",
+        "embedding_mode": "local",
+        "embedding_base_url": "http://localhost:11434/v1",
         "embedding_model_name": "nomic-embed-text",
         "provider_type": "ollama",
         "cost_tracking_mode": "auto",
@@ -444,6 +477,7 @@ PROVIDER_PRESETS = {
     "自定义": {
         "base_url": "",
         "model_name": "",
+        "embedding_mode": "disabled",
         "embedding_model_name": "",
         "provider_type": "auto",
         "cost_tracking_mode": "auto",
@@ -481,3 +515,83 @@ def test_llm_connection(base_url: str, api_key: str, model_name: str) -> str:
             model_name=model_name,
         )
         raise RuntimeError(message) from exc
+
+
+def test_llm_capabilities(
+    base_url: str,
+    api_key: str,
+    model_name: str,
+    *,
+    embedding_mode: str = "disabled",
+    embedding_model_name: str = "",
+    embedding_base_url: str = "",
+    embedding_api_key: str = "",
+) -> dict:
+    """Test chat and embedding independently without hiding partial readiness."""
+
+    verified_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    try:
+        chat_message = test_llm_connection(base_url, api_key, model_name)
+        chat_status = "ready"
+    except Exception as exc:
+        chat_status = "failed"
+        chat_message = str(exc)
+
+    clean_mode = str(embedding_mode or "disabled").strip()
+    if clean_mode == "disabled":
+        embedding_status = "disabled"
+        embedding_message = "语义向量已关闭，资料检索将使用关键词模式。"
+    elif not str(embedding_model_name or "").strip():
+        embedding_status = "failed"
+        embedding_message = "未设置语义向量模型，资料检索将使用关键词模式。"
+    else:
+        if clean_mode == "separate_provider":
+            vector_url = str(embedding_base_url or "").strip()
+            vector_key = str(embedding_api_key or "").strip()
+        elif clean_mode == "local":
+            vector_url = str(embedding_base_url or base_url).strip()
+            vector_key = str(embedding_api_key or "local").strip()
+        else:
+            vector_url = str(base_url or "").strip()
+            vector_key = str(api_key or "").strip()
+        if not vector_url or not vector_key:
+            return {
+                "chat_status": chat_status,
+                "chat_status_message": chat_message,
+                "embedding_status": "failed",
+                "embedding_status_message": "向量服务地址或密钥不完整，资料检索将使用关键词模式。",
+                "capabilities_verified_at": verified_at,
+            }
+        try:
+            openai_client_class = _require_openai()
+            vector_client = openai_client_class(
+                api_key=vector_key,
+                base_url=vector_url,
+                http_client=httpx.Client(
+                    trust_env=_should_trust_env_proxy(),
+                    timeout=httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=30.0),
+                ),
+            )
+            response = vector_client.embeddings.create(
+                model=str(embedding_model_name).strip(),
+                input="NovelForge capability check",
+            )
+            _extract_embedding(response)
+            embedding_status = "ready"
+            embedding_message = "语义向量连接成功。"
+        except Exception as exc:
+            embedding_status = "failed"
+            embedding_message = _format_llm_error(
+                exc,
+                action="向量连接测试",
+                base_url=vector_url,
+                model_name=str(embedding_model_name).strip(),
+            )
+
+    return {
+        "chat_status": chat_status,
+        "chat_status_message": chat_message,
+        "embedding_status": embedding_status,
+        "embedding_status_message": embedding_message,
+        "capabilities_verified_at": verified_at,
+    }

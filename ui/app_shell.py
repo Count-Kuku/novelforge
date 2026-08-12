@@ -10,7 +10,6 @@ from novelforge.services.memory import (
     copy_story_settings,
     create_project,
     create_story,
-    creative_profile_path,
     get_active_project_name,
     get_active_story_id,
     list_projects,
@@ -141,8 +140,6 @@ def is_story_creative_profile_configured(project_name: str | None, story_id: str
     if not project_name:
         return False
     try:
-        if not creative_profile_path(project_name, story_id).exists():
-            return False
         profile = load_creative_profile(project_name, story_id=story_id)
         return bool(profile.get("is_configured"))
     except Exception as exc:

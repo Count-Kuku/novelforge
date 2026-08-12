@@ -86,7 +86,6 @@ DEFAULT_WORLDLINE_ID = "main"
 DEFAULT_CHUNK_SIZE = 900
 DEFAULT_CHUNK_OVERLAP = 150
 DEFAULT_TOP_K = 6
-DEFAULT_EMBEDDING_MODEL = os.getenv("LLM_EMBEDDING_MODEL") or os.getenv("EMBEDDING_MODEL") or "text-embedding-3-small"
 GLOBAL_WORLDLINE_IDS = {"", "all", "global", "shared", "common", "canon", "unknown"}
 AUTHORITY_WEIGHTS = {
     "project": 2.0,
@@ -96,7 +95,14 @@ AUTHORITY_WEIGHTS = {
     "unknown": 0.0,
 }
 REFERENCE_FOCUS_SOURCE_MAP = {
-    "角色": ["entity_character_card", "entity_alias_group", "knowledge_characters", "memory_character"],
+    "角色": [
+        "entity_character_card",
+        "entity_alias_group",
+        "knowledge_characters",
+        "knowledge_relationships",
+        "memory_character",
+        "memory_relationship",
+    ],
     "世界观": ["entity_setting_card", "knowledge_world_rules", "knowledge_locations", "knowledge_organizations", "memory_world"],
     "剧情事件": ["knowledge_timeline_events", "memory_timeline"],
     "道具能力": ["entity_setting_card", "knowledge_items", "knowledge_abilities"],
@@ -123,10 +129,22 @@ KNOWLEDGE_SOURCE_TYPES = [
 
 def _active_embedding_model_name() -> str:
     try:
-        model_name = str(load_llm_settings().get("embedding_model_name") or DEFAULT_EMBEDDING_MODEL).strip()
+        settings = load_llm_settings()
+        if str(settings.get("embedding_mode") or "disabled") == "disabled":
+            return ""
+        if str(settings.get("embedding_status") or "unverified") != "ready":
+            return ""
+        model_name = str(settings.get("embedding_model_name") or "").strip()
     except Exception:
-        model_name = DEFAULT_EMBEDDING_MODEL
-    return model_name or DEFAULT_EMBEDDING_MODEL
+        model_name = ""
+    return model_name
+
+
+def _active_embedding_mode() -> str:
+    try:
+        return str(load_llm_settings().get("embedding_mode") or "disabled").strip()
+    except Exception:
+        return "disabled"
 
 STORY_SCOPED_SOURCE_TYPES = {
     "outline",
@@ -321,18 +339,15 @@ RETRIEVAL_TASK_PROFILES = {
             "chapter_discussion",
             "chapter_summary",
             "memory_character",
+            "memory_world",
             "memory_relationship",
+            "memory_timeline",
             "memory_active_constraint",
             "entity_character_card",
+            "entity_setting_card",
             "entity_alias_group",
             "external_source",
-            "knowledge_characters",
-            "knowledge_relationships",
-            "knowledge_writing_style",
-            "knowledge_dialogue_style",
-            "knowledge_narrative_techniques",
-            "knowledge_constraints",
-        ],
+        ] + KNOWLEDGE_SOURCE_TYPES,
     },
     "review": {
         "top_k": 9,

@@ -7,7 +7,8 @@ from urllib.parse import urlparse
 
 import streamlit as st
 
-from novelforge.core.llm import PROVIDER_PRESETS, test_llm_connection
+from novelforge.core.llm import PROVIDER_PRESETS, test_llm_capabilities
+from novelforge.services.model_readiness import get_model_readiness
 from novelforge.services.memory import (
     delete_llm_profile,
     get_active_llm_profile,
@@ -39,6 +40,27 @@ COST_TRACKING_MODE_OPTIONS = {
 }
 PRICING_CURRENCY_OPTIONS = {"CNY": "人民币（CNY）", "USD": "美元（USD）"}
 DISPLAY_CURRENCY_OPTIONS = {"CNY": "人民币为主", "USD": "美元为主"}
+EMBEDDING_MODE_OPTIONS = {
+    "disabled": "关闭语义向量（关键词检索）",
+    "same_provider": "与聊天模型使用同一服务",
+    "separate_provider": "使用独立向量服务",
+    "local": "使用本地向量服务",
+}
+
+
+def _render_capability_result(result: dict) -> None:
+    chat_message = str(result.get("chat_status_message") or "")
+    if result.get("chat_status") == "ready":
+        st.success(f"对话模型：{chat_message}")
+    else:
+        st.error(f"对话模型：{chat_message}")
+    embedding_message = str(result.get("embedding_status_message") or "")
+    if result.get("embedding_status") == "ready":
+        st.success(f"资料语义检索：{embedding_message}")
+    elif result.get("embedding_status") == "disabled":
+        st.info(embedding_message)
+    else:
+        st.warning(f"资料语义检索：{embedding_message}")
 
 
 def _load_llm_profile_state() -> tuple[list[dict], dict, dict, list[str], dict[str, str]]:
@@ -101,12 +123,17 @@ def _render_llm_profile_actions(selected_profile_id: str, selected_profile: dict
         else:
             with st.spinner("正在测试连接..."):
                 try:
-                    message = test_llm_connection(
+                    result = test_llm_capabilities(
                         str(selected_profile.get("base_url", "") or ""),
                         str(selected_profile.get("api_key", "") or ""),
                         str(selected_profile.get("model_name", "") or ""),
+                        embedding_mode=str(selected_profile.get("embedding_mode") or "disabled"),
+                        embedding_model_name=str(selected_profile.get("embedding_model_name") or ""),
+                        embedding_base_url=str(selected_profile.get("embedding_base_url") or ""),
+                        embedding_api_key=str(selected_profile.get("embedding_api_key") or ""),
                     )
-                    st.success(message)
+                    upsert_llm_profile({**selected_profile, **result})
+                    _render_capability_result(result)
                 except Exception as exc:
                     st.error(str(exc))
     with st.expander("删除当前配置方案", expanded=False):
@@ -164,7 +191,9 @@ def _render_provider_quick_fill(profile_id: str) -> None:
                     st.session_state.update({
                         _profile_widget_key("llm_base_url", pid): p["base_url"],
                         _profile_widget_key("llm_model_name", pid): p["model_name"],
+                        _profile_widget_key("llm_embedding_mode", pid): p.get("embedding_mode", "disabled"),
                         _profile_widget_key("llm_embedding_model_name", pid): p["embedding_model_name"],
+                        _profile_widget_key("llm_embedding_base_url", pid): p.get("embedding_base_url", ""),
                         _profile_widget_key("llm_provider_type", pid): p.get("provider_type", "auto"),
                         _profile_widget_key("llm_cost_tracking_mode", pid): p.get("cost_tracking_mode", "auto"),
                         _profile_widget_key("llm_pricing_currency", pid): p.get("pricing_currency", "USD"),
@@ -190,7 +219,10 @@ def _clean_llm_profile_form_values(
     base_url: str,
     api_key: str,
     model_name: str,
+    embedding_mode: str,
     embedding_model_name: str,
+    embedding_base_url: str,
+    embedding_api_key: str,
     provider_type: str,
     cost_tracking_mode: str,
     pricing_currency: str,
@@ -220,7 +252,10 @@ def _clean_llm_profile_form_values(
         "base_url": base_url.strip(),
         "api_key": api_key.strip(),
         "model_name": model_name.strip(),
+        "embedding_mode": embedding_mode.strip().lower() or "disabled",
         "embedding_model_name": embedding_model_name.strip(),
+        "embedding_base_url": embedding_base_url.strip(),
+        "embedding_api_key": embedding_api_key.strip(),
         "provider_type": provider_type.strip().lower() or "auto",
         "cost_tracking_mode": cost_tracking_mode.strip().lower() or "auto",
         "pricing_currency": pricing_currency.strip().upper() or "USD",
@@ -273,6 +308,25 @@ def _validate_llm_profile_payload(payload: dict, *, require_api_key: bool, auto_
     if payload.get("provider_type") not in PROVIDER_TYPE_OPTIONS:
         st.error("供应商类型无效，请重新选择。")
         return False
+    embedding_mode = str(payload.get("embedding_mode") or "disabled")
+    if embedding_mode not in EMBEDDING_MODE_OPTIONS:
+        st.error("语义向量模式无效，请重新选择。")
+        return False
+    if embedding_mode != "disabled" and not payload.get("embedding_model_name"):
+        st.error("启用语义向量时必须填写向量模型名。")
+        return False
+    embedding_base_url = str(payload.get("embedding_base_url") or "")
+    if embedding_mode in {"separate_provider", "local"}:
+        if not embedding_base_url:
+            st.error("独立或本地向量服务必须填写服务网址。")
+            return False
+        parsed_embedding_url = urlparse(embedding_base_url)
+        if parsed_embedding_url.scheme not in {"http", "https"} or not parsed_embedding_url.netloc:
+            st.error("向量服务网址格式无效，需要以 http:// 或 https:// 开头。")
+            return False
+    if embedding_mode == "separate_provider" and not payload.get("embedding_api_key"):
+        st.error("独立向量服务必须填写自己的 API Key。")
+        return False
     if payload.get("cost_tracking_mode") not in COST_TRACKING_MODE_OPTIONS:
         st.error("费用统计模式无效，请重新选择。")
         return False
@@ -307,11 +361,25 @@ def _handle_test_and_save_profile(payload: dict, *, auto_activate: bool) -> None
     if not _validate_llm_profile_payload(payload, require_api_key=True, auto_activate=auto_activate):
         return
     try:
-        with st.spinner("正在测试连接..."):
-            test_llm_connection(payload["base_url"], payload["api_key"], payload["model_name"])
-        _save_llm_profile(payload, auto_activate=auto_activate)
-        st.success("连接成功，模型配置方案已保存。")
-        st.rerun()
+        with st.spinner("正在分别测试对话模型和资料语义检索..."):
+            result = test_llm_capabilities(
+                payload["base_url"],
+                payload["api_key"],
+                payload["model_name"],
+                embedding_mode=payload.get("embedding_mode", "disabled"),
+                embedding_model_name=payload.get("embedding_model_name", ""),
+                embedding_base_url=payload.get("embedding_base_url", ""),
+                embedding_api_key=payload.get("embedding_api_key", ""),
+            )
+        _render_capability_result(result)
+        if result.get("chat_status") != "ready":
+            st.error("对话模型尚不可用，配置未保存。请检查密钥、服务地址和模型名。")
+            return
+        _save_llm_profile({**payload, **result}, auto_activate=auto_activate)
+        if result.get("embedding_status") == "failed":
+            st.warning("对话模型已保存；资料检索暂时明确降级为关键词模式。")
+        else:
+            st.success("能力测试完成，模型配置方案已保存。")
     except Exception as exc:
         st.error(str(exc))
 
@@ -366,11 +434,38 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             placeholder="deepseek-v4-flash",
             key=_profile_widget_key("llm_model_name", selected_profile_id),
         )
-        embedding_model_name = st.text_input(
+        selected_embedding_mode = str(selected_profile.get("embedding_mode") or "disabled")
+        if selected_embedding_mode not in EMBEDDING_MODE_OPTIONS:
+            selected_embedding_mode = "disabled"
+        embedding_mode = st.selectbox(
+            "资料语义检索",
+            options=list(EMBEDDING_MODE_OPTIONS),
+            index=list(EMBEDDING_MODE_OPTIONS).index(selected_embedding_mode),
+            format_func=lambda value: EMBEDDING_MODE_OPTIONS.get(value, value),
+            key=_profile_widget_key("llm_embedding_mode", selected_profile_id),
+            help="关闭后仍可使用关键词检索；聊天模型与资料导入不会因此被阻塞。",
+        )
+        embedding_col_model, embedding_col_url = st.columns(2)
+        embedding_model_name = embedding_col_model.text_input(
             "语义向量模型名",
             value=selected_profile.get("embedding_model_name", ""),
             placeholder="text-embedding-3-small",
             key=_profile_widget_key("llm_embedding_model_name", selected_profile_id),
+            help="关闭语义向量时会忽略此字段。",
+        )
+        embedding_base_url = embedding_col_url.text_input(
+            "独立/本地向量服务网址",
+            value=selected_profile.get("embedding_base_url", ""),
+            placeholder="http://localhost:11434/v1",
+            key=_profile_widget_key("llm_embedding_base_url", selected_profile_id),
+            help="只有独立或本地向量模式会使用此地址。",
+        )
+        embedding_api_key = st.text_input(
+            "独立向量服务密钥",
+            value=selected_profile.get("embedding_api_key", ""),
+            type="password",
+            key=_profile_widget_key("llm_embedding_api_key", selected_profile_id),
+            help="只有使用独立向量服务时需要填写；不会拿聊天密钥去探测其它供应商。",
         )
         provider_col, tracking_col = st.columns(2)
         provider_values = list(PROVIDER_TYPE_OPTIONS)
@@ -613,7 +708,10 @@ def _render_llm_profile_form(selected_profile: dict, active_profile: dict) -> No
             base_url,
             api_key,
             model_name,
+            embedding_mode,
             embedding_model_name,
+            embedding_base_url,
+            embedding_api_key,
             provider_type,
             cost_tracking_mode,
             pricing_currency,
@@ -681,6 +779,14 @@ def _render_saved_llm_profiles(profiles: list[dict], active_profile: dict) -> No
 def _render_active_llm_settings(settings: dict) -> None:
     st.markdown("### 当前生效方案")
     masked_key = _mask_api_key(settings.get("api_key", ""))
+    readiness = get_model_readiness(settings)
+    chat_label = {
+        "ready": "可用",
+        "unverified": "待验证",
+        "missing": "未配置",
+        "failed": "验证失败",
+    }.get(readiness.get("chat_status"), str(readiness.get("chat_status") or "-"))
+    retrieval_label = "语义 + 关键词" if readiness.get("retrieval_mode") == "hybrid" else "关键词模式"
     with st.container(border=True):
         st.markdown(f"**{settings.get('profile_name') or '未命名方案'}**")
         st.caption(
@@ -690,12 +796,18 @@ def _render_active_llm_settings(settings: dict) -> None:
         )
         render_stat_strip(
             [
-                ("对话模型", settings.get("model_name") or "-", "生成内容"),
-                ("向量模型", settings.get("embedding_model_name") or "-", "检索资料"),
+                ("对话能力", chat_label, settings.get("model_name") or "未设置"),
+                ("资料检索", retrieval_label, readiness.get("embedding_status") or "-"),
                 ("主显示币种", settings.get("display_currency", "CNY"), "费用预估"),
                 ("执行前预估", "开启" if settings.get("preflight_enabled", True) else "关闭", "Token 与费用"),
             ]
         )
+        if readiness.get("chat_status") in {"missing", "failed"}:
+            st.error(readiness.get("chat_message") or "聊天模型尚不可用。")
+        elif readiness.get("chat_status") == "unverified":
+            st.info("聊天配置尚未验证。建议点击“测试连接”，系统会分别检查对话和语义检索能力。")
+        if readiness.get("retrieval_mode") == "lexical":
+            st.caption(readiness.get("embedding_message") or "资料检索当前使用关键词模式。")
     with st.expander("查看完整配置与文件路径", expanded=False):
         st.code(json.dumps({
         "方案标识": settings.get("profile_id", ""),
@@ -703,7 +815,9 @@ def _render_active_llm_settings(settings: dict) -> None:
         "模型服务网址": settings.get("base_url", ""),
         "接口密钥": masked_key,
         "聊天模型名": settings.get("model_name", ""),
+        "语义向量模式": settings.get("embedding_mode", "disabled"),
         "语义向量模型名": settings.get("embedding_model_name", ""),
+        "语义向量服务网址": settings.get("embedding_base_url", ""),
         "供应商类型": settings.get("provider_type", "auto"),
         "费用统计模式": settings.get("cost_tracking_mode", "auto"),
         "价格币种": settings.get("pricing_currency", "USD"),

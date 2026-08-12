@@ -579,7 +579,7 @@ def _run_retrieval(
         filtered_chunks.append(chunk)
 
     semantic_scores = {}
-    if retrieval_mode in {"semantic", "hybrid"}:
+    if retrieval_mode in {"semantic", "hybrid"} and _retrieval_api._active_embedding_model_name():
         try:
             semantic_scores = _semantic_scores(project_name, query_plan["semantic_query"], filtered_chunks)
         except Exception as exc:

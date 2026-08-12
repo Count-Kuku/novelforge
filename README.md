@@ -89,8 +89,8 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 写作工作�
 
 ### 首次使用
 
-1. 在 `模型配置` 中添加 OpenAI-compatible 服务地址、API Key、聊天模型和可选 Embedding 模型。
-2. 测试连接并保存档案。
+1. 在 `模型配置` 中选择供应商预设并填写 API Key；服务地址和推荐聊天模型会自动带出，自定义兼容接口才需要手工填写地址。
+2. 测试并保存。系统会分别检查聊天与 Embedding；Embedding 关闭或失败时仍可创作，并明确使用关键词检索。
 3. 新建项目和故事，在 `创作配置` 中确定任务类型、篇幅和参考强度。
 4. 需要遵守原作或参考资料时，先进入 `资料导入`。
 
@@ -132,7 +132,11 @@ LLM_API_KEY=
 DEEPSEEK_API_KEY=
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
+LLM_EMBEDDING_MODE=disabled
 LLM_EMBEDDING_MODEL=
+# 独立或本地向量服务才需要：
+LLM_EMBEDDING_BASE_URL=
+LLM_EMBEDDING_API_KEY=
 LLM_PROVIDER_TYPE=auto
 LLM_COST_TRACKING_MODE=auto
 LLM_PRICING_CURRENCY=USD
@@ -155,6 +159,8 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 `BRAVE_SEARCH_API_KEY` 只传给 Brave Search API。网络研究仅抓取公开的 HTTP/HTTPS 静态文本页面，不登录网站、不携带浏览器 Cookie、不绕过付费墙。自动研究任务可在后台恢复；手动搜索入口仍要求先勾选结果。
 
 `.env` 用于首次启动时引导默认模型方案。模型方案写入 `data/global.db` 后，数据库是后续读取的权威来源；此时请在 `模型配置` 页面修改模型和费率，单独编辑 `.env` 不会覆盖已经保存的方案。
+
+`LLM_EMBEDDING_MODE` 支持 `disabled`、`same_provider`、`separate_provider` 和 `local`。DeepSeek/OpenRouter 默认采用 `disabled`，避免把聊天密钥和不兼容的向量模型组合在一起；只有向量能力通过独立验证后才启用语义排名。
 
 ## 数据与备份
 
