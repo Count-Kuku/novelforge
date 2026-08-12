@@ -27,6 +27,7 @@ from .shared import (
     pending_active_session_key,
 )
 from .preflight import render_writing_preflight
+from .attachments import render_attachment_tray
 
 
 def _manual_knowledge_selector(
@@ -302,6 +303,8 @@ def render_composer(
         key=input_key,
         placeholder=placeholder,
     )
+
+    render_attachment_tray(project_name, story_id, session_id)
 
     config = _render_advanced_settings(
         project_name,

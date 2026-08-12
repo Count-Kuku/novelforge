@@ -137,13 +137,27 @@ def _worldline_allowed(chunk: _retrieval_api.RetrievalChunk, worldline_id: str |
     return _worldline_match_state(chunk, worldline_id) in {"off", "global", "match"}
 
 
-def _story_scope_allowed(chunk: _retrieval_api.RetrievalChunk, story_id: str | None = "default") -> bool:
+def _story_scope_allowed(
+    chunk: _retrieval_api.RetrievalChunk,
+    story_id: str | None = "default",
+    *,
+    session_id: str = "",
+    turn_id: str = "",
+) -> bool:
     if not isinstance(chunk.metadata, dict):
         return True
     target_story_id = str(story_id or "default").strip() or "default"
     chunk_story_id = str(chunk.metadata.get("story_id") or "").strip()
     if chunk_story_id:
-        return chunk_story_id == target_story_id
+        if chunk_story_id != target_story_id:
+            return False
+    attachment_scope = str(chunk.metadata.get("attachment_scope") or "").strip()
+    if attachment_scope == "session":
+        return bool(session_id) and str(chunk.metadata.get("session_id") or "") == session_id
+    if attachment_scope == "turn":
+        return bool(turn_id) and str(chunk.metadata.get("turn_id") or "") == turn_id
+    if chunk_story_id:
+        return True
     setting_scope = str(chunk.metadata.get("setting_scope") or "").strip().lower()
     if setting_scope == "story":
         return False
@@ -508,6 +522,17 @@ def resolve_retrieval_params(
             else:
                 params["allowed_source_types"] = focus_types
 
+    # A source explicitly attached from free writing remains eligible even
+    # when the creative profile narrows ordinary knowledge to one focus area.
+    if (
+        "creative_attachment" in profile_source_types
+        and normalized_strategy == "union"
+    ):
+        current_types = list(params.get("allowed_source_types") or [])
+        if "creative_attachment" not in current_types:
+            current_types.append("creative_attachment")
+        params["allowed_source_types"] = current_types
+
     return params
 
 
@@ -527,6 +552,8 @@ def _run_retrieval(
     story_id: str = "default",
     source_type_strategy: str = "union",
     explicit_knowledge_ids: list[str] | None = None,
+    session_id: str = "",
+    turn_id: str = "",
 ) -> dict:
     resolved = resolve_retrieval_params(
         reference_focus,
@@ -566,7 +593,12 @@ def _run_retrieval(
             continue
         if source_filter_enabled and chunk.source_type not in source_filter:
             continue
-        if not _story_scope_allowed(chunk, story_id):
+        if not _story_scope_allowed(
+            chunk,
+            story_id,
+            session_id=session_id,
+            turn_id=turn_id,
+        ):
             continue
         if not _worldline_allowed(chunk, normalized_worldline, normalized_worldline_mode):
             continue
@@ -716,6 +748,8 @@ def retrieve_context(
     story_id: str = "default",
     source_type_strategy: str = "union",
     explicit_knowledge_ids: list[str] | None = None,
+    session_id: str = "",
+    turn_id: str = "",
 ) -> list[_retrieval_api.RetrievalHit]:
     result = _run_retrieval(
         project_name,
@@ -732,6 +766,8 @@ def retrieve_context(
         story_id=story_id,
         source_type_strategy=source_type_strategy,
         explicit_knowledge_ids=explicit_knowledge_ids,
+        session_id=session_id,
+        turn_id=turn_id,
     )
     return result["reranked_hits"]
 
@@ -752,6 +788,8 @@ def debug_retrieve_context(
     story_id: str = "default",
     source_type_strategy: str = "union",
     explicit_knowledge_ids: list[str] | None = None,
+    session_id: str = "",
+    turn_id: str = "",
 ) -> dict:
     result = _run_retrieval(
         project_name,
@@ -768,6 +806,8 @@ def debug_retrieve_context(
         story_id=story_id,
         source_type_strategy=source_type_strategy,
         explicit_knowledge_ids=explicit_knowledge_ids,
+        session_id=session_id,
+        turn_id=turn_id,
     )
     return {
         **{key: value for key, value in result.items() if key not in {"initial_hits", "reranked_hits"}},

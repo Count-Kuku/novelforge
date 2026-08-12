@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from novelforge.services import retrieval as _retrieval_api
 
-def ingest_external_source_file(project_name: str, source_name: str, content: str, *, overwrite: bool = True) -> str:
+def ingest_external_source_file(
+    project_name: str,
+    source_name: str,
+    content: str,
+    *,
+    overwrite: bool = True,
+    return_record: bool = False,
+) -> str | dict:
     safe_name = _retrieval_api.re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "_", source_name).strip("_") or "external_source"
     parsed = {}
     try:
@@ -33,7 +40,7 @@ def ingest_external_source_file(project_name: str, source_name: str, content: st
         "unknown": 0.0,
     }.get(authority_name, 0.0)
     try:
-        _retrieval_api.sync_retrieval_source_file_record(
+        source_record = _retrieval_api.sync_retrieval_source_file_record(
             project_name,
             relative_path=relative_path,
             title=str(parsed_payload.get("title") or target.name),
@@ -55,7 +62,8 @@ def ingest_external_source_file(project_name: str, source_name: str, content: st
         else:
             target.write_bytes(previous_content)
         raise
-    return relative_path
+    result = {"relative_path": relative_path, **dict(source_record or {})}
+    return result if return_record else relative_path
 
 
 def build_structured_external_source_payload(

@@ -103,6 +103,33 @@ def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
     if not clean_story_id:
         raise ValueError("Story ID cannot be empty.")
 
+    attachment_source_ids = [
+        str(row["source_id"])
+        for row in conn.execute(
+            """
+            SELECT DISTINCT source_id
+            FROM creative_attachments
+            WHERE story_id = ? AND scope IN ('story', 'session', 'turn')
+            """,
+            (clean_story_id,),
+        ).fetchall()
+    ]
+    for source_id in attachment_source_ids:
+        other_owner = conn.execute(
+            """
+            SELECT 1 FROM creative_attachments
+            WHERE source_id = ? AND (story_id IS NULL OR story_id <> ?)
+            LIMIT 1
+            """,
+            (source_id, clean_story_id),
+        ).fetchone()
+        if other_owner is not None:
+            continue
+        conn.execute(
+            "UPDATE source_documents SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) WHERE source_id = ?",
+            (source_id,),
+        )
+
     # Creative-session turns and fragments cascade from the session row.
     conn.execute("DELETE FROM creative_sessions WHERE story_id = ?", (clean_story_id,))
 
@@ -167,11 +194,22 @@ def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
         "knowledge_items",
         "pending_knowledge_items",
         "entity_alias_groups",
-        "source_documents",
         "rules",
         "prompt_options",
         "asset_files",
     ):
         conn.execute(f"DELETE FROM {table} WHERE story_id = ?", (clean_story_id,))
+
+    # Attachment-backed source documents are shared file assets. Their
+    # lifecycle was handled above; other story-owned source documents may now
+    # be removed normally.
+    conn.execute(
+        """
+        DELETE FROM source_documents
+        WHERE story_id = ?
+          AND source_id NOT IN (SELECT source_id FROM creative_attachments)
+        """,
+        (clean_story_id,),
+    )
 
     conn.execute("DELETE FROM story_profiles WHERE story_id = ?", (clean_story_id,))

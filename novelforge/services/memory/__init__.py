@@ -35,6 +35,12 @@ _export_module(_core)
 from . import stories as _stories
 _export_module(_stories)
 
+from . import creative_profiles as _creative_profiles
+_export_module(_creative_profiles)
+
+from . import creative_attachments as _creative_attachments
+_export_module(_creative_attachments)
+
 from . import knowledge as _knowledge
 _export_module(_knowledge)
 

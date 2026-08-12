@@ -843,6 +843,12 @@ def _documents_from_external_sources(project_name: str) -> list[_retrieval_api.R
     source_dir = _retrieval_api.retrieval_sources_path(project_name)
     documents: list[_retrieval_api.RetrievalDocument] = []
 
+    attachment_owners: dict[str, list[dict]] = {}
+    for attachment in _retrieval_api.list_all_creative_attachments(project_name):
+        relative_path = str(attachment.get("relative_path") or "").replace("\\", "/")
+        if relative_path:
+            attachment_owners.setdefault(relative_path, []).append(attachment)
+
     source_files = []
     seen_source_paths: set[str] = set()
     for relative_path in _retrieval_api.list_retrieval_source_files(project_name):
@@ -891,6 +897,39 @@ def _documents_from_external_sources(project_name: str) -> list[_retrieval_api.R
 
         if str(metadata.get("retrieval_status") or "active") == "quarantine":
             continue
+
+        owners = attachment_owners.get(relative_path, [])
+        if owners:
+            for owner in owners:
+                owner_metadata = {
+                    **metadata,
+                    "attachment_id": owner.get("attachment_id"),
+                    "attachment_scope": owner.get("scope"),
+                    "story_id": owner.get("story_id") or "",
+                    "session_id": owner.get("session_id") or "",
+                    "turn_id": owner.get("turn_id") or "",
+                    "remaining_uses": owner.get("remaining_uses"),
+                    "source_id": owner.get("source_id"),
+                    "source_revision_id": owner.get("source_revision_id"),
+                }
+                doc = _retrieval_api._make_document(
+                    project_name,
+                    "creative_attachment",
+                    f"{relative_path}:{owner.get('attachment_id')}",
+                    title,
+                    content,
+                    scope=scope if scope in {"project", "canon", "reference"} else "reference",
+                    path=str(file),
+                    tags=tags,
+                    metadata={
+                        **owner_metadata,
+                        "authority": _retrieval_api._infer_authority(scope, owner_metadata),
+                    },
+                )
+                if doc:
+                    documents.append(doc)
+            if source_type == "creative_attachment":
+                continue
 
         doc = _retrieval_api._make_document(
             project_name,

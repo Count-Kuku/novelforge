@@ -23,6 +23,7 @@ from novelforge.core.schemas import (
     ConflictResolution,
     ContextDirective,
     CreativeFragment,
+    CreativeAttachment,
     CreativeProfile,
     CreativeSession,
     CreativeSessionBundle,
@@ -136,6 +137,13 @@ from storage.repositories import (
     upsert_project_meta,
     update_creative_fragment_row,
     update_creative_session_row,
+    list_creative_attachment_rows,
+    list_all_creative_attachment_rows,
+    claim_turn_creative_attachment_rows,
+    load_creative_attachment_row,
+    release_turn_creative_attachment_rows,
+    update_creative_attachment_row,
+    upsert_creative_attachment_row,
 )
 
 BASE_DIR = Path("data/projects")
@@ -1784,8 +1792,8 @@ def sync_retrieval_source_file_record(
     source_type: str = "reference",
     authority: float = 0.0,
     metadata: dict | None = None,
-) -> None:
-    _sync_source_to_db_best_effort(
+) -> dict:
+    result = _sync_source_to_db_best_effort(
         project_name,
         lambda conn: sync_retrieval_source_file(
             conn,
@@ -1797,6 +1805,7 @@ def sync_retrieval_source_file_record(
             metadata=metadata,
         ),
     )
+    return dict(result or {})
 
 
 def _mark_asset_deleted_best_effort(
@@ -1952,12 +1961,13 @@ def _load_entity_aliases_from_db_best_effort(project_name: str) -> list[dict] | 
         return None
 
 
-def _sync_source_to_db_best_effort(project_name: str, callback) -> None:
+def _sync_source_to_db_best_effort(project_name: str, callback):
     if _project_db_marked_unavailable(project_name):
-        return
+        return None
+    result = None
     try:
         with open_project_db(project_path(project_name).resolve()) as conn:
-            callback(conn)
+            result = callback(conn)
             conn.commit()
     except Exception as exc:
         _DB_UNAVAILABLE_PROJECTS.add(project_name)
@@ -1969,6 +1979,7 @@ def _sync_source_to_db_best_effort(project_name: str, callback) -> None:
         _raise_if_db_only(f"Failed to sync source record to project database for {project_name}.", exc)
     else:
         _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
+    return result
 
 
 def _sync_retrieval_to_db_best_effort(project_name: str, callback) -> None:
@@ -2020,7 +2031,7 @@ def create_project(project_name: str) -> str:
     _initialize_project_db_best_effort(normalized_name)
     _memory_api.load_stories_index(normalized_name)
     load_memory(normalized_name)
-    load_creative_profile(normalized_name)
+    _memory_api.load_creative_profile(normalized_name)
     _memory_api.load_project_rules(normalized_name)
     _memory_api.knowledge_dir_path(normalized_name)
     _memory_api.save_pending_knowledge_items(normalized_name, _memory_api.load_pending_knowledge_items(normalized_name))
@@ -2111,135 +2122,3 @@ def save_memory(project_name: str, memory: dict):
         ),
     )
     sync_project_retrieval_assets(project_name)
-
-
-def creative_profile_path(project_name: str, story_id: str = "default") -> Path:
-    return _memory_api._story_path_from_project_path(project_name, story_id, "creative_profile.json")
-
-
-def load_creative_profile(project_name: str, story_id: str = "default") -> dict:
-    db_profile = _load_runtime_from_db_best_effort(
-        project_name,
-        lambda conn: load_story_profile_row(conn, story_id),
-        "creative profile",
-    )
-    if db_profile is not None:
-        return CreativeProfile.model_validate(db_profile).model_dump()
-    path = creative_profile_path(project_name, story_id)
-    if not path.exists():
-        profile = CreativeProfile().model_dump()
-        save_creative_profile(project_name, profile, story_id)
-        return profile
-
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        raw = {}
-    profile = CreativeProfile.model_validate(raw).model_dump()
-    if isinstance(raw, dict) and raw and "is_configured" not in raw:
-        profile["is_configured"] = True
-    if profile != raw:
-        save_creative_profile(project_name, profile, story_id)
-    elif db_profile == {}:
-        _sync_runtime_to_db_best_effort(
-            project_name,
-            lambda conn: sync_story_profile(conn, story_id, profile),
-        )
-    return profile
-
-
-def save_creative_profile(project_name: str, profile: dict, story_id: str = "default", mark_configured: bool | None = None) -> dict:
-    normalized = CreativeProfile.model_validate(profile or {}).model_dump()
-    if mark_configured is not None:
-        normalized["is_configured"] = bool(mark_configured)
-    path = creative_profile_path(project_name, story_id)
-    _write_json_mirror(path, normalized)
-    _sync_runtime_to_db_best_effort(
-        project_name,
-        lambda conn: sync_story_profile(conn, story_id, normalized),
-    )
-    return normalized
-
-
-def _creative_profile_discussion_path(project_name: str, story_id: str = "default") -> Path:
-    return _memory_api._story_path_from_project_path(project_name, story_id, "creative_profile.discussion.json")
-
-
-def save_creative_profile_discussion_artifact(project_name: str, discussion: dict, report_markdown: str, story_id: str = "default"):
-    path = _creative_profile_discussion_path(project_name, story_id)
-    payload = {
-        "discussion": discussion if isinstance(discussion, dict) else {},
-        "report_markdown": str(report_markdown or ""),
-    }
-    _write_json_mirror(path, payload)
-    _sync_asset_payload_to_db_best_effort(
-        project_name,
-        path,
-        asset_type="creative_profile_discussion",
-        logical_key="creative_profile",
-        story_id=story_id,
-        title="Creative Profile Discussion",
-        payload=payload,
-    )
-    sync_project_retrieval_assets(project_name)
-
-
-def load_creative_profile_discussion_artifact(project_name: str, story_id: str = "default") -> dict:
-    db_payload = _load_asset_payload_from_db_best_effort(
-        project_name,
-        asset_type="creative_profile_discussion",
-        logical_key="creative_profile",
-        story_id=story_id,
-    )
-    if isinstance(db_payload, dict):
-        payload = db_payload
-    else:
-        payload = None
-    path = _creative_profile_discussion_path(project_name, story_id)
-    if payload is None and not path.exists():
-        return {}
-    if payload is None:
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        if isinstance(payload, dict):
-            _sync_asset_payload_to_db_best_effort(
-                project_name,
-                path,
-                asset_type="creative_profile_discussion",
-                logical_key="creative_profile",
-                story_id=story_id,
-                title="Creative Profile Discussion",
-                payload=payload,
-            )
-    if not isinstance(payload, dict):
-        return {}
-    discussion = payload.get("discussion", {})
-    return {
-        "discussion": discussion if isinstance(discussion, dict) else {},
-        "report_markdown": str(payload.get("report_markdown", "") or ""),
-    }
-
-
-def delete_creative_profile_discussion_artifact(project_name: str, story_id: str = "default") -> bool:
-    path = _creative_profile_discussion_path(project_name, story_id)
-    existed = path.exists()
-    exists_in_db = _asset_payload_exists(
-        project_name,
-        asset_type="creative_profile_discussion",
-        logical_key="creative_profile",
-        story_id=story_id,
-    )
-    if not existed and not exists_in_db:
-        return False
-    if existed:
-        path.unlink()
-    mark_asset_deleted_record(
-        project_name,
-        asset_type="creative_profile_discussion",
-        logical_key="creative_profile",
-        story_id=story_id,
-    )
-    sync_project_retrieval_assets(project_name)
-    return True

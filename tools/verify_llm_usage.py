@@ -158,7 +158,7 @@ def verify_context_attribution() -> None:
 def verify_repository() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    check(ensure_schema(conn) == CURRENT_SCHEMA_VERSION == 11, "数据库迁移升级到版本 11")
+    check(ensure_schema(conn) == CURRENT_SCHEMA_VERSION >= 10, "数据库迁移包含用量账本版本 10")
     base = build_llm_usage_event(
         usage={"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
         profile=_profile(),
@@ -237,7 +237,9 @@ def verify_llm_integration() -> None:
             "_get_api_key",
             "_get_model_name",
             "_get_embedding_model_name",
+            "_get_embedding_client_config",
             "_get_client",
+            "_get_client_for_config",
             "_require_openai",
             "load_llm_settings",
             "persist_llm_usage_event",
@@ -248,6 +250,7 @@ def verify_llm_integration() -> None:
         llm_module._get_api_key = lambda: "test-key"
         llm_module._get_model_name = lambda: "patched-chat-model"
         llm_module._get_embedding_model_name = lambda: "patched-embedding-model"
+        llm_module._get_embedding_client_config = lambda: ("test-key", "https://example.invalid/v1")
         llm_module._require_openai = lambda: None
         llm_module.load_llm_settings = lambda: _profile()
         llm_module.persist_llm_usage_event = lambda event: captured.append(event) or True
@@ -292,7 +295,7 @@ def verify_llm_integration() -> None:
                 create=lambda **kwargs: embedding_create_calls.append(kwargs) or embedding_response
             )
         )
-        llm_module._get_client = lambda: client
+        llm_module._get_client_for_config = lambda *_args: client
         check(llm_module.get_embedding("向量输入") == [0.1, 0.2], "Embedding 调用保持原返回值")
         check(captured[-1]["endpoint_type"] == "embedding" and captured[-1]["embedding_tokens"] == 7, "Embedding usage 被记录")
         check(embedding_create_calls[0]["model"] == "patched-embedding-model", "Embedding 模型钩子保持兼容")

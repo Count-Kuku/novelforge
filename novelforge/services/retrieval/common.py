@@ -49,6 +49,7 @@ from novelforge.services.memory import (
     load_retrieval_manifest,
     load_retrieval_vectors,
     list_retrieval_source_files,
+    list_all_creative_attachments,
     list_stories,
     project_path,
     retrieval_sources_path,
@@ -347,6 +348,7 @@ RETRIEVAL_TASK_PROFILES = {
             "entity_setting_card",
             "entity_alias_group",
             "external_source",
+            "creative_attachment",
         ] + KNOWLEDGE_SOURCE_TYPES,
     },
     "review": {

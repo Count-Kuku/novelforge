@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 from datetime import datetime, timezone
@@ -19,6 +20,8 @@ from novelforge.services.llm_estimation import build_calibrated_preflight
 from novelforge.services.memory import (
     accept_creative_fragment,
     begin_creative_turn,
+    claim_turn_creative_attachments,
+    release_turn_creative_attachments,
     complete_creative_turn,
     consume_context_directives,
     create_creative_session,
@@ -41,6 +44,7 @@ from novelforge.core.prompts import (
     creative_session_summary_prompt,
 )
 from novelforge.core.schemas import ChapterWritingGuidance
+from novelforge.services.memory import retrieval_sources_path
 
 
 LOGGER = logging.getLogger("novelforge.interactive_writing")
@@ -238,6 +242,43 @@ def _session_context_blocks(
             "scope": "story",
             "story_id": session.get("story_id"),
             "activation_reason": "当前分支最近的已接受或即将接受片段",
+        })
+    return blocks
+
+
+def _claimed_attachment_blocks(project_name: str, attachments: list[dict]) -> list[dict]:
+    blocks: list[dict] = []
+    source_root = retrieval_sources_path(project_name).resolve()
+    for attachment in attachments:
+        relative_path = str(attachment.get("relative_path") or "")
+        target = (source_root / relative_path).resolve()
+        if source_root != target and source_root not in target.parents:
+            raise ValueError("创作附件路径超出项目资料目录。")
+        if not target.is_file():
+            continue
+        try:
+            payload = json.loads(target.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        content = str(payload.get("content") or "") if isinstance(payload, dict) else ""
+        if not content.strip():
+            continue
+        blocks.append({
+            "block_id": f"creative_attachment:{attachment.get('attachment_id')}",
+            "category": "retrieval",
+            "content": content,
+            "source_type": "creative_attachment",
+            "source_ref": str(attachment.get("source_revision_id") or attachment.get("source_id") or ""),
+            "placement": "reference",
+            "priority": 85,
+            "scope": "story",
+            "story_id": attachment.get("story_id"),
+            "activation_reason": "用户指定仅下一轮使用的资料",
+            "metadata": {
+                "attachment_id": attachment.get("attachment_id"),
+                "attachment_scope": "turn",
+                "source_revision_id": attachment.get("source_revision_id"),
+            },
         })
     return blocks
 
@@ -508,6 +549,7 @@ def preview_writing_context(
     manual_knowledge_ids: list[str] | None = None,
     branch_from_fragment_id: str | None = None,
     context_budget: int = 12_000,
+    turn_attachment_blocks: list[dict] | None = None,
 ):
     bundle = _bundle_or_raise(project_name, story_id, session_id)
     branch = _resolve_generation_branch(
@@ -541,13 +583,17 @@ def preview_writing_context(
         generation_guidance=guidance,
         prompt_option_ids=prompt_option_ids,
         manual_knowledge_ids=manual_knowledge_ids,
-        additional_blocks=_session_context_blocks(
-            bundle,
-            context_head_id=branch["context_head_id"],
-        ),
+        additional_blocks=[
+            *_session_context_blocks(
+                bundle,
+                context_head_id=branch["context_head_id"],
+            ),
+            *list(turn_attachment_blocks or []),
+        ],
         allowed_scopes=["project", "canon", "reference"],
         retrieval_profile="drafting",
         context_budget=context_budget,
+        retrieval_session_id=session_id,
     )
 
 
@@ -592,6 +638,12 @@ def generate_writing_fragment(
         story_id=story_id,
     )
     try:
+        claimed_attachments = claim_turn_creative_attachments(
+            project_name,
+            story_id=story_id,
+            session_id=session_id,
+            turn_id=str(turn["turn_id"]),
+        )
         assembly = preview_writing_context(
             project_name,
             story_id,
@@ -602,6 +654,10 @@ def generate_writing_fragment(
             prompt_option_ids=prompt_option_ids,
             manual_knowledge_ids=manual_knowledge_ids,
             branch_from_fragment_id=branch_from_fragment_id,
+            turn_attachment_blocks=_claimed_attachment_blocks(
+                project_name,
+                claimed_attachments,
+            ),
         )
         ensure_context_budget(assembly)
         prompt = creative_fragment_prompt(
@@ -623,6 +679,19 @@ def generate_writing_fragment(
         if not str(content or "").strip():
             raise RuntimeError("模型没有返回创作片段。")
     except Exception as exc:
+        try:
+            release_turn_creative_attachments(
+                project_name,
+                story_id=story_id,
+                session_id=session_id,
+                turn_id=str(turn["turn_id"]),
+            )
+        except Exception as attachment_exc:
+            LOGGER.warning(
+                "Failed to release turn-scoped creative attachments: turn=%s error=%s",
+                turn.get("turn_id"),
+                attachment_exc,
+            )
         try:
             fail_creative_turn(
                 project_name,

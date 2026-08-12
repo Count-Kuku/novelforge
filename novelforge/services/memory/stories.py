@@ -136,10 +136,16 @@ def load_creative_session_bundle(
             return None
         turns = _memory_api.list_creative_turn_rows(conn, str(session["session_id"]))
         fragments = _memory_api.list_creative_fragment_rows(conn, str(session["session_id"]))
+        attachments = _memory_api.list_creative_attachment_rows(
+            conn,
+            story_id=str(session["story_id"]),
+            session_id=str(session["session_id"]),
+        )
     return _memory_api.CreativeSessionBundle.model_validate({
         "session": session,
         "turns": turns,
         "fragments": fragments,
+        "attachments": attachments,
     }).model_dump()
 
 

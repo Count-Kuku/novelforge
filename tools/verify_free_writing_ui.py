@@ -37,6 +37,7 @@ def verify() -> None:
     expected = {
         "__init__.py",
         "chapter_panel.py",
+        "attachments.py",
         "composer.py",
         "fragments.py",
         "knowledge_panel.py",

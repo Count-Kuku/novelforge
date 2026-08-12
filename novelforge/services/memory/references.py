@@ -808,7 +808,9 @@ def sync_project_database_from_files(project_name: str) -> dict:
             asset_payload_count = 0
             for story in stories_index.get("stories", []):
                 story_id = str(story.get("story_id") or "default")
-                profile_file = _memory_api.creative_profile_path(normalized_name, story_id)
+                profile_file = _memory_api._story_path_from_project_path(
+                    normalized_name, story_id, "creative_profile.json"
+                )
                 if profile_file.exists():
                     try:
                         profile_raw = _memory_api.json.loads(profile_file.read_text(encoding="utf-8"))
@@ -835,7 +837,9 @@ def sync_project_database_from_files(project_name: str) -> dict:
                 _memory_api.sync_prompt_options_payload(conn, "story", story_prompt_options, story_id)
                 story_prompt_option_count += len(story_prompt_options)
 
-                creative_discussion_file = _memory_api._creative_profile_discussion_path(normalized_name, story_id)
+                creative_discussion_file = _memory_api._story_path_from_project_path(
+                    normalized_name, story_id, "creative_profile.discussion.json"
+                )
                 if creative_discussion_file.exists():
                     try:
                         payload = _memory_api.json.loads(creative_discussion_file.read_text(encoding="utf-8"))

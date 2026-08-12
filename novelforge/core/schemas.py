@@ -603,10 +603,37 @@ class CreativeFragment(NovelForgeSchema):
     accepted_at: str | None = None
 
 
+class CreativeAttachment(NovelForgeSchema):
+    attachment_id: str
+    content_hash: str
+    source_id: str
+    source_revision_id: str | None = None
+    relative_path: str
+    title: str = ""
+    filename: str = ""
+    media_type: str = ""
+    attachment_kind: Literal["file", "pasted_text", "url", "existing_source"] = "file"
+    scope: Literal["turn", "session", "story", "project"] = "session"
+    story_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    remaining_uses: int | None = Field(default=None, ge=0)
+    status: Literal["parsed", "indexed", "processing", "ready", "failed"] = "indexed"
+    ingestion_task_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    task_status: str = ""
+    task_message: str = ""
+    task_progress: dict[str, Any] = Field(default_factory=dict)
+    task_stages: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+
 class CreativeSessionBundle(NovelForgeSchema):
     session: CreativeSession
     turns: list[CreativeTurn] = Field(default_factory=list)
     fragments: list[CreativeFragment] = Field(default_factory=list)
+    attachments: list[CreativeAttachment] = Field(default_factory=list)
 
 
 class ContextDirective(NovelForgeSchema):

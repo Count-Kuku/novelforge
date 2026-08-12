@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`11`
+当前代码期望的 SQLite schema version：`12`
 
 ## 权威存储边界
 
@@ -90,6 +90,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `009_runtime_hardening` | 项目维护锁、向量构建统计，以及旧任务残留租约清理 |
 | `010_llm_usage` | 追加式 LLM 用量事件、价格快照，以及项目/故事/任务/操作索引 |
 | `011_ingestion_knowledge_retrieval_upgrade` | 来源/知识修订、类型化知识、精确证据锚点、父子检索关系、稳定反馈绑定和可查询 FTS5 |
+| `012_creative_attachments` | 自由创作附件、来源修订关联、项目/故事/会话/单轮作用域和一次性消费状态 |
 
 ## 表分组
 
@@ -159,6 +160,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 - `creative_sessions`：自由创作会话。
 - `creative_turns`：会话轮次和操作。
 - `creative_fragments`：片段版本、父子关系、接受状态和审计信息。
+- `creative_attachments`：自由创作资料与既有来源修订的关联，保存作用域、会话/故事归属、索引/后台处理状态和仅下一轮的剩余使用次数；通过 `ingestion_task_id` 投影可恢复知识化任务，OCR 逐页置信度保存在附件与来源修订元数据中；原文仍由来源文件资产承载。
 
 ### 图谱预留
 

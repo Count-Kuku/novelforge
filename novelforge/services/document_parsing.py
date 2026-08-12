@@ -7,6 +7,7 @@ from io import BytesIO
 import mimetypes
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 from typing import Iterable
 from urllib.parse import unquote
 import xml.etree.ElementTree as ET
@@ -521,6 +522,161 @@ def _parse_pdf(filename: str, data: bytes) -> ParsedDocument:
         sections=sections,
         warnings=warnings,
         metadata={"page_count": len(reader.pages), "empty_page_count": empty_pages},
+    )
+
+
+def get_local_ocr_readiness() -> dict:
+    """Report the optional local OCR engine without importing it at startup."""
+
+    executable = shutil.which("tesseract")
+    if not executable:
+        return {
+            "available": False,
+            "engine": "tesseract",
+            "message": "未找到本地 Tesseract OCR，可关闭 OCR 后继续导入文本层。",
+        }
+    try:
+        import fitz  # type: ignore[import-not-found]
+        import pytesseract  # type: ignore[import-not-found]
+        from PIL import Image  # noqa: F401
+    except ImportError:
+        return {
+            "available": False,
+            "engine": "tesseract",
+            "message": "OCR Python 依赖未安装，请重新安装 requirements.txt。",
+        }
+    try:
+        version = str(pytesseract.get_tesseract_version())
+    except Exception as exc:
+        return {
+            "available": False,
+            "engine": "tesseract",
+            "message": f"Tesseract OCR 无法启动：{exc}",
+        }
+    return {
+        "available": True,
+        "engine": "tesseract",
+        "version": version,
+        "executable": executable,
+        "message": "本地 OCR 可用；资料不会上传到第三方 OCR 服务。",
+    }
+
+
+def ocr_pdf_bytes(
+    filename: str,
+    data: bytes,
+    *,
+    languages: str = "chi_sim+eng",
+    dpi: int = 200,
+) -> ParsedDocument:
+    """Run explicitly requested local OCR and retain page confidence evidence."""
+
+    clean_filename = Path(str(filename or "document.pdf")).name
+    _validate_document_size(clean_filename, data)
+    readiness = get_local_ocr_readiness()
+    if not readiness.get("available"):
+        raise DocumentParsingError(str(readiness.get("message") or "本地 OCR 不可用。"))
+    try:
+        import fitz  # type: ignore[import-not-found]
+        import pytesseract  # type: ignore[import-not-found]
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover - guarded by readiness
+        raise DocumentParsingError("OCR Python 依赖未安装。") from exc
+
+    try:
+        pdf = fitz.open(stream=data, filetype="pdf")
+    except Exception as exc:
+        raise DocumentParsingError(f"PDF 无法打开以执行 OCR：{exc}") from exc
+    if pdf.page_count > MAX_PDF_PAGES:
+        pdf.close()
+        raise DocumentParsingError(f"PDF 超过 {MAX_PDF_PAGES} 页安全上限。")
+
+    sections: list[ParsedSection] = []
+    page_confidences: list[dict] = []
+    low_confidence_pages: list[int] = []
+    zoom = max(int(dpi or 200), 72) / 72.0
+    try:
+        for page_index in range(pdf.page_count):
+            page = pdf.load_page(page_index)
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
+            image = Image.frombytes("RGB", [pixmap.width, pixmap.height], pixmap.samples)
+            try:
+                ocr_data = pytesseract.image_to_data(
+                    image,
+                    lang=languages,
+                    output_type=pytesseract.Output.DICT,
+                )
+            except Exception as exc:
+                raise DocumentParsingError(
+                    f"第 {page_index + 1} 页 OCR 失败：{exc}"
+                ) from exc
+            words: list[str] = []
+            confidences: list[float] = []
+            for text, raw_confidence in zip(
+                ocr_data.get("text", []),
+                ocr_data.get("conf", []),
+            ):
+                clean_text = str(text or "").strip()
+                try:
+                    confidence = float(raw_confidence)
+                except (TypeError, ValueError):
+                    confidence = -1.0
+                if clean_text:
+                    words.append(clean_text)
+                if clean_text and confidence >= 0:
+                    confidences.append(confidence)
+            page_text = " ".join(words).strip()
+            mean_confidence = (
+                round(sum(confidences) / len(confidences), 2)
+                if confidences
+                else 0.0
+            )
+            page_number = page_index + 1
+            page_confidences.append(
+                {
+                    "page": page_number,
+                    "confidence": mean_confidence,
+                    "char_count": len(page_text),
+                }
+            )
+            if mean_confidence < 60:
+                low_confidence_pages.append(page_number)
+            if page_text:
+                sections.append(
+                    ParsedSection(
+                        title=f"第 {page_number} 页",
+                        text=page_text,
+                        level=2,
+                        order=len(sections) + 1,
+                        content_kind="ocr_pdf_page",
+                        location={"page": page_number, "ocr_confidence": mean_confidence},
+                    )
+                )
+    finally:
+        pdf.close()
+
+    warnings: list[str] = []
+    if low_confidence_pages:
+        preview = "、".join(str(value) for value in low_confidence_pages[:12])
+        warnings.append(f"OCR 置信度低于 60 的页面：{preview}。请在附件状态中抽查。")
+    if not sections:
+        warnings.append("OCR 没有识别到可用文本。")
+    return ParsedDocument(
+        filename=clean_filename,
+        title=Path(clean_filename).stem or "扫描 PDF",
+        media_type="application/pdf",
+        parser_name="tesseract_ocr",
+        sections=sections,
+        warnings=warnings,
+        metadata={
+            "page_count": len(page_confidences),
+            "empty_page_count": len([item for item in page_confidences if not item["char_count"]]),
+            "ocr_requested": True,
+            "ocr_engine": readiness.get("engine"),
+            "ocr_engine_version": readiness.get("version"),
+            "ocr_languages": languages,
+            "ocr_page_confidences": page_confidences,
+        },
     )
 
 

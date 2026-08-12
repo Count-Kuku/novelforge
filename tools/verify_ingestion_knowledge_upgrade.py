@@ -194,7 +194,7 @@ def verify_database_and_retrieval() -> None:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    check(ensure_schema(conn) == CURRENT_SCHEMA_VERSION == 11, "数据库迁移升级到 v11")
+    check(ensure_schema(conn) == CURRENT_SCHEMA_VERSION >= 11, "数据库迁移包含资料知识升级 v11")
     sync_stories_index(conn, {"stories": [{"story_id": "default", "name": "默认"}], "active_story_id": "default"})
     batch = sync_long_reference_batch(conn, {
         "batch_id": "upgrade",

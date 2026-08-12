@@ -354,6 +354,8 @@ def assemble_generation_context(
     top_k: int | None = None,
     retrieval_mode: str = "hybrid",
     context_budget: int = DEFAULT_CONTEXT_BUDGET,
+    retrieval_session_id: str = "",
+    retrieval_turn_id: str = "",
 ) -> ContextAssembly:
     normalized_guidance = dict(generation_guidance or {})
     if manual_knowledge_ids is None and "manual_knowledge_ids" in normalized_guidance:
@@ -517,6 +519,8 @@ def assemble_generation_context(
         explicit_knowledge_ids=manual_knowledge_ids,
         reference_focus=list(profile.get("reference_focus") or []),
         reference_strength=str(profile.get("reference_strength") or "").strip() or None,
+        session_id=retrieval_session_id,
+        turn_id=retrieval_turn_id,
     )
     deduped_hits: list[RetrievalHit] = []
     for hit in hits:

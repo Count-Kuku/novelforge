@@ -489,6 +489,46 @@ def finalize_creative_session_rows(
 
 
 def delete_creative_session_row(conn: sqlite3.Connection, session_id: str) -> bool:
+    source_ids = [
+        str(row["source_id"])
+        for row in conn.execute(
+            """
+            SELECT DISTINCT source_id
+            FROM creative_attachments
+            WHERE session_id = ? AND scope IN ('session', 'turn')
+            """,
+            (str(session_id or "").strip(),),
+        ).fetchall()
+    ]
+    for source_id in source_ids:
+        other_owner = conn.execute(
+            """
+            SELECT 1 FROM creative_attachments
+            WHERE source_id = ? AND session_id <> ?
+            LIMIT 1
+            """,
+            (source_id, str(session_id or "").strip()),
+        ).fetchone()
+        if other_owner is not None:
+            continue
+        conn.execute(
+            """
+            UPDATE source_segments
+            SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE source_id = ? AND deleted_at IS NULL
+            """,
+            (source_id,),
+        )
+        conn.execute(
+            """
+            UPDATE source_documents
+            SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+            WHERE source_id = ? AND deleted_at IS NULL
+            """,
+            (source_id,),
+        )
     return conn.execute(
         "DELETE FROM creative_sessions WHERE session_id = ?",
         (str(session_id or "").strip(),),
@@ -541,6 +581,17 @@ def clone_creative_session_rows(
         str(row["fragment_id"]): _copy_id("fragment", target_story_id, str(row["fragment_id"]))
         for row in fragment_rows
     }
+    attachment_rows = conn.execute(
+        """
+        SELECT attachment.*
+        FROM creative_attachments AS attachment
+        LEFT JOIN creative_sessions AS session ON session.session_id = attachment.session_id
+        WHERE attachment.scope IN ('story', 'session', 'turn')
+          AND (attachment.story_id = ? OR session.story_id = ?)
+        ORDER BY attachment.created_at, attachment.attachment_id
+        """,
+        (source_story_id, source_story_id),
+    ).fetchall()
     now = _now()
     for row in sessions:
         conn.execute(
@@ -630,9 +681,59 @@ def clone_creative_session_rows(
                 now if row["accepted_at"] else None,
             ),
         )
+    for row in attachment_rows:
+        source_attachment_id = str(row["attachment_id"])
+        target_attachment_id = _copy_id(
+            "attachment", target_story_id, source_attachment_id
+        )
+        source_session_id = str(row["session_id"] or "")
+        source_turn_id = str(row["turn_id"] or "")
+        source_id = str(row["source_id"])
+        source_row = conn.execute(
+            "SELECT story_id FROM source_documents WHERE source_id = ?",
+            (source_id,),
+        ).fetchone()
+        if source_row is not None and str(source_row["story_id"] or "") == source_story_id:
+            conn.execute(
+                "UPDATE source_documents SET story_id = NULL WHERE source_id = ?",
+                (source_id,),
+            )
+        conn.execute(
+            """
+            INSERT INTO creative_attachments (
+                attachment_id, content_hash, source_id, source_revision_id,
+                relative_path, title, filename, media_type, attachment_kind,
+                scope, story_id, session_id, turn_id, status,
+                ingestion_task_id, remaining_uses, metadata_json, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                target_attachment_id,
+                str(row["content_hash"]),
+                source_id,
+                row["source_revision_id"],
+                str(row["relative_path"]),
+                str(row["title"] or ""),
+                str(row["filename"] or ""),
+                str(row["media_type"] or ""),
+                str(row["attachment_kind"] or "file"),
+                str(row["scope"] or "story"),
+                target_story_id,
+                session_map.get(source_session_id),
+                turn_map.get(source_turn_id),
+                str(row["status"] or "indexed"),
+                None,
+                row["remaining_uses"],
+                str(row["metadata_json"] or "{}"),
+                now,
+                now,
+            ),
+        )
     return {
         "session_count": len(sessions),
         "turn_count": len(turn_rows),
         "fragment_count": len(fragment_rows),
+        "attachment_count": len(attachment_rows),
         "session_id_map": session_map,
     }

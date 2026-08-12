@@ -32,6 +32,15 @@ from .creative_sessions import (
     update_creative_fragment_row,
     update_creative_session_row,
 )
+from .creative_attachments import (
+    claim_turn_creative_attachment_rows,
+    list_creative_attachment_rows,
+    list_all_creative_attachment_rows,
+    load_creative_attachment_row,
+    release_turn_creative_attachment_rows,
+    update_creative_attachment_row,
+    upsert_creative_attachment_row,
+)
 from .knowledge import (
     delete_knowledge_category_item,
     delete_pending_knowledge_items,
@@ -160,6 +169,13 @@ __all__ = [
     "load_creative_session_row",
     "update_creative_fragment_row",
     "update_creative_session_row",
+    "list_creative_attachment_rows",
+    "list_all_creative_attachment_rows",
+    "claim_turn_creative_attachment_rows",
+    "load_creative_attachment_row",
+    "release_turn_creative_attachment_rows",
+    "update_creative_attachment_row",
+    "upsert_creative_attachment_row",
     "rename_project_meta",
     "set_project_maintenance_mode",
     "delete_workflow_run_snapshot",
