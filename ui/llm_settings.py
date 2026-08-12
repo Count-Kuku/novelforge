@@ -17,7 +17,7 @@ from novelforge.services.memory import (
     set_active_llm_profile,
     upsert_llm_profile,
 )
-from ui.common import confirmed_button, scoped_widget_key
+from ui.common import confirmed_button, developer_mode_enabled, scoped_widget_key
 from ui.layout import render_stat_strip
 from ui.llm_usage import render_usage_dashboard
 
@@ -808,6 +808,8 @@ def _render_active_llm_settings(settings: dict) -> None:
             st.info("聊天配置尚未验证。建议点击“测试连接”，系统会分别检查对话和语义检索能力。")
         if readiness.get("retrieval_mode") == "lexical":
             st.caption(readiness.get("embedding_message") or "资料检索当前使用关键词模式。")
+    if not developer_mode_enabled():
+        return
     with st.expander("查看完整配置与文件路径", expanded=False):
         st.code(json.dumps({
         "方案标识": settings.get("profile_id", ""),

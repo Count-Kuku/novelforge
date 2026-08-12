@@ -6,6 +6,7 @@ import json
 import streamlit as st
 
 from novelforge.services.retrieval_eval import build_retrieval_usage_report_from_payload
+from ui.common import developer_mode_enabled
 from ui.labels import label_authority, label_schema, label_scope, label_source_type
 from ui.retrieval_views import render_retrieval_hits_block
 
@@ -33,7 +34,7 @@ def render_step_validation(step_result: dict):
         st.caption(f"结构校验失败：{schema_name} / {message}")
 
 def render_step_json_expander(title: str, payload: dict):
-    if not payload:
+    if not payload or not developer_mode_enabled():
         return
     with st.expander(title, expanded=False):
         st.code(json.dumps(payload, ensure_ascii=False, indent=2), language="json")

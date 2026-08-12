@@ -21,7 +21,7 @@ from novelforge.workflows.ingestion_tasks import (
     resume_long_reference_ingestion_task,
     retry_failed_long_reference_ingestion_task,
 )
-from ui.common import confirmed_button, scoped_widget_key
+from ui.common import confirmed_button, developer_mode_enabled, scoped_widget_key
 from ui.ingestion_task_estimate import render_ingestion_task_estimate
 from ui.llm_usage import format_usage_cost
 
@@ -157,7 +157,7 @@ def _render_runtime_status(task: dict) -> None:
         st.caption("后台调度器正在运行；关闭浏览器页面不会停止资料任务。")
     else:
         st.warning("后台调度器当前未运行。任务会保留在数据库中，并在调度器恢复后继续。")
-    if task.get("worker_id"):
+    if task.get("worker_id") and developer_mode_enabled():
         with st.expander("Worker、租约与心跳", expanded=False):
             st.json({
                 "worker_id": task.get("worker_id", ""),
@@ -285,8 +285,9 @@ def _render_task_details(task: dict) -> None:
             width="stretch",
             hide_index=True,
         )
-    with st.expander("任务设置与最近结果", expanded=False):
-        st.json({
+    if developer_mode_enabled():
+        with st.expander("任务设置与最近结果", expanded=False):
+            st.json({
             "任务 ID": task.get("task_id", ""),
             "批次 ID": task.get("batch_id", ""),
             "创建时间": task.get("created_at", ""),
@@ -294,7 +295,7 @@ def _render_task_details(task: dict) -> None:
             "归档时间": task.get("archived_at", ""),
             "设置": task.get("configuration", {}),
             "最近结果": task.get("result", {}),
-        })
+            })
 
 
 def _render_actual_usage(project_name: str, task: dict) -> None:

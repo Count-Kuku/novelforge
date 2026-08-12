@@ -1,4 +1,5 @@
 from hashlib import sha256
+import re
 
 from novelforge.domain.knowledge_quality import merge_list_values, merge_text_values, normalize_knowledge_match_name
 from novelforge.domain.knowledge_workflows import safe_confidence
@@ -75,6 +76,25 @@ def merge_details_values(items: list[dict]) -> dict:
     return merged
 
 
+def merge_typed_values(items: list[dict]) -> dict:
+    """Merge structured fields for display while retaining source ownership."""
+
+    merged: dict = {}
+    for item in items:
+        typed = item.get("typed_data") if isinstance(item.get("typed_data"), dict) else {}
+        for key, value in typed.items():
+            if value in (None, "", []):
+                continue
+            if isinstance(value, list):
+                current = merged.get(key, [])
+                merged[key] = merge_list_values([current if isinstance(current, list) else [current], value])
+            elif key not in merged:
+                merged[key] = value
+            elif str(value) not in str(merged[key]):
+                merged[key] = merge_text_values([str(merged[key]), str(value)])
+    return merged
+
+
 def pick_authority(values: list[str]) -> str:
     priority = {"official": 5, "project": 4, "curated": 3, "community": 2, "unknown": 1}
     cleaned = [str(value or "unknown") for value in values]
@@ -120,10 +140,15 @@ def item_search_text(item: dict) -> str:
         item.get("source_title", ""),
         " ".join(str(tag) for tag in item.get("tags", []) if str(tag).strip()) if isinstance(item.get("tags", []), list) else "",
     ]
-    details = item.get("details", {})
-    if isinstance(details, dict):
-        parts.extend([str(key) for key in details.keys()])
-        parts.extend([str(value) for value in details.values()])
+    for structured in (item.get("typed_data", {}), item.get("details", {})):
+        if not isinstance(structured, dict):
+            continue
+        parts.extend([str(key) for key in structured.keys()])
+        for value in structured.values():
+            if isinstance(value, list):
+                parts.extend(str(entry) for entry in value)
+            else:
+                parts.append(str(value))
     return "\n".join(str(part) for part in parts if str(part).strip())
 
 
@@ -198,6 +223,57 @@ def summarize_items_for_card(items: list[dict], max_items: int = 8) -> list[str]
     return lines
 
 
+def source_chips_for_items(items: list[dict], max_items: int = 12) -> list[dict]:
+    """Build compact source references without copying source facts."""
+
+    chips: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = (
+            str(item.get("source_title") or "").strip(),
+            str(item.get("source_origin") or "").strip(),
+            str(item.get("source_segment_id") or "").strip(),
+        )
+        if not any(key) or key in seen:
+            continue
+        seen.add(key)
+        chips.append({
+            "title": key[0] or "未命名来源",
+            "origin": key[1],
+            "segment_id": key[2],
+            "knowledge_id": str(item.get("id") or item.get("knowledge_id") or ""),
+        })
+        if len(chips) >= max_items:
+            break
+    return chips
+
+
+def timeline_item_sort_key(item: dict) -> tuple:
+    """Return a deterministic creator-facing order for mixed timeline labels."""
+
+    typed = item.get("typed_data") if isinstance(item.get("typed_data"), dict) else {}
+    raw_order = str(typed.get("order_hint") or item.get("order_hint") or "").strip()
+    raw_time = str(typed.get("time") or item.get("time") or "").strip()
+
+    def natural_parts(value: str) -> tuple:
+        return tuple(
+            (0, int(part)) if part.isdigit() else (1, part.casefold())
+            for part in re.split(r"(\d+)", value)
+            if part
+        )
+
+    return (
+        0 if raw_order else 1,
+        natural_parts(raw_order),
+        0 if raw_time else 1,
+        natural_parts(raw_time),
+        str(item.get("name") or "").casefold(),
+        str(item.get("id") or item.get("knowledge_id") or ""),
+    )
+
+
 def build_character_entity_cards(project_name: str, max_characters: int = 80) -> list[dict]:
     knowledge_base = load_knowledge_base(project_name)
     alias_groups = load_entity_aliases(project_name)
@@ -239,13 +315,19 @@ def build_character_entity_cards(project_name: str, max_characters: int = 80) ->
             "name": name,
             "aliases": aliases,
             "summary": merged_character.get("summary", ""),
-            "profile": merged_character.get("details", {}),
+            "profile": {**merged_character.get("details", {}), **merge_typed_values(items)},
             "relationships": related_relationships,
+            "abilities": summarize_items_for_card(sources["abilities"]),
+            "items": summarize_items_for_card(sources["items"]),
             "abilities_and_items": related_abilities,
             "dialogue_style": dialogue_notes,
             "constraints": constraints,
             "timeline": timeline,
+            "events": timeline,
             "evidence": evidence,
+            "sources": source_chips_for_items([
+                item for source_items in sources.values() for item in source_items
+            ]),
             "confidence": merged_character.get("confidence", 0.7),
             "importance": max([safe_confidence(item.get("importance", 0.5)) for item in items] or [0.5]),
             "canon_status": primary.get("canon_status", "unknown"),
@@ -256,6 +338,7 @@ def build_character_entity_cards(project_name: str, max_characters: int = 80) ->
             "worldline_id": primary.get("worldline_id", ""),
             "worldline_label": primary.get("worldline_label", ""),
             "source_knowledge_ids": source_ids,
+            "primary_knowledge_id": str(primary.get("id") or primary.get("knowledge_id") or ""),
             "tags": tags,
             "status": "entity_card",
         }
@@ -295,7 +378,12 @@ def build_setting_entity_cards(project_name: str, max_cards: int = 120) -> list[
                 [item for item in knowledge.get("relationships", []) if isinstance(item, dict) and _isolation_compatible(item, primary)],
                 [],
             )[:6]
+            related_conflicts = [
+                item for item in related_relationships
+                if any(token in item_search_text(item).lower() for token in ("冲突", "敌对", "战争", "矛盾", "conflict", "hostile"))
+            ]
             details = primary.get("details", {}) if isinstance(primary.get("details", {}), dict) else {}
+            profile = {**details, **merge_typed_values(group_items)}
             evidence = merge_list_values([item.get("evidence", []) for item in group_items])[:8]
             card = {
                 "id": _entity_card_id("setting_entity", category, name_key, primary),
@@ -303,11 +391,13 @@ def build_setting_entity_cards(project_name: str, max_cards: int = 120) -> list[
                 "setting_type": category,
                 "name": primary.get("name", "未命名设定"),
                 "summary": merge_text_values([item.get("summary", "") for item in group_items])[:1200],
-                "profile": details,
+                "profile": profile,
                 "rules": summarize_items_for_card(group_items, max_items=8),
                 "timeline": summarize_items_for_card(related_timeline, max_items=6),
                 "related_entities": summarize_items_for_card(related_relationships, max_items=6),
+                "conflicts": summarize_items_for_card(related_conflicts, max_items=6),
                 "evidence": evidence,
+                "sources": source_chips_for_items(group_items + related_timeline + related_relationships),
                 "confidence": primary.get("confidence", 0.7),
                 "importance": max([safe_confidence(item.get("importance", 0.5)) for item in group_items] or [0.5]),
                 "canon_status": primary.get("canon_status", "unknown"),
@@ -318,6 +408,7 @@ def build_setting_entity_cards(project_name: str, max_cards: int = 120) -> list[
                 "worldline_id": primary.get("worldline_id", ""),
                 "worldline_label": primary.get("worldline_label", ""),
                 "source_knowledge_ids": merge_list_values([[item.get("id", "") for item in group_items if item.get("id")]]),
+                "primary_knowledge_id": str(primary.get("id") or primary.get("knowledge_id") or ""),
                 "tags": merge_list_values([[SETTING_ENTITY_CATEGORY_GROUPS.get(category, category), "设定实体卡", "entity_setting"], primary.get("tags", [])]),
                 "status": "entity_card",
             }

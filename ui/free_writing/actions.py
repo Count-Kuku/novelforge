@@ -12,7 +12,7 @@ from novelforge.workflows.creative_actions import (
     execute_creative_action,
     undo_creative_action,
 )
-from ui.common import scoped_widget_key
+from ui.common import developer_mode_enabled, scoped_widget_key
 from ui.streaming import run_with_stream
 
 
@@ -27,6 +27,17 @@ ACTION_LABELS = {
 }
 
 
+def _humanize_mapping(value: dict) -> str:
+    parts = []
+    for key, item in value.items():
+        label = {
+            "category": "分类", "knowledge_id": "知识", "story_id": "故事",
+            "chapter_no": "章节", "scope": "范围", "field": "字段",
+        }.get(str(key), str(key))
+        parts.append(f"{label}：{item}")
+    return " · ".join(parts)
+
+
 def _render_action_card(project_name: str, action: dict) -> None:
     action_id = str(action.get("action_id") or "")
     label = ACTION_LABELS.get(str(action.get("action_type") or ""), "创作动作")
@@ -36,9 +47,9 @@ def _render_action_card(project_name: str, action: dict) -> None:
         target = dict(action.get("target") or {})
         patch = dict(action.get("patch") or {})
         if target:
-            st.caption("目标：" + json.dumps(target, ensure_ascii=False))
+            st.caption("目标：" + (_humanize_mapping(target) if not developer_mode_enabled() else json.dumps(target, ensure_ascii=False)))
         if patch:
-            st.caption("拟变更：" + json.dumps(patch, ensure_ascii=False))
+            st.caption("拟变更：" + (_humanize_mapping(patch) if not developer_mode_enabled() else json.dumps(patch, ensure_ascii=False)))
         if status == "awaiting_confirmation":
             confirm_col, cancel_col = st.columns(2)
             if confirm_col.button(

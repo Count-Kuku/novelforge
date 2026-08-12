@@ -20,7 +20,7 @@ from novelforge.services.resource_browser import (
     _save_browser_resource,
 )
 from novelforge.services.retrieval import rebuild_retrieval_assets
-from ui.common import confirmed_button, navigate_to, scoped_widget_key
+from ui.common import confirmed_button, developer_mode_enabled, navigate_to, scoped_widget_key
 from ui.labels import label_status
 from ui.resource_browser_state import (
     RESOURCE_BROWSER_GROUPS,
@@ -83,7 +83,9 @@ def _status_index(status: str) -> int:
 
 
 def _render_run_resource_detail(project_name: str, story_id: str, resource: dict) -> None:
-    st.code(resource.get("content", ""), language="json")
+    st.caption("运行记录已保存。开发者模式可查看完整技术数据。")
+    if developer_mode_enabled():
+        st.code(resource.get("content", ""), language="json")
     delete_key = scoped_widget_key("browser_delete", project_name, story_id, resource.get("id"))
     if confirmed_button(st, "删除该运行记录", "确认删除该运行记录", delete_key):
         if _delete_browser_resource(project_name, resource, story_id=story_id):
@@ -108,7 +110,8 @@ def _render_readonly_resource_detail(project_name: str, story_id: str, resource:
     group = str(resource.get("group") or "")
     if group == "creative_session":
         st.caption("自由创作会话在资源浏览器中只读；继续创作、提炼设定或整理章节请回到“自由创作”。")
-        st.code(resource.get("content", ""), language="json")
+        if developer_mode_enabled():
+            st.code(resource.get("content", ""), language="json")
         if st.button(
             "前往自由创作",
             key=scoped_widget_key("browser_goto_creative", project_name, story_id, resource.get("id")),
@@ -118,10 +121,12 @@ def _render_readonly_resource_detail(project_name: str, story_id: str, resource:
         return
     if group in {"context_directive", "generation_context"}:
         st.caption("这类记录在资源页中只读；创作提醒请到生成页面管理，生成时实际使用的资料会自动随结果保存。")
-        st.code(resource.get("content", ""), language="json")
+        if developer_mode_enabled():
+            st.code(resource.get("content", ""), language="json")
         return
     st.caption("该资源在浏览器中只读；编辑和批量处理请回到「资料导入」。")
-    st.code(resource.get("content", ""), language="json")
+    if developer_mode_enabled():
+        st.code(resource.get("content", ""), language="json")
     if st.button(
         "前往资料导入",
         key=scoped_widget_key("browser_goto_ingestion", project_name, story_id, resource.get("id")),
@@ -202,6 +207,9 @@ def _render_arc_metadata_editor(project_name: str, story_id: str, resource: dict
 
 
 def _render_structured_payload_editor(project_name: str, story_id: str, resource: dict) -> str:
+    if not developer_mode_enabled():
+        payload = resource.get("review_payload", {}) if resource.get("group") == "review" else resource.get("evaluation_payload", {})
+        return json.dumps(payload, ensure_ascii=False)
     if resource.get("group") == "review":
         return st.text_area(
             "审阅详细数据",

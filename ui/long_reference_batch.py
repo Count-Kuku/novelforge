@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 
 import streamlit as st
+from ui.common import developer_mode_enabled
 
 from novelforge.domain.extraction_presets import (
     KNOWLEDGE_CONSOLIDATION_MODE_LABELS,
@@ -79,7 +80,7 @@ def render_knowledge_diff_item(item: dict, prefix: str):
     if item.get("summary"):
         st.write(str(item.get("summary"))[:500])
     details = item.get("details", {})
-    if isinstance(details, dict) and details:
+    if isinstance(details, dict) and details and developer_mode_enabled():
         st.caption(f"{prefix} details")
         st.json(details)
 
@@ -396,7 +397,7 @@ def _render_batch_quick_result(selected_batch_id: str):
         if batch_quick_result.get("queued"):
             st.info(f"后台任务已创建：{batch_quick_result.get('task_id', '')}。请在“资料任务”中查看实时状态。")
             return
-        st.json({
+        result_rows = {
             "任务 ID": batch_quick_result.get("task_id", ""),
             "导入片段": batch_quick_result.get("imported_count", 0),
             "提取片段": batch_quick_result.get("processed_count", 0),
@@ -406,7 +407,11 @@ def _render_batch_quick_result(selected_batch_id: str):
             "保留待审核": batch_quick_result.get("blocked_count", 0),
             "保留原因": batch_quick_result.get("auto_confirm", {}).get("blocked_reasons", {}),
             "失败": batch_quick_result.get("failed_titles", []),
-        })
+        }
+        st.dataframe(
+            [{"结果": key, "内容": str(value)} for key, value in result_rows.items()],
+            width="stretch", hide_index=True,
+        )
 
 
 def _render_batch_quick_continue(
@@ -601,12 +606,12 @@ def _render_manual_extract_result(selected_batch_id: str):
     if not manual_extract_result:
         return
     with st.expander("上次手动提取结果", expanded=bool(manual_extract_result.get("failures"))):
-        st.json({
+        st.dataframe([{
             "操作": manual_extract_result.get("action", ""),
             "处理片段": manual_extract_result.get("processed", 0),
             "新增候选": manual_extract_result.get("queued_total", 0),
             "失败": manual_extract_result.get("failures", []),
-        })
+        }], width="stretch", hide_index=True)
 
 
 def _render_batch_manual_processing(
@@ -737,13 +742,16 @@ def _render_extraction_plan_template_editor(
                     st.rerun()
                 else:
                     st.error("删除失败：模板不存在。")
-            templates_json = st.text_area(
-                "模板库 JSON",
-                value=json.dumps(project_plan_templates, ensure_ascii=False, indent=2),
-                height=180,
-                key=f"batch_extract_plan_templates_json_{selected_batch_id}",
-            )
-            if st.button("保存模板库 JSON", key=f"batch_save_extract_plan_templates_json_{selected_batch_id}", width="stretch"):
+            if developer_mode_enabled():
+                templates_json = st.text_area(
+                    "模板库 JSON",
+                    value=json.dumps(project_plan_templates, ensure_ascii=False, indent=2),
+                    height=180,
+                    key=f"batch_extract_plan_templates_json_{selected_batch_id}",
+                )
+            else:
+                templates_json = ""
+            if developer_mode_enabled() and st.button("保存模板库 JSON", key=f"batch_save_extract_plan_templates_json_{selected_batch_id}", width="stretch"):
                 try:
                     parsed = json.loads(templates_json)
                     if not isinstance(parsed, list):
@@ -1109,13 +1117,16 @@ def _render_batch_advanced_actions(project_name: str, batch: dict, selected_batc
             else:
                 st.success("已删除批次记录。已导入的资料文件和知识库条目不会被删除。")
                 st.rerun()
-        raw_batch_json = st.text_area(
-            "批次原始数据",
-            value=json.dumps(batch, ensure_ascii=False, indent=2),
-            height=360,
-            key=f"batch_raw_json_{selected_batch_id}",
-        )
-        if st.button("保存批次原始数据", key=f"batch_save_raw_{selected_batch_id}"):
+        if developer_mode_enabled():
+            raw_batch_json = st.text_area(
+                "批次原始数据",
+                value=json.dumps(batch, ensure_ascii=False, indent=2),
+                height=360,
+                key=f"batch_raw_json_{selected_batch_id}",
+            )
+        else:
+            raw_batch_json = ""
+        if developer_mode_enabled() and st.button("保存批次原始数据", key=f"batch_save_raw_{selected_batch_id}"):
             try:
                 parsed = json.loads(raw_batch_json)
                 if not isinstance(parsed, dict):

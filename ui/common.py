@@ -3,10 +3,18 @@ from __future__ import annotations
 
 import hashlib
 import html
+import os
 
 import streamlit as st
 
 from novelforge.domain.creative_profile_workflows import CUSTOM_OPTION_LABEL
+
+
+def developer_mode_enabled() -> bool:
+    """Developer-only surfaces are opt-in and never exposed by default."""
+
+    value = str(os.environ.get("NOVELFORGE_DEVELOPER_MODE") or "").strip().lower()
+    return value in {"1", "true", "yes", "on", "enabled"}
 
 def create_batch_progress_callback(title: str):
     progress_bar = st.progress(0)

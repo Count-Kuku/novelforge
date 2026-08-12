@@ -692,7 +692,7 @@ def _render_long_reference_quick_result(state_scope: StateScope):
             f"模式={KNOWLEDGE_EXTRACTION_MODE_LABELS.get(quick_result.get('extraction_mode', ''), quick_result.get('extraction_mode', ''))} / "
             f"分类={'、'.join(label_knowledge_category(category) for category in quick_result.get('categories', []))}"
         )
-        st.json({
+        result_rows = {
             "任务 ID": quick_result.get("task_id", ""),
             "导入片段": quick_result.get("imported_count", 0),
             "提取片段": quick_result.get("processed_count", 0),
@@ -702,7 +702,11 @@ def _render_long_reference_quick_result(state_scope: StateScope):
             "保留待审核": quick_result.get("blocked_count", 0),
             "失败": quick_result.get("failed_titles", []),
             "保留原因": quick_result.get("auto_confirm", {}).get("blocked_reasons", {}),
-        })
+        }
+        st.dataframe(
+            [{"结果": key, "内容": str(value)} for key, value in result_rows.items()],
+            width="stretch", hide_index=True,
+        )
 
 
 def _render_long_reference_stepwise_processing(
@@ -815,12 +819,12 @@ def _render_long_reference_stepwise_processing(
         )
         if manual_result:
             with st.expander("上次手动提取结果", expanded=bool(manual_result.get("failed_titles"))):
-                st.json({
+                st.dataframe([{
                     "处理片段": manual_result.get("processed", 0),
                     "新增候选": manual_result.get("queued_total", 0),
                     "失败": manual_result.get("failed_titles", []),
                     "整理": manual_result.get("consolidation", {}),
-                })
+                }], width="stretch", hide_index=True)
 
 
 def render_long_reference_importer(

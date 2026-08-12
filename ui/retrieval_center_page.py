@@ -21,7 +21,7 @@ from novelforge.services.retrieval import (
 )
 from novelforge.services.retrieval_eval import retrieval_profile_label
 from novelforge.workflows.skills import detect_potential_conflicts, save_retrieval_conflict_resolution
-from ui.common import confirmed_button, scoped_session_key, scoped_widget_key
+from ui.common import confirmed_button, developer_mode_enabled, scoped_session_key, scoped_widget_key
 from ui.labels import (
     label_knowledge_category,
     label_retrieval_mode,
@@ -306,7 +306,7 @@ def _render_retrieval_conflicts(project_name: str, current_story_id: str, curren
                         st.error(f"保存裁决失败：{exc}")
 
     resolutions = load_conflict_resolutions(project_name)
-    if resolutions:
+    if resolutions and developer_mode_enabled():
         with st.expander("已保存冲突裁决", expanded=False):
             st.code(json.dumps(resolutions, ensure_ascii=False, indent=2), language="json")
 

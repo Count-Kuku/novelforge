@@ -19,7 +19,7 @@ from novelforge.services.memory import (
     retry_knowledge_center_index,
     search_knowledge_center,
 )
-from ui.common import scoped_widget_key
+from ui.common import developer_mode_enabled, scoped_widget_key
 from ui.labels import label_knowledge_category
 
 
@@ -171,7 +171,15 @@ def _render_knowledge_history(project_name: str, record: dict) -> None:
     )
     revision = next(item for item in revisions if str(item.get("revision_id") or "") == selected)
     diff = knowledge_revision_diff(payload, revision)
-    st.code(diff or "该修订与当前版本没有字段差异。", language="diff")
+    if developer_mode_enabled():
+        st.code(diff or "该修订与当前版本没有字段差异。", language="diff")
+    else:
+        changed_fields = []
+        snapshot = revision.get("snapshot") if isinstance(revision.get("snapshot"), dict) else {}
+        for key in sorted(set(snapshot) | set(payload)):
+            if snapshot.get(key) != payload.get(key) and key not in {"updated_at", "created_at"}:
+                changed_fields.append(key)
+        st.caption("变更字段：" + ("、".join(changed_fields) if changed_fields else "无内容差异"))
     if st.button(
         "恢复为新修订",
         key=scoped_widget_key("knowledge_center_restore_revision", project_name, knowledge_id, selected),
@@ -201,7 +209,7 @@ def _render_detail(project_name: str, story_id: str, query: str) -> None:
     payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
     st.caption(
         f"{label_knowledge_category(record.get('category') or '')} · "
-        f"故事 {record.get('story_id') or '项目共享'} · 世界线 {record.get('worldline_id') or '通用'}"
+        f"故事 {record.get('story_id') or '项目共享'} · 资料版本 {record.get('worldline_id') or '通用'}"
     )
     if payload.get("summary"):
         st.write(payload.get("summary"))
@@ -226,7 +234,7 @@ def _render_detail(project_name: str, story_id: str, query: str) -> None:
 
 def render_unified_knowledge_center(project_name: str, story_id: str) -> None:
     st.markdown("### 资料与知识中心")
-    st.caption("跨来源、分类、故事与世界线搜索；结果按页加载，不会一次创建全部控件。")
+    st.caption("跨来源、分类、故事与资料版本搜索；结果按页加载，不会一次创建全部控件。")
     _render_index_state(project_name)
     view = st.segmented_control(
         "统一视图", options=list(VIEW_FILTERS), default="全部",
@@ -238,7 +246,7 @@ def render_unified_knowledge_center(project_name: str, story_id: str) -> None:
         key=scoped_widget_key("knowledge_center_query", project_name, story_id),
     )
     worldline = st.text_input(
-        "世界线（留空不过滤）", value="",
+        "资料版本（留空不过滤）", value="",
         key=scoped_widget_key("knowledge_center_worldline", project_name, story_id),
     )
     signature = json.dumps([view, query, worldline], ensure_ascii=False)

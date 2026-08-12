@@ -10,7 +10,6 @@ from novelforge.services.memory import (
     discard_pending_knowledge_items,
     load_auto_review_policy,
     load_auto_review_runs,
-    load_character_entities,
     load_entity_aliases,
     load_knowledge_base,
     load_knowledge_category,
@@ -18,17 +17,14 @@ from novelforge.services.memory import (
     load_knowledge_evidence,
     load_long_reference_batch,
     load_pending_knowledge_items,
-    load_setting_entities,
     load_source_package_report,
     queue_pending_knowledge_items,
     restore_auto_review_snapshots_to_pending,
     return_confirmed_knowledge_item_to_pending,
     rollback_auto_review_run,
     save_auto_review_policy,
-    save_character_entities,
     save_entity_aliases,
     save_pending_knowledge_items,
-    save_setting_entities,
     save_source_package_report,
 )
 from novelforge.services.retrieval import rebuild_retrieval_assets
@@ -70,7 +66,7 @@ from novelforge.domain.knowledge_workflows import (
     summarize_item_evidence,
     update_pending_knowledge_item,
 )
-from ui.common import confirmed_button, scoped_widget_key
+from ui.common import confirmed_button, developer_mode_enabled, scoped_widget_key
 from ui.knowledge_type_editor import render_typed_knowledge_fields
 from ui.layout import render_empty_state, render_section_heading, render_stat_strip
 from ui.labels import (
@@ -323,9 +319,12 @@ def render_pending_knowledge_queue(project_name: str):
             ("自动审核", "已开启" if policy.get("enabled", True) else "未开启", "按当前策略"),
         ]
     )
+    review_views = ["逐条审核", "批量处理", "质检问题"]
+    if developer_mode_enabled():
+        review_views.append("技术数据")
     view = st.segmented_control(
         "审核视图",
-        options=["逐条审核", "批量处理", "质检问题", "技术数据"],
+        options=review_views,
         default="逐条审核",
         key=scoped_widget_key("pending_knowledge_view", project_name),
         label_visibility="collapsed",
@@ -425,7 +424,8 @@ def render_auto_review_policy_panel(project_name: str):
                 "manual_review_categories": manual_review_categories,
             })
             st.success("自动审核策略已保存。")
-            st.json(saved)
+            if developer_mode_enabled():
+                st.json(saved)
 
 
 def _render_auto_review_run_metrics(runs: list[dict]) -> None:
@@ -639,8 +639,9 @@ def render_auto_review_runs_panel(project_name: str):
         _render_auto_review_reason_counts(selected_run)
         _render_auto_review_decisions(selected_run)
         _render_manual_review_snapshots(project_name, selected_run_id, selected_run)
-        with st.expander("高级：处理记录原始数据", expanded=False):
-            st.json(selected_run)
+        if developer_mode_enabled():
+            with st.expander("高级：处理记录原始数据", expanded=False):
+                st.json(selected_run)
         _render_auto_review_rollback(project_name, selected_run_id, selected_run)
 
 
@@ -745,6 +746,12 @@ def _render_pending_item_source_fields(item: dict, tags_value: str) -> dict:
 
 
 def _render_pending_item_json_fields(details_value: str, evidence_value: str, evidence_contexts_value: str) -> dict:
+    if not developer_mode_enabled():
+        return {
+            "details_json": details_value,
+            "evidence_json": evidence_value,
+            "evidence_contexts_json": evidence_contexts_value,
+        }
     return {
         "details_json": st.text_area("详情 JSON（高级）", value=details_value, height=180),
         "evidence_json": st.text_area("证据 JSON（高级）", value=evidence_value, height=180),
@@ -753,7 +760,7 @@ def _render_pending_item_json_fields(details_value: str, evidence_value: str, ev
 
 
 def _render_pending_item_form(project_name: str, item: dict, pending_id: str) -> tuple[dict, bool, bool]:
-    _, _, _, tags_value = _pending_item_json_defaults(item)
+    details_value, evidence_value, evidence_contexts_value, tags_value = _pending_item_json_defaults(item)
     with st.form(key=scoped_widget_key("pending_item_editor_form", project_name, pending_id)):
         values = {}
         values.update(_render_pending_item_basic_fields(item))
@@ -762,6 +769,7 @@ def _render_pending_item_form(project_name: str, item: dict, pending_id: str) ->
         values.update(_render_pending_item_version_fields(item))
         values.update(_render_pending_item_score_fields(item))
         values.update(_render_pending_item_source_fields(item, tags_value))
+        values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_confirm = st.columns(2)
         save_clicked = col_save.form_submit_button("保存修改到待审核设定", width="stretch")
         confirm_clicked = col_confirm.form_submit_button("保存并确认", width="stretch")
@@ -895,7 +903,7 @@ def _render_confirmed_item_basic_fields(item: dict, category: str) -> dict:
 
 
 def _render_confirmed_item_form(project_name: str, category: str, selected_index: int, item: dict) -> tuple[dict, bool, bool]:
-    _, _, _, tags_value = _pending_item_json_defaults(item)
+    details_value, evidence_value, evidence_contexts_value, tags_value = _pending_item_json_defaults(item)
     item_id = str(item.get("id") or item.get("knowledge_id") or selected_index)
     with st.form(key=scoped_widget_key("confirmed_item_editor_form", project_name, category, item_id)):
         values = {}
@@ -905,6 +913,7 @@ def _render_confirmed_item_form(project_name: str, category: str, selected_index
         values.update(_render_pending_item_version_fields(item))
         values.update(_render_pending_item_score_fields(item))
         values.update(_render_pending_item_source_fields(item, tags_value))
+        values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_delete = st.columns(2)
         save_clicked = col_save.form_submit_button("保存正式知识", width="stretch")
         delete_confirmed = col_delete.checkbox(
@@ -1426,176 +1435,33 @@ def render_pending_knowledge_quality_panel(project_name: str, pending_items: lis
 
 
 def render_character_entity_card_panel(project_name: str):
-    existing_cards = load_character_entities(project_name)
-    preview_key = scoped_widget_key("character_entity_preview", project_name)
-    preview_revision_key = scoped_widget_key("character_entity_preview_revision", project_name)
     st.markdown("#### 角色资料卡")
-    st.caption("从已确认的角色、关系、能力、对白风格、时间线和约束知识中聚合角色资料卡。角色卡保存后会进入检索索引。")
-    col_limit, col_action = st.columns([1, 1])
-    max_characters = col_limit.number_input(
-        "最多生成角色数",
-        min_value=5,
-        max_value=200,
-        value=80,
-        step=5,
-        key=scoped_widget_key("character_entity_max_count", project_name),
-    )
-    if col_action.button(
-        "生成角色资料卡预览",
-        key=scoped_widget_key("generate_character_entities", project_name),
-        width="stretch",
-    ):
-        cards = build_character_entity_cards(project_name, max_characters=int(max_characters))
-        st.session_state[preview_key] = cards
-        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
-        st.success(f"已生成 {len(cards)} 张角色资料卡预览。")
-
-    preview_cards = st.session_state.get(preview_key, existing_cards)
-    st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
-    if preview_cards:
-        for card in preview_cards[:5]:
-            with st.expander(f"{card.get('name', '未命名角色')} · 角色卡预览", expanded=False):
-                if card.get("summary"):
-                    st.write(card.get("summary"))
-                if card.get("relationships"):
-                    st.markdown("**关系**")
-                    st.write("\n".join(f"- {item}" for item in card.get("relationships", [])[:5]))
-                if card.get("dialogue_style"):
-                    st.markdown("**对白/风格**")
-                    st.write("\n".join(f"- {item}" for item in card.get("dialogue_style", [])[:5]))
-                if card.get("constraints"):
-                    st.markdown("**约束**")
-                    st.write("\n".join(f"- {item}" for item in card.get("constraints", [])[:5]))
-
-    serialized_preview = json.dumps(preview_cards, ensure_ascii=False, indent=2)
-    raw_cards_json = st.text_area(
-        "角色资料卡 JSON",
-        value=serialized_preview,
-        height=320,
-        key=scoped_widget_key(
-            "character_entity_cards_json",
-            project_name,
-            st.session_state.get(preview_revision_key, 0),
-            serialized_preview,
-        ),
-    )
-    col_save, col_clear = st.columns(2)
-    if col_save.button(
-        "保存角色资料卡并更新可匹配资料",
-        key=scoped_widget_key("save_character_entities", project_name),
-        width="stretch",
-    ):
-        try:
-            parsed = json.loads(raw_cards_json)
-            if not isinstance(parsed, list):
-                st.error("角色资料卡必须是列表结构。")
-            else:
-                save_character_entities(project_name, parsed)
-                rebuild_retrieval_assets(project_name, build_vectors=True)
-                st.session_state[preview_key] = parsed
-                st.success(f"已保存 {len(parsed)} 张角色资料卡。")
-                st.rerun()
-        except json.JSONDecodeError as exc:
-            st.error(f"角色资料卡 JSON 格式错误：{exc}")
-    if col_clear.button(
-        "清空预览",
-        key=scoped_widget_key("clear_character_entity_preview", project_name),
-        width="stretch",
-    ):
-        st.session_state.pop(preview_key, None)
-        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
-        st.rerun()
+    cards = build_character_entity_cards(project_name)
+    st.caption("由正式知识实时聚合，不单独保存。请在角色中心编辑，变更会回写知识修订。")
+    if not cards:
+        render_empty_state("还没有角色", "先新增或确认一条角色知识，角色卡会自动出现。")
+        return
+    st.dataframe([
+        {"角色": card.get("name", ""), "关系": len(card.get("relationships", [])),
+         "能力/道具": len(card.get("abilities_and_items", [])), "事件": len(card.get("events", [])),
+         "来源": len(card.get("sources", []))}
+        for card in cards
+    ], width="stretch", hide_index=True)
 
 
 def render_setting_entity_card_panel(project_name: str):
-    existing_cards = load_setting_entities(project_name)
-    preview_key = scoped_widget_key("setting_entity_preview", project_name)
-    preview_revision_key = scoped_widget_key("setting_entity_preview_revision", project_name)
     st.markdown("#### 世界设定卡")
-    st.caption("从已确认的世界规则、地点、组织、能力、物品和硬性约束中聚合设定资料卡。保存后会进入检索索引。")
-    col_limit, col_action = st.columns([1, 1])
-    max_cards = col_limit.number_input(
-        "最多生成设定卡数",
-        min_value=5,
-        max_value=300,
-        value=120,
-        step=5,
-        key=scoped_widget_key("setting_entity_max_count", project_name),
-    )
-    if col_action.button(
-        "生成世界设定卡预览",
-        key=scoped_widget_key("generate_setting_entities", project_name),
-        width="stretch",
-    ):
-        cards = build_setting_entity_cards(project_name, max_cards=int(max_cards))
-        st.session_state[preview_key] = cards
-        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
-        st.success(f"已生成 {len(cards)} 张世界设定卡预览。")
-
-    preview_cards = st.session_state.get(preview_key, existing_cards)
-    st.caption(f"已保存 {len(existing_cards)} 张；当前预览 {len(preview_cards)} 张。")
-    if preview_cards:
-        rows = [
-            {
-                "类型": SETTING_ENTITY_CATEGORY_GROUPS.get(card.get("setting_type", ""), card.get("setting_type", "")),
-                "名称": card.get("name", ""),
-                "重要性": safe_confidence(card.get("importance", 0.5)),
-                "资料版本": card.get("worldline_label", ""),
-            }
-            for card in preview_cards[:12]
-        ]
-        st.dataframe(rows, width="stretch", hide_index=True)
-        for card in preview_cards[:5]:
-            with st.expander(f"{SETTING_ENTITY_CATEGORY_GROUPS.get(card.get('setting_type', ''), card.get('setting_type', '设定'))} / {card.get('name', '未命名设定')}", expanded=False):
-                if card.get("summary"):
-                    st.write(str(card.get("summary"))[:900])
-                for label, field in [("规则/资料", "rules"), ("时间线", "timeline"), ("关联实体", "related_entities")]:
-                    values = card.get(field, [])
-                    if isinstance(values, list) and values:
-                        st.markdown(f"**{label}**")
-                        st.write("\n".join(f"- {item}" for item in values[:8]))
-                if card.get("profile"):
-                    st.caption("profile")
-                    st.json(card.get("profile"))
-
-    serialized_preview = json.dumps(preview_cards, ensure_ascii=False, indent=2)
-    raw_cards_json = st.text_area(
-        "世界设定卡 JSON",
-        value=serialized_preview,
-        height=320,
-        key=scoped_widget_key(
-            "setting_entity_cards_json",
-            project_name,
-            st.session_state.get(preview_revision_key, 0),
-            serialized_preview,
-        ),
-    )
-    col_save, col_clear = st.columns(2)
-    if col_save.button(
-        "保存世界设定卡并更新可匹配资料",
-        key=scoped_widget_key("save_setting_entities", project_name),
-        width="stretch",
-    ):
-        try:
-            parsed = json.loads(raw_cards_json)
-            if not isinstance(parsed, list):
-                st.error("世界设定卡必须是列表结构。")
-            else:
-                save_setting_entities(project_name, parsed)
-                rebuild_retrieval_assets(project_name, build_vectors=True)
-                st.session_state[preview_key] = parsed
-                st.success(f"已保存 {len(parsed)} 张世界设定卡。")
-                st.rerun()
-        except json.JSONDecodeError as exc:
-            st.error(f"世界设定卡 JSON 格式错误：{exc}")
-    if col_clear.button(
-        "清空设定卡预览",
-        key=scoped_widget_key("clear_setting_entity_preview", project_name),
-        width="stretch",
-    ):
-        st.session_state.pop(preview_key, None)
-        st.session_state[preview_revision_key] = int(st.session_state.get(preview_revision_key, 0)) + 1
-        st.rerun()
+    cards = build_setting_entity_cards(project_name)
+    st.caption("由正式知识实时聚合，不单独保存。请在世界观中心编辑对应权威知识。")
+    if not cards:
+        render_empty_state("还没有世界设定", "先新增或确认规则、地点、组织或力量体系知识。")
+        return
+    st.dataframe([
+        {"类型": SETTING_ENTITY_CATEGORY_GROUPS.get(card.get("setting_type", ""), card.get("setting_type", "")),
+         "名称": card.get("name", ""), "冲突": len(card.get("conflicts", [])),
+         "来源": len(card.get("sources", [])), "资料版本": card.get("worldline_label", "")}
+        for card in cards
+    ], width="stretch", hide_index=True)
 
 
 def render_entity_alias_panel(project_name: str):
@@ -1902,9 +1768,12 @@ def _render_knowledge_raw_editor(project_name: str, category: str, items: list[d
 
 def render_knowledge_organizer(project_name: str, knowledge_category_options: list[str]):
     render_section_heading("知识库", "查看、编辑和整理已确认的知识，让后续写作检索更准确。")
+    organizer_views = ["知识条目", "资料卡与别名"]
+    if developer_mode_enabled():
+        organizer_views.append("技术数据")
     view = st.segmented_control(
         "知识管理视图",
-        options=["知识条目", "资料卡与别名", "技术数据"],
+        options=organizer_views,
         default="知识条目",
         key=scoped_widget_key("knowledge_organizer_view", project_name),
         label_visibility="collapsed",
@@ -1924,7 +1793,7 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
                 key=scoped_widget_key("knowledge_create_summary", project_name, category),
             )
             new_worldline = st.text_input(
-                "世界线标识", value=DEFAULT_WORLDLINE_ID,
+                "资料版本标识", value=DEFAULT_WORLDLINE_ID,
                 key=scoped_widget_key("knowledge_create_worldline", project_name, category),
             )
             create_clicked = st.form_submit_button("新增并保存", width="stretch")
@@ -2160,7 +2029,7 @@ def render_source_record_detail(project_name: str, record: dict):
             st.markdown("##### 摘要")
             st.write(payload.get("summary"))
         content = str(payload.get("content") or payload.get("body") or "")
-        if metadata:
+        if metadata and developer_mode_enabled():
             with st.expander("元数据", expanded=False):
                 st.json(metadata)
         if content:

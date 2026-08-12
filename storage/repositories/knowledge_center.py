@@ -188,6 +188,67 @@ def load_knowledge_center_record_row(
     return result
 
 
+def load_knowledge_graph_rows(
+    conn: sqlite3.Connection,
+    *,
+    story_id: str | None = None,
+    worldline_id: str | None = None,
+) -> dict:
+    """Load the active relationship projection used by creator-facing views.
+
+    The graph is a projection of confirmed knowledge.  Callers must edit the
+    owning knowledge item instead of mutating these rows directly.
+    """
+
+    clauses = ["edge.deleted_at IS NULL", "source.deleted_at IS NULL", "target.deleted_at IS NULL"]
+    params: list[str] = []
+    if story_id is not None:
+        clauses.append("COALESCE(edge.story_id, '') IN ('', ?)")
+        params.append(str(story_id))
+    if worldline_id is not None:
+        clauses.append(
+            "COALESCE(source.worldline_id, target.worldline_id, '') IN ('', 'global', 'main', ?)"
+        )
+        params.append(str(worldline_id))
+    rows = conn.execute(
+        f"""
+        SELECT edge.edge_id, edge.story_id, edge.relation_type, edge.direction,
+               edge.confidence, edge.metadata_json, edge.updated_at,
+               source.node_id AS source_node_id,
+               source.display_name AS source_name,
+               source.node_type AS source_type,
+               target.node_id AS target_node_id,
+               target.display_name AS target_name,
+               target.node_type AS target_type
+        FROM graph_edges AS edge
+        JOIN graph_nodes AS source ON source.node_id = edge.source_node_id
+        JOIN graph_nodes AS target ON target.node_id = edge.target_node_id
+        WHERE {' AND '.join(clauses)}
+        ORDER BY edge.updated_at DESC, edge.edge_id
+        """,
+        tuple(params),
+    ).fetchall()
+    edges: list[dict] = []
+    nodes: dict[str, dict] = {}
+    for row in rows:
+        edge = dict(row)
+        metadata = _json_object(edge.pop("metadata_json", "{}"))
+        owner_id = str(metadata.get("knowledge_id") or "")
+        item = metadata.get("item") if isinstance(metadata.get("item"), dict) else {}
+        edge["knowledge_id"] = owner_id
+        edge["knowledge_item"] = item
+        edges.append(edge)
+        for side in ("source", "target"):
+            node_id = str(edge.get(f"{side}_node_id") or "")
+            if node_id:
+                nodes[node_id] = {
+                    "node_id": node_id,
+                    "name": str(edge.get(f"{side}_name") or ""),
+                    "node_type": str(edge.get(f"{side}_type") or "entity"),
+                }
+    return {"nodes": list(nodes.values()), "edges": edges}
+
+
 def _payload_for_job(conn: sqlite3.Connection, record_type: str, record_id: str) -> dict:
     if record_type in {"knowledge", "pending"}:
         pending = record_type == "pending"

@@ -952,9 +952,10 @@ def gather_retrieval_documents(project_name: str) -> list[_retrieval_api.Retriev
     documents = []
     documents.extend(_documents_from_memory(project_name))
     documents.extend(_documents_from_knowledge(project_name))
-    documents.extend(_documents_from_character_entities(project_name))
+    # Entity cards are live creator-facing projections of the authoritative
+    # knowledge documents above. Indexing persisted legacy cards as well would
+    # create a drifting duplicate fact source.
     documents.extend(_documents_from_entity_aliases(project_name))
-    documents.extend(_documents_from_setting_entities(project_name))
     documents.extend(_documents_from_external_sources(project_name))
 
     # Conflict resolutions may be project-wide or story-owned.  Preserve the

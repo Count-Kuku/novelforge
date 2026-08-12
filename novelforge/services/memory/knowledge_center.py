@@ -6,6 +6,7 @@ import difflib
 
 from novelforge.services import memory as _memory_api
 from storage.repositories import (
+    load_knowledge_graph_rows,
     load_knowledge_center_record_row,
     load_knowledge_index_state_row,
     mark_knowledge_retrieval_state,
@@ -13,6 +14,22 @@ from storage.repositories import (
     retry_knowledge_index_jobs,
     search_knowledge_center_rows,
 )
+
+
+def load_knowledge_graph(
+    project_name: str,
+    *,
+    story_id: str | None = None,
+    worldline_id: str | None = None,
+) -> dict:
+    """Return the current relationship projection of authoritative knowledge."""
+
+    if _memory_api._project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+        return load_knowledge_graph_rows(
+            conn, story_id=story_id, worldline_id=worldline_id,
+        )
 
 
 def search_knowledge_center(

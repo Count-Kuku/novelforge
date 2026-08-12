@@ -68,6 +68,7 @@ from .knowledge import (
     sync_pending_knowledge,
 )
 from .knowledge_center import (
+    load_knowledge_graph_rows,
     load_knowledge_center_record_row,
     load_knowledge_index_state_row,
     mark_knowledge_retrieval_state,

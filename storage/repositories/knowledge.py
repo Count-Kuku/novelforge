@@ -778,8 +778,9 @@ def _upsert_graph_node_for_knowledge(
     return node_id
 
 
-def _entity_node_id(name: str) -> str:
-    digest = sha256(name.strip().lower().encode("utf-8")).hexdigest()[:24]
+def _entity_node_id(name: str, story_id: str | None = None, worldline_id: str | None = None) -> str:
+    identity = "|".join((name.strip().lower(), str(story_id or ""), str(worldline_id or "")))
+    digest = sha256(identity.encode("utf-8")).hexdigest()[:24]
     return f"entity_node_{digest}"
 
 
@@ -794,7 +795,7 @@ def _upsert_named_entity_node(
     clean_name = str(name or "").strip()
     if not clean_name:
         return None
-    node_id = _entity_node_id(clean_name)
+    node_id = _entity_node_id(clean_name, story_id, worldline_id)
     conn.execute(
         """
         INSERT INTO graph_nodes (
@@ -985,7 +986,10 @@ def _upsert_graph_relationship_edges(
     if not source_node_id or not target_node_id:
         return
     relation_type = re.sub(r"\s+", "_", relation.lower())[:80] or "related_to"
-    edge_id_source = f"{knowledge_id}:{source_node_id}:{target_node_id}:{relation_type}"
+    typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
+    raw_direction = str(item.get("direction") or typed_data.get("direction") or "directed").strip().lower()
+    direction = raw_direction if raw_direction in {"directed", "bidirectional", "undirected"} else "directed"
+    edge_id_source = f"{knowledge_id}:{source_node_id}:{target_node_id}:{relation_type}:{direction}"
     edge_id = "edge_" + sha256(edge_id_source.encode("utf-8")).hexdigest()[:24]
     conn.execute(
         """
@@ -994,7 +998,7 @@ def _upsert_graph_relationship_edges(
             direction, confidence, evidence_id, metadata_json, created_at, updated_at, deleted_at
         )
         VALUES (
-            ?, ?, ?, ?, ?, 'directed', ?, NULL, ?,
+            ?, ?, ?, ?, ?, ?, ?, NULL, ?,
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             NULL
@@ -1004,6 +1008,7 @@ def _upsert_graph_relationship_edges(
             source_node_id = excluded.source_node_id,
             target_node_id = excluded.target_node_id,
             relation_type = excluded.relation_type,
+            direction = excluded.direction,
             confidence = excluded.confidence,
             metadata_json = excluded.metadata_json,
             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
@@ -1015,6 +1020,7 @@ def _upsert_graph_relationship_edges(
             source_node_id,
             target_node_id,
             relation_type,
+            direction,
             _float_or_none(item.get("confidence")),
             _json_dumps({"knowledge_id": knowledge_id, "item": item}),
         ),

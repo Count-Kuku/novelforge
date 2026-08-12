@@ -16,7 +16,7 @@ def render_typed_knowledge_fields(category: str, item: dict) -> dict:
     normalized = normalize_typed_knowledge_item(item, category)
     typed_data = normalized.get("typed_data", {})
     st.markdown("##### 分类专属字段")
-    st.caption("这些字段会以稳定结构保存，供筛选、聚合和检索使用；详情 JSON 仍会完整保留。")
+    st.caption("这些字段会以稳定结构保存，供筛选、聚合和检索使用；其他扩展字段仍会完整保留。")
     all_known_keys = {
         field.key
         for category_fields in KNOWLEDGE_TYPE_FIELDS.values()

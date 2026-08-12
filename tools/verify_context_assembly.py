@@ -30,11 +30,10 @@ from novelforge.services.memory import (
     load_context_directives,
     load_effective_context_directives,
     save_context_directive,
-    save_character_entities,
     save_project_prompt_options,
     upsert_knowledge_category_item_record,
 )
-from novelforge.services.retrieval import debug_retrieve_context, resolve_retrieval_params
+from novelforge.services.retrieval import debug_retrieve_context, rebuild_retrieval_assets, resolve_retrieval_params
 from novelforge.core.schemas import ContextBlock
 from novelforge.domain.setting_knowledge import build_generation_setting_context, upsert_setting_item
 from tools.verify_utils import isolated_workspace
@@ -183,15 +182,19 @@ def verify_source_type_strategy(project_name: str, story_id: str) -> None:
         source_type_strategy="replace",
     )
     check(replace_params["allowed_source_types"] == ["chapter_summary"], "replace 明确覆盖 Profile")
-    save_character_entities(
+    upsert_knowledge_category_item_record(
         project_name,
-        [{
+        "characters",
+        {
             "id": "character_profile_probe",
             "name": "codexentityalpha",
-            "summary": "用于验证正文 Profile 人物实体召回。",
+            "summary": "用于验证正文 Profile 人物权威知识召回。",
             "story_id": story_id,
-        }],
+            "setting_scope": "story",
+            "status": "confirmed",
+        },
     )
+    rebuild_retrieval_assets(project_name, build_vectors=False)
     entity_result = debug_retrieve_context(
         project_name,
         "codexentityalpha",
@@ -203,10 +206,10 @@ def verify_source_type_strategy(project_name: str, story_id: str) -> None:
     )
     check(
         any(
-            item.get("chunk", {}).get("source_type") == "entity_character_card"
+            item.get("chunk", {}).get("source_type") == "knowledge_characters"
             for item in entity_result.get("reranked_hits", [])
         ),
-        "drafting Profile 与显式来源合并后能实际召回人物实体卡",
+        "drafting Profile 与显式来源合并后能实际召回人物权威知识",
     )
 
 

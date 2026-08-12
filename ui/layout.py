@@ -849,6 +849,43 @@ def apply_app_style() -> None:
             overflow-y: auto;
         }
 
+        /* 创作实体与固定作曲器 */
+        .nf-entity-badge-row, .nf-entity-source-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+            margin: 0.35rem 0 0.7rem;
+        }
+
+        .nf-entity-badge, .nf-entity-source {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.24rem 0.55rem;
+            color: var(--nf-muted);
+            background: var(--nf-panel-soft);
+            border: 1px solid var(--nf-border);
+            border-radius: 999px;
+            font-size: 0.75rem;
+            line-height: 1.35;
+        }
+
+        .nf-entity-success { color: var(--nf-success); background: var(--nf-success-soft); }
+        .nf-entity-warning { color: var(--nf-warning); background: var(--nf-warning-soft); }
+        .nf-entity-danger { color: var(--nf-danger); background: var(--nf-danger-soft); }
+        .nf-entity-source { color: var(--nf-accent-strong); background: var(--nf-accent-soft); }
+
+        .stApp [class*="st-key-nf-creative-composer-"] {
+            position: sticky;
+            bottom: 0.6rem;
+            z-index: 20;
+            padding: 0.75rem;
+            background: rgba(255, 255, 255, 0.96);
+            border: 1px solid var(--nf-border-strong);
+            border-radius: var(--nf-radius-lg);
+            box-shadow: 0 12px 34px rgba(16, 24, 40, 0.14);
+            backdrop-filter: blur(12px);
+        }
+
         /* 窄屏 */
         @media (max-width: 900px) {
             .block-container {

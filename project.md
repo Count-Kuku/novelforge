@@ -266,6 +266,12 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 已经提交的知识，但必须展示失败状态并允许重试。普通编辑、移动、归档、合并和历史恢复均追加知识修订，
 其中恢复历史内容必须保存为新修订，不能覆盖修订链。
 
+角色中心、世界观中心、时间轴和关系图均是正式知识的实时投影。旧版
+`character_entities/setting_entities` 资产仅用于兼容读取，不再进入检索或作为编辑目标；实体视图
+修改通过单条知识事务写回正式知识并追加修订。关系图节点按故事和世界线隔离，关系编辑由知识
+投影触发器替换活动边。普通界面不显示原始 JSON；显式设置 `NOVELFORGE_DEVELOPER_MODE=1`
+后才开放技术数据和原始差异视图。
+
 ## 持久资料任务契约
 
 ### 生命周期
@@ -363,6 +369,7 @@ queued -> running -> completed
 # 包边界与 UI
 .\.venv\Scripts\python.exe tools\verify_package_structure.py
 .\.venv\Scripts\python.exe tools\verify_ui_consistency.py
+.\.venv\Scripts\python.exe tools\verify_entity_experience.py
 
 # DB-first 存储
 .\.venv\Scripts\python.exe tools\verify_db_storage.py
