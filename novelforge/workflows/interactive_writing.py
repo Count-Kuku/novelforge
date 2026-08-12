@@ -836,7 +836,7 @@ def generate_writing_fragment(
         "status": "completed",
         "error_text": "",
     }
-    return {
+    result = {
         "success": True,
         "status": "completed",
         "session_id": session_id,
@@ -847,6 +847,31 @@ def generate_writing_fragment(
         "auto_extraction": auto_extraction,
         "warnings": warnings,
     }
+    try:
+        # Keep正文 persistence and the conversational action ledger aligned for
+        # every workflow caller, including non-UI integrations.  The import is
+        # intentionally local because the action workflow reuses generation
+        # helpers from this module.
+        from novelforge.workflows.creative_actions import record_creative_generation_action
+
+        record_creative_generation_action(
+            project_name,
+            story_id,
+            session_id,
+            user_message,
+            result,
+            action_type=branch["action_type"],
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "Creative fragment persisted but action ledger update failed: "
+            "session=%s fragment=%s error=%s",
+            session_id,
+            fragment_id,
+            exc,
+        )
+        warnings.append(f"片段已保存，但动作账本更新失败：{exc}")
+    return result
 
 
 def accept_writing_fragment(

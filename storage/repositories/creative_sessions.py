@@ -592,6 +592,30 @@ def clone_creative_session_rows(
         """,
         (source_story_id, source_story_id),
     ).fetchall()
+    message_rows = conn.execute(
+        """
+        SELECT message.* FROM creative_messages AS message
+        JOIN creative_sessions AS session ON session.session_id = message.session_id
+        WHERE session.story_id = ? ORDER BY message.created_at, message.message_id
+        """,
+        (source_story_id,),
+    ).fetchall()
+    action_rows = conn.execute(
+        """
+        SELECT action.* FROM creative_action_runs AS action
+        JOIN creative_sessions AS session ON session.session_id = action.session_id
+        WHERE session.story_id = ? ORDER BY action.created_at, action.action_id
+        """,
+        (source_story_id,),
+    ).fetchall()
+    message_map = {
+        str(row["message_id"]): _copy_id("creative_message", target_story_id, str(row["message_id"]))
+        for row in message_rows
+    }
+    action_map = {
+        str(row["action_id"]): _copy_id("creative_action", target_story_id, str(row["action_id"]))
+        for row in action_rows
+    }
     now = _now()
     for row in sessions:
         conn.execute(
@@ -730,10 +754,93 @@ def clone_creative_session_rows(
                 now,
             ),
         )
+    for row in message_rows:
+        message_metadata = _json_object(str(row["metadata_json"] or "{}"))
+        linked_action_id = str(message_metadata.get("action_id") or "")
+        if linked_action_id in action_map:
+            message_metadata["action_id"] = action_map[linked_action_id]
+        conn.execute(
+            """
+            INSERT INTO creative_messages (
+                message_id, story_id, session_id, role, message_kind,
+                content, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                message_map[str(row["message_id"])], target_story_id,
+                session_map[str(row["session_id"])], str(row["role"]),
+                str(row["message_kind"]), str(row["content"]),
+                json.dumps(message_metadata, ensure_ascii=False, sort_keys=True), now,
+            ),
+        )
+    for row in action_rows:
+        target_action_id = action_map[str(row["action_id"])]
+        source_action_status = str(row["status"])
+        copied_action_status = (
+            "cancelled"
+            if source_action_status in {"planned", "awaiting_confirmation", "running"}
+            else source_action_status
+        )
+        copied_action_error = (
+            "故事复制时该动作尚未完成，副本已取消执行。"
+            if copied_action_status == "cancelled" and source_action_status != "cancelled"
+            else str(row["error_text"] or "")
+        )
+        conn.execute(
+            """
+            INSERT INTO creative_action_runs (
+                action_id, story_id, session_id, request_message_id, action_type,
+                status, scope, target_json, patch_json, plan_json, result_json,
+                undo_json, requires_confirmation, confirmed_at, idempotency_key,
+                error_text, created_at, updated_at, finished_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                target_action_id, target_story_id,
+                session_map[str(row["session_id"])],
+                message_map.get(str(row["request_message_id"] or "")),
+                str(row["action_type"]), copied_action_status, str(row["scope"]),
+                str(row["target_json"] or "{}"), str(row["patch_json"] or "{}"),
+                str(row["plan_json"] or "{}"), str(row["result_json"] or "{}"),
+                str(row["undo_json"] or "{}"), int(row["requires_confirmation"] or 0),
+                row["confirmed_at"], f"copy:{target_story_id}:{row['idempotency_key']}",
+                copied_action_error, now, now, row["finished_at"],
+            ),
+        )
+    revision_rows = conn.execute(
+        """
+        SELECT revision.* FROM creative_config_revisions AS revision
+        WHERE revision.action_id IN (
+            SELECT action_id FROM creative_action_runs WHERE story_id = ?
+        ) ORDER BY revision.created_at, revision.revision_id
+        """,
+        (source_story_id,),
+    ).fetchall()
+    for row in revision_rows:
+        conn.execute(
+            """
+            INSERT INTO creative_config_revisions (
+                revision_id, action_id, story_id, session_id, config_scope,
+                before_json, after_json, patch_json, reason,
+                reversed_by_action_id, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _copy_id("creative_config_revision", target_story_id, str(row["revision_id"])),
+                action_map[str(row["action_id"])], target_story_id,
+                session_map.get(str(row["session_id"] or "")),
+                str(row["config_scope"]), str(row["before_json"] or "{}"),
+                str(row["after_json"] or "{}"), str(row["patch_json"] or "{}"),
+                str(row["reason"] or ""),
+                action_map.get(str(row["reversed_by_action_id"] or "")), now,
+            ),
+        )
     return {
         "session_count": len(sessions),
         "turn_count": len(turn_rows),
         "fragment_count": len(fragment_rows),
         "attachment_count": len(attachment_rows),
+        "message_count": len(message_rows),
+        "action_count": len(action_rows),
         "session_id_map": session_map,
     }

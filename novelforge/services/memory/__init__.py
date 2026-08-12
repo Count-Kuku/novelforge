@@ -41,6 +41,9 @@ _export_module(_creative_profiles)
 from . import creative_attachments as _creative_attachments
 _export_module(_creative_attachments)
 
+from . import creative_actions as _creative_actions
+_export_module(_creative_actions)
+
 from . import knowledge as _knowledge
 _export_module(_knowledge)
 

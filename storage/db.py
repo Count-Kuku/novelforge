@@ -222,6 +222,9 @@ def inspect_project_db(project_path: Path) -> dict:
         "creative_turns",
         "creative_fragments",
         "creative_attachments",
+        "creative_messages",
+        "creative_action_runs",
+        "creative_config_revisions",
     ]
     result = {
         "ok": False,

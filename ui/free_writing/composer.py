@@ -7,16 +7,10 @@ import json
 import streamlit as st
 
 from novelforge.domain.setting_knowledge import list_setting_items
-from novelforge.services.memory import update_creative_session
-from novelforge.services.model_readiness import require_chat_ready
-from novelforge.workflows.interactive_writing import (
-    create_writing_session,
-    generate_writing_fragment,
-)
+from novelforge.domain.creative_actions import route_creative_action
 from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_knowledge_category
 from ui.prompt_option_tools import render_context_assembly_summary
-from ui.streaming import run_with_stream
 
 from .shared import (
     ACTION_LABELS,
@@ -24,10 +18,10 @@ from .shared import (
     active_fragment,
     branch_frontier,
     last_result_key,
-    pending_active_session_key,
 )
 from .preflight import render_writing_preflight
 from .attachments import render_attachment_tray
+from .execution import run_creative_action, run_creative_generation
 
 
 def _manual_knowledge_selector(
@@ -303,6 +297,28 @@ def render_composer(
         key=input_key,
         placeholder=placeholder,
     )
+    routed = route_creative_action(
+        str(user_message or ""),
+        has_fragment=bool(active_fragment(bundle)) if bundle else False,
+    )
+    routed_type = str(routed.get("action_type") or "write")
+    if routed_type == "revise":
+        action = "rewrite"
+        branch_id = None
+    is_tool_action = routed_type not in {"write", "revise"}
+    if is_tool_action and str(user_message or "").strip():
+        st.info(
+            "将作为创作命令处理："
+            + {
+                "import_sources": "导入资料",
+                "extract_knowledge": "提炼设定",
+                "query_knowledge": "查询资料",
+                "update_knowledge": "修改知识",
+                "update_config": "调整配置",
+                "save_chapter": "保存章节",
+                "clarify": "补充说明",
+            }.get(routed_type, routed_type)
+        )
 
     render_attachment_tray(project_name, story_id, session_id)
 
@@ -316,20 +332,22 @@ def render_composer(
     if bundle and str(active_fragment(bundle).get("status") or "") == "proposed" and action == "continue":
         st.caption("继续生成成功后，当前片段会自动保留；生成失败不会改变当前内容。")
 
-    estimate_approved = render_writing_preflight(
-        project_name,
-        story_id,
-        session_id,
-        bundle,
-        str(user_message or "").strip(),
-        config["word_count"],
-        action_type=action,
-        branch_from_fragment_id=branch_id,
-        auto_extract_mode=session_options["auto_extract_mode"],
-    )
+    estimate_approved = True
+    if not is_tool_action:
+        estimate_approved = render_writing_preflight(
+            project_name,
+            story_id,
+            session_id,
+            bundle,
+            str(user_message or "").strip(),
+            config["word_count"],
+            action_type=action,
+            branch_from_fragment_id=branch_id,
+            auto_extract_mode=session_options["auto_extract_mode"],
+        )
 
     if st.button(
-        ACTION_LABELS[action],
+        "执行创作命令" if is_tool_action else ACTION_LABELS[action],
         disabled=(
             archived
             or not bool(str(user_message or "").strip())
@@ -344,89 +362,23 @@ def render_composer(
         width="stretch",
         type="primary",
     ):
-        _run_generation(
-            project_name,
-            story_id,
-            session_id,
-            bundle,
-            action,
-            branch_id,
-            str(user_message or "").strip(),
-            config,
-            session_options,
-        )
-
-
-def _run_generation(
-    project_name: str,
-    story_id: str,
-    session_id: str,
-    bundle: dict,
-    action: str,
-    branch_id: str | None,
-    user_message: str,
-    config: dict,
-    session_options: dict,
-) -> None:
-    try:
-        require_chat_ready(action="自由创作")
-        effective_session_id = session_id
-        if not bundle:
-            created = create_writing_session(
-                project_name,
-                story_id,
-                session_goal=user_message,
-                writing_guidance=config["writing_guidance"],
-                target_chapter_no=session_options["target_chapter_no"],
-                auto_extract_mode=session_options["auto_extract_mode"],
+        if is_tool_action:
+            run_creative_action(
+                project_name, story_id, session_id, bundle,
+                str(user_message or "").strip(), config, session_options,
             )
-            effective_session_id = str(created["session_id"])
-            st.session_state[
-                pending_active_session_key(project_name, story_id)
-            ] = effective_session_id
         else:
-            update_creative_session(
-                project_name,
-                effective_session_id,
-                {
-                    "writing_guidance": config["writing_guidance"],
-                    "target_chapter_no": session_options["target_chapter_no"],
-                    "auto_extract_mode": session_options["auto_extract_mode"],
-                },
-                story_id=story_id,
-            )
-
-        result = run_with_stream(
-            "正在生成创作片段...",
-            generate_writing_fragment,
-            project_name,
-            story_id,
-            effective_session_id,
-            user_message,
-            action_type=action,
-            word_count=config["word_count"],
-            writing_guidance=config["writing_guidance"],
-            prompt_option_ids=config["prompt_option_ids"],
-            manual_knowledge_ids=config["manual_knowledge_ids"],
-            branch_from_fragment_id=branch_id,
-        )
-        st.session_state[
-            last_result_key(project_name, story_id, effective_session_id)
-        ] = result
-        st.session_state[action_mode_key(effective_session_id)] = "continue"
-        st.session_state[
-            scoped_session_key(
-                "creative_user_input_clear",
+            run_creative_generation(
                 project_name,
                 story_id,
-                effective_session_id,
+                session_id,
+                bundle,
+                action,
+                branch_id,
+                str(user_message or "").strip(),
+                config,
+                session_options,
             )
-        ] = True
-        st.rerun()
-    except Exception as exc:
-        st.error(f"生成失败：{exc}")
-
-
 def render_last_context(
     project_name: str,
     story_id: str,

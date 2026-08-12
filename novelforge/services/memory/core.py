@@ -144,6 +144,15 @@ from storage.repositories import (
     release_turn_creative_attachment_rows,
     update_creative_attachment_row,
     upsert_creative_attachment_row,
+    insert_creative_action_row,
+    insert_creative_config_revision_row,
+    insert_creative_message_row,
+    list_creative_action_rows,
+    list_creative_message_rows,
+    load_creative_action_row,
+    load_creative_config_revision_row,
+    mark_creative_config_revision_reversed_row,
+    update_creative_action_row,
 )
 
 BASE_DIR = Path("data/projects")

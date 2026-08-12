@@ -11,6 +11,7 @@ from novelforge.services.memory import (
 from ui.layout import render_section_heading
 
 from .chapter_panel import render_chapter_panel
+from .actions import render_creative_action_history
 from .composer import render_composer, render_last_context
 from .fragments import render_fragment_actions, render_fragment_history
 from .knowledge_panel import render_knowledge_panel
@@ -39,6 +40,7 @@ def render_dynamic_generation_page(
         )
         render_fragment_history(project_name, story_id, bundle)
         render_fragment_actions(project_name, story_id, bundle)
+        render_creative_action_history(project_name, story_id, session_id)
         render_section_heading(
             "继续创作",
             "只写下一段要发生什么；角色卡、世界观和正式知识会自动匹配。",
