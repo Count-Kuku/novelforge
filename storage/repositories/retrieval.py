@@ -82,6 +82,10 @@ def sync_retrieval_manifest_payload(conn: sqlite3.Connection, manifest: dict) ->
         active_doc_ids.append(doc_id)
         metadata = doc.get("metadata", {}) if isinstance(doc.get("metadata"), dict) else {}
         source_id = _existing_id(conn, "source_documents", "source_id", metadata.get("source_id"))
+        if not source_id and str(metadata.get("relative_path") or "").strip():
+            relative_path = str(metadata.get("relative_path") or "").replace("\\", "/").strip()
+            candidate_source_id = "source_file_" + sha256(relative_path.encode("utf-8")).hexdigest()[:24]
+            source_id = _existing_id(conn, "source_documents", "source_id", candidate_source_id)
         source_revision_id = _existing_id(
             conn, "source_revisions", "revision_id", metadata.get("source_revision_id")
         )

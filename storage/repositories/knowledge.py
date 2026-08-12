@@ -591,20 +591,81 @@ def upsert_knowledge_category_item(
     if not clean_category or not item_id:
         raise ValueError("Knowledge category and item ID are required.")
     normalized["id"] = item_id
-    items = load_knowledge_category_rows(conn, clean_category)
-    replaced = False
-    for index, existing in enumerate(items):
-        existing_id = str(existing.get("id") or existing.get("knowledge_id") or "").strip()
-        if existing_id != item_id:
-            continue
-        normalized["created_at"] = existing.get("created_at") or normalized.get("created_at")
-        items[index] = normalized
-        replaced = True
-        break
-    if not replaced:
-        items.append(normalized)
-    sync_knowledge_category(conn, clean_category, items)
-    return normalized, items
+    previous = conn.execute(
+        "SELECT content_json, created_at FROM knowledge_items WHERE knowledge_id = ?",
+        (item_id,),
+    ).fetchone()
+    previous_snapshot = str(previous[0]) if previous else None
+    if previous and not normalized.get("created_at"):
+        normalized["created_at"] = previous[1]
+    normalized.update({
+        "id": item_id,
+        "knowledge_id": item_id,
+        "category": clean_category,
+    })
+    story_id = _story_id_or_none(conn, normalized.get("story_id"))
+    source_id = _existing_id(conn, "source_documents", "source_id", normalized.get("source_id"))
+    segment_id = _existing_id(
+        conn, "source_segments", "segment_id",
+        normalized.get("source_segment_id") or normalized.get("segment_id"),
+    )
+    typed_data = normalized.get("typed_data") if isinstance(normalized.get("typed_data"), dict) else {}
+    conn.execute(
+        """
+        INSERT INTO knowledge_items (
+            knowledge_id, story_id, category, name, title, summary, content_json,
+            canon_status, worldline_id, worldline_name, confidence, importance,
+            evidence_strength, source_id, segment_id, extraction_mode, setting_scope,
+            setting_role, injection_policy, status, schema_version, structured_json,
+            created_at, updated_at, deleted_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            COALESCE(?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL
+        )
+        ON CONFLICT(knowledge_id) DO UPDATE SET
+            story_id=excluded.story_id, category=excluded.category, name=excluded.name,
+            title=excluded.title, summary=excluded.summary, content_json=excluded.content_json,
+            canon_status=excluded.canon_status, worldline_id=excluded.worldline_id,
+            worldline_name=excluded.worldline_name, confidence=excluded.confidence,
+            importance=excluded.importance, evidence_strength=excluded.evidence_strength,
+            source_id=excluded.source_id, segment_id=excluded.segment_id,
+            extraction_mode=excluded.extraction_mode, setting_scope=excluded.setting_scope,
+            setting_role=excluded.setting_role, injection_policy=excluded.injection_policy,
+            status=excluded.status, schema_version=excluded.schema_version,
+            structured_json=excluded.structured_json,
+            updated_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), deleted_at=NULL
+        """,
+        (
+            item_id, story_id, clean_category,
+            str(normalized.get("name") or normalized.get("canonical_name") or "").strip(),
+            _item_title(normalized), _item_summary(normalized), _json_dumps(normalized),
+            str(normalized.get("canon_status") or normalized.get("scope") or "").strip() or None,
+            str(normalized.get("worldline_id") or "").strip() or None,
+            str(normalized.get("worldline_label") or normalized.get("worldline_name") or "").strip() or None,
+            _float_or_none(normalized.get("confidence")), _float_or_none(normalized.get("importance")),
+            _float_or_none(normalized.get("evidence_strength")), source_id, segment_id,
+            str(normalized.get("extraction_mode") or "").strip() or None,
+            str(normalized.get("setting_scope") or "").strip() or None,
+            str(normalized.get("setting_role") or "").strip() or None,
+            str(normalized.get("injection_policy") or "").strip() or None,
+            str(normalized.get("status") or "confirmed"), int(normalized.get("schema_version") or 1),
+            _json_dumps(typed_data), normalized.get("created_at"),
+        ),
+    )
+    _sync_knowledge_revision(
+        conn, knowledge_id=item_id, item=normalized, previous_snapshot=previous_snapshot,
+    )
+    _soft_delete_graph_edge_ids(conn, _active_graph_edges_by_owner(conn).get(item_id, []))
+    _upsert_graph_node_for_knowledge(
+        conn, knowledge_id=item_id, category=clean_category, item=normalized, story_id=story_id,
+    )
+    if clean_category == "relationships":
+        _upsert_graph_relationship_edges(
+            conn, knowledge_id=item_id, item=normalized, story_id=story_id,
+        )
+    _sync_item_evidence(conn, item=normalized, knowledge_id=item_id)
+    return normalized, load_knowledge_category_rows(conn, clean_category)
 
 
 def delete_knowledge_category_item(
@@ -620,15 +681,32 @@ def delete_knowledge_category_item(
     clean_item_id = str(item_id or "").strip()
     if not clean_category or not clean_item_id:
         return False, load_knowledge_category_rows(conn, clean_category) if clean_category else []
-    items = load_knowledge_category_rows(conn, clean_category)
-    remaining = [
-        item for item in items
-        if str(item.get("id") or item.get("knowledge_id") or "").strip() != clean_item_id
-    ]
-    if len(remaining) == len(items):
-        return False, items
-    sync_knowledge_category(conn, clean_category, remaining)
-    return True, remaining
+    row = conn.execute(
+        "SELECT category FROM knowledge_items WHERE knowledge_id = ? AND category = ? AND deleted_at IS NULL",
+        (clean_item_id, clean_category),
+    ).fetchone()
+    if not row:
+        return False, load_knowledge_category_rows(conn, clean_category)
+    conn.execute(
+        """
+        UPDATE knowledge_items
+        SET deleted_at=COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+        WHERE knowledge_id=? AND category=? AND deleted_at IS NULL
+        """,
+        (clean_item_id, clean_category),
+    )
+    conn.execute(
+        """
+        UPDATE graph_nodes
+        SET deleted_at=COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+            updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+        WHERE knowledge_id=? AND deleted_at IS NULL
+        """,
+        (clean_item_id,),
+    )
+    _soft_delete_graph_edge_ids(conn, _active_graph_edges_by_owner(conn).get(clean_item_id, []))
+    return True, load_knowledge_category_rows(conn, clean_category)
 
 
 def _graph_node_type_for_category(category: str) -> str:

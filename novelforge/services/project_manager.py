@@ -506,7 +506,11 @@ def save_retrieval_source_content(project_name: str, relative_path: str, content
         title=target.name,
         content_hash=hashlib.sha256(target.read_bytes()).hexdigest(),
         source_type="reference",
-        metadata={"relative_path": normalized_relative_path},
+        metadata={
+            "relative_path": normalized_relative_path,
+            "content": content,
+            "char_count": len(content),
+        },
     )
     sync_project_retrieval_assets(project_name)
 

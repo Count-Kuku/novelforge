@@ -518,14 +518,19 @@ def _refresh_project_json_mirror(project_name: str, path: _memory_api.Path, payl
 
 
 def _refresh_knowledge_retrieval_best_effort(project_name: str) -> None:
+    # The database triggers already enqueue a durable row-level FTS update and
+    # mark the broader retrieval index stale.  The app dispatcher picks it up;
+    # library callers are never surprised by a background thread during an
+    # atomic transaction test or one-shot script.
     try:
-        _memory_api.sync_project_retrieval_assets(project_name)
-    except Exception as exc:
-        _memory_api.logging.getLogger("novelforge.retrieval").warning(
-            "Knowledge commit succeeded, but retrieval rebuild failed for %s: %s",
-            project_name,
-            exc,
+        from novelforge.workflows.knowledge_index_dispatcher import (
+            wake_running_knowledge_index_dispatcher,
         )
+
+        wake_running_knowledge_index_dispatcher(project_name)
+    except Exception:
+        return None
+    return None
 
 
 def confirm_pending_knowledge_items_with_records(

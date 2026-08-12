@@ -47,6 +47,9 @@ _export_module(_creative_actions)
 from . import knowledge as _knowledge
 _export_module(_knowledge)
 
+from . import knowledge_center as _knowledge_center
+_export_module(_knowledge_center)
+
 from . import content as _content
 _export_module(_content)
 

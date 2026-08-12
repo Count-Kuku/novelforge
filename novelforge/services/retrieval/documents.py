@@ -874,7 +874,7 @@ def _documents_from_external_sources(project_name: str) -> list[_retrieval_api.R
         scope = "reference"
         title = file.stem
         content = raw_text
-        metadata = {"external_file": True}
+        metadata = {"external_file": True, "relative_path": relative_path}
         tags = ["external"]
         source_type = "external_source"
 

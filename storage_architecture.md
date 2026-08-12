@@ -92,6 +92,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `011_ingestion_knowledge_retrieval_upgrade` | 来源/知识修订、类型化知识、精确证据锚点、父子检索关系、稳定反馈绑定和可查询 FTS5 |
 | `012_creative_attachments` | 自由创作附件、来源修订关联、项目/故事/会话/单轮作用域和一次性消费状态 |
 | `013_creative_action_protocol` | 自由创作消息、动作计划/确认/幂等/撤销和配置修订历史 |
+| `014_unified_knowledge_center` | 跨知识/待审核/来源的 trigram FTS、增量索引任务和可重试后台索引状态 |
 
 ## 表分组
 
@@ -107,6 +108,17 @@ DB-only 错误语义并提前删除待迁移镜像。
 
 - `asset_files`：长文本/文件资产的逻辑键、相对路径、hash、作用域和软删除状态。
 - `asset_payloads`：讨论结论、章节元数据、审阅/评价 JSON、摘要、实体卡、模板和上下文快照等小型结构化工件。
+
+### 统一资料与知识中心
+
+- `knowledge_center_fts`：正式知识、待审核知识和来源片段的统一 trigram FTS 投影，保存故事、世界线、分类和归档状态过滤列。
+- `knowledge_index_jobs`：由知识和来源写入触发器生成的幂等增量投影任务；失败记录显式保留，只有用户重试才重新排队。
+- `knowledge_index_state`：完整检索 manifest 的请求修订、已索引修订、后台状态与最后错误。知识事务不等待整库检索重建。
+
+统一中心始终限制每页结果数量。单条知识新增、编辑、移动和归档使用 `BEGIN IMMEDIATE` 的记录级写入；
+提交完成后 UI 立即反馈，FTS 查询前可就地消费轻量增量任务，完整检索资产则由后台调度器按请求修订防丢失地更新。
+来源详情沿 `source_id/source_revision_id/start_offset/end_offset` 展示原文和精确证据，知识历史沿
+`knowledge_revisions` 生成差异；恢复历史内容会再写一个 revision，而不是回退或覆盖历史行。
 
 同一活动资产由 `(scope, story_id, asset_type, logical_key)` 唯一确定。SQLite 对 `NULL` 的唯一约束不能直接覆盖项目级资产，因此 migration 005 使用项目级和故事级两个部分唯一索引。
 

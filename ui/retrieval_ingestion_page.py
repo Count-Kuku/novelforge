@@ -286,21 +286,26 @@ def _render_ingestion_workspace(
         management_view_key = scoped_widget_key("ingestion_management_view", project_name, story_id)
         management_view = st.segmented_control(
             "管理内容",
-            options=["原文资料", "知识条目", "健康检查", "资料包"],
-            default="原文资料" if management_view_key not in st.session_state else None,
+            options=["统一中心", "原文资料", "知识条目", "健康检查", "资料包"],
+            default="统一中心" if management_view_key not in st.session_state else None,
             key=management_view_key,
             width="stretch",
             label_visibility="collapsed",
         )
         st.caption(
             {
+                "统一中心": "跨来源、分类、故事与世界线搜索、分页浏览和查看修订。",
                 "原文资料": "查看保存的原文、切分片段、来源证据与修订记录。",
                 "知识条目": "维护审核通过后会参与检索和写作的结构化知识。",
                 "健康检查": "检查资料覆盖率、冲突、缺失证据和索引状态。",
                 "资料包": "汇总项目资料，便于整体检查、归档或迁移。",
             }.get(str(management_view), "")
         )
-        if management_view == "知识条目":
+        if management_view == "统一中心":
+            from ui.knowledge_center import render_unified_knowledge_center
+
+            render_unified_knowledge_center(project_name, story_id)
+        elif management_view == "知识条目":
             render_knowledge_organizer(project_name, knowledge_category_options)
         elif management_view == "健康检查":
             render_ingestion_health_panel(project_name)

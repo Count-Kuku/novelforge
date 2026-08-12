@@ -54,12 +54,18 @@ from novelforge.workflows.web_research_task_dispatcher import (
     ensure_web_research_task_dispatcher,
     get_web_research_task_dispatcher_status,
 )
+from novelforge.workflows.knowledge_index_dispatcher import (
+    ensure_knowledge_index_dispatcher,
+    get_knowledge_index_dispatcher_status,
+    prime_knowledge_index_dispatcher,
+)
 
 def _reload_live_ui_modules() -> dict[str, object]:
     global list_projects
     background_runtime_active = bool(
         get_ingestion_task_dispatcher_status().get("running")
         or get_web_research_task_dispatcher_status().get("running")
+        or get_knowledge_index_dispatcher_status().get("running")
     )
     memory_helpers = memory_module if background_runtime_active else memory_module.reload_implementation_modules()
     list_projects = memory_helpers.list_projects
@@ -154,6 +160,8 @@ def main():
     ui_modules = _reload_live_ui_modules()
     ensure_ingestion_task_dispatcher()
     ensure_web_research_task_dispatcher()
+    ensure_knowledge_index_dispatcher()
+    prime_knowledge_index_dispatcher(list_projects())
     layout_helpers = ui_modules["layout"]
     layout_helpers.apply_app_style()
 

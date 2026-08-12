@@ -1186,12 +1186,6 @@ def update_confirmed_knowledge_item_record(
                 snapshots[destination_category] = target_after
         conn.commit()
 
-    for category, items in snapshots.items():
-        _memory_api._refresh_project_json_mirror(
-            project_name,
-            _memory_api.knowledge_category_path(project_name, category),
-            items,
-        )
     _memory_api._refresh_knowledge_retrieval_best_effort(project_name)
     return True
 
@@ -1260,11 +1254,6 @@ def merge_confirmed_knowledge_item_records(
         )
         conn.commit()
 
-    _memory_api._refresh_project_json_mirror(
-        project_name,
-        _memory_api.knowledge_category_path(project_name, clean_category),
-        category_after,
-    )
     _memory_api._refresh_knowledge_retrieval_best_effort(project_name)
     return True
 
@@ -1311,11 +1300,6 @@ def delete_confirmed_knowledge_item_records(
                 deleted_count += 1
         conn.commit()
 
-    _memory_api._refresh_project_json_mirror(
-        project_name,
-        _memory_api.knowledge_category_path(project_name, clean_category),
-        category_after,
-    )
     _memory_api._refresh_knowledge_retrieval_best_effort(project_name)
     return deleted_count
 

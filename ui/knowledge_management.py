@@ -753,7 +753,7 @@ def _render_pending_item_json_fields(details_value: str, evidence_value: str, ev
 
 
 def _render_pending_item_form(project_name: str, item: dict, pending_id: str) -> tuple[dict, bool, bool]:
-    details_value, evidence_value, evidence_contexts_value, tags_value = _pending_item_json_defaults(item)
+    _, _, _, tags_value = _pending_item_json_defaults(item)
     with st.form(key=scoped_widget_key("pending_item_editor_form", project_name, pending_id)):
         values = {}
         values.update(_render_pending_item_basic_fields(item))
@@ -762,7 +762,6 @@ def _render_pending_item_form(project_name: str, item: dict, pending_id: str) ->
         values.update(_render_pending_item_version_fields(item))
         values.update(_render_pending_item_score_fields(item))
         values.update(_render_pending_item_source_fields(item, tags_value))
-        values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_confirm = st.columns(2)
         save_clicked = col_save.form_submit_button("保存修改到待审核设定", width="stretch")
         confirm_clicked = col_confirm.form_submit_button("保存并确认", width="stretch")
@@ -849,10 +848,11 @@ def render_pending_knowledge_item_editor(project_name: str, pending_items: list[
         if not values["name"].strip():
             st.error("名称不能为空。")
             return
-        parsed_json = _parse_pending_item_json_fields(values)
-        if parsed_json is None:
-            return
-        updated_item = _build_pending_item_update(item, values, parsed_json)
+        updated_item = _build_pending_item_update(
+            item,
+            values,
+            (item.get("details", {}), item.get("evidence", []), item.get("evidence_contexts", [])),
+        )
         if confirm_clicked:
             typed_errors = validate_typed_knowledge_item(updated_item, values["category"])
             if typed_errors:
@@ -895,7 +895,7 @@ def _render_confirmed_item_basic_fields(item: dict, category: str) -> dict:
 
 
 def _render_confirmed_item_form(project_name: str, category: str, selected_index: int, item: dict) -> tuple[dict, bool, bool]:
-    details_value, evidence_value, evidence_contexts_value, tags_value = _pending_item_json_defaults(item)
+    _, _, _, tags_value = _pending_item_json_defaults(item)
     item_id = str(item.get("id") or item.get("knowledge_id") or selected_index)
     with st.form(key=scoped_widget_key("confirmed_item_editor_form", project_name, category, item_id)):
         values = {}
@@ -905,9 +905,8 @@ def _render_confirmed_item_form(project_name: str, category: str, selected_index
         values.update(_render_pending_item_version_fields(item))
         values.update(_render_pending_item_score_fields(item))
         values.update(_render_pending_item_source_fields(item, tags_value))
-        values.update(_render_pending_item_json_fields(details_value, evidence_value, evidence_contexts_value))
         col_save, col_delete = st.columns(2)
-        save_clicked = col_save.form_submit_button("保存正式知识并重建索引", width="stretch")
+        save_clicked = col_save.form_submit_button("保存正式知识", width="stretch")
         delete_confirmed = col_delete.checkbox(
             "确认删除该条正式知识",
             key=scoped_widget_key("delete_confirmed_knowledge_confirm", project_name, category, item_id),
@@ -940,7 +939,6 @@ def _render_return_confirmed_to_pending(project_name: str, category: str, select
         return False
     result = return_confirmed_knowledge_item_to_pending(project_name, category, str(item.get("id") or ""), reason=return_reason)
     if result.get("success"):
-        rebuild_retrieval_assets(project_name, build_vectors=True)
         st.success(result.get("message", "已退回待审核。"))
         st.rerun()
     st.error(result.get("message", "退回失败。"))
@@ -949,8 +947,7 @@ def _render_return_confirmed_to_pending(project_name: str, category: str, select
 
 def _delete_confirmed_knowledge_item(project_name: str, category: str, selected_index: int, item: dict) -> None:
     if save_confirmed_knowledge_item(project_name, category, selected_index, item, delete_only=True):
-        rebuild_retrieval_assets(project_name, build_vectors=True)
-        st.success("已删除该条正式知识，并重建检索索引。")
+        st.success("已删除该条正式知识；搜索索引将在后台更新。")
         st.rerun()
     st.error("删除失败：条目不存在或分类无效。")
 
@@ -988,9 +985,8 @@ def _build_confirmed_item_update(item: dict, values: dict, parsed_json: tuple) -
 
 def _save_confirmed_item_editor_result(project_name: str, category: str, selected_index: int, updated_item: dict, target_category: str) -> None:
     if save_confirmed_knowledge_item(project_name, category, selected_index, updated_item):
-        rebuild_retrieval_assets(project_name, build_vectors=True)
         move_note = "，并移动分类" if target_category != category else ""
-        st.success(f"已保存正式知识{move_note}，并重建检索索引。")
+        st.success(f"已保存正式知识{move_note}；搜索索引将在后台增量更新。")
         st.rerun()
     st.error("保存失败：条目不存在或分类无效。")
 
@@ -1045,10 +1041,11 @@ def render_confirmed_knowledge_item_editor(
         if not values["name"].strip():
             st.error("名称不能为空。")
             return
-        parsed_json = _parse_pending_item_json_fields(values)
-        if parsed_json is None:
-            return
-        updated_item = _build_confirmed_item_update(item, values, parsed_json)
+        updated_item = _build_confirmed_item_update(
+            item,
+            values,
+            (item.get("details", {}), item.get("evidence", []), item.get("evidence_contexts", [])),
+        )
         typed_errors = validate_typed_knowledge_item(updated_item, values["target_category"])
         if typed_errors:
             st.error("；".join(typed_errors))
@@ -1813,34 +1810,42 @@ def _render_knowledge_merge_editor(project_name: str, category: str, selected_in
         for index, item in zip(selected_indices, selected_items)
     ]
     selection_scope = "|".join(sorted(selected_item_ids))
-    raw_merged_json = st.text_area(
-        "合并后详细数据，可在保存前修改",
-        value=json.dumps(merged_item, ensure_ascii=False, indent=2),
-        height=340,
-        key=scoped_widget_key("knowledge_organizer_merged_json", project_name, category, selection_scope),
-    )
-    if st.button(
-        "保存合并结果并移除原条目",
-        key=scoped_widget_key("knowledge_organizer_save_merge", project_name, category, selection_scope),
-    ):
-        try:
-            parsed = json.loads(raw_merged_json)
-            if not isinstance(parsed, dict):
-                st.error("合并结果必须是对象结构。")
-            else:
-                if merge_confirmed_knowledge_items(
-                    project_name,
-                    category,
-                    selected_indices,
-                    parsed,
-                    selected_item_ids=selected_item_ids,
-                ):
-                    rebuild_retrieval_assets(project_name, build_vectors=True)
-                    st.success(f"已合并 {len(selected_items)} 条知识库条目，并重建检索索引。")
-                    st.rerun()
-                st.error("合并失败：条目不存在或分类无效。")
-        except json.JSONDecodeError as exc:
-            st.error(f"详细数据格式错误：{exc}")
+    with st.form(scoped_widget_key("knowledge_organizer_merge_form", project_name, category, selection_scope)):
+        merged_name = st.text_input(
+            "合并后名称", value=str(merged_item.get("name") or ""),
+            key=scoped_widget_key("knowledge_merge_name", project_name, category, selection_scope),
+        )
+        merged_summary = st.text_area(
+            "合并后摘要", value=str(merged_item.get("summary") or ""), height=140,
+            key=scoped_widget_key("knowledge_merge_summary", project_name, category, selection_scope),
+        )
+        merged_tags = st.text_input(
+            "标签（逗号分隔）",
+            value=", ".join(str(tag) for tag in merged_item.get("tags", []) if str(tag).strip()),
+            key=scoped_widget_key("knowledge_merge_tags", project_name, category, selection_scope),
+        )
+        merge_clicked = st.form_submit_button("保存合并结果并归档原条目", width="stretch")
+    if merge_clicked:
+        parsed = {
+            **merged_item,
+            "name": merged_name.strip(),
+            "summary": merged_summary.strip(),
+            "tags": parse_comma_tags(merged_tags),
+            "revision_reason": "在知识中心合并条目",
+        }
+        if not parsed["name"]:
+            st.error("合并后名称不能为空。")
+        elif merge_confirmed_knowledge_items(
+            project_name,
+            category,
+            selected_indices,
+            parsed,
+            selected_item_ids=selected_item_ids,
+        ):
+            st.success(f"已合并 {len(selected_items)} 条知识库条目；原条目可在归档视图找到。")
+            st.rerun()
+        else:
+            st.error("合并失败：条目不存在或分类无效。")
 
 
 def _render_knowledge_delete_action(project_name: str, category: str, selected_indices: list[int], selected_items: list[dict]) -> None:
@@ -1864,8 +1869,7 @@ def _render_knowledge_delete_action(project_name: str, category: str, selected_i
             selected_item_ids=selected_item_ids,
         )
         if removed_count:
-            rebuild_retrieval_assets(project_name, build_vectors=True)
-            st.success(f"已删除 {removed_count} 条知识库条目，并重建检索索引。")
+            st.success(f"已归档 {removed_count} 条知识库条目；搜索索引将在后台更新。")
             st.rerun()
         st.error("删除失败：条目不存在或分类无效。")
 
@@ -1910,6 +1914,41 @@ def render_knowledge_organizer(project_name: str, knowledge_category_options: li
         return
 
     category = _select_knowledge_organizer_category(project_name, knowledge_category_options)
+    with st.expander("新增知识条目", expanded=False):
+        with st.form(scoped_widget_key("knowledge_create_form", project_name, category)):
+            new_name = st.text_input(
+                "名称", key=scoped_widget_key("knowledge_create_name", project_name, category),
+            )
+            new_summary = st.text_area(
+                "摘要", height=120,
+                key=scoped_widget_key("knowledge_create_summary", project_name, category),
+            )
+            new_worldline = st.text_input(
+                "世界线标识", value=DEFAULT_WORLDLINE_ID,
+                key=scoped_widget_key("knowledge_create_worldline", project_name, category),
+            )
+            create_clicked = st.form_submit_button("新增并保存", width="stretch")
+        if create_clicked:
+            if not new_name.strip():
+                st.error("名称不能为空。")
+            else:
+                from uuid import uuid4
+                from novelforge.services.memory import upsert_knowledge_category_item_record
+
+                saved = upsert_knowledge_category_item_record(project_name, category, {
+                    "id": f"{category}_{uuid4().hex}",
+                    "category": category,
+                    "name": new_name.strip(),
+                    "summary": new_summary.strip(),
+                    "worldline_id": new_worldline.strip() or DEFAULT_WORLDLINE_ID,
+                    "worldline_label": DEFAULT_WORLDLINE_LABEL,
+                    "scope": "project",
+                    "authority": "project",
+                    "status": "confirmed",
+                    "revision_reason": "在知识中心新增",
+                })
+                st.success(f"已新增：{saved.get('name') or new_name.strip()}。")
+                st.rerun()
     items = load_knowledge_category(project_name, category)
     if not items:
         render_empty_state("这个分类还没有知识", "可以先导入资料，再将提取结果确认到知识库。")

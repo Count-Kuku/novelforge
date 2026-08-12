@@ -52,6 +52,7 @@ def ingest_external_source_file(
                 "relative_path": relative_path,
                 "scope": str(parsed_payload.get("scope") or "reference"),
                 "char_count": len(str(parsed_payload.get("content") or content)),
+                "content": str(parsed_payload.get("content") or content),
             },
         )
     except Exception:
