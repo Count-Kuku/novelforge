@@ -28,7 +28,7 @@ RESOURCE_BROWSER_GROUPS = [
     ("generation_context", "生成时使用的资料"),
     ("source", "外部资料"),
     ("knowledge_item", "知识库条目"),
-    ("pending_knowledge", "待审核设定"),
+    ("pending_knowledge", "待审核知识"),
     ("long_reference_batch", "资料批次"),
 ]
 

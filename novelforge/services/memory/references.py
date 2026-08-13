@@ -1159,7 +1159,7 @@ def sync_project_database_from_files(project_name: str) -> dict:
                     for item in build_setting_items_from_memory(
                         legacy_memory,
                         setting_scope="project",
-                        source_title="项目核心设定",
+                        source_title="项目优先设定",
                     ):
                         category = str(item.get("category") or "")
                         if category in _memory_api.KNOWLEDGE_CATEGORIES:

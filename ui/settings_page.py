@@ -1,4 +1,4 @@
-"""Settings and core setting management pages."""
+"""Unified knowledge library and priority-setting management pages."""
 from __future__ import annotations
 
 import html
@@ -12,7 +12,6 @@ from novelforge.services.memory import (
     create_story,
     discard_pending_knowledge_items,
     list_stories,
-    load_knowledge_base,
     load_memory,
     load_pending_knowledge_items,
     rename_story,
@@ -37,7 +36,7 @@ from novelforge.domain.knowledge_workflows import (
     update_pending_knowledge_item,
 )
 from ui.app_shell import activate_story_after_creation, copy_story_workspace_settings, switch_to_story
-from ui.common import navigate_to, scoped_widget_key
+from ui.common import scoped_widget_key
 from ui.labels import label_knowledge_category
 
 
@@ -155,7 +154,7 @@ def render_setting_items_editor(project_name: str, story_id: str, setting_scope:
     ]
 
     metric_cols = st.columns(3)
-    metric_cols[0].metric("当前可用核心设定", len(all_items))
+    metric_cols[0].metric("当前可用优先设定", len(all_items))
     metric_cols[1].metric(f"{_setting_scope_label(setting_scope)}设定", len(editable_items_all))
     metric_cols[2].metric("每次生成都使用", len([item for item in all_items if str(item.get("injection_policy") or "") == "always"]))
 
@@ -200,15 +199,15 @@ def render_setting_items_editor(project_name: str, story_id: str, setting_scope:
         )
 
     if inherited_items:
-        with st.expander("继承的项目级核心设定", expanded=False):
+        with st.expander("继承的项目级优先设定", expanded=False):
             for item in inherited_items:
                 st.markdown(f"- **{html.escape(str(item.get('name') or '-'))}**：{html.escape(str(item.get('summary') or ''))}")
 
     if not editable_items:
         if editable_items_all:
-            st.info("当前筛选条件下没有匹配的核心设定。")
+            st.info("当前筛选条件下没有匹配的优先设定。")
         else:
-            st.info(f"当前还没有{_setting_scope_label(setting_scope)}核心设定。可以直接新增，保存后会成为可复用的正式知识条目。")
+            st.info(f"当前还没有{_setting_scope_label(setting_scope)}优先设定。可以直接新增，保存后会成为知识库中的正式知识条目。")
         return
 
     for item in editable_items:
@@ -224,7 +223,7 @@ def render_setting_items_editor(project_name: str, story_id: str, setting_scope:
 
 
 def render_generation_setting_context_preview(project_name: str, story_id: str):
-    with st.expander("预览：模型会优先参考哪些核心设定", expanded=False):
+    with st.expander("预览：模型会优先参考哪些优先设定", expanded=False):
         try:
             context = build_generation_setting_context(project_name, story_id)
         except Exception as exc:
@@ -232,7 +231,7 @@ def render_generation_setting_context_preview(project_name: str, story_id: str):
             return
         setting_context = str(context.get("_setting_context") or "").strip()
         if not setting_context:
-            st.caption("当前没有需要在每次生成中优先提供给模型的核心设定。")
+            st.caption("当前没有需要在每次生成中优先提供给模型的优先设定。")
             return
         st.caption("这里是统一设定知识合成后的只读预览。正文、细纲、审阅等生成流程会优先参考这些内容。")
         st.code(setting_context, language="markdown")
@@ -392,7 +391,7 @@ def _handle_pending_core_setting_editor_action(
         saved_count = confirm_pending_knowledge_items(project_name, [pending_id])
         if saved_count:
             rebuild_retrieval_assets(project_name, build_vectors=True)
-        st.success(f"已确认 {saved_count} 条核心设定。")
+        st.success(f"已确认 {saved_count} 条优先设定。")
     else:
         st.success("候选设定已保存。")
     st.rerun()
@@ -457,7 +456,7 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
                 saved_count = confirm_pending_knowledge_items(project_name, selected_ids)
                 if saved_count:
                     rebuild_retrieval_assets(project_name, build_vectors=True)
-                st.success(f"已确认 {saved_count} 条核心设定。")
+                st.success(f"已确认 {saved_count} 条优先设定。")
                 st.rerun()
         if col_discard.button("丢弃所选候选", key=f"{key_prefix}_discard", width="stretch"):
             if not selected_ids:
@@ -468,7 +467,16 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
                 st.rerun()
 
 
-def render_settings_page(project_name: str, *, render_memory_page):
+def render_settings_page(
+    project_name: str,
+    *,
+    render_memory_page,
+    render_knowledge_organizer,
+    render_pending_knowledge_queue,
+    render_auto_review_policy_panel,
+    render_auto_review_runs_panel,
+    knowledge_category_options: list[str],
+):
     story_id = st.session_state.get("active_story_id", "default")
     stories = list_stories(project_name)
     current_story_name = "默认"
@@ -477,7 +485,6 @@ def render_settings_page(project_name: str, *, render_memory_page):
             current_story_name = s.get("name", story_id)
             break
 
-    st.info(f"当前正在管理 **{current_story_name}** 的核心设定。这里适合保存角色、世界观和长期事实；临时写作要求请使用“创作提醒”。")
     migration_key = f"setting_knowledge_migration:{project_name}"
     if not st.session_state.get(migration_key):
         try:
@@ -485,37 +492,90 @@ def render_settings_page(project_name: str, *, render_memory_page):
             st.session_state[migration_key] = True
             if migration_result.get("migrated") or migration_result.get("updated"):
                 st.success(
-                    f"已将旧核心设定同步为统一知识条目：新增 {migration_result.get('migrated', 0)} 条，更新 {migration_result.get('updated', 0)} 条。"
+                    f"已将旧版设定同步为统一知识条目：新增 {migration_result.get('migrated', 0)} 条，更新 {migration_result.get('updated', 0)} 条。"
                 )
         except Exception as exc:
-            st.warning(f"旧核心设定迁移失败，当前仍可继续编辑新的统一设定：{exc}")
-    st.caption("核心设定会作为正式知识条目保存。本页只集中展示需要优先影响生成的高优先级内容。")
+            st.warning(f"旧版设定迁移失败，当前仍可继续编辑新的统一知识：{exc}")
 
-    story_tab, project_tab, management_tab = st.tabs(["当前故事设定", "全项目共用设定", "故事管理"])
+    st.info(
+        "知识库保存全部正式知识；“优先设定”只是其中需要优先影响创作的一部分，"
+        "并不是另一套独立数据。"
+    )
+    view_key = scoped_widget_key("knowledge_library_view", project_name, story_id)
+    view = st.segmented_control(
+        "知识库视图",
+        options=["全部知识", "优先设定", "待审核知识", "故事管理"],
+        default="全部知识" if view_key not in st.session_state else None,
+        key=view_key,
+        width="stretch",
+        label_visibility="collapsed",
+    )
+    if view == "全部知识":
+        all_view_key = scoped_widget_key("knowledge_library_all_view", project_name, story_id)
+        all_view = st.segmented_control(
+            "全部知识视图",
+            options=["知识条目", "统一搜索", "创作实体"],
+            default="知识条目" if all_view_key not in st.session_state else None,
+            key=all_view_key,
+            width="stretch",
+            label_visibility="collapsed",
+        )
+        if all_view == "统一搜索":
+            from ui.knowledge_center import render_unified_knowledge_center
 
+            render_unified_knowledge_center(project_name, story_id)
+        elif all_view == "创作实体":
+            from ui.entity_experience import render_entity_experience
+
+            render_entity_experience(project_name, story_id)
+        else:
+            render_knowledge_organizer(project_name, knowledge_category_options)
+        return
+    if view == "待审核知识":
+        review_view_key = scoped_widget_key("knowledge_library_review_view", project_name, story_id)
+        review_view = st.segmented_control(
+            "待审核知识视图",
+            options=["审核队列", "审核策略", "处理记录"],
+            default="审核队列" if review_view_key not in st.session_state else None,
+            key=review_view_key,
+            width="stretch",
+            label_visibility="collapsed",
+        )
+        if review_view == "审核策略":
+            render_auto_review_policy_panel(project_name)
+        elif review_view == "处理记录":
+            render_auto_review_runs_panel(project_name)
+        else:
+            render_pending_knowledge_queue(project_name)
+        return
+    if view == "故事管理":
+        _render_story_management_tab(project_name)
+        return
+
+    st.caption(
+        f"当前正在管理“{current_story_name}”的优先设定。它们仍是知识库条目，"
+        "可以设置为每次生成、内容相关时或仅手动选择时使用。"
+    )
+    story_tab, project_tab = st.tabs(["当前故事", "全项目共用"])
     with story_tab:
         _render_story_settings_tab(project_name, story_id, current_story_name, render_memory_page=render_memory_page)
-
     with project_tab:
         _render_project_settings_tab(project_name)
-
-    with management_tab:
-        _render_story_management_tab(project_name)
 
 
 def _render_story_settings_tab(project_name: str, story_id: str, story_name: str, *, render_memory_page):
     st.markdown("#### 设定复制与导入")
-    st.caption("这里只复制正式知识条目中的核心设定，不会改变创作配置、生成规则或提示词选项。")
+    st.caption("这里只复制正式知识条目中的优先设定，不会改变其他知识、创作配置、生成规则或提示词选项。")
 
     st.markdown("##### 当前故事与整个项目")
     col_a, col_c = st.columns(2)
     if col_a.button("把项目共用设定复制到当前故事", width="stretch"):
         result = copy_project_core_settings_to_story(project_name, story_id)
-        st.success(f"已处理项目核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
+        st.success(f"已处理项目优先设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
         st.rerun()
     if col_c.button("把当前故事设定共享给整个项目", width="stretch"):
         result = copy_story_core_settings_to_project(project_name, story_id)
-        st.success(f"已共享当前故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
+        st.success(f"已共享当前故事优先设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
         st.rerun()
 
     other_stories = [s for s in list_stories(project_name) if s.get("story_id") != story_id]
@@ -531,13 +591,13 @@ def _render_story_settings_tab(project_name: str, story_id: str, story_name: str
         action_col.markdown('<div class="nf-button-align-spacer" aria-hidden="true"></div>', unsafe_allow_html=True)
         if action_col.button("复制所选故事设定", width="stretch", key="import_other_story"):
             result = copy_story_core_settings_to_story(project_name, sel_story, story_id)
-            st.success(f"已复制故事核心设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
+            st.success(f"已复制故事优先设定：新增 {result.get('copied', 0)} 条，更新 {result.get('updated', 0)} 条。")
             st.rerun()
     else:
         st.caption("当前项目没有其他故事可复制。")
 
     st.divider()
-    st.markdown(f"#### {story_name} 的核心设定")
+    st.markdown(f"#### {story_name} 的优先设定")
     render_pending_core_setting_panel(project_name, story_id)
     render_generation_setting_context_preview(project_name, story_id)
     render_memory_page(project_name, {}, embedded=True)
@@ -545,7 +605,7 @@ def _render_story_settings_tab(project_name: str, story_id: str, story_name: str
 
 def _render_project_settings_tab(project_name: str):
     base_memory = load_memory(project_name)
-    st.markdown("#### 项目基础设定（所有故事共享）")
+    st.markdown("#### 项目基本信息（所有故事共享）")
     changed = False
     new_memory = dict(base_memory)
 
@@ -570,19 +630,6 @@ def _render_project_settings_tab(project_name: str):
     render_generation_setting_context_preview(project_name, "default")
     render_setting_items_editor(project_name, "default", "project")
 
-    st.divider()
-    st.markdown("#### 项目知识库")
-    knowledge = load_knowledge_base(project_name)
-    total_items = sum(len(items) for items in knowledge.values())
-    st.caption(f"共 {len(knowledge)} 个分类，{total_items} 条知识条目。详细管理请到「资料导入」页面。")
-    for cat, items in knowledge.items():
-        if items:
-            with st.expander(f"{label_knowledge_category(cat)}（{len(items)} 条）", expanded=False):
-                for item in items:
-                    summary = str(item.get("summary") or item.get("content") or "")[:200]
-                    st.markdown(f"- **{item.get('name', '-')}**：{summary}")
-    if st.button("前往资料导入", width="stretch", key="goto_ingestion"):
-        navigate_to("资料导入")
 
 
 def _render_story_management_tab(project_name: str):
@@ -637,7 +684,7 @@ def _render_story_management_tab(project_name: str):
         new_story_name = st.text_input("故事名称", key="settings_new_story_name")
         new_story_desc = st.text_area("故事描述", height=80, key="settings_new_story_desc",
                                        placeholder="例如：原作线续写、平行世界、角色穿越...")
-        copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True, key="settings_copy_story_workspace")
+        copy_from = st.checkbox("从当前故事复制创作配置和优先设定", value=True, key="settings_copy_story_workspace")
         if st.button("创建故事", key="settings_create_story", width="stretch"):
             if new_story_name.strip():
                 meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())

@@ -147,16 +147,28 @@ def render_retrieval_page(project_name: str, ui_modules: dict[str, object], mode
             render_ingestion_task_manager=ui_modules["ingestion_tasks"].render_ingestion_task_manager,
             render_ingestion_health_panel=knowledge_management.render_ingestion_health_panel,
             render_source_ledger_page=knowledge_management.render_source_ledger_page,
-            render_auto_review_policy_panel=knowledge_management.render_auto_review_policy_panel,
-            render_pending_knowledge_queue=knowledge_management.render_pending_knowledge_queue,
-            render_auto_review_runs_panel=knowledge_management.render_auto_review_runs_panel,
             render_long_reference_batch_manager=ui_modules["long_reference_batch"].render_long_reference_batch_manager,
-            render_knowledge_organizer=knowledge_management.render_knowledge_organizer,
             render_source_package_report_page=knowledge_management.render_source_package_report_page,
         )
         return
 
     ui_modules["retrieval_center"].render_retrieval_center_page(project_name, current_story_id)
+
+
+def render_model_settings_page(project_name: str | None, ui_modules: dict[str, object]) -> None:
+    ui_modules["llm_settings"].render_llm_settings_page()
+    if not project_name:
+        return
+
+    with st.expander("高级：创作规则与写作偏好", expanded=False):
+        st.caption("这些设置不会占用普通侧栏；通常在具体生成页面就地调整写作偏好即可。")
+        rule_col, preference_col = st.columns(2)
+        if rule_col.button("管理生成规则", key="open_advanced_generation_rules", width="stretch"):
+            st.session_state["pending_nav_page"] = "生成规则"
+            st.rerun()
+        if preference_col.button("集中管理写作偏好", key="open_advanced_prompt_options", width="stretch"):
+            st.session_state["pending_nav_page"] = "提示词选项"
+            st.rerun()
 
 
 def main():
@@ -198,7 +210,7 @@ def main():
     if not project_name and page != "模型配置":
         st.stop()
     elif page == "模型配置":
-        ui_modules["llm_settings"].render_llm_settings_page()
+        render_model_settings_page(project_name, ui_modules)
     elif page == "项目总览":
         ui_modules["project_overview"].render_project_overview_page(project_name)
     elif page == "创作配置":
@@ -206,8 +218,16 @@ def main():
             project_name,
             render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
         )
-    elif page == "核心设定":
-        ui_modules["settings"].render_settings_page(project_name, render_memory_page=render_memory_page)
+    elif page == "知识库":
+        ui_modules["settings"].render_settings_page(
+            project_name,
+            render_memory_page=render_memory_page,
+            render_knowledge_organizer=ui_modules["knowledge_management"].render_knowledge_organizer,
+            render_pending_knowledge_queue=ui_modules["knowledge_management"].render_pending_knowledge_queue,
+            render_auto_review_policy_panel=ui_modules["knowledge_management"].render_auto_review_policy_panel,
+            render_auto_review_runs_panel=ui_modules["knowledge_management"].render_auto_review_runs_panel,
+            knowledge_category_options=list(KNOWLEDGE_CATEGORY_LABELS.keys()),
+        )
     elif page == "自由创作":
         ui_modules["free_writing"].render_dynamic_generation_page(
             project_name,

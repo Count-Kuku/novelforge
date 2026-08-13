@@ -129,7 +129,7 @@ def _render_chapter_write_settings(
             help="默认勾选已启用选项；也可以临时选择未启用的预设，仅影响本次生成。",
         )
     else:
-        write_settings_ui.info("还没有可用于正文写作的提示词选项。它不是讨论后才会出现；展开下面的管理区就能新增，或去工作台的「提示词选项」页复制内置预设。")
+        write_settings_ui.info("还没有可用于正文写作的提示词选项。展开下面的管理区即可新增或复制内置预设。")
     write_settings_ui.markdown("#### 提示词选项")
     with write_settings_ui.container():
         _render_prompt_option_inline_tools(

@@ -322,7 +322,7 @@ def _render_prompt_option_capability_tools(
         else f"#### {capability_label}提示词选项"
     )
     if select_for_run and compact:
-        st.caption("只影响本次生成；完整管理请前往“配置 → 提示词选项”。")
+        st.caption("只影响本次生成；可在下方直接新增或管理写作偏好。")
     elif select_for_run:
         st.caption("这里可以临时选择本次生成使用哪些提示词，也可以直接新增或修改正文写作提示词。")
     else:
@@ -423,7 +423,7 @@ def _render_generation_injection_preview(
     chapter_no: int | None = None,
 ):
     with st.expander("预览：本次会提供给模型什么", expanded=False):
-        st.caption("这里会按真实生成方式汇总规则、核心设定、创作提醒和匹配到的资料。预览不会消耗“仅下一次”的创作提醒。")
+        st.caption("这里会按真实生成方式汇总规则、优先设定、创作提醒和匹配到的资料。预览不会消耗“仅下一次”的创作提醒。")
         request_payload = {
             "project_name": project_name,
             "story_id": story_id,

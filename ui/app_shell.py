@@ -21,7 +21,7 @@ from novelforge.services.memory import (
     set_active_story,
 )
 from novelforge.services.project_manager import get_project_summary
-from ui.common import scoped_widget_key
+from ui.common import developer_mode_enabled, scoped_widget_key
 from ui.llm_usage import render_sidebar_usage_summary
 from ui import navigation as _navigation
 
@@ -29,11 +29,13 @@ from ui import navigation as _navigation
 _NAVIGATION_CONTRACT = (
     "ADVANCED_PAGE_GROUPS",
     "DEFAULT_PAGE",
+    "HIDDEN_PAGE_RETURN_TARGETS",
     "LEGACY_PAGE_ALIASES",
     "PAGE_DESCRIPTIONS",
     "PAGE_GROUP_LABELS",
     "PAGE_ICONS",
     "PAGE_LABELS",
+    "PRIMARY_PAGE_GROUPS",
     "page_groups_for_story",
 )
 if not all(hasattr(_navigation, name) for name in _NAVIGATION_CONTRACT):
@@ -43,11 +45,13 @@ if not all(hasattr(_navigation, name) for name in _NAVIGATION_CONTRACT):
 
 ADVANCED_PAGE_GROUPS = _navigation.ADVANCED_PAGE_GROUPS
 DEFAULT_PAGE = _navigation.DEFAULT_PAGE
+HIDDEN_PAGE_RETURN_TARGETS = _navigation.HIDDEN_PAGE_RETURN_TARGETS
 LEGACY_PAGE_ALIASES = _navigation.LEGACY_PAGE_ALIASES
 PAGE_DESCRIPTIONS = _navigation.PAGE_DESCRIPTIONS
 PAGE_GROUP_LABELS = _navigation.PAGE_GROUP_LABELS
 PAGE_ICONS = _navigation.PAGE_ICONS
 PAGE_LABELS = _navigation.PAGE_LABELS
+PRIMARY_PAGE_GROUPS = _navigation.PRIMARY_PAGE_GROUPS
 navigation_page_groups_for_story = _navigation.page_groups_for_story
 
 
@@ -158,6 +162,7 @@ def page_groups_for_story(project_name: str | None, story_id: str = "default") -
     return navigation_page_groups_for_story(
         project_name=project_name,
         planning_pages=planning_pages_for_story(project_name, story_id),
+        developer_mode=developer_mode_enabled(),
     )
 
 def _project_creation_error_message(exc: Exception) -> str:
@@ -351,7 +356,7 @@ def _render_new_story_popover(project_name: str) -> None:
     with st.sidebar.popover("新故事", width="stretch"):
         new_story_name = st.text_input("故事名称", key="new_story_name_input")
         new_story_desc = st.text_area("故事描述", key="new_story_desc_input", height=80, placeholder="例如：原作线续写、平行世界、角色穿越...")
-        copy_from = st.checkbox("从当前故事复制创作配置和核心设定", value=True, key="sidebar_copy_from")
+        copy_from = st.checkbox("从当前故事复制创作配置和优先设定", value=True, key="sidebar_copy_from")
         if st.button("创建故事", key="sidebar_create_story", width="stretch"):
             if new_story_name.strip():
                 meta = create_story(project_name, new_story_name.strip(), new_story_desc.strip())
@@ -377,15 +382,31 @@ def _apply_pending_navigation(available_pages: list[str]) -> None:
         st.session_state["nav_revision"] = int(st.session_state.get("nav_revision", 0)) + 1
 
 
-def _resolve_active_page(available_pages: list[str]) -> str:
+def _resolve_active_page(available_pages: list[str], visible_pages: list[str] | None = None) -> str:
+    visible_pages = visible_pages or available_pages
     active_page = LEGACY_PAGE_ALIASES.get(st.session_state.get("active_page", DEFAULT_PAGE), st.session_state.get("active_page", DEFAULT_PAGE))
     if active_page not in available_pages:
-        if active_page in PAGE_GROUPS.get("规划", []) and "创作配置" in available_pages:
+        if active_page in PAGE_GROUPS.get("规划", []) and "创作配置" in visible_pages:
             active_page = "创作配置"
-        elif DEFAULT_PAGE in available_pages:
+        elif DEFAULT_PAGE in visible_pages:
             active_page = DEFAULT_PAGE
         else:
-            active_page = available_pages[0]
+            active_page = visible_pages[0]
+    return active_page
+
+
+def _render_hidden_page_navigation(active_page: str, visible_pages: list[str]) -> str:
+    label = PAGE_LABELS.get(active_page, active_page)
+    target_page = HIDDEN_PAGE_RETURN_TARGETS.get(active_page, DEFAULT_PAGE)
+    if target_page not in visible_pages:
+        target_page = DEFAULT_PAGE if DEFAULT_PAGE in visible_pages else visible_pages[0]
+    target_label = PAGE_LABELS.get(target_page, target_page)
+    st.sidebar.caption(f"当前按需打开：{label}")
+    if st.sidebar.button(f"返回：{target_label}", key="return_from_hidden_page", width="stretch"):
+        st.session_state["active_page"] = target_page
+        st.session_state["nav_revision"] = int(st.session_state.get("nav_revision", 0)) + 1
+        st.rerun()
+    _render_page_description(active_page)
     return active_page
 
 
@@ -465,9 +486,14 @@ def _render_sidebar_navigation(project_name: str | None) -> str:
     st.sidebar.divider()
     current_story_id = st.session_state.get("active_story_id", "default")
     visible_page_groups = page_groups_for_story(project_name, current_story_id)
-    available_pages = [page for pages in visible_page_groups.values() for page in pages]
+    visible_pages = [page for pages in visible_page_groups.values() for page in pages]
+    available_pages = [page for pages in PAGE_GROUPS.values() for page in pages]
+    if not project_name:
+        available_pages = visible_pages
     _apply_pending_navigation(available_pages)
-    active_page = _resolve_active_page(available_pages)
+    active_page = _resolve_active_page(available_pages, visible_pages)
+    if active_page not in visible_pages:
+        return _render_hidden_page_navigation(active_page, visible_pages)
     selected_group, selected_page = _render_navigation_radios(visible_page_groups, active_page)
     _render_planning_profile_hint(project_name, current_story_id, selected_group)
     _render_page_description(selected_page)

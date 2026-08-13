@@ -195,7 +195,7 @@ def _apply_setting_candidate(project_name: str, story_id: str, item: dict, issue
         if _setting_candidate_has_blocked_id_conflict(issues, str(payload.get("id") or ""), replace_target):
             payload["id"] = _fork_setting_candidate_id(payload, story_id)
     saved = upsert_setting_item(project_name, target_category, payload)
-    st.success(f"已保存核心设定：{saved.get('name')}")
+    st.success(f"已保存优先设定：{saved.get('name')}")
     st.rerun()
 
 
@@ -217,9 +217,9 @@ def _render_setting_asset_candidate(project_name: str, story_id: str, key_prefix
             key=scoped_widget_key("replace_discussion_setting", key_prefix, item.get("id", "")),
         )
     elif issues:
-        st.caption("相近设定属于项目级或其他故事，不会被当前故事候选覆盖；如需调整，请到对应层级的核心设定页编辑。")
+        st.caption("相近设定属于项目级或其他故事，不会被当前故事候选覆盖；如需调整，请到知识库的对应优先设定中编辑。")
     if st.button(
-        "保存为核心设定",
+        "保存为优先设定",
         key=scoped_widget_key("apply_discussion_setting", key_prefix, item.get("id", "")),
         width="stretch",
     ):
@@ -229,7 +229,7 @@ def _render_setting_asset_candidate(project_name: str, story_id: str, key_prefix
 def _render_setting_asset_candidates(project_name: str, story_id: str, key_prefix: str, setting_candidates: list[dict], existing_settings: list[dict]) -> None:
     if not setting_candidates:
         return
-    st.markdown("#### 核心设定候选")
+    st.markdown("#### 优先设定候选")
     for item in setting_candidates:
         _render_setting_asset_candidate(project_name, story_id, key_prefix, item, existing_settings)
 

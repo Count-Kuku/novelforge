@@ -128,7 +128,7 @@ def build_retrieval_usage_report_from_payload(
             "priority_sources": [],
             "constraints": [],
             "conflicts": [],
-            "risk_notes": ["本次没有检索到可用资料，生成内容更依赖当前输入、核心设定和模型推断。"],
+            "risk_notes": ["本次没有检索到可用资料，生成内容更依赖当前输入、优先设定和模型推断。"],
         }
 
     source_type_counts: dict[str, int] = {}

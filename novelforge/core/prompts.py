@@ -16,7 +16,7 @@ def format_story_state_guidance(memory: dict) -> str:
     setting_context = str(memory.get("_setting_context", "") or "").strip()
     setting_section = f"""
 
-统一核心设定条目：
+统一优先设定条目：
 {setting_context}
 """ if setting_context else ""
     return f"""
@@ -1801,7 +1801,7 @@ def creative_structure_prompt(
 
 说明这次应如何使用原作资料、项目设定、参考资料和文风资料。
 
-## 核心设定取舍
+## 优先设定取舍
 
 说明哪些设定必须保留，哪些可以按需求改写。
 

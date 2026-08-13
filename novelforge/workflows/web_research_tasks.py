@@ -695,7 +695,7 @@ def run_web_research_task(
                     "verified_count": len(verified_claims),
                     "contested_count": sum(item.verification_status == "contested" for item in verified_claims),
                 },
-                "交叉验证完成，结果等待人工选择进入待审核设定。",
+                "交叉验证完成，结果等待人工选择进入待审核知识。",
             )
 
         if task_holder["task"]["steps"]["evaluate"]["status"] != "completed":

@@ -899,7 +899,7 @@ def copy_story_settings(
     *,
     include_discussions: bool = True,
 ):
-    """复制故事级创作配置、讨论工件、Prompt 选项、规则、旧 memory 覆盖层和正式核心设定。"""
+    """复制故事级创作配置、讨论工件、Prompt 选项、规则、旧 memory 覆盖层和正式优先设定。"""
     profile = _memory_api.load_creative_profile(project_name, source_story_id)
     _memory_api.save_creative_profile(
         project_name,

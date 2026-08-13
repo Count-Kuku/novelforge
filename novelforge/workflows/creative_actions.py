@@ -206,7 +206,7 @@ def execute_creative_action(
                 str(action.get("session_id") or ""), fragment_id,
                 stream_callback=stream_callback,
             )
-            receipt = f"已提炼 {len(result.get('candidate_ids') or [])} 条待审核设定。"
+            receipt = f"已提炼 {len(result.get('candidate_ids') or [])} 条待审核知识。"
         elif action_type == "update_config":
             result, undo = _apply_config(project_name, action)
             receipt = "配置差异已确认并保存，可从动作记录撤销。"

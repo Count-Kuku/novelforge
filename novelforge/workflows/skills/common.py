@@ -816,7 +816,7 @@ def build_pending_knowledge_from_setting_extraction(
                 "evidence": [{
                     "source_title": f"第 {chapter_no} 章正文",
                     "quote": summary[:160],
-                    "note": "由章节设定提炼流程生成，确认后成为故事级核心设定条目。",
+                    "note": "由章节设定提炼流程生成，确认后成为故事级优先设定条目。",
                 }],
                 "confidence": 0.7,
                 "importance": 0.75,

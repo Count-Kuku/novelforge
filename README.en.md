@@ -77,13 +77,15 @@ Research tasks reuse SQLite `workflow_runs/workflow_steps` and support backgroun
 
 ## Navigation
 
-- `工作台` (Workbench): project overview and project resources.
-- `资料` (Sources): source ingestion, core state, and retrieval center.
+- `工作台` (Workbench): project overview. Outlines, chapters, and reports open on demand from project metrics instead of occupying a permanent sidebar entry.
+- `资料` (Sources): source ingestion and the Knowledge Library. The library unifies formal knowledge, Priority Settings, and Pending Knowledge.
 - `规划` (Planning): creative profile and the outline/volume/arc/chapter planning pages enabled by the active story.
-- `写作` (Writing): free writing, content generation, and unified chapter review.
-- `配置` (Configuration): model settings, generation rules, and prompt options.
+- `写作` (Writing): free writing and chapter writing. Quick and comprehensive review are integrated into chapter writing.
+- `设置` (Settings): model and cost configuration, with generation rules and writing preferences under an advanced section.
 
-The source-ingestion page contains workspaces for durable tasks, source ledger, pending review, processing records, long-form batches, knowledge organization, and source packages. In normal use, follow the workbench's recommended next action instead of working from internal storage concepts.
+The standard sidebar hides content management, retrieval diagnostics, standalone chapter review, generation rules, and prompt-option pages. Their underlying capabilities remain available through contextual entry points; generation rules and writing preferences are grouped under advanced settings. Set `NOVELFORGE_DEVELOPER_MODE=1` to restore the full developer navigation.
+
+The source-ingestion page focuses on importing, processing, and source management. Confirmed knowledge is managed in the Knowledge Library; Priority Settings are its high-priority subset, not a separate store. In normal use, follow the workbench's recommended next action instead of working from internal storage concepts.
 
 ## Recommended Workflow
 
@@ -100,13 +102,13 @@ The source-ingestion page contains workspaces for durable tasks, source ledger, 
 2. Select indexing, knowledge extraction, and optional automatic-review behavior.
 3. Review segment, call, token, and cost estimates.
 4. Create the background task and monitor it in `资料任务` (Source Tasks); the browser page may be closed.
-5. Resolve `待审核设定` (Pending Knowledge), inspect retrieval health, and run fixed evaluation cases.
+5. Resolve `待审核知识` (Pending Knowledge) under the Knowledge Library. Retrieval health, fixed evaluations, and index maintenance are developer-mode tools.
 
 ### Chapter Writing
 
 1. Discuss and save the outline or chapter direction.
 2. Generate a chapter outline and prose, or iterate directly in free writing.
-3. Review the token/cost range, then open the context preview before generation to inspect rules, core state, retrieved evidence, and budget omissions.
+3. Review the token/cost range, then open the context preview before generation to inspect rules, Priority Settings, retrieved evidence, and budget omissions.
 4. Choose quick gate review or comprehensive review in the unified chapter-review flow; extract stable new facts into pending knowledge as a separate action when needed.
 5. Confirm knowledge so later chapters can retrieve it.
 

@@ -98,9 +98,9 @@ def render_extraction_diff_detail(project_name: str, diff: dict, key_prefix: str
         new_ids = [str(item) for item in diff.get("new_pending_ids", []) if str(item).strip()]
         if old_ids or new_ids:
             action_cols = st.columns(2)
-            if action_cols[0].button("采用新版：删除旧待审核设定", key=f"{key_prefix}_accept_new", width="stretch"):
+            if action_cols[0].button("采用新版：删除旧待审核知识", key=f"{key_prefix}_accept_new", width="stretch"):
                 removed = discard_pending_knowledge_items(project_name, old_ids)
-                st.success(f"已删除旧待审核设定 {removed} 条，保留本次重新整理的结果。")
+                st.success(f"已删除旧待审核知识 {removed} 条，保留本次重新整理的结果。")
                 st.rerun()
             if action_cols[1].button("保留旧版：删除本次新增条目", key=f"{key_prefix}_keep_old", width="stretch"):
                 removed = discard_pending_knowledge_items(project_name, new_ids)
@@ -141,7 +141,7 @@ def render_extraction_coverage_report(project_name: str, batch: dict | None = No
     report = build_extraction_coverage_report(project_name, batch)
     with st.expander(f"提取覆盖率报告：{report['title']}", expanded=False):
         cols = st.columns(5)
-        cols[0].metric("待审核设定", report["pending_count"])
+        cols[0].metric("待审核知识", report["pending_count"])
         cols[1].metric("缺失分类", len(report["missing_categories"]))
         cols[2].metric("低证据", report["low_evidence"])
         cols[3].metric("低置信", report["low_confidence"])
@@ -149,11 +149,11 @@ def render_extraction_coverage_report(project_name: str, batch: dict | None = No
         if report["total_segments"]:
             st.caption(
                 f"批次片段：已提取 {report['extracted_segments']} / {report['total_segments']}，失败 {report['failed_segments']}，"
-                f"已有待审核设定覆盖片段 {report['covered_source_segments']}"
+                f"已有待审核知识覆盖片段 {report['covered_source_segments']}"
             )
 
         category_rows = [
-            {"分类": label_knowledge_category(category), "待审核设定": count}
+            {"分类": label_knowledge_category(category), "待审核知识": count}
             for category, count in report["category_counts"].items()
         ]
         st.dataframe(category_rows, width="stretch", hide_index=True)
@@ -226,7 +226,7 @@ def _render_batch_overview(project_name: str, batch: dict, selected_batch_id: st
             "系统会跳过已导入片段的重复导入，只继续未完成的提取；失败片段会按当前设置重试。"
         )
     else:
-        st.success("这个批次的片段都已经完成提取。下一步可以去“待审核设定”审核，或按需重新处理已提取片段。")
+        st.success("这个批次的片段都已经完成提取。下一步可以去“待审核知识”审核，或按需重新处理已提取片段。")
 
     render_extraction_coverage_report(project_name, batch, key_prefix=f"batch_{selected_batch_id}")
     return segments, resume_state
@@ -769,7 +769,7 @@ def _render_plan_auto_consolidation_options(
     knowledge_category_options: list[str],
 ) -> tuple[bool, str, int, list[str]]:
     auto_consolidate = st.checkbox(
-        "计划完成后自动整理当前批次的待审核设定",
+        "计划完成后自动整理当前批次的待审核知识",
         value=False,
         key=f"batch_extract_plan_auto_consolidate_{selected_batch_id}",
     )
@@ -871,7 +871,7 @@ def _run_batch_extraction_plan(
         plan_summary["auto_consolidation"] = {
             "enabled": True,
             "success": False,
-            "message": "本次计划没有新增待审核设定，已跳过自动整理。",
+            "message": "本次计划没有新增待审核知识，已跳过自动整理。",
             "source_count": 0,
             "queued_count": 0,
             "mode": auto_consolidation_mode,
@@ -891,7 +891,7 @@ def _run_batch_extraction_plan(
 
     st.success(
         f"计划完成：执行 {len(plan_summary.get('processed_steps', []))} 个专家步骤，"
-        f"累计处理 {plan_summary.get('processed_segments', 0)} 次片段，加入 {plan_summary.get('queued_total', 0)} 条待审核设定。"
+        f"累计处理 {plan_summary.get('processed_segments', 0)} 次片段，加入 {plan_summary.get('queued_total', 0)} 条待审核知识。"
     )
     if plan_summary.get("auto_consolidation", {}).get("enabled"):
         auto_info = plan_summary.get("auto_consolidation", {})
@@ -1045,7 +1045,7 @@ def _render_batch_consolidation(
 ):
     st.markdown("#### 批次级整理")
     batch_pending_items = get_batch_pending_knowledge_items(project_name, batch)
-    st.caption(f"当前批次关联待审核设定 {len(batch_pending_items)} 条。整理会合并同一角色、关系或事件，并用整理后的条目替换这些零散内容。")
+    st.caption(f"当前批次关联待审核知识 {len(batch_pending_items)} 条。整理会合并同一角色、关系或事件，并用整理后的条目替换这些零散内容。")
     col_mode, col_limit = st.columns(2)
     consolidation_mode = col_mode.selectbox(
         "整理模式",
@@ -1068,10 +1068,10 @@ def _render_batch_consolidation(
         format_func=label_knowledge_category,
         key=f"batch_consolidation_categories_{selected_batch_id}",
     )
-    if st.button("整理当前批次待审核设定", key=f"batch_consolidate_pending_{selected_batch_id}", width="stretch"):
+    if st.button("整理当前批次待审核知识", key=f"batch_consolidate_pending_{selected_batch_id}", width="stretch"):
         try:
             consolidation_summary = _run_with_stream(
-                "正在整理当前批次待审核设定...",
+                "正在整理当前批次待审核知识...",
                 consolidate_batch_pending_items,
                 project_name,
                 batch,

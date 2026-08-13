@@ -7,20 +7,19 @@ from novelforge.workflows.source_workflows import (
     build_ingestion_workbench,
     save_manual_retrieval_source_card,
 )
-from ui.common import scoped_widget_key
+from ui.common import navigate_to, scoped_widget_key
 from ui.labels import label_authority, label_scope, label_source_type
 from ui.layout import render_empty_state, render_section_heading, render_stat_strip
 from ui.web_research import render_web_research_import
 
 
-INGESTION_WORKSPACE_SECTIONS = ["概览", "导入", "处理", "审核", "管理"]
+INGESTION_WORKSPACE_SECTIONS = ["概览", "导入", "处理", "管理"]
 
 INGESTION_WORKSPACE_DESCRIPTIONS = {
     "概览": "查看资料准备状态和当前最需要完成的一件事。",
     "导入": "上传文件、粘贴文本、整理网络资料或新增手动条目。",
     "处理": "跟踪后台任务，继续长篇批次或重试失败片段。",
-    "审核": "确认提取结果，处理重复、冲突和证据不足的条目。",
-    "管理": "维护原文来源、正式知识、资料健康度和资料包。",
+    "管理": "维护原文来源、知识库辅助视图、资料健康度和资料包。",
 }
 
 _WORKSPACE_TARGET_MAP = {
@@ -31,6 +30,7 @@ _WORKSPACE_TARGET_MAP = {
     "处理进度": "处理",
     "长篇批次": "处理",
     "待审核设定": "审核",
+    "待审核知识": "审核",
     "待审核": "审核",
     "处理记录": "审核",
     "资料来源": "管理",
@@ -58,14 +58,18 @@ def _migrate_ingestion_subview_state(project_name: str, story_id: str, legacy_wo
         st.session_state[scoped_widget_key("ingestion_task_view", project_name, story_id)] = (
             "长篇批次" if legacy_workspace == "长篇批次" else "后台任务"
         )
-    elif legacy_workspace in {"待审核设定", "待审核", "处理记录"}:
-        st.session_state[scoped_widget_key("ingestion_review_view", project_name, story_id)] = (
+    elif legacy_workspace in {"待审核设定", "待审核知识", "待审核", "处理记录"}:
+        st.session_state[scoped_widget_key("knowledge_library_view", project_name, story_id)] = "待审核知识"
+        st.session_state[scoped_widget_key("knowledge_library_review_view", project_name, story_id)] = (
             "处理记录" if legacy_workspace == "处理记录" else "审核队列"
         )
     elif legacy_workspace in _MANAGEMENT_VIEW_MAP:
-        st.session_state[scoped_widget_key("ingestion_management_view", project_name, story_id)] = (
-            _MANAGEMENT_VIEW_MAP[legacy_workspace]
-        )
+        legacy_management_view = _MANAGEMENT_VIEW_MAP[legacy_workspace]
+        if legacy_management_view == "知识条目":
+            st.session_state[scoped_widget_key("knowledge_library_view", project_name, story_id)] = "全部知识"
+            st.session_state[scoped_widget_key("knowledge_library_all_view", project_name, story_id)] = "知识条目"
+        else:
+            st.session_state[scoped_widget_key("ingestion_management_view", project_name, story_id)] = legacy_management_view
 
 
 def _render_ingestion_metrics(workbench: dict) -> None:
@@ -73,7 +77,7 @@ def _render_ingestion_metrics(workbench: dict) -> None:
         [
             ("资料健康度", f"{workbench.get('health_score', 0)} / 100"),
             ("处理中", workbench.get("needs_processing_count", 0), "后台任务与未完成批次"),
-            ("待审核", workbench.get("pending_review_count", 0), "确认后才会用于生成"),
+            ("待审核知识", workbench.get("pending_review_count", 0), "确认后才会用于生成"),
             ("可匹配原文", workbench.get("ready_source_count", 0)),
             ("正式知识", workbench.get("confirmed_knowledge_count", 0)),
         ]
@@ -82,16 +86,18 @@ def _render_ingestion_metrics(workbench: dict) -> None:
 
 def _activate_ingestion_action(project_name: str, story_id: str, action: dict) -> None:
     target_section = str(action.get("target_section") or "")
+    if target_section in {"待审核设定", "待审核知识", "待审核", "处理记录"}:
+        st.session_state[scoped_widget_key("knowledge_library_view", project_name, story_id)] = "待审核知识"
+        st.session_state[scoped_widget_key("knowledge_library_review_view", project_name, story_id)] = (
+            "处理记录" if target_section == "处理记录" else "审核队列"
+        )
+        navigate_to("知识库")
     workspace = _WORKSPACE_TARGET_MAP.get(target_section, target_section)
     if workspace in INGESTION_WORKSPACE_SECTIONS:
         st.session_state[_ingestion_workspace_key(project_name, story_id)] = workspace
     if target_section in {"资料任务", "处理任务", "处理进度", "长篇批次"}:
         st.session_state[scoped_widget_key("ingestion_task_view", project_name, story_id)] = (
             "长篇批次" if target_section == "长篇批次" else "后台任务"
-        )
-    if target_section in {"待审核设定", "待审核", "处理记录"}:
-        st.session_state[scoped_widget_key("ingestion_review_view", project_name, story_id)] = (
-            "处理记录" if target_section == "处理记录" else "审核队列"
         )
     if target_section in _MANAGEMENT_VIEW_MAP:
         st.session_state[scoped_widget_key("ingestion_management_view", project_name, story_id)] = (
@@ -216,20 +222,18 @@ def _render_ingestion_workspace(
     render_ingestion_health_panel,
     render_ingestion_task_manager,
     render_source_ledger_page,
-    render_auto_review_policy_panel,
-    render_pending_knowledge_queue,
-    render_auto_review_runs_panel,
     render_long_reference_batch_manager,
-    render_knowledge_organizer,
     render_source_package_report_page,
     workbench: dict,
 ) -> None:
-    render_section_heading("资料准备流程", "按“导入 → 处理 → 审核 → 管理”完成资料准备；概览只负责提示当前状态。")
+    render_section_heading("资料准备流程", "按“导入 → 处理 → 管理”完成资料准备；候选内容统一到“知识库 → 待审核知识”确认。")
     workspace_key = _ingestion_workspace_key(project_name, story_id)
     default_workspace = "导入" if str(workbench.get("overall_status") or "empty") == "empty" else "概览"
     if workspace_key in st.session_state:
         raw_value = str(st.session_state.get(workspace_key) or "")
         _migrate_ingestion_subview_state(project_name, story_id, raw_value)
+        if raw_value in {"待审核设定", "待审核知识", "待审核", "处理记录", "知识整理", "知识库"}:
+            navigate_to("知识库")
         current_value = _WORKSPACE_TARGET_MAP.get(raw_value, raw_value)
         st.session_state[workspace_key] = (
             current_value if current_value in INGESTION_WORKSPACE_SECTIONS else default_workspace
@@ -267,52 +271,27 @@ def _render_ingestion_workspace(
             render_long_reference_batch_manager(project_name, knowledge_category_options, expanded=True)
         else:
             render_ingestion_task_manager(project_name, story_id)
-    elif selected_section == "审核":
-        review_view_key = scoped_widget_key("ingestion_review_view", project_name, story_id)
-        review_view = st.segmented_control(
-            "审核视图",
-            options=["审核队列", "审核策略", "处理记录"],
-            default="审核队列" if review_view_key not in st.session_state else None,
-            key=review_view_key,
-            label_visibility="collapsed",
-        )
-        if review_view == "审核策略":
-            render_auto_review_policy_panel(project_name)
-        elif review_view == "处理记录":
-            render_auto_review_runs_panel(project_name)
-        else:
-            render_pending_knowledge_queue(project_name)
     else:
         management_view_key = scoped_widget_key("ingestion_management_view", project_name, story_id)
+        management_options = ["原文资料", "健康检查", "资料包"]
+        if str(st.session_state.get(management_view_key) or "") not in management_options:
+            st.session_state.pop(management_view_key, None)
         management_view = st.segmented_control(
             "管理内容",
-            options=["创作实体", "统一中心", "原文资料", "知识条目", "健康检查", "资料包"],
-            default="统一中心" if management_view_key not in st.session_state else None,
+            options=management_options,
+            default="原文资料" if management_view_key not in st.session_state else None,
             key=management_view_key,
             width="stretch",
             label_visibility="collapsed",
         )
         st.caption(
             {
-                "创作实体": "按角色、世界观、时间轴和关系图浏览并编辑实时知识投影。",
-                "统一中心": "跨来源、分类、故事与资料版本搜索、分页浏览和查看修订。",
                 "原文资料": "查看保存的原文、切分片段、来源证据与修订记录。",
-                "知识条目": "维护审核通过后会参与检索和写作的结构化知识。",
                 "健康检查": "检查资料覆盖率、冲突、缺失证据和索引状态。",
                 "资料包": "汇总项目资料，便于整体检查、归档或迁移。",
             }.get(str(management_view), "")
         )
-        if management_view == "创作实体":
-            from ui.entity_experience import render_entity_experience
-
-            render_entity_experience(project_name, story_id)
-        elif management_view == "统一中心":
-            from ui.knowledge_center import render_unified_knowledge_center
-
-            render_unified_knowledge_center(project_name, story_id)
-        elif management_view == "知识条目":
-            render_knowledge_organizer(project_name, knowledge_category_options)
-        elif management_view == "健康检查":
+        if management_view == "健康检查":
             render_ingestion_health_panel(project_name)
         elif management_view == "资料包":
             render_source_package_report_page(project_name)
@@ -375,11 +354,7 @@ def render_retrieval_ingestion_page(
     render_ingestion_task_manager,
     render_ingestion_health_panel,
     render_source_ledger_page,
-    render_auto_review_policy_panel,
-    render_pending_knowledge_queue,
-    render_auto_review_runs_panel,
     render_long_reference_batch_manager,
-    render_knowledge_organizer,
     render_source_package_report_page,
 ):
     current_story_id = str(st.session_state.get("active_story_id") or "default")
@@ -393,11 +368,7 @@ def render_retrieval_ingestion_page(
         render_ingestion_health_panel=render_ingestion_health_panel,
         render_ingestion_task_manager=render_ingestion_task_manager,
         render_source_ledger_page=render_source_ledger_page,
-        render_auto_review_policy_panel=render_auto_review_policy_panel,
-        render_pending_knowledge_queue=render_pending_knowledge_queue,
-        render_auto_review_runs_panel=render_auto_review_runs_panel,
         render_long_reference_batch_manager=render_long_reference_batch_manager,
-        render_knowledge_organizer=render_knowledge_organizer,
         render_source_package_report_page=render_source_package_report_page,
         workbench=workbench,
     )

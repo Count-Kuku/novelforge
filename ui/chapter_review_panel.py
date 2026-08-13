@@ -105,7 +105,7 @@ def _render_actions(
     memory_col, _ = st.columns(2)
     with memory_col:
         do_memory = st.button(
-            "提炼待审核设定" if has_chapter else "需要先生成正文",
+            "提炼待审核知识" if has_chapter else "需要先生成正文",
             disabled=not has_chapter,
             key=scoped_widget_key("memory_inline", *chapter_scope),
             width="stretch",
@@ -113,7 +113,7 @@ def _render_actions(
         if do_memory and has_chapter:
             try:
                 result = _run_with_stream(
-                    "正在提炼待审核设定...",
+                    "正在提炼待审核知识...",
                     extract_setting_candidates_from_chapter,
                     project_name,
                     chapter_no,
@@ -123,7 +123,7 @@ def _render_actions(
                 )
                 st.session_state[setting_extraction_step_key] = result
                 queued_count = result.get("data", {}).get("queued_knowledge_count", 0)
-                render_step_status_message(result, f"已提炼 {queued_count} 条待审核设定，确认后生效", "设定提炼失败：")
+                render_step_status_message(result, f"已提炼 {queued_count} 条待审核知识，确认后生效", "设定提炼失败：")
                 render_step_validation(result)
                 render_step_json_expander("章节设定提炼详细数据", result)
             except Exception as exc:

@@ -219,7 +219,7 @@ def _score_chunk(
     if chunk.source_type.startswith("memory_"):
         score += 0.5
         score_breakdown["source_type"] = score_breakdown.get("source_type", 0.0) + 0.5
-        match_reasons.append("核心设定来源")
+        match_reasons.append("优先设定来源")
     if chunk.source_type in {"review_issue", "chapter_summary"}:
         score += 0.25
         score_breakdown["source_type"] = score_breakdown.get("source_type", 0.0) + 0.25

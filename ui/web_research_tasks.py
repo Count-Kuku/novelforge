@@ -245,7 +245,7 @@ def _render_claim_review(project_name: str, story_id: str, task: dict) -> None:
         return
     selected_ids: list[str] = []
     st.markdown("##### 研究结论与证据")
-    st.caption("选择后只会进入“待审核设定”；仍需人工确认，存在冲突的候选默认不选。")
+    st.caption("选择后只会进入“待审核知识”；仍需人工确认，存在冲突的候选默认不选。")
     for index, claim in enumerate(claims, start=1):
         claim_id = str(claim.get("claim_id") or "")
         status = str(claim.get("verification_status") or "single_source")
@@ -275,7 +275,7 @@ def _render_claim_review(project_name: str, story_id: str, task: dict) -> None:
             if chosen:
                 selected_ids.append(claim_id)
     if st.button(
-        f"将选中的 {len(selected_ids)} 条送入待审核设定",
+        f"将选中的 {len(selected_ids)} 条送入待审核知识",
         disabled=not selected_ids,
         type="primary",
         width="stretch",
@@ -286,7 +286,7 @@ def _render_claim_review(project_name: str, story_id: str, task: dict) -> None:
             st.success(f"已提交 {len(result.get('pending_ids', []))} 条候选；重复提交会更新同一条记录。")
             st.rerun()
         except Exception as exc:
-            st.error(f"提交待审核设定失败：{exc}")
+            st.error(f"提交待审核知识失败：{exc}")
 
 
 def _render_task_detail(project_name: str, story_id: str, task: dict) -> None:
@@ -374,7 +374,7 @@ def _render_task_detail(project_name: str, story_id: str, task: dict) -> None:
                     lambda: quarantine_web_research_sources(project_name, task["task_id"]),
                 )
             else:
-                st.warning("网页原文当前处于隔离状态，不会进入写作检索；已验证的事实仍可单独送入待审核设定。")
+                st.warning("网页原文当前处于隔离状态，不会进入写作检索；已验证的事实仍可单独送入待审核知识。")
                 _run_action(
                     "确认来源后，启用全部网页原文检索",
                     f"activate_sources_{task['task_id']}",

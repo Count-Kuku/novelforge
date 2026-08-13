@@ -159,7 +159,7 @@ def compact_memory(project_name: str, story_id: str = "default") -> dict:
     return {
         "status": "skipped",
         "reason": "memory_compaction_deprecated",
-        "message": "核心设定已改为结构化知识管理；章节提炼会写入待确认知识队列，不再压缩写回 memory.json。",
+        "message": "优先设定已纳入统一知识库管理；章节提炼会写入待审核知识队列，不再压缩写回 memory.json。",
         "project_name": project_name,
         "story_id": story_id,
     }

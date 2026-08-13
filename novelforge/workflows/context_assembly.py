@@ -43,7 +43,7 @@ PLACEMENT_ORDER = {
 CATEGORY_LABELS = {
     "rules": "生成规则与人工裁决",
     "creative_profile": "创作配置",
-    "always_settings": "始终注入的核心设定",
+    "always_settings": "始终注入的优先设定",
     "story_state": "故事状态",
     "directive": "导演注",
     "retrieval": "检索资料",
@@ -450,7 +450,7 @@ def assemble_generation_context(
         scope="story",
         story_id=story_id,
         worldline=worldline_id or None,
-        activation_reason="注入策略为 always 的已确认核心设定",
+        activation_reason="注入策略为 always 的已确认优先设定",
     )
     if setting_block:
         blocks.append(setting_block)
@@ -668,7 +668,7 @@ def ensure_context_budget(assembly: ContextAssembly | dict) -> ContextAssembly:
     normalized = assembly if isinstance(assembly, ContextAssembly) else ContextAssembly.model_validate(assembly)
     if normalized.hard_budget_exceeded:
         raise RuntimeError(
-            "必需上下文已经超过预算，请先缩短始终注入的核心设定、硬规则、"
+            "必需上下文已经超过预算，请先缩短始终注入的优先设定、硬规则、"
             "硬约束导演注、本次写作指导或手选知识。"
         )
     return normalized

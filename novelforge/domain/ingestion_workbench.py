@@ -226,10 +226,10 @@ def build_ingestion_workbench_summary(
             action_id="review_high_risk_pending",
             priority=95,
             tone="error",
-            title="处理高风险待审核设定",
+            title="处理高风险待审核知识",
             detail=f"当前有 {high_risk_count} 条高风险线索，需要比较原文证据和已有知识后再决定。",
-            button_label="进入待审核设定",
-            target_section="待审核设定",
+            button_label="进入待审核知识",
+            target_section="待审核知识",
         ))
     elif pending_count:
         actions.append(_batch_action(
@@ -237,9 +237,9 @@ def build_ingestion_workbench_summary(
             priority=80,
             tone="warning",
             title="审核新整理出的知识",
-            detail=f"有 {pending_count} 条待审核设定；确认后才会成为后续写作使用的正式知识。",
-            button_label="进入待审核设定",
-            target_section="待审核设定",
+            detail=f"有 {pending_count} 条待审核知识；确认后才会成为后续写作使用的正式知识。",
+            button_label="进入待审核知识",
+            target_section="待审核知识",
         ))
 
     confirmed_count = int(health.get("confirmed_count") or 0)

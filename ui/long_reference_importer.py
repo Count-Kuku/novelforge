@@ -600,7 +600,7 @@ def _render_long_reference_quick_processing(
             "自动审核并保存低风险知识",
             value=False,
             key=_long_reference_key("long_reference_quick_auto_confirm", state_scope),
-            help="只自动确认没有冲突、有证据且可信度较高的内容；风险内容会留在待审核设定中。",
+            help="只自动确认没有冲突、有证据且可信度较高的内容；风险内容会留在待审核知识中。",
         )
         quick_consolidate = st.checkbox(
             "提取后自动整理散知识",

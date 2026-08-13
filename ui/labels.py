@@ -180,7 +180,7 @@ def label_batch_segment_status(value: str) -> str:
     labels = {
         "pending": "待处理",
         "imported": "已导入",
-        "queued": "已加入待审核设定",
+        "queued": "已加入待审核知识",
         "extracted": "已提取",
         "failed": "失败",
         "skipped": "已跳过",

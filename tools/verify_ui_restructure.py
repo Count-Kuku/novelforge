@@ -15,7 +15,7 @@ from streamlit.testing.v1 import AppTest
 from novelforge.services.memory import create_long_reference_batch, create_project, set_active_project_name
 from tools.verify_utils import isolated_workspace
 from ui.common import scoped_widget_key
-from ui.navigation import ADVANCED_PAGE_GROUPS, PAGE_DESCRIPTIONS, PAGE_LABELS
+from ui.navigation import ADVANCED_PAGE_GROUPS, PAGE_DESCRIPTIONS, PAGE_LABELS, PRIMARY_PAGE_GROUPS
 
 
 def _verify_live_ui_reload_registry() -> str:
@@ -77,11 +77,17 @@ def _source_checks() -> list[str]:
         raise AssertionError(f"导航页缺少说明：{missing_descriptions}")
     checks.append("全部导航页具有可读名称与说明")
 
+    primary_pages = {page for pages in PRIMARY_PAGE_GROUPS.values() for page in pages}
+    hidden_pages = {"项目资源", "检索中心", "章节审阅", "生成规则", "提示词选项"}
+    if primary_pages & hidden_pages:
+        raise AssertionError(f"普通侧栏仍显示重复或高级页面：{sorted(primary_pages & hidden_pages)}")
+    checks.append("普通侧栏只保留核心创作链路")
+
     ingestion_source = (ROOT / "ui" / "retrieval_ingestion_page.py").read_text(encoding="utf-8")
-    for label in ["概览", "导入", "处理", "审核", "管理"]:
+    for label in ["概览", "导入", "处理", "管理"]:
         if label not in ingestion_source:
             raise AssertionError(f"资料中心缺少工作区：{label}")
-    checks.append("资料中心按资料生命周期拆分为五个工作区")
+    checks.append("资料中心聚焦导入、处理和来源管理，知识审核统一进入知识库")
     importer_source = (ROOT / "ui" / "long_reference_importer.py").read_text(encoding="utf-8")
     if 'st.expander("长篇文本导入"' in importer_source:
         raise AssertionError("长篇导入仍被包在折叠栏中")
@@ -183,32 +189,55 @@ def _render_all_pages() -> tuple[list[str], dict[str, list[str]]]:
         else:
             rendered.append("长篇批次工作区")
 
-        management_view_key = scoped_widget_key("ingestion_management_view", project_name, "default")
+        library_view_key = scoped_widget_key("knowledge_library_view", project_name, "default")
+        library_all_view_key = scoped_widget_key("knowledge_library_all_view", project_name, "default")
         app.session_state[workspace_key] = "知识库"
-        if management_view_key in app.session_state:
-            del app.session_state[management_view_key]
         app.run(timeout=30)
         management_errors = [str(item.value) for item in app.exception]
         if management_errors:
             failures["知识库工作区"] = management_errors
-        elif app.session_state[workspace_key] != "管理" or app.session_state[management_view_key] != "知识条目":
-            failures["知识库工作区"] = ["旧知识库状态没有迁移到管理 / 知识条目"]
+        elif (
+            "active_page" not in app.session_state
+            or app.session_state["active_page"] != "知识库"
+            or library_view_key not in app.session_state
+            or app.session_state[library_view_key] != "全部知识"
+            or library_all_view_key not in app.session_state
+            or app.session_state[library_all_view_key] != "知识条目"
+        ):
+            failures["知识库工作区"] = ["旧知识库状态没有迁移到知识库 / 全部知识 / 知识条目"]
         else:
             rendered.append("知识库工作区")
 
         ingestion_views = [
             ("处理", scoped_widget_key("ingestion_task_view", project_name, "default"), "后台任务", "资料中心 / 后台任务"),
-            ("审核", scoped_widget_key("ingestion_review_view", project_name, "default"), "审核队列", "资料中心 / 审核队列"),
-            ("审核", scoped_widget_key("ingestion_review_view", project_name, "default"), "审核策略", "资料中心 / 审核策略"),
-            ("审核", scoped_widget_key("ingestion_review_view", project_name, "default"), "处理记录", "资料中心 / 处理记录"),
             ("管理", scoped_widget_key("ingestion_management_view", project_name, "default"), "原文资料", "资料中心 / 原文资料"),
-            ("管理", scoped_widget_key("ingestion_management_view", project_name, "default"), "知识条目", "资料中心 / 知识条目"),
             ("管理", scoped_widget_key("ingestion_management_view", project_name, "default"), "健康检查", "资料中心 / 健康检查"),
             ("管理", scoped_widget_key("ingestion_management_view", project_name, "default"), "资料包", "资料中心 / 资料包"),
         ]
         for workspace, view_key, view_value, label in ingestion_views:
             app.session_state[workspace_key] = workspace
             app.session_state[view_key] = view_value
+            app.run(timeout=30)
+            errors = [str(item.value) for item in app.exception]
+            if errors:
+                failures[label] = errors
+            else:
+                rendered.append(label)
+
+        knowledge_views = [
+            ("全部知识", scoped_widget_key("knowledge_library_all_view", project_name, "default"), "知识条目", "知识库 / 知识条目"),
+            ("全部知识", scoped_widget_key("knowledge_library_all_view", project_name, "default"), "统一搜索", "知识库 / 统一搜索"),
+            ("全部知识", scoped_widget_key("knowledge_library_all_view", project_name, "default"), "创作实体", "知识库 / 创作实体"),
+            ("待审核知识", scoped_widget_key("knowledge_library_review_view", project_name, "default"), "审核队列", "知识库 / 审核队列"),
+            ("待审核知识", scoped_widget_key("knowledge_library_review_view", project_name, "default"), "审核策略", "知识库 / 审核策略"),
+            ("待审核知识", scoped_widget_key("knowledge_library_review_view", project_name, "default"), "处理记录", "知识库 / 处理记录"),
+            ("优先设定", "", "", "知识库 / 优先设定"),
+        ]
+        for library_view, subview_key, subview_value, label in knowledge_views:
+            app.session_state["pending_nav_page"] = "知识库"
+            app.session_state[library_view_key] = library_view
+            if subview_key:
+                app.session_state[subview_key] = subview_value
             app.run(timeout=30)
             errors = [str(item.value) for item in app.exception]
             if errors:

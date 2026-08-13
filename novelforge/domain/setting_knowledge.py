@@ -195,19 +195,19 @@ def build_setting_items_from_memory(
                 "summary": summary,
                 "details": details,
                 "evidence": [{
-                    "source_title": source_title or ("故事核心设定" if setting_scope == "story" else "项目核心设定"),
+                    "source_title": source_title or ("故事优先设定" if setting_scope == "story" else "项目优先设定"),
                     "quote": summary[:160],
-                    "note": "由旧核心设定迁移为统一设定条目。",
+                    "note": "由旧版设定迁移为统一优先设定条目。",
                 }],
                 "confidence": 1.0,
                 "importance": 0.9,
                 "evidence_strength": 1.0,
                 "canon_status": "user_override",
                 "extraction_mode": "manual_setting",
-                "tags": ["核心设定", label, field_name],
+                "tags": ["优先设定", label, field_name],
                 "scope": "project",
                 "authority": "project",
-                "source_title": source_title or ("故事核心设定" if setting_scope == "story" else "项目核心设定"),
+                "source_title": source_title or ("故事优先设定" if setting_scope == "story" else "项目优先设定"),
                 "source_origin": "migration",
                 "status": "confirmed",
                 "setting_role": "core",
@@ -242,7 +242,7 @@ def upsert_setting_item(project_name: str, category: str, item: dict) -> dict:
     normalized["story_id"] = str(normalized.get("story_id") or "") if normalized["setting_scope"] == "story" else ""
     normalized["injection_policy"] = normalize_injection_policy(normalized.get("injection_policy"))
     normalized["source_origin"] = str(normalized.get("source_origin") or "manual_setting")
-    normalized["source_title"] = str(normalized.get("source_title") or ("故事核心设定" if normalized["setting_scope"] == "story" else "项目核心设定"))
+    normalized["source_title"] = str(normalized.get("source_title") or ("故事优先设定" if normalized["setting_scope"] == "story" else "项目优先设定"))
     normalized["version_scope"] = str(normalized.get("version_scope") or "project_main")
     normalized["worldline_id"] = str(normalized.get("worldline_id") or "main")
     normalized["worldline_label"] = str(normalized.get("worldline_label") or "本项目主线")
@@ -261,7 +261,7 @@ def upsert_setting_item(project_name: str, category: str, item: dict) -> dict:
     if not isinstance(normalized.get("tags"), list):
         normalized["tags"] = []
     normalized["tags"] = [str(tag).strip() for tag in normalized["tags"] if str(tag).strip()]
-    for tag in ["核心设定", normalized["setting_field"]]:
+    for tag in ["优先设定", normalized["setting_field"]]:
         if tag and tag not in normalized["tags"]:
             normalized["tags"].append(tag)
     if not isinstance(normalized.get("evidence"), list):
@@ -355,7 +355,7 @@ def _clone_setting_item(
         "复制来源设定ID": source_id,
     }
     tags = [str(tag).strip() for tag in clone.get("tags", []) if str(tag).strip()] if isinstance(clone.get("tags"), list) else []
-    for tag in ["核心设定", "复制设定"]:
+    for tag in ["优先设定", "复制设定"]:
         if tag not in tags:
             tags.append(tag)
     clone["tags"] = tags
@@ -392,7 +392,7 @@ def copy_setting_items(
             item,
             target_scope=target_scope,
             target_story_id=target_story_id,
-            source_label=source_label or str(item.get("source_title") or "核心设定复制"),
+            source_label=source_label or str(item.get("source_title") or "优先设定复制"),
         )
         existing = load_knowledge_category(project_name, category)
         index_by_id = _knowledge_item_index(existing)
@@ -435,7 +435,7 @@ def copy_project_core_settings_to_story(project_name: str, target_story_id: str)
         source_scope="project",
         target_scope="story",
         target_story_id=target_story_id,
-        source_label="项目核心设定",
+        source_label="项目优先设定",
     )
 
 
@@ -445,7 +445,7 @@ def copy_story_core_settings_to_project(project_name: str, source_story_id: str)
         source_scope="story",
         source_story_id=source_story_id,
         target_scope="project",
-        source_label=f"故事核心设定：{source_story_id}",
+        source_label=f"故事优先设定：{source_story_id}",
     )
 
 
@@ -456,12 +456,12 @@ def copy_story_core_settings_to_story(project_name: str, source_story_id: str, t
         source_story_id=source_story_id,
         target_scope="story",
         target_story_id=target_story_id,
-        source_label=f"故事核心设定：{source_story_id}",
+        source_label=f"故事优先设定：{source_story_id}",
     )
 
 
 def migrate_core_settings_to_knowledge(project_name: str, story_id: str | None = None) -> dict:
-    sources: list[tuple[dict, str, str, str]] = [(load_memory(project_name), "project", "", "项目核心设定")]
+    sources: list[tuple[dict, str, str, str]] = [(load_memory(project_name), "project", "", "项目优先设定")]
     if story_id is None:
         story_ids = [str(story.get("story_id") or "default") for story in list_stories(project_name)]
     else:
@@ -471,7 +471,7 @@ def migrate_core_settings_to_knowledge(project_name: str, story_id: str | None =
             continue
         overrides = _load_story_overrides(project_name, sid)
         if overrides:
-            sources.append((overrides, "story", sid, f"故事核心设定：{sid}"))
+            sources.append((overrides, "story", sid, f"故事优先设定：{sid}"))
 
     migrated = 0
     updated = 0
