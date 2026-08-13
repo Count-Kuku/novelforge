@@ -82,7 +82,7 @@ def render_project_overview_page(project_name: str):
     with st.expander("更多常用入口", expanded=False):
         action_col4, action_col5, action_col6 = st.columns(3)
         with action_col4:
-            render_quick_action("按章节写正文", "正文生成", "根据章节需求或细纲写正式正文，并可自动审阅、整理设定。")
+            render_quick_action("按章节写正文", "正文生成", "根据章节需求或细纲写正式正文，并可继续快速或综合审阅。")
         with action_col5:
             render_quick_action("查找项目内容", "项目资源", "集中查找大纲、章节、报告、资料与创作记录。")
         with action_col6:
@@ -92,9 +92,9 @@ def render_project_overview_page(project_name: str):
     col1, col2, col3, col4, col5 = st.columns(5)
     render_resource_metric_link(col1, project_name, story_id, "正文章节", summary.get("chapter_count", 0), ["chapter_content"])
     render_resource_metric_link(col2, project_name, story_id, "细纲章节", summary.get("chapter_outline_count", 0), ["chapter_outline"])
-    render_resource_metric_link(col3, project_name, story_id, "审阅数量", summary.get("review_count", 0), ["review"])
+    render_resource_metric_link(col3, project_name, story_id, "快速审阅", summary.get("review_count", 0), ["review"])
     render_resource_metric_link(col4, project_name, story_id, "分析报告", summary.get("analysis_count", 0), ["analysis"])
-    render_resource_metric_link(col5, project_name, story_id, "评估报告", summary.get("evaluation_count", 0), ["evaluation"])
+    render_resource_metric_link(col5, project_name, story_id, "综合审阅", summary.get("evaluation_count", 0), ["evaluation"])
 
     with st.expander("高级：更多项目指标", expanded=False):
         advanced_cols_a = st.columns(5)

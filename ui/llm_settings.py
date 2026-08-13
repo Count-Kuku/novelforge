@@ -14,7 +14,6 @@ from novelforge.services.provider_adapters import (
     PROVIDER_PRESET_VERSION,
     discover_provider_models,
 )
-from novelforge.services.credentials import build_credential_ref, store_system_credential
 from novelforge.services.memory import (
     delete_llm_profile,
     get_active_llm_profile,
@@ -918,30 +917,10 @@ def _render_capability_center() -> None:
                 f"{'可用' if item.get('available') else '不可用 / 可降级'}"
             )
             st.caption(str(item.get("message") or "暂无状态说明。"))
-    with st.expander("配置网络搜索能力", expanded=not snapshot.get("search", {}).get("available")):
-        brave_key = st.text_input(
-            "Brave Search API Key",
-            type="password",
-            value="",
-            placeholder="已保存时留空即可",
-            key="capability_center_brave_key",
-            help="密钥写入系统凭据管理器，数据库只保存引用、指纹和末四位。",
-        )
-        if st.button("安全保存搜索密钥", key="save_brave_search_credential"):
-            if not brave_key.strip():
-                st.warning("请输入 Brave Search API Key。")
-            else:
-                try:
-                    store_system_credential(
-                        brave_key.strip(),
-                        purpose="web-search",
-                        owner_id="brave",
-                        credential_ref=build_credential_ref("web-search", "brave"),
-                    )
-                    st.success("搜索密钥已保存到系统凭据管理器。")
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"搜索密钥保存失败：{exc}")
+    st.caption(
+        "网络搜索会优先复用当前模型方案的原生联网能力；模型不支持或调用失败时，"
+        "自动切换到免密通用搜索，不需要单独配置搜索 API Key。"
+    )
 
 
 def render_llm_settings_page():

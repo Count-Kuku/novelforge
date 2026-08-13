@@ -11,7 +11,7 @@ NovelForge is a local LLM writing workspace for long-form fiction and fan fictio
 ### Writing And Planning
 
 - Multiple isolated story spaces per project, with shared project sources and knowledge.
-- Full outline, volume, arc, chapter outline, drafting, review, and chapter evaluation.
+- Full outline, volume, arc, chapter outline, drafting, and one chapter-review flow with quick and comprehensive modes.
 - Iterative free writing with continuation, rewrite candidates, branching, accepted fragments, knowledge extraction, and chapter compilation.
 - Story creative profiles for task type, length, workflow depth, reference strength, and source version/worldline.
 - Global, project, and story-level generation rules and prompt options.
@@ -20,7 +20,7 @@ NovelForge is a local LLM writing workspace for long-form fiction and fan fictio
 ### Sources And Knowledge
 
 - Pasted sources, manual source cards, and multi-file TXT/Markdown/DOCX/EPUB/text-layer PDF ingestion.
-- Recoverable Brave Search research agents with official/wiki/community/fanon planning, parallel discovery, safe fetching, claim extraction, cross-source verification, and human review.
+- Recoverable web-research agents that reuse native model search when available and otherwise fall back to keyless metasearch, with parallel discovery, safe fetching, claim extraction, cross-source verification, and human review.
 - Structure-aware heading, chapter, scene, paragraph, and sentence splitting with source offsets, fingerprints, and segment checkpoints.
 - General, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction modes.
 - Multi-specialist plans, pending review, automatic review policy, conflict/duplicate checks, and batch rollback.
@@ -80,7 +80,7 @@ Research tasks reuse SQLite `workflow_runs/workflow_steps` and support backgroun
 - `工作台` (Workbench): project overview and project resources.
 - `资料` (Sources): source ingestion, core state, and retrieval center.
 - `规划` (Planning): creative profile and the outline/volume/arc/chapter planning pages enabled by the active story.
-- `写作` (Writing): free writing, content generation, and chapter evaluation.
+- `写作` (Writing): free writing, content generation, and unified chapter review.
 - `配置` (Configuration): model settings, generation rules, and prompt options.
 
 The source-ingestion page contains workspaces for durable tasks, source ledger, pending review, processing records, long-form batches, knowledge organization, and source packages. In normal use, follow the workbench's recommended next action instead of working from internal storage concepts.
@@ -107,7 +107,7 @@ The source-ingestion page contains workspaces for durable tasks, source ledger, 
 1. Discuss and save the outline or chapter direction.
 2. Generate a chapter outline and prose, or iterate directly in free writing.
 3. Review the token/cost range, then open the context preview before generation to inspect rules, core state, retrieved evidence, and budget omissions.
-4. Review or evaluate the chapter, then extract stable new facts into pending knowledge.
+4. Choose quick gate review or comprehensive review in the unified chapter-review flow; extract stable new facts into pending knowledge as a separate action when needed.
 5. Confirm knowledge so later chapters can retrieve it.
 
 ## Setup And Run
@@ -139,9 +139,6 @@ LLM_PRICING_CURRENCY=USD
 LLM_DISPLAY_CURRENCY=CNY
 LLM_USD_TO_CNY_RATE=7.142857
 
-# Legacy import: migrated to the system credential manager and scrubbed
-BRAVE_SEARCH_API_KEY=
-
 # Optional local cost estimation, per 1M tokens in LLM_PRICING_CURRENCY
 LLM_INPUT_PRICE_PER_MILLION=0
 LLM_CACHED_INPUT_PRICE_PER_MILLION=0
@@ -152,7 +149,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 
 When prices are empty or `0`, NovelForge still records tokens but does not guess a cost. If the provider does not return cost directly, local amounts are estimates from the event's price snapshot rather than provider invoices. Model Settings separately controls the price-entry currency, primary display currency, and USD-to-CNY factor. The DeepSeek preset factor aligns its official Chinese and English price tables; it is not a live foreign-exchange quote. Update values, verification dates, and sources when either pricing or conversion policy changes.
 
-Model, embedding, and Brave Search keys are configured in the UI and stored in Windows Credential Manager or the system keyring. SQLite and configuration mirrors retain only the credential reference, SHA-256 fingerprint, and last four characters. Legacy `.env` keys are one-time migration sources and are scrubbed after successful migration. `BRAVE_SEARCH_API_KEY` is sent only to Brave Search.
+Model and embedding keys are configured in the UI and stored in Windows Credential Manager or the system keyring. SQLite and configuration mirrors retain only the credential reference, SHA-256 fingerprint, and last four characters. Web search reuses the active model provider's native search when available and automatically falls back to keyless DDGS metasearch, so no separate search key is required.
 
 `.env` only bootstraps non-secret model parameters and migrates legacy keys on first launch. After model profiles have been written to `data/global.db`, the database is authoritative; update models and rates in `模型配置` (Model Settings), because editing `.env` alone does not override a saved profile.
 

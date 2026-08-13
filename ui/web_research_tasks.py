@@ -27,7 +27,6 @@ from novelforge.workflows.web_research_tasks import (
 from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import KNOWLEDGE_CATEGORY_LABELS, label_scope
 from ui.llm_preflight import render_preflight_estimate
-from novelforge.services.credentials import system_credential_available
 
 
 SOURCE_KIND_LABELS = {
@@ -72,8 +71,7 @@ def _render_task_creator(project_name: str, story_id: str) -> None:
         "Planner 会拆分查询，多个 Collector 并行搜索；抓取、事实提取和验证结果会分阶段保存。"
         "任务只生成审核候选，不会直接写入正式知识。"
     )
-    if not system_credential_available(purpose="web-search", owner_id="brave"):
-        st.warning("尚未配置网络搜索能力；任务会保存，但需先到“能力中心”安全保存搜索密钥再执行。")
+    st.caption("搜索会自动复用模型原生能力，并在不可用时切换到免密通用搜索。")
 
     with st.form(scoped_widget_key("web_research_task_form", project_name, story_id)):
         topic = st.text_input(

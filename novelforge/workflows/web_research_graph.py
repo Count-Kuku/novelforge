@@ -107,7 +107,7 @@ def build_web_research_graph(
     def dispatch_collectors(state: WebResearchGraphState) -> list[Send]:
         plan = WebResearchPlan.model_validate(state.get("plan") or {})
         shared = {
-            "provider": str(state.get("provider") or "brave"),
+            "provider": str(state.get("provider") or "auto"),
             "language": str(state.get("language") or "zh-hans"),
             "freshness": str(state.get("freshness") or ""),
         }
@@ -138,7 +138,7 @@ def build_web_research_graph(
         try:
             result = searcher(
                 search_query,
-                provider=str(state.get("provider") or "brave"),
+                provider=str(state.get("provider") or "auto"),
                 count=branch.max_results,
                 language=str(state.get("language") or "zh-hans"),
                 freshness=str(state.get("freshness") or ""),
@@ -216,7 +216,7 @@ def run_web_research_discovery(
     topic: str,
     *,
     source_kinds: list[str] | None = None,
-    provider: str = "brave",
+    provider: str = "auto",
     language: str = "zh-hans",
     freshness: str = "",
     max_results_per_branch: int = 5,

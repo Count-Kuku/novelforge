@@ -12,7 +12,7 @@ NovelForge 采用 SQLite 与文件资产组合存储：
 |---|---|---|
 | 全局模型档案、全局规则、全局提示词选项、LLM 用量账本 | `data/global.db` | 全局结构化配置和跨项目计量 |
 | 项目、故事、知识、来源、检索、运行记录 | `data/projects/{project_name}/project.db` | 每个项目独立数据库 |
-| 大纲、章节、审阅、分析、评价、导入原文 | 项目目录内 Markdown/TXT 等文件 | 正文由文件保存，生命周期登记在 `asset_files` |
+| 大纲、章节、快速/综合审阅、分析、导入原文 | 项目目录内 Markdown/TXT 等文件 | 正文由文件保存，生命周期登记在 `asset_files`；快速审阅兼容 `reviews`，综合审阅兼容 `evaluation` |
 | 结构化 JSON | 非权威兼容层 | 默认不写；只用于旧项目导入或显式兼容镜像 |
 
 结构化数据写入失败必须向上抛错，不能在 DB-only 模式下静默退回文件并假装成功。
@@ -38,9 +38,9 @@ data/
                 ├── arcs/
                 ├── chapter_outlines/
                 ├── chapters/
-                ├── reviews/
+                ├── reviews/             # 快速审阅兼容目录
                 ├── analysis/
-                ├── evaluation/
+                ├── evaluation/          # 综合审阅兼容目录
                 ├── runs/
                 └── retrieval/
 ```
@@ -108,7 +108,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 ### 文件资产与结构化工件
 
 - `asset_files`：长文本/文件资产的逻辑键、相对路径、hash、作用域和软删除状态。
-- `asset_payloads`：讨论结论、章节元数据、审阅/评价 JSON、摘要、实体卡、模板和上下文快照等小型结构化工件。
+- `asset_payloads`：讨论结论、章节元数据、快速/综合审阅 JSON、摘要、实体卡、模板和上下文快照等小型结构化工件。
 
 ### 统一资料与知识中心
 

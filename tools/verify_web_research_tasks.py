@@ -27,7 +27,11 @@ def main() -> int:
     workspace = make_workspace("novelforge_web_research_tasks_")
     previous_cwd = Path.cwd()
     previous_background_flag = os.environ.get("NOVELFORGE_DISABLE_BACKGROUND_TASKS")
+    previous_credential_backend = os.environ.get("NOVELFORGE_CREDENTIAL_BACKEND")
+    previous_llm_key = os.environ.get("LLM_API_KEY")
     os.environ["NOVELFORGE_DISABLE_BACKGROUND_TASKS"] = "1"
+    os.environ["NOVELFORGE_CREDENTIAL_BACKEND"] = "memory"
+    os.environ["LLM_API_KEY"] = "sk-web-research-test-only"
     os.chdir(workspace)
     try:
         from novelforge.core.schemas import (
@@ -127,7 +131,7 @@ def main() -> int:
                 hits = [
                     {
                         "result_id": "official-hit",
-                        "provider": "brave",
+                        "provider": "ddgs",
                         "query": "official",
                         "title": "官方设定",
                         "url": "https://official.example.com/lore",
@@ -137,7 +141,7 @@ def main() -> int:
                     },
                     {
                         "result_id": "community-hit",
-                        "provider": "brave",
+                        "provider": "ddgs",
                         "query": "community",
                         "title": "社区整理",
                         "url": "https://community.example.net/lore",
@@ -784,6 +788,14 @@ def main() -> int:
             os.environ.pop("NOVELFORGE_DISABLE_BACKGROUND_TASKS", None)
         else:
             os.environ["NOVELFORGE_DISABLE_BACKGROUND_TASKS"] = previous_background_flag
+        if previous_credential_backend is None:
+            os.environ.pop("NOVELFORGE_CREDENTIAL_BACKEND", None)
+        else:
+            os.environ["NOVELFORGE_CREDENTIAL_BACKEND"] = previous_credential_backend
+        if previous_llm_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = previous_llm_key
         retry_rmtree(workspace)
 
 

@@ -20,7 +20,6 @@ from novelforge.services.web_research import (
 from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_authority, label_scope
 from ui.web_research_tasks import render_web_research_task_manager
-from novelforge.services.credentials import system_credential_available
 
 
 def _search_result_key(project_name: str, story_id: str) -> str:
@@ -94,18 +93,13 @@ def _render_manual_web_research_import(project_name: str, story_id: str) -> None
     st.markdown("#### 网络检索")
     st.caption(
         "搜索公开网页，检查结果后抓取正文并导入当前项目。"
-        "首版不会登录网站、绕过付费墙，也不会自动确认网络设定。"
+        "系统优先使用当前模型的原生搜索，否则自动切换到免密通用搜索；"
+        "不会登录网站或绕过付费墙。"
     )
-    if not system_credential_available(purpose="web-search", owner_id="brave"):
-        st.warning("尚未配置网络搜索能力。请在“模型与费用 → 能力中心”安全保存 Brave Search 密钥。")
 
     provider_options = available_web_search_providers()
-    provider = st.selectbox(
-        "搜索服务",
-        options=list(provider_options),
-        format_func=lambda value: provider_options.get(value, value),
-        key=scoped_widget_key("web_research_provider", *state_scope),
-    )
+    provider = "auto"
+    st.caption(f"搜索服务：{provider_options[provider]}")
     query = st.text_input(
         "研究主题或检索词",
         placeholder="例如：原神 坎瑞亚 官方设定 时间线",

@@ -29,6 +29,7 @@ def pipeline_plan_write_review_update(
     word_count: str = "2000-2500",
     story_id: str = "default",
     stream_callback=None,
+    extract_settings: bool = True,
 ) -> dict:
     started_at = _skills_api.datetime.now().isoformat(timespec="microseconds")
     run_id = _build_pipeline_run_id(chapter_no, story_id, started_at=started_at)
@@ -129,7 +130,7 @@ def pipeline_plan_write_review_update(
     if review_step.success:
         state.last_successful_step = "review_chapter"
 
-    if chapter_step.success and review_step.success:
+    if chapter_step.success and review_step.success and extract_settings:
         state.next_step = "setting_extraction"
         _skills_api._transition_pipeline_state(state, "setting_extraction", "review step completed")
         try:
@@ -145,7 +146,7 @@ def pipeline_plan_write_review_update(
                 retrieval_hits=_skills_api.get_retrieval_trace(_skills_api._story_trace_key("setting_extraction", project_name, story_id, chapter_no)),
             )
             _skills_api._record_pipeline_error(state, step_name="setting_extraction", message=str(exc), error_type="llm")
-    else:
+    elif extract_settings:
         skip_reason = "review_chapter_failed" if chapter_step.success else "write_chapter_failed"
         skip_warning = (
             "Skipped because chapter review step did not complete successfully."
@@ -161,12 +162,20 @@ def pipeline_plan_write_review_update(
         )
         if not state.halted:
             _skills_api._halt_pipeline(state, skip_reason)
+    else:
+        memory_step = _skills_api._make_step_result(
+            "setting_extraction",
+            success=False,
+            status="skipped",
+            warnings=["设定提炼已与章节审阅解耦，可在章节写作页单独执行。"],
+            retrieval_hits=[],
+        )
 
     _skills_api._record_pipeline_step(state, memory_step)
     state.setting_extraction = memory_step.data
     if memory_step.success:
         state.last_successful_step = "setting_extraction"
-    elif not state.halted:
+    elif extract_settings and not state.halted:
         _skills_api._halt_pipeline(state, "setting_extraction_failed")
 
     if not state.halted:
@@ -183,6 +192,7 @@ def pipeline_plan_write_review_update(
     )
     result = state.model_dump()
     result["story_id"] = story_id
+    result["extract_settings"] = bool(extract_settings)
     result["pipeline"] = pipeline_result.model_dump()
     _skills_api.save_pipeline_run(project_name, state.run_id, _skills_api.json.dumps(result, ensure_ascii=False, indent=2), story_id=story_id)
     return result

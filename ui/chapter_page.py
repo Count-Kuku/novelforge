@@ -12,39 +12,30 @@ from novelforge.services.memory import (
     load_global_prompt_options,
     load_project_prompt_options,
     load_story_prompt_options,
-    save_chapter,
 )
 from novelforge.core.prompt_options import filter_prompt_options, merge_prompt_option_layers
 from novelforge.domain.setting_knowledge import list_setting_items
 from novelforge.workflows.skills import (
-    extract_setting_candidates_from_chapter,
     generate_chapter_outline,
-    get_retrieval_trace,
     pipeline_plan_write_review_update,
-    review_chapter,
     write_chapter,
 )
+from ui.chapter_review_runtime import run_chapter_review_by_mode
+from ui.chapter_review_panel import render_chapter_review_panel
 from ui.common import scoped_session_key, scoped_widget_key
 from ui.context_directives import render_context_directive_tools
 from ui.discussion import (
     _format_discussion_artifact_as_guidance,
     _render_approved_discussion_artifact,
 )
-from ui.labels import label_status
 from ui.layout import render_empty_state, render_section_heading
 from ui.prompt_option_tools import (
     _prompt_option_label,
     _render_generation_injection_preview,
     _render_prompt_option_capability_tools,
     _render_prompt_option_inline_tools,
-    render_context_assembly_summary,
 )
-from ui.step_views import (
-    render_step_json_expander,
-    render_step_retrieval,
-    render_step_status_message,
-    render_step_validation,
-)
+from ui.step_views import render_step_json_expander
 from ui.streaming import (
     GenerationCancelled,
     make_stream_preview as _make_stream_preview,
@@ -80,28 +71,17 @@ def _run_chapter_inline_pipeline(
             raise RuntimeError(write_result.get("error", "正文生成失败"))
 
         _safe_stream_emit(stream_callback, "\n\n## 审阅\n\n")
-        review_result = review_chapter(project_name, chapter_no, chapter, story_id=story_id, stream_callback=stream_callback)
+        review_result = run_chapter_review_by_mode(
+            project_name,
+            chapter_no,
+            chapter,
+            mode="quick",
+            story_id=story_id,
+            stream_callback=stream_callback,
+        )
         steps_result["review_chapter"] = review_result
-        review_markdown = review_result.get("data", {}).get("review_markdown", "")
+        review_markdown = review_result.get("data", {}).get("review_report", "")
 
-        review_success = bool(review_result.get("success")) and review_result.get("status") not in {"failed", "rejected", "blocked"}
-        if review_success:
-            _safe_stream_emit(stream_callback, "\n\n## 设定提炼\n\n")
-            memory_result = extract_setting_candidates_from_chapter(
-                project_name,
-                chapter_no,
-                chapter,
-                story_id=story_id,
-                stream_callback=stream_callback,
-            )
-        else:
-            memory_result = {
-                "step_name": "setting_extraction",
-                "success": False,
-                "status": "skipped",
-                "warnings": ["章节审阅未通过或未完成，已跳过设定提炼。"],
-            }
-        steps_result["setting_extraction"] = memory_result
         complete_stream("自动流程执行完成。")
         return {
             "chapter": chapter,
@@ -285,7 +265,7 @@ def _render_missing_outline_actions(
                     except Exception as exc:
                         st.error(f"细纲生成失败：{exc}")
         with col_full_pipeline:
-            if st.button("自动完成：细纲→正文→审阅→整理设定", width="stretch", type="primary", key=scoped_widget_key("full_pipeline_btn", *chapter_scope)):
+            if st.button("自动完成：细纲→正文→快速审阅", width="stretch", type="primary", key=scoped_widget_key("full_pipeline_btn", *chapter_scope)):
                 if not gen_requirement.strip():
                     st.warning("请先填写创作需求。")
                 else:
@@ -298,6 +278,7 @@ def _render_missing_outline_actions(
                             gen_requirement,
                             word_count,
                             story_id=story_id,
+                            extract_settings=False,
                         )
                         st.session_state[pipeline_result_key] = pipeline_result
                         chapter = pipeline_result.get("chapter", "") or pipeline_result.get("steps", {}).get("write_chapter", {}).get("data", {}).get("chapter", "")
@@ -372,7 +353,7 @@ def _render_chapter_generation_actions(
         )
     with col_pipeline:
         pipeline_clicked = st.button(
-            "自动完成：正文→审阅→整理设定" if has_outline else "需要先填写或生成细纲",
+            "自动完成：正文→快速审阅" if has_outline else "需要先填写或生成细纲",
             disabled=not has_outline,
             width="stretch",
             key=scoped_widget_key("inline_pipeline_btn", *chapter_scope),
@@ -418,151 +399,6 @@ def _render_chapter_generation_actions(
             st.rerun()
         except Exception as exc:
             st.error(f"自动流程执行失败：{exc}")
-
-
-def _render_review_memory_prompt_tools(project_name: str, story_id: str, chapter_scope: tuple):
-    with st.expander("高级：审阅与设定提炼提示词选项", expanded=False):
-        tab_review_prompts, tab_memory_prompts = st.tabs(["章节审阅", "设定提炼"])
-        with tab_review_prompts:
-            _render_prompt_option_capability_tools(
-                project_name,
-                story_id,
-                "review",
-                scoped_widget_key("review_prompt_options", *chapter_scope),
-            )
-        with tab_memory_prompts:
-            _render_prompt_option_capability_tools(
-                project_name,
-                story_id,
-                "setting_extraction",
-                scoped_widget_key("setting_extraction_prompt_options", *chapter_scope),
-            )
-
-
-def _render_chapter_review_memory_actions(
-    project_name: str,
-    story_id: str,
-    chapter_no: int,
-    chapter_scope: tuple,
-    chapter_text: str,
-    review_inline_step_key: str,
-    review_markdown_key: str,
-    setting_extraction_step_key: str,
-):
-    save_col, review_col, memory_col = st.columns(3)
-    with save_col:
-        if st.button("保存正文", width="stretch"):
-            save_chapter(project_name, chapter_no, chapter_text, story_id=story_id)
-            st.success("正文已保存")
-
-    has_chapter = bool(chapter_text.strip())
-    with review_col:
-        do_review = st.button(
-            "审阅正文" if has_chapter else "需要先生成正文",
-            disabled=not has_chapter,
-            key=scoped_widget_key("review_inline", *chapter_scope),
-            width="stretch",
-        )
-        if do_review and has_chapter:
-            try:
-                result = _run_with_stream(
-                    "正在审阅正文...",
-                    review_chapter,
-                    project_name,
-                    chapter_no,
-                    chapter_text,
-                    story_id=story_id,
-                    preview_language="json",
-                )
-                st.session_state[review_inline_step_key] = result
-                st.session_state[review_markdown_key] = result.get("data", {}).get("review_markdown", "")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"审阅失败：{exc}")
-
-    with memory_col:
-        do_memory = st.button(
-            "提炼待审核设定" if has_chapter else "需要先生成正文",
-            disabled=not has_chapter,
-            key=scoped_widget_key("memory_inline", *chapter_scope),
-            width="stretch",
-        )
-        if do_memory and has_chapter:
-            try:
-                result = _run_with_stream(
-                    "正在提炼待审核设定...",
-                    extract_setting_candidates_from_chapter,
-                    project_name,
-                    chapter_no,
-                    chapter_text,
-                    story_id=story_id,
-                    preview_language="json",
-                )
-                st.session_state[setting_extraction_step_key] = result
-                queued_count = result.get("data", {}).get("queued_knowledge_count", 0)
-                render_step_status_message(result, f"已提炼 {queued_count} 条待审核设定，确认后生效", "设定提炼失败：")
-                render_step_validation(result)
-                render_step_json_expander("章节设定提炼详细数据", result)
-            except Exception as exc:
-                st.error(f"设定提炼失败：{exc}")
-
-
-def _render_chapter_result_details(
-    project_name: str,
-    story_id: str,
-    chapter_no: int,
-    chapter_step: dict,
-    pipeline_result_key: str,
-    review_markdown_key: str,
-    review_inline_step_key: str,
-    setting_extraction_step_key: str,
-):
-    review_markdown = st.session_state.get(review_markdown_key, "")
-    if review_markdown:
-        with st.expander("审阅结果", expanded=True):
-            st.markdown(review_markdown)
-
-    pipeline_result = st.session_state.get(pipeline_result_key, {})
-    if pipeline_result:
-        expanded_by_default = bool(pipeline_result.get("steps", {}).get("write_chapter", {}).get("success"))
-        with st.expander("自动流程执行详情", expanded=not expanded_by_default):
-            pipeline_steps = pipeline_result.get("steps", {})
-            for step_label, step_key in [("细纲", "chapter_outline"), ("写作", "write_chapter"), ("审阅", "review_chapter"), ("设定提炼", "setting_extraction")]:
-                step_result = pipeline_steps.get(step_key, {})
-                if step_result:
-                    status = step_result.get("status", "-")
-                    st.caption(f"{step_label}：{label_status(status)}")
-                    render_step_validation(step_result)
-            pipeline_markdown = pipeline_result.get("review_markdown", "") or pipeline_steps.get("review_chapter", {}).get("data", {}).get("review_markdown", "")
-            if pipeline_markdown:
-                st.markdown("#### 审阅结果")
-                st.markdown(pipeline_markdown)
-
-    render_step_validation(chapter_step)
-    render_context_assembly_summary(
-        (chapter_step.get("data") or {}).get("context_assembly") or {},
-        "本次正文使用的规则与资料",
-    )
-    render_step_retrieval(
-        chapter_step,
-        "本次正文生成参考的资料",
-        get_retrieval_trace(f"write:{project_name}:{story_id}:{chapter_no}")
-    )
-    review_step = st.session_state.get(review_inline_step_key, {})
-    render_context_assembly_summary(
-        (review_step.get("data") or {}).get("context_assembly") or {},
-        "本次审阅使用的规则与资料",
-    )
-    render_step_retrieval(
-        review_step,
-        "本次审阅参考的资料",
-        get_retrieval_trace(f"review:{project_name}:{story_id}:{chapter_no}")
-    )
-    render_step_retrieval(
-        st.session_state.get(setting_extraction_step_key, {}),
-        "本次设定提炼参考的资料",
-        get_retrieval_trace(f"setting_extraction:{project_name}:{story_id}:{chapter_no}")
-    )
 
 
 def _prepare_chapter_page_context(project_name: str) -> dict:
@@ -770,21 +606,12 @@ def _render_chapter_generation_section(project_name: str, context: dict, chapter
 
 
 def _render_chapter_review_section(project_name: str, context: dict, chapter_text: str) -> None:
-    _render_review_memory_prompt_tools(project_name, context["story_id"], context["chapter_scope"])
-    _render_chapter_review_memory_actions(
+    render_chapter_review_panel(
         project_name,
         context["story_id"],
         context["chapter_no"],
         context["chapter_scope"],
         chapter_text,
-        context["review_inline_step_key"],
-        context["review_markdown_key"],
-        context["setting_extraction_step_key"],
-    )
-    _render_chapter_result_details(
-        project_name,
-        context["story_id"],
-        context["chapter_no"],
         context["chapter_step"],
         context["pipeline_result_key"],
         context["review_markdown_key"],
@@ -802,7 +629,7 @@ def render_chapter_page(project_name: str):
 
     view = st.segmented_control(
         "章节写作流程",
-        options=["1 · 准备细纲", "2 · 写作正文", "3 · 审阅整理"],
+        options=["1 · 准备细纲", "2 · 写作正文", "3 · 保存与审阅"],
         default="1 · 准备细纲",
         key=scoped_widget_key("chapter_page_view", *context["chapter_scope"]),
         label_visibility="collapsed",
@@ -821,7 +648,7 @@ def render_chapter_page(project_name: str):
         return
 
     chapter_text = str(st.session_state.get(context["chapter_text_key"], context["existing_chapter"]) or "")
-    render_section_heading("审阅与设定提炼", "正文稳定后可以保存、审阅，并把长期设定整理为待审核内容。")
+    render_section_heading("保存与章节审阅", "保存当前正文，并按需要选择快速审阅或综合审阅。设定提炼作为独立操作放在下方。")
     if not chapter_text.strip():
         render_empty_state("还没有可审阅的正文", "请先切换到“写作正文”生成或粘贴本章内容。")
         return

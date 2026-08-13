@@ -219,7 +219,7 @@ def _render_structured_payload_editor(project_name: str, story_id: str, resource
         )
     if resource.get("group") == "evaluation":
         return st.text_area(
-            "评估详细数据",
+            "综合审阅详细数据",
             value=json.dumps(resource.get("evaluation_payload", {}), ensure_ascii=False, indent=2),
             height=220,
             key=scoped_widget_key("browser_json", project_name, story_id, resource.get("id")),

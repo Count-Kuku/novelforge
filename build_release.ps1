@@ -112,7 +112,7 @@ if (Test-Path -LiteralPath (Join-Path $ResolvedRuntimeRoot "pyvenv.cfg")) {
     throw "RuntimeRoot points to a virtual environment. A copied venv is tied to its build machine; provide a self-contained Python distribution instead."
 }
 
-& $PortablePython -c "import streamlit, openai, dotenv, pydantic, httpx"
+& $PortablePython -c "import streamlit, openai, dotenv, pydantic, httpx, ddgs"
 if (-not $?) {
     throw "The self-contained runtime is missing one or more NovelForge dependencies."
 }

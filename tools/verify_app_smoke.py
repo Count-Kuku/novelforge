@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -16,11 +17,30 @@ from tools.verify_utils import isolated_workspace
 
 def main() -> int:
     with isolated_workspace("novelforge_app_smoke_"):
+        hot_reload_probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import novelforge.workflows.skills as skills; "
+                    "delattr(skills, 'review_chapter_by_mode') if hasattr(skills, 'review_chapter_by_mode') else None; "
+                    "import app"
+                ),
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=30).run()
         exceptions = [str(item.value) for item in app.exception]
         result = {
-            "ok": not exceptions,
+            "ok": not exceptions and hot_reload_probe.returncode == 0,
             "exceptions": exceptions,
+            "hot_reload_probe": {
+                "ok": hot_reload_probe.returncode == 0,
+                "stderr": hot_reload_probe.stderr.strip(),
+            },
             "titles": [str(item.value) for item in app.title],
         }
         print(json.dumps(result, ensure_ascii=False, indent=2))

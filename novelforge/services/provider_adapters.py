@@ -17,10 +17,10 @@ class ProviderAdapter:
 
 
 PROVIDER_ADAPTERS = {
-    "deepseek": ProviderAdapter("deepseek", ("chat",), notes="当前预设仅声明对话能力。"),
-    "openai": ProviderAdapter("openai", ("chat", "embedding")),
-    "openrouter": ProviderAdapter("openrouter", ("chat",)),
-    "qwen": ProviderAdapter("qwen", ("chat", "embedding")),
+    "deepseek": ProviderAdapter("deepseek", ("chat", "search")),
+    "openai": ProviderAdapter("openai", ("chat", "embedding", "search")),
+    "openrouter": ProviderAdapter("openrouter", ("chat", "search")),
+    "qwen": ProviderAdapter("qwen", ("chat", "embedding", "search")),
     "siliconflow": ProviderAdapter("siliconflow", ("chat", "embedding")),
     "ollama": ProviderAdapter("ollama", ("chat", "embedding")),
     "openai_compatible": ProviderAdapter("openai_compatible", ("chat", "embedding")),
@@ -97,6 +97,7 @@ def negotiate_provider_capabilities(
             for capability, ready in (
                 ("chat", chat_status == "ready"),
                 ("embedding", embedding_status == "ready"),
+                ("search", "search" in adapter.capabilities and chat_status == "ready"),
             )
             if ready
         ],

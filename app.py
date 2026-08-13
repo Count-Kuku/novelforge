@@ -17,6 +17,8 @@ from ui import (
     arc_outline_page as ui_arc_outline_page,
     chapter_outline_page as ui_chapter_outline_page,
     chapter_page as ui_chapter_page,
+    chapter_review_panel as ui_chapter_review_panel,
+    chapter_review_runtime as ui_chapter_review_runtime,
     creative_profile_page as ui_creative_profile_page,
     discussion as ui_discussion,
     discussion_assets_panel as ui_discussion_assets_panel,
@@ -81,6 +83,8 @@ def _reload_live_ui_modules() -> dict[str, object]:
     importlib.reload(ui_web_research)
     prompt_option_helpers = importlib.reload(ui_prompt_option_tools)
     importlib.reload(ui_discussion)
+    importlib.reload(ui_chapter_review_runtime)
+    importlib.reload(ui_chapter_review_panel)
     # Streamlit keeps imported modules alive between script reruns. Reload the
     # navigation contract before app_shell so a long-running process cannot
     # combine an old navigation module with a newly edited shell module.
@@ -241,7 +245,7 @@ def main():
         )
     elif page == "正文生成":
         ui_modules["chapter"].render_chapter_page(project_name)
-    elif page == "章节评价":
+    elif page == "章节审阅":
         ui_modules["evaluation"].render_evaluation_page(
             project_name,
             ui_modules["prompt_option_tools"]._render_prompt_option_capability_tools,

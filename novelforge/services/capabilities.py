@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import asdict, dataclass, field
 from typing import Callable
 
@@ -126,20 +125,18 @@ def _model_status(capability: str) -> CapabilityStatus:
 
 
 def _search_status() -> CapabilityStatus:
-    from novelforge.services.credentials import resolve_or_migrate_environment_credential
+    from novelforge.services.web_research.search import automatic_search_status
 
-    key = resolve_or_migrate_environment_credential(
-        purpose="web-search",
-        owner_id="brave",
-        environment_key="BRAVE_SEARCH_API_KEY",
-    )
-    available = bool(key)
+    status = automatic_search_status()
+    available = bool(status["available"])
+    native_provider = str(status.get("native_provider") or "")
     return CapabilityStatus(
         CAPABILITY_SEARCH,
         "ready" if available else "missing",
         available,
-        "Brave Search 已配置。" if available else "尚未配置 Brave Search API Key。",
-        "brave",
+        str(status["message"]),
+        f"{native_provider}+ddgs" if native_provider else "ddgs",
+        status,
     )
 
 

@@ -550,3 +550,69 @@ def evaluate_chapter_comprehensive(project_name: str, chapter_no: int, chapter: 
             "saved_path": f"data/projects/{project_name}/stories/{story_id}/evaluation/chapter_{chapter_no:03d}.md",
         },
     ).model_dump()
+
+
+def review_chapter_by_mode(
+    project_name: str,
+    chapter_no: int,
+    chapter: str,
+    *,
+    mode: str = "quick",
+    story_id: str = "default",
+    stream_callback=None,
+) -> dict:
+    """Run either review depth through one stable chapter-review contract.
+
+    The existing ``reviews`` and ``evaluation`` assets remain the compatibility
+    stores for quick and comprehensive results.  Callers no longer need to know
+    which legacy workflow or payload field belongs to each depth.
+    """
+
+    normalized_mode = str(mode or "quick").strip().lower()
+    aliases = {
+        "quick": "quick",
+        "fast": "quick",
+        "快速": "quick",
+        "快速审阅": "quick",
+        "comprehensive": "comprehensive",
+        "full": "comprehensive",
+        "综合": "comprehensive",
+        "综合审阅": "comprehensive",
+    }
+    normalized_mode = aliases.get(normalized_mode, normalized_mode)
+    if normalized_mode == "quick":
+        result = review_chapter(
+            project_name,
+            chapter_no,
+            chapter,
+            story_id=story_id,
+            stream_callback=stream_callback,
+        )
+        payload_field = "review"
+        report_field = "review_markdown"
+        storage_kind = "reviews"
+    elif normalized_mode == "comprehensive":
+        result = evaluate_chapter_comprehensive(
+            project_name,
+            chapter_no,
+            chapter,
+            story_id=story_id,
+            stream_callback=stream_callback,
+        )
+        payload_field = "evaluation"
+        report_field = "report_markdown"
+        storage_kind = "evaluation"
+    else:
+        raise ValueError(f"未知章节审阅模式：{mode}")
+
+    unified = dict(result or {})
+    data = dict(unified.get("data") or {})
+    data["review_mode"] = normalized_mode
+    data["review_payload"] = data.get(payload_field) or {}
+    data["review_report"] = str(data.get(report_field) or "")
+    data["compatibility_storage"] = storage_kind
+    unified["data"] = data
+    artifacts = dict(unified.get("artifacts") or {})
+    artifacts.update({"review_mode": normalized_mode, "compatibility_storage": storage_kind})
+    unified["artifacts"] = artifacts
+    return unified

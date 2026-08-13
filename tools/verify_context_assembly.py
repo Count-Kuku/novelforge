@@ -524,6 +524,38 @@ def verify_other_generation_entrypoints(project_name: str, story_id: str) -> Non
     check(review_result["success"] is True, "统一装配后的章节审阅成功")
     check(bool(review_result["data"].get("context_assembly")), "章节审阅使用统一上下文装配")
 
+    with patch.object(skills, "review_chapter", return_value=review_result):
+        unified_quick = skills.review_chapter_by_mode(
+            project_name,
+            2,
+            "主角沿地下河前行。",
+            mode="quick",
+            story_id=story_id,
+        )
+    check(unified_quick["data"]["review_mode"] == "quick", "统一审阅入口标记快速模式")
+    check(unified_quick["data"]["review_payload"]["status"] == "pass", "统一审阅入口归一化快速审阅结果")
+
+    comprehensive_step = skills._make_step_result(
+        "evaluate_chapter_comprehensive",
+        success=True,
+        status="completed",
+        data={
+            "evaluation": {"status": "pass", "overall_score": 88},
+            "report_markdown": "# 章节综合评价",
+        },
+        artifacts={"report_saved": True},
+    ).model_dump()
+    with patch.object(skills, "evaluate_chapter_comprehensive", return_value=comprehensive_step):
+        unified_comprehensive = skills.review_chapter_by_mode(
+            project_name,
+            2,
+            "主角沿地下河前行。",
+            mode="comprehensive",
+            story_id=story_id,
+        )
+    check(unified_comprehensive["data"]["review_mode"] == "comprehensive", "统一审阅入口标记综合模式")
+    check(unified_comprehensive["data"]["review_payload"]["overall_score"] == 88, "统一审阅入口归一化综合审阅结果")
+
 
 def main() -> int:
     with isolated_workspace("novelforge_context_assembly_"):

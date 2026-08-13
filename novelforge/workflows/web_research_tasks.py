@@ -467,7 +467,7 @@ def run_web_research_task(
                 {
                     "topic": task_holder["task"]["topic"],
                     "source_kinds": list(configuration.get("source_kinds") or []),
-                    "provider": "brave",
+                    "provider": "auto",
                     "language": str(configuration.get("language") or "zh-hans"),
                     "freshness": str(configuration.get("freshness") or ""),
                     "max_results_per_branch": int(configuration.get("max_results_per_branch") or 5),
@@ -544,7 +544,7 @@ def run_web_research_task(
                         project_name,
                         [page],
                         query=task_holder["task"]["topic"],
-                        provider="brave",
+                        provider=str(hit.get("provider") or "auto"),
                         scope=str(configuration.get("scope") or "reference"),
                         authority=assessment.authority,
                         build_vectors=False,

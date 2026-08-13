@@ -52,43 +52,80 @@ def _private_resolver(host: str, port: int, *, type: int = 0) -> list[tuple]:
     return [(socket.AF_INET, type or socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
 
 
-def verify_brave_search_normalization() -> None:
+def verify_native_search_and_keyless_fallback() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        check(request.headers.get("x-subscription-token") == "test-key", "search key stays in request header")
-        check(request.url.params.get("q") == "坎瑞亚 官方设定", "search query is passed to provider")
+        check(request.headers.get("x-api-key") == "test-key", "active model key stays in native request header")
+        body = json.loads(request.content)
+        check("坎瑞亚 官方设定" in body["messages"][0]["content"], "search query is passed to native provider")
+        check(body["tools"][0]["type"] == "web_search_20250305", "native provider receives hosted search tool")
         return httpx.Response(
             200,
             json={
-                "query": {"more_results_available": True},
-                "web": {
-                    "results": [
-                        {
-                            "title": "官方设定页",
-                            "url": "https://example.com/lore",
-                            "description": "设定摘要",
-                            "extra_snippets": ["补充片段"],
-                            "language": "zh-hans",
-                            "age": "2026-01-01",
-                        },
-                        {"title": "无效结果", "url": "file:///tmp/private"},
-                    ]
-                },
+                "content": [
+                    {
+                        "type": "web_search_tool_result",
+                        "content": [
+                            {
+                                "type": "web_search_result",
+                                "title": "官方设定页",
+                                "url": "https://example.com/lore",
+                                "content": "设定摘要",
+                            },
+                            {"type": "web_search_result", "title": "无效结果", "url": "file:///tmp/private"},
+                        ],
+                    }
+                ],
             },
             request=request,
         )
 
+    profile = {
+        "provider_type": "auto",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "test-key",
+        "model_name": "deepseek-v4-flash",
+    }
     with httpx.Client(transport=httpx.MockTransport(handler), trust_env=False) as client:
         result = search_web(
             "坎瑞亚  官方设定",
-            api_key="test-key",
             count=8,
             client=client,
+            profile=profile,
         )
-    check(result.provider == "brave", "search result records provider")
-    check(result.more_results_available, "search result keeps pagination hint")
-    check(len(result.results) == 1, "search result drops non-http URLs")
-    check(result.results[0].rank == 1, "search results receive stable display ranks")
-    check(result.results[0].extra_snippets == ["补充片段"], "search result keeps extra snippets")
+    check(result.provider == "deepseek_native", "search records the detected native provider")
+    check(len(result.results) == 1, "native search drops non-http URLs")
+    check(result.results[0].rank == 1, "native search results receive stable display ranks")
+    check(result.results[0].description == "设定摘要", "native search keeps source excerpts")
+
+    class FakeDDGS:
+        def __init__(self, **kwargs):
+            check(kwargs.get("timeout") == 20, "keyless fallback receives a bounded timeout")
+
+        def text(self, query: str, **kwargs):
+            check(query == "坎瑞亚 官方设定", "keyless fallback receives the normalized query")
+            check(kwargs.get("region") == "cn-zh", "keyless fallback maps the result language")
+            return [
+                        {
+                            "title": "通用搜索结果",
+                            "href": "https://fallback.example/lore",
+                            "description": "设定摘要",
+                            "body": "通用搜索摘要",
+                        }
+                    ]
+
+    def failing_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(failing_handler), trust_env=False) as client:
+        fallback = search_web(
+            "坎瑞亚 官方设定",
+            count=5,
+            client=client,
+            profile=profile,
+            ddgs_factory=FakeDDGS,
+        )
+    check(fallback.provider == "ddgs", "native failure automatically falls back to keyless search")
+    check(fallback.results[0].url == "https://fallback.example/lore", "keyless results are normalized")
 
 
 def verify_safe_fetch_and_text_extraction() -> FetchedWebPage:
@@ -184,7 +221,7 @@ def verify_batch_source_import(page: FetchedWebPage) -> None:
             "demo",
             [page, page.model_dump()],
             query="坎瑞亚",
-            provider="brave",
+            provider="ddgs",
             authority="official",
         )
     check(len(imported) == 1, "duplicate final URLs are imported once per batch")
@@ -277,7 +314,7 @@ def verify_parallel_research_graph() -> None:
         {
             "topic": "NovelForge",
             "source_kinds": ["official", "community"],
-            "provider": "brave",
+            "provider": "auto",
             "language": "en",
             "freshness": "",
             "max_results_per_branch": 2,
@@ -327,13 +364,13 @@ def verify_excluded_domains() -> None:
     def searcher(query: str, **kwargs) -> WebSearchResult:
         queries.append(query)
         return WebSearchResult(
-            provider="brave",
+            provider="auto",
             query=query,
             requested_count=int(kwargs.get("count") or 1),
             results=[
                 WebSearchHit(
                     result_id="blocked",
-                    provider="brave",
+                    provider="auto",
                     query=query,
                     title="blocked",
                     url="https://sub.blocked.example/lore",
@@ -341,7 +378,7 @@ def verify_excluded_domains() -> None:
                 ),
                 WebSearchHit(
                     result_id="allowed",
-                    provider="brave",
+                    provider="auto",
                     query=query,
                     title="allowed",
                     url="https://allowed.example/lore",
@@ -354,7 +391,7 @@ def verify_excluded_domains() -> None:
         {
             "topic": "NovelForge",
             "source_kinds": ["general"],
-            "provider": "brave",
+            "provider": "auto",
             "language": "en",
             "freshness": "",
             "max_results_per_branch": 2,
@@ -372,7 +409,7 @@ def verify_excluded_domains() -> None:
 
 def main() -> int:
     try:
-        verify_brave_search_normalization()
+        verify_native_search_and_keyless_fallback()
         page = verify_safe_fetch_and_text_extraction()
         verify_private_network_rejection()
         verify_dns_rebinding_rejection()
