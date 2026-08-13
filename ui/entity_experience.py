@@ -389,7 +389,7 @@ def _render_relationship_graph(project_name: str, story_id: str) -> None:
     if graph.get("edges"):
         if len(graph["edges"]) > 80:
             st.warning("关系较多，画布只显示最近 80 条；筛选后可查看其余关系。")
-        st.graphviz_chart(_graph_dot(graph), use_container_width=True)
+        st.graphviz_chart(_graph_dot(graph), width="stretch")
         st.dataframe([
             {"主体": edge.get("source_name"), "关系": edge.get("relation_type"), "客体": edge.get("target_name"),
              "方向": edge.get("direction"), "置信度": edge.get("confidence")}

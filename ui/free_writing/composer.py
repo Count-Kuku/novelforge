@@ -2,34 +2,48 @@
 
 from __future__ import annotations
 
-import json
-
 import streamlit as st
-import streamlit.components.v1 as components
 
 from novelforge.domain.setting_knowledge import list_setting_items
 from novelforge.domain.creative_actions import route_creative_action
 from novelforge.services.model_readiness import require_chat_ready
 from novelforge.workflows.interactive_writing import create_writing_session
-from ui.common import developer_mode_enabled, scoped_session_key, scoped_widget_key
+from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_knowledge_category
-from ui.prompt_option_tools import render_context_assembly_summary
 
 from .shared import (
     ACTION_LABELS,
     action_mode_key,
     active_fragment,
     branch_frontier,
-    last_result_key,
 )
 from .preflight import render_writing_preflight
 from .attachments import render_attachment_tray
 from .execution import run_creative_action, run_creative_generation
 
 
-def _run_generation(*args, **kwargs):
-    """Compatibility entrypoint retained for older UI integrations and tests."""
+_COMPOSER_SHORTCUT = st.components.v2.component(
+    "novelforge_composer_shortcut",
+    js="""
+    export default function(component) {
+      const label = component.data.label;
+      const key = "nfCreativeComposerShortcut";
+      if (window[key]) document.removeEventListener("keydown", window[key], true);
+      const handler = (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
+        const buttons = [...document.querySelectorAll('button')];
+        const target = buttons.find((button) => button.innerText.trim() === label && !button.disabled);
+        if (target) { event.preventDefault(); target.click(); }
+      };
+      window[key] = handler;
+      document.addEventListener("keydown", handler, true);
+      return () => document.removeEventListener("keydown", handler, true);
+    }
+    """,
+)
 
+
+def _run_generation(*args, **kwargs):
     try:
         require_chat_ready(action="自由创作")
     except Exception as exc:
@@ -64,28 +78,9 @@ def _render_command_palette(input_key: str, project_name: str, story_id: str, se
 
 
 def _install_composer_shortcut(button_label: str) -> None:
-    """Bind Ctrl/Command+Enter to the visible primary composer action."""
-
-    safe_label = json.dumps(str(button_label), ensure_ascii=False)
-    components.html(
-        f"""
-        <script>
-        (() => {{
-          const doc = window.parent.document;
-          const key = "nfCreativeComposerShortcut";
-          if (window.parent[key]) doc.removeEventListener("keydown", window.parent[key], true);
-          const handler = (event) => {{
-            if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
-            const label = {safe_label};
-            const buttons = [...doc.querySelectorAll('button')];
-            const target = buttons.find((button) => button.innerText.trim() === label && !button.disabled);
-            if (target) {{ event.preventDefault(); target.click(); }}
-          }};
-          window.parent[key] = handler;
-          doc.addEventListener("keydown", handler, true);
-        }})();
-        </script>
-        """,
+    _COMPOSER_SHORTCUT(
+        key="novelforge_composer_shortcut",
+        data={"label": str(button_label)},
         height=0,
     )
 
@@ -452,25 +447,3 @@ def render_composer(
                 session_options,
             )
     _install_composer_shortcut(action_label)
-def render_last_context(
-    project_name: str,
-    story_id: str,
-    session_id: str,
-) -> None:
-    if not session_id:
-        return
-    result = st.session_state.get(
-        last_result_key(project_name, story_id, session_id),
-        {},
-    )
-    if not result:
-        return
-    for warning in result.get("warnings", []):
-        st.warning(warning)
-    render_context_assembly_summary(
-        result.get("context_assembly", {}),
-        "上一轮使用了哪些资料",
-    )
-    if developer_mode_enabled():
-        with st.expander("技术信息（排查问题时使用）", expanded=False):
-            st.code(json.dumps(result, ensure_ascii=False, indent=2), language="json")

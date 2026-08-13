@@ -7,6 +7,7 @@ import sys
 
 from . import chapter_panel as _chapter_panel
 from . import composer as _composer
+from . import context_panel as _context_panel
 from . import fragments as _fragments
 from . import knowledge_panel as _knowledge_panel
 from . import page as _page
@@ -23,6 +24,7 @@ def reload_components():
         _knowledge_panel,
         _chapter_panel,
         _composer,
+        _context_panel,
         _page,
     ):
         importlib.reload(module)

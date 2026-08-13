@@ -39,6 +39,7 @@ def verify() -> None:
         "chapter_panel.py",
         "attachments.py",
         "composer.py",
+        "context_panel.py",
         "execution.py",
         "actions.py",
         "fragments.py",

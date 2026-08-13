@@ -4,6 +4,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -13,8 +14,12 @@ os.environ["NOVELFORGE_CREDENTIAL_BACKEND"] = "memory"
 os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
 from novelforge.services.automatic_configuration import (
+    copy_story_automatic_configurations,
     configure_operation_automatically,
+    delete_automatic_configurations,
+    load_automatic_configuration,
     list_automatic_configuration_revisions,
+    rename_project_automatic_configurations,
 )
 from novelforge.services.capabilities import (
     CAPABILITY_CHAT,
@@ -58,6 +63,44 @@ def verify_credentials() -> None:
     check(secret not in raw_db, "凭据元数据表不保存明文")
     check(delete_system_credential(metadata["credential_ref"]), "凭据可连同引用安全删除")
 
+    rollback = store_system_credential(
+        "sk-before-failed-update", purpose="test", owner_id="rollback"
+    )
+    with patch(
+        "novelforge.services.credentials.upsert_credential_reference_row",
+        side_effect=RuntimeError("simulated metadata failure"),
+    ):
+        try:
+            store_system_credential(
+                "sk-after-failed-update",
+                purpose="test",
+                owner_id="rollback",
+                credential_ref=rollback["credential_ref"],
+            )
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("元数据写入失败应向调用者报告")
+    check(
+        resolve_system_credential(rollback["credential_ref"]) == "sk-before-failed-update",
+        "凭据元数据写入失败会恢复旧密钥",
+    )
+    with patch(
+        "novelforge.services.credentials.mark_credential_reference_deleted_row",
+        side_effect=RuntimeError("simulated delete failure"),
+    ):
+        try:
+            delete_system_credential(rollback["credential_ref"])
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("凭据引用删除失败应向调用者报告")
+    check(
+        resolve_system_credential(rollback["credential_ref"]) == "sk-before-failed-update",
+        "凭据引用删除失败会恢复密钥",
+    )
+    delete_system_credential(rollback["credential_ref"])
+
 
 def verify_profile_migration() -> None:
     secret = "sk-profile-migration-4567"
@@ -80,6 +123,19 @@ def verify_profile_migration() -> None:
     hydrated = load_llm_profiles()["profiles"][0]
     check(hydrated["api_key"] == secret, "运行时按引用恢复模型密钥")
     check(hydrated["api_key_last_four"] == "4567", "模型方案保留密钥末四位")
+    old_ref = hydrated["api_key_ref"]
+    payload["profiles"][0].update(
+        {
+            "api_key": "sk-profile-rotated-9012",
+            "api_key_ref": old_ref,
+            "api_key_fingerprint": hydrated["api_key_fingerprint"],
+        }
+    )
+    save_llm_profiles(payload)
+    rotated = load_llm_profiles()["profiles"][0]
+    check(rotated["api_key_ref"] != old_ref, "密钥轮换使用不可变的新凭据引用")
+    check(rotated["api_key"] == "sk-profile-rotated-9012", "密钥轮换后运行时解析新密钥")
+    check(not resolve_system_credential(old_ref), "模型方案提交后清理旧凭据引用")
 
 
 def verify_capability_registry() -> None:
@@ -122,6 +178,42 @@ def verify_automatic_configuration() -> None:
         "stage5-project", "story-main", "creative_writing"
     )
     check(len(revisions) >= 2 and revisions[0]["reasons"], "自动配置保存调整原因和修订链")
+
+    check(
+        copy_story_automatic_configurations("stage5-project", "story-main", "story-copy") == 1,
+        "复制故事会复制有效自动配置",
+    )
+    copied = load_automatic_configuration("stage5-project", "story-copy", "creative_writing")
+    check(copied["settings"] == locked["settings"], "故事副本继承有效自动配置")
+    check(copied["locked_fields"] == locked["locked_fields"], "故事副本继承用户锁定项")
+    try:
+        copy_story_automatic_configurations("stage5-project", "story-main", "story-copy")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("重复复制自动配置应拒绝覆盖目标修订链")
+    check(
+        len(list_automatic_configuration_revisions(
+            "stage5-project", "story-copy", "creative_writing"
+        )) == 1,
+        "拒绝重复复制时保留目标自动配置修订链",
+    )
+    check(
+        rename_project_automatic_configurations("stage5-project", "stage5-renamed") == 2,
+        "项目重命名会迁移所有故事自动配置键",
+    )
+    check(
+        not load_automatic_configuration("stage5-project", "story-main", "creative_writing"),
+        "项目重命名后旧自动配置键不再可见",
+    )
+    check(
+        bool(load_automatic_configuration("stage5-renamed", "story-copy", "creative_writing")),
+        "项目重命名后自动配置仍可读取",
+    )
+    check(
+        delete_automatic_configurations("stage5-renamed", story_id="story-copy") == 1,
+        "删除故事会级联清理自动配置",
+    )
 
 
 def main() -> int:

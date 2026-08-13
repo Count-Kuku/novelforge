@@ -1532,6 +1532,14 @@ def _rollback_story_copy(project_name: str, target_story_id: str, original_index
 
     if database_cleaned:
         try:
+            from novelforge.services.automatic_configuration import delete_automatic_configurations
+
+            delete_automatic_configurations(project_name, story_id=target_story_id)
+        except Exception as exc:
+            errors.append(f"automatic configuration cleanup failed: {exc}")
+
+    if database_cleaned:
+        try:
             _memory_api.sync_project_retrieval_assets(project_name)
         except Exception as exc:
             _memory_api.logging.getLogger("novelforge").warning(
@@ -1616,6 +1624,9 @@ def copy_story(project_name: str, source_story_id: str, new_name: str,
             target_id,
             include_discussions=include_discussions,
         )
+        from novelforge.services.automatic_configuration import copy_story_automatic_configurations
+
+        copy_story_automatic_configurations(project_name, source_story_id, target_id)
         _materialize_copied_story_json_mirrors(project_name, target_id)
         _memory_api.sync_project_retrieval_assets(project_name)
         return meta
@@ -1658,6 +1669,9 @@ def archive_story(project_name: str, story_id: str) -> bool:
 
 def delete_story(project_name: str, story_id: str) -> bool:
     story_id = normalize_story_id(story_id)
+
+    from novelforge.services.automatic_configuration import delete_automatic_configurations
+
     if _memory_api._project_db_marked_unavailable(project_name):
         raise RuntimeError(f"Project database is unavailable for {project_name}.")
     with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
@@ -1755,9 +1769,19 @@ def delete_story(project_name: str, story_id: str) -> bool:
                         exc,
                     )
 
+    try:
+        delete_automatic_configurations(project_name, story_id=story_id)
+    except Exception as exc:
+        _memory_api.logging.getLogger("novelforge.configuration").warning(
+            "Story %s was deleted, but automatic settings cleanup failed for %s: %s",
+            story_id,
+            project_name,
+            exc,
+        )
     sp = story_path(project_name, story_id)
     if sp.exists():
         import shutil
+
         shutil.rmtree(str(sp))
     try:
         _memory_api.sync_project_retrieval_assets(project_name)

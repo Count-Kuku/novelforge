@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import logging
 import os
 import re
 from ctypes import wintypes
@@ -27,6 +28,7 @@ from storage.repositories import (
 SERVICE_NAME = "NovelForge"
 _MEMORY_SECRETS: dict[str, str] = {}
 _MEMORY_LOCK = RLock()
+LOGGER = logging.getLogger("novelforge.credentials")
 
 
 class CredentialStoreUnavailable(RuntimeError):
@@ -191,6 +193,23 @@ def store_system_credential(
         raise ValueError("不能保存空凭据。")
     reference = str(credential_ref or build_credential_ref(purpose, owner_id)).strip()
     backend = _selected_backend()
+    previous_metadata: dict = {}
+    previous_secret = ""
+    try:
+        previous_metadata = load_credential_metadata(reference, data_path=data_path)
+        if previous_metadata:
+            previous_secret = _read_secret(
+                str(previous_metadata.get("backend") or backend), reference
+            )
+    except Exception:
+        # A metadata read can fail while the platform secret store is still
+        # available. Preserve a same-backend value so a later database write
+        # failure cannot turn an update into credential loss.
+        previous_metadata = {"backend": backend}
+        try:
+            previous_secret = _read_secret(backend, reference)
+        except Exception:
+            previous_secret = ""
     _write_secret(backend, reference, value)
     metadata = {
         "credential_ref": reference,
@@ -204,10 +223,24 @@ def store_system_credential(
     try:
         initialize_global_db(data_path)
         with open_global_db(data_path) as conn:
-            return upsert_credential_reference_row(conn, metadata)
+            stored = upsert_credential_reference_row(conn, metadata)
+            conn.commit()
     except Exception:
-        _delete_secret(backend, reference)
+        if previous_secret:
+            previous_backend = str(previous_metadata.get("backend") or backend)
+            if previous_backend != backend:
+                _delete_secret(backend, reference)
+            _write_secret(previous_backend, reference, previous_secret)
+        else:
+            _delete_secret(backend, reference)
         raise
+    previous_backend = str(previous_metadata.get("backend") or "")
+    if previous_secret and previous_backend and previous_backend != backend:
+        try:
+            _delete_secret(previous_backend, reference)
+        except Exception as exc:
+            LOGGER.warning("Failed to remove credential from previous backend: %s", exc)
+    return stored
 
 
 def load_credential_metadata(credential_ref: str, *, data_path: Path = Path("data")) -> dict:
@@ -229,9 +262,20 @@ def delete_system_credential(credential_ref: str, *, data_path: Path = Path("dat
     metadata = load_credential_metadata(credential_ref, data_path=data_path)
     if not metadata:
         return False
-    _delete_secret(str(metadata.get("backend") or ""), credential_ref)
-    with open_global_db(data_path) as conn:
-        return mark_credential_reference_deleted_row(conn, credential_ref)
+    backend = str(metadata.get("backend") or "")
+    previous_secret = _read_secret(backend, credential_ref)
+    _delete_secret(backend, credential_ref)
+    try:
+        with open_global_db(data_path) as conn:
+            deleted = mark_credential_reference_deleted_row(conn, credential_ref)
+            if not deleted:
+                raise RuntimeError(f"凭据引用删除失败：{credential_ref}")
+            conn.commit()
+            return True
+    except Exception:
+        if previous_secret:
+            _write_secret(backend, credential_ref, previous_secret)
+        raise
 
 
 def _dotenv_secret(path: Path, key: str) -> str:
@@ -271,6 +315,11 @@ def resolve_or_migrate_environment_credential(
     credential_ref = build_credential_ref(purpose, owner_id)
     existing = resolve_system_credential(credential_ref, data_path=data_path)
     if existing:
+        os.environ.pop(environment_key, None)
+        try:
+            _scrub_dotenv_secret(dotenv_path, environment_key)
+        except OSError as exc:
+            LOGGER.warning("Legacy environment credential cleanup will be retried: %s", exc)
         return existing
     legacy = str(os.getenv(environment_key) or _dotenv_secret(dotenv_path, environment_key)).strip()
     if not legacy:
@@ -283,7 +332,10 @@ def resolve_or_migrate_environment_credential(
         data_path=data_path,
     )
     os.environ.pop(environment_key, None)
-    _scrub_dotenv_secret(dotenv_path, environment_key)
+    try:
+        _scrub_dotenv_secret(dotenv_path, environment_key)
+    except OSError as exc:
+        LOGGER.warning("Legacy environment credential cleanup will be retried: %s", exc)
     return legacy
 
 
@@ -314,33 +366,53 @@ def secure_llm_profiles_payload(payload: dict) -> dict:
         "active_profile_id": str(payload.get("active_profile_id") or ""),
         "profiles": [],
     }
-    for source_profile in payload.get("profiles", []):
-        profile = dict(source_profile or {})
-        profile_id = str(profile.get("id") or "default")
-        for secret_field, purpose in (
-            ("api_key", "llm-chat"),
-            ("embedding_api_key", "llm-embedding"),
-        ):
-            secret = str(profile.pop(secret_field, "") or "").strip()
-            credential_ref = str(profile.get(f"{secret_field}_ref") or "").strip()
-            if secret:
-                metadata = store_system_credential(
-                    secret,
-                    purpose=purpose,
-                    owner_id=profile_id,
-                    credential_ref=credential_ref,
-                )
-                for suffix, metadata_field in (
-                    ("ref", "credential_ref"),
-                    ("fingerprint", "fingerprint"),
-                    ("last_four", "last_four"),
-                    ("backend", "backend"),
-                ):
-                    profile[f"{secret_field}_{suffix}"] = metadata[metadata_field]
-            elif not credential_ref:
-                for suffix in ("ref", "fingerprint", "last_four", "backend"):
-                    profile.pop(f"{secret_field}_{suffix}", None)
-        secured["profiles"].append(profile)
+    created_refs: list[str] = []
+    try:
+        for source_profile in payload.get("profiles", []):
+            profile = dict(source_profile or {})
+            profile_id = str(profile.get("id") or "default")
+            for secret_field, purpose in (
+                ("api_key", "llm-chat"),
+                ("embedding_api_key", "llm-embedding"),
+            ):
+                secret = str(profile.pop(secret_field, "") or "").strip()
+                old_ref = str(profile.get(f"{secret_field}_ref") or "").strip()
+                if secret:
+                    fingerprint = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+                    old_fingerprint = str(
+                        profile.get(f"{secret_field}_fingerprint") or ""
+                    )
+                    credential_ref = old_ref
+                    if not credential_ref or fingerprint != old_fingerprint:
+                        credential_ref = (
+                            f"{build_credential_ref(purpose, profile_id)}:{fingerprint[:16]}"
+                        )
+                    metadata = store_system_credential(
+                        secret,
+                        purpose=purpose,
+                        owner_id=profile_id,
+                        credential_ref=credential_ref,
+                    )
+                    if credential_ref != old_ref:
+                        created_refs.append(credential_ref)
+                    for suffix, metadata_field in (
+                        ("ref", "credential_ref"),
+                        ("fingerprint", "fingerprint"),
+                        ("last_four", "last_four"),
+                        ("backend", "backend"),
+                    ):
+                        profile[f"{secret_field}_{suffix}"] = metadata[metadata_field]
+                elif not old_ref:
+                    for suffix in ("ref", "fingerprint", "last_four", "backend"):
+                        profile.pop(f"{secret_field}_{suffix}", None)
+            secured["profiles"].append(profile)
+    except Exception:
+        for credential_ref in reversed(created_refs):
+            try:
+                delete_system_credential(credential_ref)
+            except Exception:
+                pass
+        raise
     return secured
 
 

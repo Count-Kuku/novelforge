@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`12`
+当前代码期望的 SQLite schema version：`15`
 
 ## 权威存储边界
 
@@ -93,6 +93,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `012_creative_attachments` | 自由创作附件、来源修订关联、项目/故事/会话/单轮作用域和一次性消费状态 |
 | `013_creative_action_protocol` | 自由创作消息、动作计划/确认/幂等/撤销和配置修订历史 |
 | `014_unified_knowledge_center` | 跨知识/待审核/来源的 trigram FTS、增量索引任务和可重试后台索引状态 |
+| `015_capability_orchestration` | 系统凭据引用元数据、可解释自动配置状态和不可变修订链 |
 
 ## 表分组
 
@@ -151,6 +152,12 @@ DB-only 错误语义并提前删除待迁移镜像。
 - `entity_alias_groups`：主名称、别名和实体类型。
 - `auto_review_policy`、`auto_review_runs`：自动审核策略、批处理记录和回退快照。
 
+### 全局能力与自动配置
+
+- `credential_references`：Windows Credential Manager 或系统 keyring 中密钥的引用、后端、SHA-256 指纹和末四位；不保存明文密钥。
+- `automatic_configuration_state`：按项目、故事和操作保存当前有效的检索深度、上下文预算、批量大小及用户锁定字段。
+- `automatic_configuration_revisions`：自动配置的信号、原因、前后差异和锁定项修订链；项目重命名、故事复制与删除会同步维护作用域。
+
 ### 检索
 
 - `retrieval_documents`：可检索文档的来源、作用域、权威和世界线元数据。
@@ -178,12 +185,12 @@ DB-only 错误语义并提前删除待迁移镜像。
 - `creative_action_runs`：动作计划、目标、补丁、确认状态、幂等键、结果、错误和撤销快照。
 - `creative_config_revisions`：会话/故事配置动作的前后差异与反向动作关联。
 
-### 图谱预留
+### 关系图投影与 GraphRAG 边界
 
 - `graph_nodes`
 - `graph_edges`
 
-表结构已经存在，但当前产品尚未建立正式 GraphRAG 构建和查询链路。它们不能被文档或 UI 表述为已完成能力。
+正式关系知识会幂等投影到这些表，供角色关系图按故事和世界线浏览；关系编辑仍写回正式知识并追加修订。当前尚未建立图扩展检索或完整 GraphRAG 查询链路，关系图浏览不能被表述为 GraphRAG 检索能力。
 
 ## 持久资料任务
 

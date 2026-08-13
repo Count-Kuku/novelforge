@@ -462,36 +462,22 @@ def _normalize_llm_profiles_payload(payload: dict | None) -> dict:
 
 
 def _hydrate_llm_profiles_payload(payload: dict) -> dict:
-    from novelforge.services.credentials import hydrate_llm_profiles_payload
+    from .model_credentials import hydrate_llm_profiles_safely
 
-    try:
-        return hydrate_llm_profiles_payload(payload, _normalize_llm_profiles_payload)
-    except Exception as exc:
-        logging.getLogger("novelforge.credentials").warning(
-            "Failed to hydrate model credentials: %s", exc
-        )
-        return _normalize_llm_profiles_payload(payload)
+    return hydrate_llm_profiles_safely(payload, _normalize_llm_profiles_payload)
 
 
 def _persist_llm_profiles_payload(payload: dict) -> dict:
-    from novelforge.services.credentials import (
-        scrub_legacy_model_environment_secrets,
-        secure_llm_profiles_payload,
-    )
+    from .model_credentials import persist_llm_profiles_payload
 
-    normalized = _normalize_llm_profiles_payload(payload)
-    secured = secure_llm_profiles_payload(normalized)
-    if _global_db_marked_unavailable():
-        raise RuntimeError("系统凭据已保存，但全局数据库不可用，模型方案未写入。")
-    try:
-        with open_global_db(Path("data")) as conn:
-            sync_global_setting(conn, "llm_profiles", secured)
-            conn.commit()
-    except Exception as exc:
-        raise RuntimeError("全局数据库写入失败，未清理旧密钥来源。") from exc
-    _write_json_mirror(LLM_PROFILES_PATH, secured)
-    scrub_legacy_model_environment_secrets(ENV_PATH)
-    return secured
+    return persist_llm_profiles_payload(
+        payload,
+        normalize=_normalize_llm_profiles_payload,
+        global_db_unavailable=_global_db_marked_unavailable,
+        write_json_mirror=_write_json_mirror,
+        profiles_path=LLM_PROFILES_PATH,
+        env_path=ENV_PATH,
+    )
 
 
 def _load_env_llm_profile() -> dict:
@@ -549,12 +535,25 @@ def load_llm_profiles() -> dict:
         "LLM profiles",
     )
     if isinstance(db_payload, dict):
+        from .model_credentials import scrub_legacy_model_secrets_safely
+
+        scrub_legacy_model_secrets_safely(ENV_PATH)
         normalized = _normalize_llm_profiles_payload(db_payload)
         if any(
             profile.get("api_key") or profile.get("embedding_api_key")
             for profile in normalized.get("profiles", [])
         ):
-            db_payload = _persist_llm_profiles_payload(normalized)
+            try:
+                db_payload = _persist_llm_profiles_payload(normalized)
+            except Exception as exc:
+                # A headless Windows process can temporarily lack a logon
+                # session for Credential Manager. Keep the already-persisted
+                # legacy profile usable in memory and retry migration on the
+                # next load; never write a new raw secret in this path.
+                logging.getLogger("novelforge.credentials").warning(
+                    "Legacy model credential migration deferred: %s", exc
+                )
+                return normalized
         return _hydrate_llm_profiles_payload(db_payload)
 
     LLM_PROFILES_PATH.parent.mkdir(parents=True, exist_ok=True)

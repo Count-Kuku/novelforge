@@ -7,6 +7,10 @@ from datetime import datetime
 from pathlib import Path
 
 from novelforge.services.llm_usage import rename_llm_usage_project
+from novelforge.services.automatic_configuration import (
+    delete_automatic_configurations,
+    rename_project_automatic_configurations,
+)
 from novelforge.services.memory import (
     BASE_DIR,
     DELETED_PROJECTS_DIR,
@@ -193,6 +197,10 @@ def delete_project(project_name: str) -> bool:
             raise
 
     unregistered = unregister_project(project_name)
+    try:
+        delete_automatic_configurations(project_name)
+    except Exception as exc:
+        LOGGER.warning("Project %s was deleted, but automatic settings cleanup failed: %s", project_name, exc)
     return bool(archived or discoverable or unregistered)
 
 
@@ -265,6 +273,13 @@ def rename_project(old_name: str, new_name: str) -> str:
             old_name,
             normalized_name,
             exc,
+        )
+    try:
+        rename_project_automatic_configurations(old_name, normalized_name)
+    except Exception as exc:
+        LOGGER.warning(
+            "Project %s was renamed to %s, but automatic settings relabeling failed: %s",
+            old_name, normalized_name, exc,
         )
     try:
         sync_project_retrieval_assets(normalized_name)

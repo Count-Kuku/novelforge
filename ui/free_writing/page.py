@@ -12,7 +12,8 @@ from ui.layout import render_section_heading
 
 from .chapter_panel import render_chapter_panel
 from .actions import render_creative_action_history
-from .composer import render_composer, render_last_context
+from .composer import render_composer
+from .context_panel import render_last_context
 from .fragments import render_fragment_actions, render_fragment_history
 from .knowledge_panel import render_knowledge_panel
 from .session_controls import render_session_toolbar, session_generation_options

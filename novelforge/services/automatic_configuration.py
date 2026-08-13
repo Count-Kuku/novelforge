@@ -226,3 +226,174 @@ def list_automatic_configuration_revisions(
     key = automatic_configuration_key(project_name, story_id, operation)
     with open_global_db(data_path) as conn:
         return list_automatic_configuration_revision_rows(conn, key, limit=limit)
+
+
+def rename_project_automatic_configurations(
+    old_project_name: str,
+    new_project_name: str,
+    *,
+    data_path: Path = Path("data"),
+) -> int:
+    """Move project-scoped automatic settings to keys derived from the new name."""
+
+    initialize_global_db(data_path)
+    with open_global_db(data_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        moved = 0
+        try:
+            rows = conn.execute(
+                "SELECT * FROM automatic_configuration_state WHERE project_name=?",
+                (str(old_project_name or "").strip(),),
+            ).fetchall()
+            if not rows:
+                conn.commit()
+                return 0
+            collision = conn.execute(
+                "SELECT 1 FROM automatic_configuration_state WHERE project_name=? LIMIT 1",
+                (str(new_project_name or "").strip(),),
+            ).fetchone()
+            if collision:
+                raise ValueError("目标项目已存在自动配置，不能覆盖迁移。")
+            for raw in rows:
+                state = dict(raw)
+                old_key = str(state["config_key"])
+                new_key = automatic_configuration_key(
+                    new_project_name,
+                    str(state.get("story_id") or ""),
+                    str(state.get("operation") or ""),
+                )
+                revisions = conn.execute(
+                    "SELECT * FROM automatic_configuration_revisions WHERE config_key=? ORDER BY created_at,rowid",
+                    (old_key,),
+                ).fetchall()
+                conn.execute("DELETE FROM automatic_configuration_state WHERE config_key=?", (old_key,))
+                conn.execute(
+                    """
+                    INSERT INTO automatic_configuration_state (
+                        config_key, project_name, story_id, operation, settings_json,
+                        locked_fields_json, source_revision_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_key, new_project_name, state.get("story_id") or "",
+                        state.get("operation") or "", state.get("settings_json") or "{}",
+                        state.get("locked_fields_json") or "[]", state.get("source_revision_id"),
+                        state.get("created_at"), state.get("updated_at"),
+                    ),
+                )
+                for raw_revision in revisions:
+                    revision = dict(raw_revision)
+                    conn.execute(
+                        """
+                        INSERT INTO automatic_configuration_revisions (
+                            revision_id, config_key, project_name, story_id, operation,
+                            before_json, after_json, diff_json, reasons_json, signals_json,
+                            locked_fields_json, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            revision["revision_id"], new_key, new_project_name,
+                            revision.get("story_id") or "", revision.get("operation") or "",
+                            revision.get("before_json") or "{}", revision.get("after_json") or "{}",
+                            revision.get("diff_json") or "{}", revision.get("reasons_json") or "[]",
+                            revision.get("signals_json") or "{}", revision.get("locked_fields_json") or "[]",
+                            revision.get("created_at"),
+                        ),
+                    )
+                moved += 1
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        return moved
+
+
+def copy_story_automatic_configurations(
+    project_name: str,
+    source_story_id: str,
+    target_story_id: str,
+    *,
+    data_path: Path = Path("data"),
+) -> int:
+    """Copy effective settings and locks; the target starts a fresh revision chain."""
+
+    if not str(source_story_id or "").strip() or not str(target_story_id or "").strip():
+        raise ValueError("源故事和目标故事 ID 不能为空。")
+    if str(source_story_id).strip() == str(target_story_id).strip():
+        raise ValueError("不能把自动配置复制回同一个故事。")
+    initialize_global_db(data_path)
+    with open_global_db(data_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        copied = 0
+        try:
+            collision = conn.execute(
+                "SELECT 1 FROM automatic_configuration_state WHERE project_name=? AND story_id=? LIMIT 1",
+                (project_name, target_story_id),
+            ).fetchone()
+            if collision:
+                raise ValueError("目标故事已存在自动配置，不能覆盖复制。")
+            rows = conn.execute(
+                "SELECT * FROM automatic_configuration_state WHERE project_name=? AND story_id=?",
+                (project_name, source_story_id),
+            ).fetchall()
+            for raw in rows:
+                source = dict(raw)
+                operation = str(source.get("operation") or "")
+                target_key = automatic_configuration_key(project_name, target_story_id, operation)
+                revision_id = f"auto_revision_{uuid4().hex}"
+                conn.execute(
+                    """
+                    INSERT INTO automatic_configuration_state (
+                        config_key, project_name, story_id, operation, settings_json,
+                        locked_fields_json, source_revision_id, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                    """,
+                    (
+                        target_key, project_name, target_story_id, operation,
+                        source.get("settings_json") or "{}", source.get("locked_fields_json") or "[]",
+                        revision_id,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO automatic_configuration_revisions (
+                        revision_id, config_key, project_name, story_id, operation,
+                        before_json, after_json, diff_json, reasons_json, signals_json,
+                        locked_fields_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, '{}', ?, '{}', ?, '{}', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                    """,
+                    (
+                        revision_id, target_key, project_name, target_story_id, operation,
+                        source.get("settings_json") or "{}",
+                        '["从源故事复制自动配置与用户锁定项。"]',
+                        source.get("locked_fields_json") or "[]",
+                    ),
+                )
+                copied += 1
+            conn.commit()
+            return copied
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def delete_automatic_configurations(
+    project_name: str,
+    *,
+    story_id: str | None = None,
+    data_path: Path = Path("data"),
+) -> int:
+    initialize_global_db(data_path)
+    with open_global_db(data_path) as conn:
+        if story_id is None:
+            cursor = conn.execute(
+                "DELETE FROM automatic_configuration_state WHERE project_name=?",
+                (project_name,),
+            )
+        else:
+            cursor = conn.execute(
+                "DELETE FROM automatic_configuration_state WHERE project_name=? AND story_id=?",
+                (project_name, story_id),
+            )
+        conn.commit()
+        return int(cursor.rowcount or 0)

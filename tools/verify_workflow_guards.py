@@ -50,6 +50,7 @@ def verify_llm_guards() -> None:
         "_require_openai": lambda: object,
         "_get_model_name": lambda: "test-model",
         "_get_embedding_model_name": lambda: "test-embedding-model",
+        "_get_embedding_client_config": lambda: ("test-key", "https://example.invalid/v1"),
     }
 
     with ExitStack() as stack:
@@ -91,8 +92,8 @@ def verify_llm_guards() -> None:
 
         with patch.object(
             llm,
-            "_get_client",
-            lambda: fake_client(embedding_response=SimpleNamespace(data=[])),
+            "_get_client_for_config",
+            lambda *_args: fake_client(embedding_response=SimpleNamespace(data=[])),
         ):
             expect_runtime_error(lambda: llm.get_embedding("hello"), "没有返回向量数据")
 
@@ -102,14 +103,14 @@ def verify_llm_guards() -> None:
             ([0.25, float("inf")], "非有限数值"),
         ]:
             response = SimpleNamespace(data=[SimpleNamespace(embedding=embedding)])
-            with patch.object(llm, "_get_client", lambda response=response: fake_client(embedding_response=response)):
+            with patch.object(llm, "_get_client_for_config", lambda *_args, response=response: fake_client(embedding_response=response)):
                 expect_runtime_error(lambda: llm.get_embedding("hello"), expected_text)
 
         valid_embedding = SimpleNamespace(data=[SimpleNamespace(embedding=[0.25, -0.5])])
         with patch.object(
             llm,
-            "_get_client",
-            lambda: fake_client(embedding_response=valid_embedding),
+            "_get_client_for_config",
+            lambda *_args: fake_client(embedding_response=valid_embedding),
         ):
             check(llm.get_embedding("hello") == [0.25, -0.5], "合法有限向量仍正常返回")
 
