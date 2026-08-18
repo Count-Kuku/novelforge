@@ -54,7 +54,7 @@ Long-form automatic processing now creates a SQLite-backed task and returns cont
 
 ### Web Research Agent
 
-`资料导入 → 网络检索 → 自动研究 Agent` provides the complete research loop:
+`资料库 → 导入与来源 → 网络检索 → 自动研究 Agent` provides the complete research loop:
 
 1. A bounded Planner creates queries from the topic, objective, and source roles.
 2. LangGraph Collectors search official, secondary, community, and fanon branches in parallel.
@@ -77,15 +77,14 @@ Research tasks reuse SQLite `workflow_runs/workflow_steps` and support backgroun
 
 ## Navigation
 
-- `工作台` (Workbench): project overview. Outlines, chapters, and reports open on demand from project metrics instead of occupying a permanent sidebar entry.
-- `资料` (Sources): source ingestion and the Knowledge Library. The library unifies formal knowledge, Priority Settings, and Pending Knowledge.
-- `规划` (Planning): creative profile and the outline/volume/arc/chapter planning pages enabled by the active story.
-- `写作` (Writing): free writing and chapter writing. Quick and comprehensive review are integrated into chapter writing.
-- `设置` (Settings): model and cost configuration, with generation rules and writing preferences under an advanced section.
+- `工作台` (Workbench): project overview, content management, and project/story management.
+- `创作` (Creation): creative direction, novel planning, chapter writing, and free mode.
+- `资料库` (Library): unified search/editing, priority settings, pending review, and source ingestion.
+- `设置` (Settings): model/cost configuration and advanced creation settings; developer mode adds diagnostics inside this hub.
 
-The standard sidebar hides content management, retrieval diagnostics, standalone chapter review, generation rules, and prompt-option pages. Their underlying capabilities remain available through contextual entry points; generation rules and writing preferences are grouped under advanced settings. Set `NOVELFORGE_DEVELOPER_MODE=1` to restore the full developer navigation.
+The standard sidebar has exactly four top-level entries. Content management, retrieval diagnostics, standalone chapter review, generation rules, and prompt options are no longer separate entries. Set `NOVELFORGE_DEVELOPER_MODE=1` to add developer tools inside Settings without changing the top-level count.
 
-The source-ingestion page focuses on importing, processing, and source management. Confirmed knowledge is managed in the Knowledge Library; Priority Settings are its high-priority subset, not a separate store. In normal use, follow the workbench's recommended next action instead of working from internal storage concepts.
+The Library hub combines unified search/editing, priority settings, pending review, importing, processing, and source management. Priority Settings are a high-priority subset of confirmed knowledge, not a separate store. In normal use, follow the workbench's recommended next action instead of working from internal storage concepts.
 
 ## Recommended Workflow
 
@@ -102,7 +101,7 @@ The source-ingestion page focuses on importing, processing, and source managemen
 2. Select indexing, knowledge extraction, and optional automatic-review behavior.
 3. Review segment, call, token, and cost estimates.
 4. Create the background task and monitor it in `资料任务` (Source Tasks); the browser page may be closed.
-5. Resolve `待审核知识` (Pending Knowledge) under the Knowledge Library. Retrieval health, fixed evaluations, and index maintenance are developer-mode tools.
+5. Resolve Pending Review under `资料库 → 待审核`. Retrieval health, fixed evaluations, and index maintenance are developer-mode tools.
 
 ### Chapter Writing
 
@@ -153,7 +152,7 @@ When prices are empty or `0`, NovelForge still records tokens but does not guess
 
 Model and embedding keys are configured in the UI and stored in Windows Credential Manager or the system keyring. SQLite and configuration mirrors retain only the credential reference, SHA-256 fingerprint, and last four characters. Web search reuses the active model provider's native search when available and automatically falls back to keyless DDGS metasearch, so no separate search key is required.
 
-`.env` only bootstraps non-secret model parameters and migrates legacy keys on first launch. After model profiles have been written to `data/global.db`, the database is authoritative; update models and rates in `模型配置` (Model Settings), because editing `.env` alone does not override a saved profile.
+`.env` only bootstraps non-secret model parameters and migrates legacy keys on first launch. After model profiles have been written to `data/global.db`, the database is authoritative; update models and rates in `设置 → 模型与费用` (Model Settings), because editing `.env` alone does not override a saved profile.
 
 ## Data And Backups
 

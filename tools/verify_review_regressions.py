@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from hashlib import sha256
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,7 +62,7 @@ from storage.repositories import (
     upsert_knowledge_category_item,
     upsert_pending_knowledge_items,
 )
-from tools.verify_utils import isolated_workspace
+from tools.verify_utils import isolated_workspace, make_workspace, retry_rmtree
 
 
 def _expect(condition: bool, label: str, failures: list[str]) -> None:
@@ -493,8 +492,9 @@ def _verify_project_rename_and_legacy_bootstrap(failures: list[str]) -> None:
 
 
 def _verify_migration_atomicity(failures: list[str]) -> None:
-    with TemporaryDirectory() as temp_dir:
-        migration_path = Path(temp_dir) / "001_broken.sql"
+    migration_workspace = make_workspace("novelforge_review_migration_")
+    try:
+        migration_path = migration_workspace / "001_broken.sql"
         migration_path.write_text("CREATE TABLE should_rollback(id INTEGER);\nCREATE TABLE broken(\n", encoding="utf-8")
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -508,6 +508,8 @@ def _verify_migration_atomicity(failures: list[str]) -> None:
         _expect(table is None, "broken_migration_rolls_back_prior_statements", failures)
         _expect(storage_schema.get_schema_version(conn) == 0, "broken_migration_version_not_recorded", failures)
         conn.close()
+    finally:
+        retry_rmtree(migration_workspace)
 
 
 def _verify_retrieval_guards(failures: list[str]) -> None:

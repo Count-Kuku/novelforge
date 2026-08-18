@@ -15,7 +15,7 @@ from novelforge.workflows.skills import (
     get_retrieval_trace,
 )
 from ui.chapter_review_runtime import run_chapter_review_by_mode
-from ui.common import scoped_widget_key
+from ui.common import scoped_session_key, scoped_widget_key
 from ui.labels import label_status
 from ui.layout import render_section_heading
 from ui.prompt_option_tools import _render_prompt_option_capability_tools, render_context_assembly_summary
@@ -166,6 +166,35 @@ def _render_result_details(
         result_label = "综合审阅结果" if review_mode == "comprehensive" else "快速审阅结果"
         with st.expander(result_label, expanded=True):
             st.markdown(review_markdown)
+
+    other_modes = []
+    for mode in ("quick", "comprehensive"):
+        if mode == review_mode:
+            continue
+        report, payload = _load_mode_result(project_name, story_id, chapter_no, mode)
+        if report or payload or st.session_state.get(
+            scoped_session_key("chapter_review_report", project_name, story_id, chapter_no, mode)
+        ):
+            other_modes.append(mode)
+    if other_modes:
+        with st.expander("其它已保存审阅", expanded=False):
+            history_mode = st.radio(
+                "历史报告",
+                options=other_modes,
+                format_func=lambda value: "综合审阅" if value == "comprehensive" else "快速审阅",
+                horizontal=True,
+                key=scoped_widget_key("chapter_review_history_mode", project_name, story_id, chapter_no),
+            )
+            history_report, history_payload = _load_mode_result(
+                project_name, story_id, chapter_no, history_mode,
+            )
+            if history_report:
+                st.markdown(history_report)
+            if history_payload:
+                render_step_json_expander(
+                    "历史审阅详细数据",
+                    history_payload,
+                )
 
     pipeline_result = st.session_state.get(pipeline_result_key, {})
     if pipeline_result:

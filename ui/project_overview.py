@@ -73,16 +73,16 @@ def render_project_overview_page(project_name: str):
     render_section_heading("下一步做什么", "第一次使用可先确定创作方向和整理资料；想直接写，也可以进入自由创作。")
     action_col1, action_col2, action_col3 = st.columns(3)
     with action_col1:
-        render_quick_action("确定创作方向", "创作配置", "说清楚想写什么，系统会整理篇幅、原作参考程度和推荐流程。")
+        render_quick_action("确定创作方向", "创作", "说清楚想写什么，系统会整理篇幅、原作参考程度和推荐流程。", view="创作方向")
     with action_col2:
-        render_quick_action("导入与整理资料", "资料导入", "导入原作、参考文本或手动资料卡，让后续生成能够复用。")
+        render_quick_action("导入与整理资料", "资料库", "导入原作、参考文本或手动资料卡，让后续生成能够复用。", view="导入与来源", subview="导入")
     with action_col3:
-        render_quick_action("自由创作", "自由创作", "输入要求立即生成片段，也可以继续交流、续写并整理新设定。")
+        render_quick_action("自由创作", "创作", "输入要求立即生成片段，也可以继续交流、续写并整理新设定。", view="自由模式")
 
     with st.expander("继续章节创作", expanded=False):
         action_col4, _ = st.columns([1, 2])
         with action_col4:
-            render_quick_action("按章节写正文", "正文生成", "根据章节需求或细纲写正式正文，并可继续快速或综合审阅。")
+            render_quick_action("按章节写正文", "创作", "根据章节需求或细纲写正式正文，并可继续快速或综合审阅。", view="章节写作", subview="章节需求")
 
     render_section_heading("项目指标", "点击有数量的指标即可查看对应内容。")
     col1, col2, col3, col4, col5 = st.columns(5)

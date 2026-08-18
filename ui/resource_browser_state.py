@@ -5,7 +5,7 @@ import html
 
 import streamlit as st
 
-from ui.common import _safe_int_metric_value, navigate_to, scoped_widget_key
+from ui.common import _safe_int_metric_value, navigate_to_target, scoped_widget_key
 
 RESOURCE_BROWSER_GROUPS = [
     ("outline", "全书大纲"),
@@ -65,12 +65,13 @@ def navigate_to_resource_browser(
     search_value: str = "",
     select_first: bool = True,
 ):
+    normalized_groups = _normalize_resource_browser_groups(groups)
     st.session_state[_resource_browser_focus_key(project_name, story_id)] = {
-        "groups": _normalize_resource_browser_groups(groups),
+        "groups": normalized_groups,
         "search_value": str(search_value or ""),
         "select_first": bool(select_first),
     }
-    navigate_to("项目资源")
+    navigate_to_target("工作台", view="内容", payload={"resource_groups": normalized_groups})
 
 
 def _consume_resource_browser_focus(project_name: str, story_id: str, browser_items: list[dict]) -> tuple[dict, str]:

@@ -20,7 +20,7 @@ from novelforge.services.resource_browser import (
     _save_browser_resource,
 )
 from novelforge.services.retrieval import rebuild_retrieval_assets
-from ui.common import confirmed_button, developer_mode_enabled, navigate_to, scoped_widget_key
+from ui.common import confirmed_button, developer_mode_enabled, navigate_to_target, scoped_widget_key
 from ui.labels import label_status
 from ui.resource_browser_state import (
     RESOURCE_BROWSER_GROUPS,
@@ -117,22 +117,22 @@ def _render_readonly_resource_detail(project_name: str, story_id: str, resource:
             key=scoped_widget_key("browser_goto_creative", project_name, story_id, resource.get("id")),
             width="stretch",
         ):
-            navigate_to("自由创作")
+            navigate_to_target("创作", view="自由模式")
         return
     if group in {"context_directive", "generation_context"}:
         st.caption("这类记录在资源页中只读；创作提醒请到生成页面管理，生成时实际使用的资料会自动随结果保存。")
         if developer_mode_enabled():
             st.code(resource.get("content", ""), language="json")
         return
-    st.caption("该资源在浏览器中只读；编辑和批量处理请回到「资料导入」。")
+    st.caption("该资源在浏览器中只读；编辑和批量处理请回到“资料库 → 导入与来源”。")
     if developer_mode_enabled():
         st.code(resource.get("content", ""), language="json")
     if st.button(
-        "前往资料导入",
+        "前往资料库导入",
         key=scoped_widget_key("browser_goto_ingestion", project_name, story_id, resource.get("id")),
         width="stretch",
     ):
-        navigate_to("资料导入")
+        navigate_to_target("资料库", view="导入与来源", subview="导入")
 
 
 def _render_volume_metadata_editor(project_name: str, story_id: str, resource: dict) -> None:

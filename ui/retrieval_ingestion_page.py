@@ -7,7 +7,7 @@ from novelforge.workflows.source_workflows import (
     build_ingestion_workbench,
     save_manual_retrieval_source_card,
 )
-from ui.common import navigate_to, scoped_widget_key
+from ui.common import navigate_to_target, scoped_widget_key
 from ui.labels import label_authority, label_scope, label_source_type
 from ui.layout import render_empty_state, render_section_heading, render_stat_strip
 from ui.web_research import render_web_research_import
@@ -91,7 +91,11 @@ def _activate_ingestion_action(project_name: str, story_id: str, action: dict) -
         st.session_state[scoped_widget_key("knowledge_library_review_view", project_name, story_id)] = (
             "处理记录" if target_section == "处理记录" else "审核队列"
         )
-        navigate_to("知识库")
+        navigate_to_target(
+            "资料库",
+            view="待审核",
+            subview="处理记录" if target_section == "处理记录" else "审核队列",
+        )
     workspace = _WORKSPACE_TARGET_MAP.get(target_section, target_section)
     if workspace in INGESTION_WORKSPACE_SECTIONS:
         st.session_state[_ingestion_workspace_key(project_name, story_id)] = workspace
@@ -226,14 +230,18 @@ def _render_ingestion_workspace(
     render_source_package_report_page,
     workbench: dict,
 ) -> None:
-    render_section_heading("资料准备流程", "按“导入 → 处理 → 管理”完成资料准备；候选内容统一到“知识库 → 待审核知识”确认。")
+    render_section_heading("资料准备流程", "按“导入 → 处理 → 管理”完成资料准备；候选内容统一到“资料库 → 待审核”确认。")
     workspace_key = _ingestion_workspace_key(project_name, story_id)
     default_workspace = "导入" if str(workbench.get("overall_status") or "empty") == "empty" else "概览"
     if workspace_key in st.session_state:
         raw_value = str(st.session_state.get(workspace_key) or "")
         _migrate_ingestion_subview_state(project_name, story_id, raw_value)
         if raw_value in {"待审核设定", "待审核知识", "待审核", "处理记录", "知识整理", "知识库"}:
-            navigate_to("知识库")
+            navigate_to_target(
+                "资料库",
+                view="待审核",
+                subview="处理记录" if raw_value == "处理记录" else "审核队列",
+            )
         current_value = _WORKSPACE_TARGET_MAP.get(raw_value, raw_value)
         st.session_state[workspace_key] = (
             current_value if current_value in INGESTION_WORKSPACE_SECTIONS else default_workspace

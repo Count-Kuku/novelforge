@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import sys
 from pathlib import Path
@@ -144,7 +145,7 @@ def _verify_existing_session_render() -> None:
     from novelforge.workflows import interactive_writing
     from tools.verify_utils import isolated_workspace
 
-    with isolated_workspace("novelforge_free_writing_ui_"):
+    with isolated_workspace("novelforge_free_writing_ui_") as workspace:
         project_name = "free_writing_ui_verify"
         create_project(project_name)
         story = create_story(project_name, "界面验证故事")
@@ -161,6 +162,10 @@ def _verify_existing_session_render() -> None:
             interactive_writing,
             "call_llm",
             return_value="雨声压低了街巷的回音，她在灯下停住脚步。",
+        ), patch.object(
+            interactive_writing,
+            "require_operation_capabilities",
+            return_value={"ready": True},
         ):
             interactive_writing.generate_writing_fragment(
                 project_name,
@@ -183,7 +188,13 @@ def render_prompt_options(*_args, **_kwargs):
 
 render_dynamic_generation_page({project_name!r}, render_prompt_options)
 '''
-        app = AppTest.from_string(source, default_timeout=30).run()
+        # AppTest.from_string writes into Streamlit's process-global temp
+        # directory, which can be ACL-locked by Windows endpoint protection.
+        # A script inside the isolated verification workspace is deterministic
+        # and is removed after the runner is released.
+        app_script_path = workspace / "free_writing_app.py"
+        app_script_path.write_text(source, encoding="utf-8")
+        app = AppTest.from_file(str(app_script_path), default_timeout=30).run()
         exceptions = [str(item.value) for item in app.exception]
         check(not exceptions, f"已有创作状态可以完整渲染：{exceptions}")
         button_labels = {str(item.label) for item in app.button}
@@ -191,6 +202,17 @@ render_dynamic_generation_page({project_name!r}, render_prompt_options)
         check("保留这段" in button_labels, "当前片段提供保留操作")
         check("重写这段" in button_labels, "当前片段提供重写操作")
         check("接下来想怎么写？" in text_area_labels, "当前片段后紧接下一轮输入")
+        # AppTest.from_string keeps a temporary script file alive through the
+        # AppTest object. Release it before isolated_workspace removes its
+        # directory on Windows, where an open handle blocks cleanup.
+        del app
+        gc.collect()
+        try:
+            app_script_path.unlink(missing_ok=True)
+        except OSError:
+            # The interpreter-level Streamlit temp directory will retry its
+            # cleanup at process exit if a runner still owns the handle.
+            pass
 
 
 def main() -> int:

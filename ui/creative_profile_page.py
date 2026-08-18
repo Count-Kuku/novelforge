@@ -24,7 +24,7 @@ from novelforge.workflows.skills import (
     discuss_creative_profile,
     discuss_creative_profile_turn,
 )
-from ui.common import developer_mode_enabled, navigate_to, scoped_widget_key, select_with_custom, stable_widget_suffix
+from ui.common import developer_mode_enabled, navigate_to_target, scoped_widget_key, select_with_custom, stable_widget_suffix
 from ui.discussion import (
     _append_discussion_message,
     _consume_discussion_input_clear,
@@ -443,8 +443,7 @@ def _render_creative_profile_recommendation(project_name: str, story_id: str, pr
     st.info(strategy_text)
     if profile.get("is_configured"):
         if st.button("开始生成正文", type="primary", width="stretch", key=scoped_widget_key("start_generation_after_profile", project_name, story_id)):
-            navigate_to("正文生成")
-            st.rerun()
+            navigate_to_target("创作", view="章节写作", subview="章节需求")
     if developer_mode_enabled():
         with st.expander("高级：创作配置详细数据", expanded=False):
             st.json({key: value for key, value in profile.items() if key != "notes"})

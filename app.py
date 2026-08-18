@@ -22,7 +22,6 @@ from ui import (
     creative_profile_page as ui_creative_profile_page,
     discussion as ui_discussion,
     discussion_assets_panel as ui_discussion_assets_panel,
-    evaluation as ui_evaluation,
     free_writing as ui_free_writing,
     ingestion_batch_guard as ui_ingestion_batch_guard,
     ingestion_task_estimate as ui_ingestion_task_estimate,
@@ -37,6 +36,10 @@ from ui import (
     prompt_option_tools as ui_prompt_option_tools,
     prompt_options_page as ui_prompt_options_page,
     project_overview as ui_project_overview,
+    creation_hub as ui_creation_hub,
+    library_hub as ui_library_hub,
+    settings_hub as ui_settings_hub,
+    workbench_hub as ui_workbench_hub,
     resource_browser_state as ui_resource_browser_state,
     resource_management as ui_resource_management,
     retrieval_center_page as ui_retrieval_center_page,
@@ -91,13 +94,15 @@ def _reload_live_ui_modules() -> dict[str, object]:
     importlib.reload(ui_navigation)
     return {
         "app_shell": importlib.reload(ui_app_shell),
+        "creation_hub": importlib.reload(ui_creation_hub),
+        "library_hub": importlib.reload(ui_library_hub),
         "layout": layout_helpers,
         "resource_management": importlib.reload(ui_resource_management),
         "settings": importlib.reload(ui_settings_page),
+        "settings_hub": importlib.reload(ui_settings_hub),
         "chapter": importlib.reload(ui_chapter_page),
         "creative_profile": importlib.reload(ui_creative_profile_page),
         "discussion_assets": importlib.reload(ui_discussion_assets_panel),
-        "evaluation": importlib.reload(ui_evaluation),
         "free_writing": ui_free_writing.reload_components(),
         "ingestion_tasks": importlib.reload(ui_ingestion_tasks),
         "knowledge_management": importlib.reload(ui_knowledge_management),
@@ -114,6 +119,7 @@ def _reload_live_ui_modules() -> dict[str, object]:
         "volume_outline": importlib.reload(ui_volume_outline_page),
         "arc_outline": importlib.reload(ui_arc_outline_page),
         "chapter_outline": importlib.reload(ui_chapter_outline_page),
+        "workbench_hub": importlib.reload(ui_workbench_hub),
     }
 
 
@@ -155,22 +161,6 @@ def render_retrieval_page(project_name: str, ui_modules: dict[str, object], mode
     ui_modules["retrieval_center"].render_retrieval_center_page(project_name, current_story_id)
 
 
-def render_model_settings_page(project_name: str | None, ui_modules: dict[str, object]) -> None:
-    ui_modules["llm_settings"].render_llm_settings_page()
-    if not project_name:
-        return
-
-    with st.expander("高级：创作规则与写作偏好", expanded=False):
-        st.caption("这些设置不会占用普通侧栏；通常在具体生成页面就地调整写作偏好即可。")
-        rule_col, preference_col = st.columns(2)
-        if rule_col.button("管理生成规则", key="open_advanced_generation_rules", width="stretch"):
-            st.session_state["pending_nav_page"] = "生成规则"
-            st.rerun()
-        if preference_col.button("集中管理写作偏好", key="open_advanced_prompt_options", width="stretch"):
-            st.session_state["pending_nav_page"] = "提示词选项"
-            st.rerun()
-
-
 def main():
     st.set_page_config(page_title="NovelForge", layout="wide")
     ui_modules = _reload_live_ui_modules()
@@ -191,7 +181,7 @@ def main():
         memory = build_generation_setting_context(project_name, story_id)
     else:
         memory = None
-        st.info("当前还没有项目。可先进入“模型配置”填写服务地址与密钥，或点击侧边栏“新建项目”开始创建。")
+        st.info("当前还没有项目。可先进入“设置 → 模型与费用”填写服务地址与密钥，或点击侧边栏“新建项目”开始创建。")
 
     layout_helpers.render_app_header(project_name, page, memory)
     project_load_error = app_shell.get_project_load_error()
@@ -207,69 +197,21 @@ def main():
     if created_story_notice:
         st.success(created_story_notice)
 
-    if not project_name and page != "模型配置":
+    if not project_name and page != "设置":
         st.stop()
-    elif page == "模型配置":
-        render_model_settings_page(project_name, ui_modules)
-    elif page == "项目总览":
-        ui_modules["project_overview"].render_project_overview_page(project_name)
-    elif page == "创作配置":
-        ui_modules["creative_profile"].render_creative_profile_page(
+    elif page == "工作台":
+        ui_modules["workbench_hub"].render_workbench_hub(project_name, ui_modules)
+    elif page == "创作":
+        ui_modules["creation_hub"].render_creation_hub(project_name, ui_modules)
+    elif page == "资料库":
+        ui_modules["library_hub"].render_library_hub(
             project_name,
-            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
-        )
-    elif page == "知识库":
-        ui_modules["settings"].render_settings_page(
-            project_name,
+            ui_modules,
+            render_ingestion_page=render_retrieval_page,
             render_memory_page=render_memory_page,
-            render_knowledge_organizer=ui_modules["knowledge_management"].render_knowledge_organizer,
-            render_pending_knowledge_queue=ui_modules["knowledge_management"].render_pending_knowledge_queue,
-            render_auto_review_policy_panel=ui_modules["knowledge_management"].render_auto_review_policy_panel,
-            render_auto_review_runs_panel=ui_modules["knowledge_management"].render_auto_review_runs_panel,
-            knowledge_category_options=list(KNOWLEDGE_CATEGORY_LABELS.keys()),
         )
-    elif page == "自由创作":
-        ui_modules["free_writing"].render_dynamic_generation_page(
-            project_name,
-            ui_modules["prompt_option_tools"]._render_prompt_option_capability_tools,
-        )
-    elif page == "项目资源":
-        ui_modules["resource_management"].render_resource_management_page(project_name)
-    elif page == "资料导入":
-        render_retrieval_page(project_name, ui_modules, mode="ingestion")
-    elif page == "检索中心":
-        render_retrieval_page(project_name, ui_modules, mode="center")
-    elif page == "生成规则":
-        ui_modules["rules"].render_rules_page(project_name)
-    elif page == "提示词选项":
-        ui_modules["prompt_options_page"].render_prompt_options_page(project_name)
-    elif page == "生成大纲":
-        ui_modules["outline"].render_outline_page(
-            project_name,
-            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
-        )
-    elif page == "分卷大纲":
-        ui_modules["volume_outline"].render_volume_outline_page(
-            project_name,
-            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
-        )
-    elif page == "剧情段大纲":
-        ui_modules["arc_outline"].render_arc_outline_page(
-            project_name,
-            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
-        )
-    elif page == "生成细纲":
-        ui_modules["chapter_outline"].render_chapter_outline_page(
-            project_name,
-            render_discussion_asset_candidates=ui_modules["discussion_assets"].render_discussion_asset_candidates,
-        )
-    elif page == "正文生成":
-        ui_modules["chapter"].render_chapter_page(project_name)
-    elif page == "章节审阅":
-        ui_modules["evaluation"].render_evaluation_page(
-            project_name,
-            ui_modules["prompt_option_tools"]._render_prompt_option_capability_tools,
-        )
+    elif page == "设置":
+        ui_modules["settings_hub"].render_settings_hub(project_name, ui_modules)
 
 
 if __name__ == "__main__":

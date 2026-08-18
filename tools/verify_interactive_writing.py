@@ -93,7 +93,8 @@ def _extraction_result() -> dict:
     }
 
 
-def verify() -> None:
+@patch.object(interactive_writing, "require_operation_capabilities", return_value={"ready": True})
+def verify(_capability_patch) -> None:
     project_name = "interactive_writing_verify"
     create_project(project_name)
     story_id = create_story(project_name, "互动故事")["story_id"]

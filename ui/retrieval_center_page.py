@@ -422,11 +422,12 @@ def _render_retrieval_preview(project_name: str, current_story_id: str, manifest
 
 
 def render_retrieval_center_page(project_name: str, current_story_id: str):
+    view_key = scoped_widget_key("retrieval_center_view", project_name, current_story_id)
     view = st.segmented_control(
         "资料检索视图",
         options=["查找资料", "质量评测", "索引维护"],
-        default="查找资料",
-        key=scoped_widget_key("retrieval_center_view", project_name, current_story_id),
+        default="查找资料" if view_key not in st.session_state else None,
+        key=view_key,
         label_visibility="collapsed",
     )
     manifest = None

@@ -27,15 +27,14 @@ from ui import navigation as _navigation
 
 
 _NAVIGATION_CONTRACT = (
-    "ADVANCED_PAGE_GROUPS",
+    "TOP_LEVEL_PAGES",
     "DEFAULT_PAGE",
-    "HIDDEN_PAGE_RETURN_TARGETS",
     "LEGACY_PAGE_ALIASES",
+    "build_navigation_intent",
+    "canonical_legacy_page",
     "PAGE_DESCRIPTIONS",
-    "PAGE_GROUP_LABELS",
     "PAGE_ICONS",
     "PAGE_LABELS",
-    "PRIMARY_PAGE_GROUPS",
     "page_groups_for_story",
 )
 if not all(hasattr(_navigation, name) for name in _NAVIGATION_CONTRACT):
@@ -43,23 +42,23 @@ if not all(hasattr(_navigation, name) for name in _NAVIGATION_CONTRACT):
     # sys.modules. Repair it before binding the shell's navigation constants.
     _navigation = importlib.reload(_navigation)
 
-ADVANCED_PAGE_GROUPS = _navigation.ADVANCED_PAGE_GROUPS
+TOP_LEVEL_PAGES = _navigation.TOP_LEVEL_PAGES
 DEFAULT_PAGE = _navigation.DEFAULT_PAGE
-HIDDEN_PAGE_RETURN_TARGETS = _navigation.HIDDEN_PAGE_RETURN_TARGETS
 LEGACY_PAGE_ALIASES = _navigation.LEGACY_PAGE_ALIASES
 PAGE_DESCRIPTIONS = _navigation.PAGE_DESCRIPTIONS
-PAGE_GROUP_LABELS = _navigation.PAGE_GROUP_LABELS
 PAGE_ICONS = _navigation.PAGE_ICONS
 PAGE_LABELS = _navigation.PAGE_LABELS
-PRIMARY_PAGE_GROUPS = _navigation.PRIMARY_PAGE_GROUPS
+build_navigation_intent = _navigation.build_navigation_intent
+canonical_legacy_page = _navigation.canonical_legacy_page
 navigation_page_groups_for_story = _navigation.page_groups_for_story
 
 
 LOGGER = logging.getLogger("novelforge.ui.app_shell")
 
-PAGE_GROUPS = ADVANCED_PAGE_GROUPS
-
 NEW_PROJECT_INPUT_KEY = "new_project_name_input"
+
+# 兼容旧规划状态读取；普通侧栏不再展示这组页面。
+PAGE_GROUPS = _navigation.LEGACY_PAGE_GROUPS
 
 NEW_PROJECT_DIALOG_FLAG = "show_new_project_dialog"
 PROJECT_CREATION_NOTICE_KEY = "project_creation_notice"
@@ -120,7 +119,10 @@ def switch_to_story(project_name: str, story_id: str, *, target_page: str | None
     st.session_state["active_story_id"] = story_id
     st.session_state[PENDING_STORY_SWITCH_KEY] = story_id
     if target_page:
-        st.session_state["pending_nav_page"] = target_page
+        st.session_state["pending_navigation_intent"] = build_navigation_intent(
+            target_page,
+            developer_mode=developer_mode_enabled(),
+        )
 
 
 def activate_story_after_creation(
@@ -200,7 +202,10 @@ def render_new_project_dialog(existing_projects: list[str]):
         _clear_project_load_error()
         st.session_state[PENDING_PROJECT_SWITCH_KEY] = created_project
         st.session_state[PROJECT_CREATION_NOTICE_KEY] = {"project_name": created_project}
-        st.session_state["pending_nav_page"] = DEFAULT_PAGE
+        st.session_state["pending_navigation_intent"] = build_navigation_intent(
+            DEFAULT_PAGE,
+            developer_mode=developer_mode_enabled(),
+        )
         _close_new_project_dialog()
         st.rerun()
 
@@ -374,82 +379,98 @@ def _render_story_controls(project_name: str | None) -> None:
         _render_new_story_popover(project_name)
 
 
-def _apply_pending_navigation(available_pages: list[str]) -> None:
-    pending_nav_page = st.session_state.pop("pending_nav_page", "")
-    pending_nav_page = LEGACY_PAGE_ALIASES.get(pending_nav_page, pending_nav_page)
-    if pending_nav_page in available_pages:
-        st.session_state["active_page"] = pending_nav_page
-        st.session_state["nav_revision"] = int(st.session_state.get("nav_revision", 0)) + 1
+def _apply_navigation_state(intent: dict, project_name: str | None, story_id: str) -> None:
+    """把导航意图写入 Hub 和旧页面的 scoped 状态，必须在控件创建前调用。"""
 
+    page = str(intent.get("page") or DEFAULT_PAGE)
+    view = str(intent.get("view") or "")
+    subview = str(intent.get("subview") or "")
+    payload = intent.get("payload") if isinstance(intent.get("payload"), dict) else {}
+    # 设置 Hub 的当前视图不依赖项目；无项目时从旧的“模型配置”或
+    # “生成规则”状态迁移，也要准确落到对应设置视图。项目级子视图仍
+    # 只在项目已加载后写入 scoped 状态。
+    if page == "设置":
+        st.session_state["settings_hub_view"] = view or "模型与费用"
+        if not project_name:
+            return
+        if view == "高级创作":
+            st.session_state[scoped_widget_key("settings_advanced_view", project_name, story_id)] = subview or "生成规则"
+        elif view == "开发工具":
+            st.session_state[scoped_widget_key("settings_developer_view", project_name, story_id)] = subview or "资料检索"
+        return
 
-def _resolve_active_page(available_pages: list[str], visible_pages: list[str] | None = None) -> str:
-    visible_pages = visible_pages or available_pages
-    active_page = LEGACY_PAGE_ALIASES.get(st.session_state.get("active_page", DEFAULT_PAGE), st.session_state.get("active_page", DEFAULT_PAGE))
-    if active_page not in available_pages:
-        if active_page in PAGE_GROUPS.get("规划", []) and "创作配置" in visible_pages:
-            active_page = "创作配置"
-        elif DEFAULT_PAGE in visible_pages:
-            active_page = DEFAULT_PAGE
+    if not project_name:
+        return
+    if page == "工作台":
+        st.session_state[scoped_widget_key("workbench_hub_view", project_name, story_id)] = view or "概览"
+    elif page == "创作":
+        creation_key = scoped_widget_key("creation_hub_view", project_name, story_id)
+        st.session_state[creation_key] = view or "章节写作"
+        if view == "小说规划":
+            st.session_state[scoped_widget_key("creation_planning_view", project_name, story_id)] = subview or "全书"
+        if view == "章节写作" and subview:
+            try:
+                chapter_no = int(payload.get("chapter_no") or st.session_state.get("active_chapter_no") or 1)
+            except (TypeError, ValueError):
+                chapter_no = 1
+            chapter_no = max(chapter_no, 1)
+            st.session_state[scoped_widget_key("chapter_page_view", project_name, story_id, chapter_no)] = (
+                "3 · 保存与审阅" if subview == "保存与审阅" else "1 · 章节需求"
+            )
+    elif page == "资料库":
+        st.session_state[scoped_widget_key("library_hub_view", project_name, story_id)] = view or "查找与编辑"
+        if view == "导入与来源":
+            st.session_state[scoped_widget_key("ingestion_workspace_section", project_name, story_id)] = subview or "导入"
+        elif view == "查找与编辑":
+            st.session_state[scoped_widget_key("knowledge_library_view", project_name, story_id)] = "全部知识"
+            st.session_state[scoped_widget_key("knowledge_library_all_view", project_name, story_id)] = "统一搜索"
+        elif view == "优先设定":
+            st.session_state[scoped_widget_key("knowledge_library_view", project_name, story_id)] = "优先设定"
+        elif view == "待审核":
+            st.session_state[scoped_widget_key("knowledge_library_view", project_name, story_id)] = "待审核知识"
+            st.session_state[scoped_widget_key("knowledge_library_review_view", project_name, story_id)] = subview or "审核队列"
+def _apply_pending_navigation(project_name: str | None, story_id: str, available_pages: list[str]) -> None:
+    intent = st.session_state.pop("pending_navigation_intent", None)
+    legacy_page = st.session_state.pop("pending_nav_page", "")
+    if not isinstance(intent, dict):
+        if legacy_page:
+            intent = build_navigation_intent(
+                legacy_page,
+                developer_mode=developer_mode_enabled(),
+            )
         else:
-            active_page = visible_pages[0]
+            current = st.session_state.get("active_page", DEFAULT_PAGE)
+            if current not in available_pages:
+                intent = build_navigation_intent(current, developer_mode=developer_mode_enabled())
+    if not isinstance(intent, dict):
+        return
+    target_page = str(intent.get("page") or DEFAULT_PAGE)
+    if target_page not in available_pages:
+        target_page = "设置" if "设置" in available_pages else available_pages[0]
+        intent = build_navigation_intent(target_page, developer_mode=developer_mode_enabled())
+    st.session_state["active_page"] = target_page
+    _apply_navigation_state(intent, project_name, story_id)
+    st.session_state["nav_revision"] = int(st.session_state.get("nav_revision", 0)) + 1
+
+
+def _resolve_active_page(available_pages: list[str]) -> str:
+    active_page = st.session_state.get("active_page", DEFAULT_PAGE)
+    if active_page not in available_pages:
+        active_page = "设置" if "设置" in available_pages else available_pages[0]
     return active_page
 
 
-def _render_hidden_page_navigation(active_page: str, visible_pages: list[str]) -> str:
-    label = PAGE_LABELS.get(active_page, active_page)
-    target_page = HIDDEN_PAGE_RETURN_TARGETS.get(active_page, DEFAULT_PAGE)
-    if target_page not in visible_pages:
-        target_page = DEFAULT_PAGE if DEFAULT_PAGE in visible_pages else visible_pages[0]
-    target_label = PAGE_LABELS.get(target_page, target_page)
-    st.sidebar.caption(f"当前按需打开：{label}")
-    if st.sidebar.button(f"返回：{target_label}", key="return_from_hidden_page", width="stretch"):
-        st.session_state["active_page"] = target_page
-        st.session_state["nav_revision"] = int(st.session_state.get("nav_revision", 0)) + 1
-        st.rerun()
-    _render_page_description(active_page)
-    return active_page
-
-
-def _render_navigation_radios(visible_page_groups: dict[str, list[str]], active_page: str) -> tuple[str, str]:
-    group_names = list(visible_page_groups.keys())
-    active_group = next(
-        (group for group, pages in visible_page_groups.items() if active_page in pages),
-        group_names[0],
-    )
+def _render_top_level_navigation(visible_pages: list[str], active_page: str) -> str:
     nav_revision = int(st.session_state.get("nav_revision", 0))
-    selected_group = st.sidebar.radio(
-        "工作区",
-        options=group_names,
-        index=group_names.index(active_group),
-        key=f"active_page_group_{nav_revision}",
-        format_func=lambda group: PAGE_GROUP_LABELS.get(group, group),
-    )
-    group_pages = visible_page_groups[selected_group]
-    if active_page not in group_pages:
-        active_page = group_pages[0]
-
     selected_page = st.sidebar.radio(
-        "页面",
-        options=group_pages,
-        index=group_pages.index(active_page),
-        key=f"active_page_in_group_{selected_group}_{nav_revision}",
+        "工作区",
+        options=visible_pages,
+        index=visible_pages.index(active_page),
+        key=f"active_top_level_page_{nav_revision}",
         format_func=lambda page: f"{PAGE_ICONS.get(page, '•')}  {PAGE_LABELS.get(page, page)}",
     )
     st.session_state["active_page"] = selected_page
-    return selected_group, selected_page
-
-
-def _render_planning_profile_hint(project_name: str | None, current_story_id: str, selected_group: str) -> None:
-    if selected_group == "规划" and project_name and not is_story_creative_profile_configured(project_name, current_story_id):
-        st.sidebar.markdown(
-            """
-            <div class="nf-sidebar-note">
-                <strong>建议先讨论配置</strong><br>
-                规划页面都可以进入；先保存「创作配置」能让生成更贴合目标。
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    return selected_page
 
 
 def _render_page_description(selected_page: str) -> None:
@@ -487,15 +508,9 @@ def _render_sidebar_navigation(project_name: str | None) -> str:
     current_story_id = st.session_state.get("active_story_id", "default")
     visible_page_groups = page_groups_for_story(project_name, current_story_id)
     visible_pages = [page for pages in visible_page_groups.values() for page in pages]
-    available_pages = [page for pages in PAGE_GROUPS.values() for page in pages]
-    if not project_name:
-        available_pages = visible_pages
-    _apply_pending_navigation(available_pages)
-    active_page = _resolve_active_page(available_pages, visible_pages)
-    if active_page not in visible_pages:
-        return _render_hidden_page_navigation(active_page, visible_pages)
-    selected_group, selected_page = _render_navigation_radios(visible_page_groups, active_page)
-    _render_planning_profile_hint(project_name, current_story_id, selected_group)
+    _apply_pending_navigation(project_name, current_story_id, visible_pages)
+    active_page = _resolve_active_page(visible_pages)
+    selected_page = _render_top_level_navigation(visible_pages, active_page)
     _render_page_description(selected_page)
     return selected_page
 

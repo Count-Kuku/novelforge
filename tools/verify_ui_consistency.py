@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from ui.navigation import ADVANCED_PAGE_GROUPS, PAGE_DESCRIPTIONS, PRIMARY_PAGE_GROUPS
+from ui.navigation import LEGACY_PAGE_GROUPS, PAGE_DESCRIPTIONS, TOP_LEVEL_PAGES
 
 
 CHECKS: list[str] = []
@@ -43,17 +43,16 @@ def verify() -> None:
     for term in banned_user_terms:
         check(term not in ui_text, f"界面文案不再使用“{term}”")
 
-    pages = {page for group_pages in ADVANCED_PAGE_GROUPS.values() for page in group_pages}
+    pages = {page for group_pages in LEGACY_PAGE_GROUPS.values() for page in group_pages}
     check(pages <= PAGE_DESCRIPTIONS.keys(), "每个导航页面都有说明")
     check(
         all(str(PAGE_DESCRIPTIONS.get(page, "")).strip() for page in pages),
         "每个导航页面说明都不是空文本",
     )
 
-    primary_pages = {page for group_pages in PRIMARY_PAGE_GROUPS.values() for page in group_pages}
-    hidden_pages = {"项目资源", "检索中心", "章节审阅", "生成规则", "提示词选项"}
-    check(primary_pages < pages, "普通导航是完整路由的精简子集")
-    check(not (primary_pages & hidden_pages), "普通导航不再展示重复或开发者页面")
+    primary_pages = set(TOP_LEVEL_PAGES)
+    check(primary_pages == set(TOP_LEVEL_PAGES), "普通导航只保留四个顶层 Hub")
+    check(list(TOP_LEVEL_PAGES) == ["工作台", "创作", "资料库", "设置"], "普通导航顺序固定为工作台、创作、资料库、设置")
 
     check('[data-testid="stColumn"]' in layout_text, "对齐样式使用当前 Streamlit 列选择器")
     check('[data-testid="column"]' not in layout_text, "不再使用失效的旧列选择器")

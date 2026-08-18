@@ -1,6 +1,21 @@
+"""用户导航契约与旧页面迁移映射。
+
+这里不依赖 Streamlit，所有函数都可以在离线测试中直接调用。页面 renderer
+仍然保留旧名称，直到所有旧状态和调用方完成迁移。
+"""
 from __future__ import annotations
 
-ADVANCED_PAGE_GROUPS = {
+from copy import deepcopy
+import logging
+from typing import Any
+
+
+TOP_LEVEL_PAGES = ["工作台", "创作", "资料库", "设置"]
+DEFAULT_PAGE = "工作台"
+LOGGER = logging.getLogger("novelforge.ui.navigation")
+
+# 旧页面分组只用于兼容测试、开发工具和规划页状态迁移，不再直接渲染到普通侧栏。
+LEGACY_PAGE_GROUPS = {
     "工作台": ["项目总览", "项目资源"],
     "资料": ["资料导入", "知识库", "检索中心"],
     "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
@@ -8,34 +23,11 @@ ADVANCED_PAGE_GROUPS = {
     "配置": ["模型配置", "生成规则", "提示词选项"],
 }
 
-# 普通用户只需要围绕“整理资料 -> 规划 -> 写作”完成创作。内容浏览由首页的
-# 项目指标按需打开；独立审阅、检索诊断和细粒度规则管理保留为高级工具，避免
-# 它们与主流程并列后造成重复入口。设置 NOVELFORGE_DEVELOPER_MODE=1 可恢复完整导航。
-PRIMARY_PAGE_GROUPS = {
-    "工作台": ["项目总览"],
-    "资料": ["资料导入", "知识库"],
-    "规划": ["创作配置", "生成大纲", "分卷大纲", "剧情段大纲", "生成细纲"],
-    "写作": ["自由创作", "正文生成"],
-    "配置": ["模型配置"],
-}
-
-HIDDEN_PAGE_RETURN_TARGETS = {
-    "项目资源": "项目总览",
-    "检索中心": "知识库",
-    "章节审阅": "正文生成",
-    "生成规则": "模型配置",
-    "提示词选项": "模型配置",
-}
-
-PAGE_GROUP_LABELS = {
-    "工作台": "首页",
-    "资料": "资料",
-    "规划": "规划",
-    "写作": "创作",
-    "配置": "设置",
-}
-
 PAGE_LABELS = {
+    "工作台": "工作台",
+    "创作": "创作",
+    "资料库": "资料库",
+    "设置": "设置",
     "项目总览": "项目首页",
     "项目资源": "内容管理",
     "资料导入": "资料中心",
@@ -46,7 +38,7 @@ PAGE_LABELS = {
     "分卷大纲": "分卷规划",
     "剧情段大纲": "剧情段规划",
     "生成细纲": "章节细纲",
-    "自由创作": "自由创作",
+    "自由创作": "自由模式",
     "正文生成": "章节写作",
     "章节审阅": "章节审阅",
     "模型配置": "模型与费用",
@@ -55,6 +47,10 @@ PAGE_LABELS = {
 }
 
 PAGE_ICONS = {
+    "工作台": "⌂",
+    "创作": "✎",
+    "资料库": "◆",
+    "设置": "⚙",
     "项目总览": "⌂",
     "项目资源": "▦",
     "资料导入": "↥",
@@ -74,6 +70,10 @@ PAGE_ICONS = {
 }
 
 PAGE_DESCRIPTIONS = {
+    "工作台": "查看项目状态，从推荐下一步继续创作，或按指标查找已有内容。",
+    "创作": "从创作方向、小说规划到章节写作，也可以直接进入自由模式。",
+    "资料库": "统一导入、搜索、编辑资料与知识，并处理待审核知识。",
+    "设置": "管理模型、费用、生成规则和写作偏好；开发者模式提供诊断工具。",
     "项目总览": "查看项目状态，并从推荐操作继续创作。",
     "自由创作": "输入要求生成片段；继续交流即可续写，并能把稳定设定整理进知识库。",
     "项目资源": "集中查找和管理大纲、正文、报告与创作记录。",
@@ -92,30 +92,90 @@ PAGE_DESCRIPTIONS = {
     "模型配置": "设置模型服务、费用、预算提醒和常用方案。",
 }
 
-DEFAULT_PAGE = "项目总览"
-
 LEGACY_PAGE_ALIASES = {
     "设定": "知识库",
     "核心设定": "知识库",
     "优先设定": "知识库",
+    "待审核设定": "待审核知识",
     "资料录入": "资料导入",
     "资源浏览器": "项目资源",
-    "项目资源": "项目资源",
     "快速生成": "自由创作",
     "章节评价": "章节审阅",
+}
+
+# 页面名到 Hub 的稳定映射。view/subview 使用用户可见文本，便于旧状态迁移时
+# 直接诊断；真正的 scoped widget key 由 app_shell 在当前项目/故事作用域中生成。
+LEGACY_NAVIGATION_TARGETS: dict[str, dict[str, Any]] = {
+    "项目总览": {"page": "工作台", "view": "概览"},
+    "项目资源": {"page": "工作台", "view": "内容"},
+    "资料导入": {"page": "资料库", "view": "导入与来源", "subview": "导入"},
+    "知识库": {"page": "资料库", "view": "查找与编辑"},
+    "待审核知识": {"page": "资料库", "view": "待审核", "subview": "审核队列"},
+    "检索中心": {"page": "设置", "view": "开发工具", "subview": "资料检索"},
+    "创作配置": {"page": "创作", "view": "创作方向"},
+    "生成大纲": {"page": "创作", "view": "小说规划", "subview": "全书"},
+    "分卷大纲": {"page": "创作", "view": "小说规划", "subview": "分卷"},
+    "剧情段大纲": {"page": "创作", "view": "小说规划", "subview": "剧情段"},
+    "生成细纲": {"page": "创作", "view": "小说规划", "subview": "章节细纲"},
+    "自由创作": {"page": "创作", "view": "自由模式"},
+    "正文生成": {"page": "创作", "view": "章节写作", "subview": "章节需求"},
+    "章节审阅": {"page": "创作", "view": "章节写作", "subview": "保存与审阅"},
+    "模型配置": {"page": "设置", "view": "模型与费用"},
+    "生成规则": {"page": "设置", "view": "高级创作", "subview": "生成规则"},
+    "提示词选项": {"page": "设置", "view": "高级创作", "subview": "写作偏好"},
 }
 
 
 def page_groups_for_story(
     *,
     project_name: str | None,
-    planning_pages: list[str],
+    planning_pages: list[str] | None = None,
     developer_mode: bool = False,
 ) -> dict[str, list[str]]:
-    if not project_name:
-        return {"配置": ["模型配置"]}
+    """返回普通侧栏的四个入口，保留旧参数以兼容开发脚本。"""
 
-    source_groups = ADVANCED_PAGE_GROUPS if developer_mode else PRIMARY_PAGE_GROUPS
-    groups = {group: list(pages) for group, pages in source_groups.items()}
-    groups["规划"] = list(planning_pages)
-    return groups
+    if not project_name:
+        return {"设置": ["设置"]}
+    return {page: [page] for page in TOP_LEVEL_PAGES}
+
+
+def canonical_legacy_page(page: str) -> str:
+    raw_page = str(page or "").strip()
+    return LEGACY_PAGE_ALIASES.get(raw_page, raw_page)
+
+
+def build_navigation_intent(
+    page: str,
+    *,
+    view: str | None = None,
+    subview: str | None = None,
+    payload: dict[str, Any] | None = None,
+    developer_mode: bool = False,
+) -> dict[str, Any]:
+    """把新旧页面调用统一转换为一次性导航意图。"""
+
+    canonical_page = canonical_legacy_page(page)
+    if canonical_page in TOP_LEVEL_PAGES:
+        target = {"page": canonical_page}
+    else:
+        if canonical_page not in LEGACY_NAVIGATION_TARGETS:
+            LOGGER.warning("Unknown navigation target %r; falling back to project overview", page)
+        target = deepcopy(LEGACY_NAVIGATION_TARGETS.get(canonical_page, LEGACY_NAVIGATION_TARGETS["项目总览"]))
+
+    # 普通用户打开旧检索中心时回到资料库，避免通过历史状态暴露开发工具。
+    if canonical_page == "检索中心" and not developer_mode:
+        target = {"page": "资料库", "view": "查找与编辑"}
+
+    if view is not None:
+        target["view"] = str(view)
+    if subview is not None:
+        target["subview"] = str(subview)
+    clean_payload = dict(payload or {})
+    if clean_payload:
+        target["payload"] = clean_payload
+    target["version"] = 1
+    return target
+
+
+def is_valid_top_level_page(page: str) -> bool:
+    return str(page or "") in TOP_LEVEL_PAGES

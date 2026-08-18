@@ -8,6 +8,7 @@ import json
 import streamlit as st
 
 from novelforge.services.memory import (
+    KNOWLEDGE_CATEGORIES,
     knowledge_revision_diff,
     load_source_revisions,
     load_knowledge_center_index_state,
@@ -16,6 +17,7 @@ from novelforge.services.memory import (
     load_knowledge_revisions,
     restore_knowledge_revision,
     restore_archived_knowledge_item,
+    update_confirmed_knowledge_item_record,
     retry_knowledge_center_index,
     search_knowledge_center,
 )
@@ -189,6 +191,72 @@ def _render_knowledge_history(project_name: str, record: dict) -> None:
         st.rerun()
 
 
+def _render_knowledge_editor(project_name: str, record: dict) -> None:
+    """在统一搜索结果详情中提供轻量编辑入口。"""
+
+    knowledge_id = str(record.get("knowledge_id") or "").strip()
+    original_category = str(record.get("category") or "").strip()
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    category_options = list(KNOWLEDGE_CATEGORIES.keys())
+    if not knowledge_id or original_category not in category_options:
+        return
+    with st.expander("编辑知识条目", expanded=False):
+        with st.form(scoped_widget_key("knowledge_center_edit_form", project_name, knowledge_id)):
+            category = st.selectbox(
+                "分类",
+                options=category_options,
+                index=(category_options.index(original_category)
+                       if original_category in category_options else 0),
+                format_func=label_knowledge_category,
+            )
+            name = st.text_input("名称", value=str(record.get("name") or payload.get("name") or ""))
+            title = st.text_input("标题", value=str(record.get("title") or payload.get("title") or ""))
+            summary = st.text_area(
+                "摘要",
+                value=str(record.get("summary") or payload.get("summary") or ""),
+                height=100,
+            )
+            typed_data_text = st.text_area(
+                "结构化字段（JSON，可选）",
+                value=json.dumps(record.get("structured") or payload.get("typed_data") or {}, ensure_ascii=False, indent=2),
+                height=140,
+                help="只需修改名称、标题或摘要时可以保持不变；JSON 无效时不会保存。",
+            )
+            submitted = st.form_submit_button("保存修改", type="primary", width="stretch")
+        if not submitted:
+            return
+        try:
+            typed_data = json.loads(typed_data_text or "{}")
+        except json.JSONDecodeError as exc:
+            st.error(f"结构化字段不是有效 JSON：{exc}")
+            return
+        if not isinstance(typed_data, dict):
+            st.error("结构化字段必须是 JSON 对象。")
+            return
+        updated_payload = {
+            **payload,
+            "id": knowledge_id,
+            "knowledge_id": knowledge_id,
+            "category": category,
+            "name": name.strip(),
+            "title": title.strip(),
+            "summary": summary.strip(),
+            "typed_data": typed_data,
+            "revision_reason": "统一搜索详情中编辑",
+        }
+        if not update_confirmed_knowledge_item_record(
+            project_name,
+            original_category,
+            knowledge_id,
+            updated_payload,
+            target_category=category,
+        ):
+            st.error("知识条目保存失败，可能已被其他操作删除或修改。")
+            return
+        st.success("知识条目已保存，检索索引会在后台同步。")
+        st.rerun()
+
+
 def _render_detail(project_name: str, story_id: str, query: str) -> None:
     selection = st.session_state.get(_selected_key(project_name, story_id))
     if not isinstance(selection, dict):
@@ -227,6 +295,7 @@ def _render_detail(project_name: str, story_id: str, query: str) -> None:
             st.success("已恢复归档知识，并追加恢复修订。")
             st.rerun()
     if record_type == "knowledge":
+        _render_knowledge_editor(project_name, record)
         _render_knowledge_history(project_name, record)
     else:
         st.caption("待审核条目请在“审核”工作区使用规范表单确认、编辑或归档。")

@@ -939,6 +939,15 @@ def apply_app_style() -> None:
             .nf-section-caption { margin-left: 0; }
             [data-testid="stMain"] [data-testid="stColumn"] { flex-basis: 100% !important; }
 
+            /* Hub 内导航在窄屏保持完整选项，并允许横向滑动。 */
+            [data-testid="stSegmentedControl"] {
+                max-width: 100%;
+                overflow-x: auto;
+            }
+            [data-testid="stSegmentedControl"] [data-baseweb="button-group"] {
+                min-width: max-content;
+            }
+
         }
         </style>
         """,

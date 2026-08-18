@@ -32,9 +32,61 @@ def create_batch_progress_callback(title: str):
 
     return update
 
-def navigate_to(page: str):
-    st.session_state["pending_nav_page"] = page
+def navigate_to_target(
+    page: str,
+    *,
+    view: str | None = None,
+    subview: str | None = None,
+    payload: dict | None = None,
+):
+    """请求一次性导航；旧页面名由导航契约转换到新的 Hub 视图。"""
+
+    # 延迟导入，避免 navigation 读取 UI helper 时形成模块循环。
+    from ui.navigation import build_navigation_intent
+
+    intent = build_navigation_intent(
+        page,
+        view=view,
+        subview=subview,
+        payload=payload,
+        developer_mode=developer_mode_enabled(),
+    )
+    st.session_state["pending_navigation_intent"] = intent
     st.rerun()
+
+
+def navigate_to(page: str):
+    navigate_to_target(page)
+
+
+def render_hub_navigation(
+    label: str,
+    options: list[str] | tuple[str, ...],
+    *,
+    key: str,
+    default: str,
+    caption: str = "",
+):
+    """渲染统一的 Hub 内导航条，避免各页面重复实现状态初始化和视觉容器。"""
+
+    normalized_options = list(options)
+    if not normalized_options:
+        return None
+    if key in st.session_state and st.session_state.get(key) not in normalized_options:
+        st.session_state[key] = default if default in normalized_options else normalized_options[0]
+    normalized_default = default if default in normalized_options else normalized_options[0]
+    with st.container(border=True):
+        if caption:
+            st.caption(caption)
+        return st.segmented_control(
+            label,
+            options=normalized_options,
+            default=normalized_default if key not in st.session_state else None,
+            key=key,
+            width="stretch",
+            label_visibility="collapsed",
+        )
+
 
 def stable_widget_suffix(value: str) -> str:
     return hashlib.md5(str(value).encode("utf-8")).hexdigest()[:10]
@@ -76,7 +128,14 @@ def confirmed_button(
         on_click=consume_confirmation,
     )
 
-def render_quick_action(label: str, page: str, help_text: str):
+def render_quick_action(
+    label: str,
+    page: str,
+    help_text: str,
+    *,
+    view: str | None = None,
+    subview: str | None = None,
+):
     with st.container(border=True):
         st.markdown(
             f"""
@@ -89,10 +148,34 @@ def render_quick_action(label: str, page: str, help_text: str):
         )
         if st.button(
             f"打开：{label}",
-            key=f"quick_action_{stable_widget_suffix(page)}",
+            key=f"quick_action_{stable_widget_suffix(f'{page}:{view}:{subview}')}",
             width="stretch",
         ):
-            navigate_to(page)
+            navigate_to_target(page, view=view, subview=subview)
+
+
+def render_next_step_action(
+    label: str,
+    page: str,
+    *,
+    view: str | None = None,
+    subview: str | None = None,
+    help_text: str = "",
+    key_suffix: str = "",
+):
+    """渲染创作流程唯一的推荐下一步，统一通过导航意图切换。"""
+
+    with st.container(border=True):
+        st.markdown("**推荐下一步**")
+        if help_text:
+            st.caption(help_text)
+        if st.button(
+            label,
+            key=f"next_step_{stable_widget_suffix(f'{page}:{view}:{subview}:{key_suffix}')}",
+            type="primary",
+            width="stretch",
+        ):
+            navigate_to_target(page, view=view, subview=subview)
 
 def _safe_int_metric_value(value) -> int:
     try:

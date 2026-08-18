@@ -627,11 +627,12 @@ def render_chapter_page(project_name: str):
     if context["chapter_text_editor_key"] in st.session_state:
         st.session_state[context["chapter_text_key"]] = st.session_state[context["chapter_text_editor_key"]]
 
+    chapter_view_key = scoped_widget_key("chapter_page_view", *context["chapter_scope"])
     view = st.segmented_control(
         "章节写作流程",
         options=["1 · 准备细纲", "2 · 写作正文", "3 · 保存与审阅"],
-        default="1 · 准备细纲",
-        key=scoped_widget_key("chapter_page_view", *context["chapter_scope"]),
+        default="1 · 准备细纲" if chapter_view_key not in st.session_state else None,
+        key=chapter_view_key,
         label_visibility="collapsed",
     )
     if view == "1 · 准备细纲":

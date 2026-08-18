@@ -36,7 +36,7 @@ from novelforge.domain.knowledge_workflows import (
     update_pending_knowledge_item,
 )
 from ui.app_shell import activate_story_after_creation, copy_story_workspace_settings, switch_to_story
-from ui.common import scoped_widget_key
+from ui.common import navigate_to_target, scoped_widget_key
 from ui.labels import label_knowledge_category
 
 
@@ -441,7 +441,7 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
             key=f"{key_prefix}_selected",
         )
         preview_limit = min(8, len(pending_items))
-        st.caption(f"下方可直接编辑前 {preview_limit} 条候选设定；完整队列仍可在资料导入页批量处理。")
+        st.caption(f"下方可直接编辑前 {preview_limit} 条候选设定；完整队列仍可在“资料库 → 导入与来源”批量处理。")
         for index, item in enumerate(pending_items[:preview_limit], start=1):
             st.divider()
             _render_pending_core_setting_item_editor(project_name, item, f"{key_prefix}_{index}")
@@ -470,6 +470,7 @@ def render_pending_core_setting_panel(project_name: str, story_id: str, setting_
 def render_settings_page(
     project_name: str,
     *,
+    library_view: str | None = None,
     render_memory_page,
     render_knowledge_organizer,
     render_pending_knowledge_queue,
@@ -502,20 +503,36 @@ def render_settings_page(
         "并不是另一套独立数据。"
     )
     view_key = scoped_widget_key("knowledge_library_view", project_name, story_id)
-    view = st.segmented_control(
-        "知识库视图",
-        options=["全部知识", "优先设定", "待审核知识", "故事管理"],
-        default="全部知识" if view_key not in st.session_state else None,
-        key=view_key,
-        width="stretch",
-        label_visibility="collapsed",
-    )
+    if library_view is None:
+        legacy_view_aliases = {
+            "查找与编辑": "全部知识",
+            "待审核": "待审核知识",
+            "故事管理": "优先设定",
+        }
+        if view_key in st.session_state:
+            st.session_state[view_key] = legacy_view_aliases.get(
+                str(st.session_state.get(view_key) or ""),
+                st.session_state.get(view_key),
+            )
+        view = st.segmented_control(
+            "知识库视图",
+            options=["全部知识", "优先设定", "待审核知识"],
+            default="全部知识" if view_key not in st.session_state else None,
+            key=view_key,
+            width="stretch",
+            label_visibility="collapsed",
+        )
+    else:
+        view = {
+            "查找与编辑": "全部知识",
+            "待审核": "待审核知识",
+        }.get(str(library_view), str(library_view))
     if view == "全部知识":
         all_view_key = scoped_widget_key("knowledge_library_all_view", project_name, story_id)
         all_view = st.segmented_control(
-            "全部知识视图",
+            "知识查找方式",
             options=["知识条目", "统一搜索", "创作实体"],
-            default="知识条目" if all_view_key not in st.session_state else None,
+            default="统一搜索" if all_view_key not in st.session_state else None,
             key=all_view_key,
             width="stretch",
             label_visibility="collapsed",
@@ -548,10 +565,6 @@ def render_settings_page(
         else:
             render_pending_knowledge_queue(project_name)
         return
-    if view == "故事管理":
-        _render_story_management_tab(project_name)
-        return
-
     st.caption(
         f"当前正在管理“{current_story_name}”的优先设定。它们仍是知识库条目，"
         "可以设置为每次生成、内容相关时或仅手动选择时使用。"
@@ -561,6 +574,12 @@ def render_settings_page(
         _render_story_settings_tab(project_name, story_id, current_story_name, render_memory_page=render_memory_page)
     with project_tab:
         _render_project_settings_tab(project_name)
+
+
+def render_story_management_page(project_name: str) -> None:
+    """供工作台调用的故事管理门面，避免 Hub 依赖私有函数。"""
+
+    _render_story_management_tab(project_name)
 
 
 def _render_story_settings_tab(project_name: str, story_id: str, story_name: str, *, render_memory_page):
@@ -699,4 +718,4 @@ def _render_story_management_tab(project_name: str):
     st.markdown("#### 模型与费用")
     st.caption("模型服务、API 密钥、Token 预算和用量统计已集中到独立页面，避免与故事管理混在一起。")
     if st.button("前往模型与费用", key="settings_goto_llm", width="stretch"):
-        navigate_to("模型配置")
+        navigate_to_target("设置", view="模型与费用")

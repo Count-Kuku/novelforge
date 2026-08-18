@@ -62,7 +62,11 @@ def verify_protocol() -> None:
         )
         session_id = str(session["session_id"])
 
-        with patch.object(interactive_writing, "call_llm", return_value="雨落在旧桥上，旅人停住脚步。"):
+        with patch.object(interactive_writing, "call_llm", return_value="雨落在旧桥上，旅人停住脚步。"), patch.object(
+            interactive_writing,
+            "require_operation_capabilities",
+            return_value={"ready": True},
+        ):
             generation = interactive_writing.generate_writing_fragment(
                 project_name, story_id, session_id, "写一个雨夜开场", action_type="generate",
             )
