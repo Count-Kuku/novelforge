@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { api, ApiClientError } from '../../api/client'
+import { clearEditorDirty, markEditorDirty } from '../../ui/dirty'
 
 const workspace = useWorkspaceStore()
 const content = ref('')
@@ -17,15 +18,19 @@ const discussionText = ref('')
 const discussing = ref(false)
 const approving = ref(false)
 const discussionInput = ref<HTMLInputElement | null>(null)
+const editorId = 'planned-outline'
 
-watch(content, () => {
-  if (!loading.value) saved.value = false
-})
+function markOutlineDirty() {
+  saved.value = false
+  markEditorDirty(editorId)
+}
 
 onMounted(async () => {
   if (!workspace.activeProjectId || !workspace.activeStory) { loading.value = false; return }
   try {
     content.value = (await api.outline(workspace.activeProjectId, workspace.activeStory.story_id)).content
+    await nextTick()
+    clearEditorDirty(editorId)
   } catch (reason) {
     error.value = reason instanceof ApiClientError ? reason.message : '无法读取大纲'
   } finally {
@@ -41,6 +46,7 @@ async function save() {
   try {
     await api.updateOutline(workspace.activeProjectId, workspace.activeStory.story_id, content.value)
     saved.value = true
+    clearEditorDirty(editorId)
   } catch (reason) {
     error.value = reason instanceof ApiClientError ? reason.message : '保存失败'
   } finally {
@@ -79,9 +85,11 @@ async function startSuggestedDiscussion() {
   await nextTick()
   discussionInput.value?.focus()
 }
+
+onUnmounted(() => clearEditorDirty(editorId))
 </script>
 
-<template><section class="outline-page"><p class="eyebrow">02 / 结构与大纲</p><div class="title-row"><div><h2>管理全书主线、<em>转折与结局</em></h2><p>正式大纲单独保存；讨论结果只有在采用后才会进入后续规划。</p></div><span class="pill">正式规划资产</span></div><div v-if="loading" class="outline-state">正在读取大纲…</div><div v-else class="outline-editor"><div class="editor-heading"><div><p class="eyebrow">正式大纲</p><h3>全书大纲</h3></div><span v-if="saved" class="saved-state">已保存</span></div><textarea v-model="content" rows="14" placeholder="记录故事主线、关键转折和结局。上下文检查不会修改正式大纲。"></textarea><div class="editor-footer"><span v-if="error" class="error">{{ error }}</span><span v-else class="muted">内容将保存到当前故事。</span><div class="editor-actions"><button class="button secondary" :disabled="contextLoading" @click="previewContext">{{ contextLoading ? '检查中…' : '检查上下文' }}</button><button class="button accent" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存大纲' }}</button></div></div></div><div class="discussion-panel"><div><p class="eyebrow">大纲讨论</p><h3>讨论一个具体的结构问题</h3></div><div class="discussion-row"><input ref="discussionInput" v-model="discussionIdea" placeholder="例如：第二幕转折是否足够明确？" @keydown.enter="discussOutline" /><button class="button secondary" :disabled="discussing || !discussionIdea.trim()" @click="discussOutline">{{ discussing ? '讨论中…' : '开始讨论' }}</button></div><div v-if="discussionText" class="discussion-result"><p>{{ discussionText }}<span v-if="discussing" class="discussion-cursor">▌</span></p><button v-if="discussionStep" class="button accent" :disabled="approving" @click="approveOutlineDiscussion">{{ approving ? '应用中…' : '采用这份结论' }}</button></div></div><div v-if="contextPreview" class="context-panel"><div><p class="eyebrow">上下文检查</p><h3>本次生成上下文</h3></div><div class="context-metrics"><span><strong>{{ contextPreview.total_estimated_tokens || 0 }}</strong>预计 tokens</span><span><strong>{{ contextPreview.included_block_count || 0 }}</strong>纳入块</span><span><strong>{{ contextPreview.omitted_block_count || 0 }}</strong>省略块</span></div><p class="muted">{{ (contextPreview.warnings || []).join('；') || '当前预算内未发现警告。' }}</p></div><div class="outline-board"><div class="board-column"><span class="column-index">01</span><h3>故事命题</h3><p>检查核心冲突、主角目标和故事承诺。</p><div class="ghost-line"></div><div class="ghost-line short"></div></div><div class="board-column highlighted"><span class="column-index">02</span><h3>世界与人物</h3><p>检查人物动机、关系和世界规则是否支撑主线。</p><button class="button secondary" @click="startSuggestedDiscussion">带入讨论 <span>→</span></button></div><div class="board-column"><span class="column-index">03</span><h3>章节节奏</h3><p>检查关键转折的章节位置和前后铺垫。</p><div class="ghost-line"></div><div class="ghost-line short"></div></div></div></section>
+<template><section class="outline-page"><p class="eyebrow">02 / 结构与大纲</p><div class="title-row"><div><h2>管理全书主线、<em>转折与结局</em></h2><p>正式大纲单独保存；讨论结果只有在采用后才会进入后续规划。</p></div><span class="pill">正式规划资产</span></div><div v-if="loading" class="outline-state">正在读取大纲…</div><div v-else class="outline-editor"><div class="editor-heading"><div><p class="eyebrow">正式大纲</p><h3>全书大纲</h3></div><span v-if="saved" class="saved-state">已保存</span></div><textarea v-model="content" rows="14" placeholder="记录故事主线、关键转折和结局。上下文检查不会修改正式大纲。" @input="markOutlineDirty"></textarea><div class="editor-footer"><span v-if="error" class="error">{{ error }}</span><span v-else class="muted">内容将保存到当前故事。</span><div class="editor-actions"><button class="button secondary" :disabled="contextLoading" @click="previewContext">{{ contextLoading ? '检查中…' : '检查上下文' }}</button><button class="button accent" :disabled="saving" @click="save">{{ saving ? '保存中…' : '保存大纲' }}</button></div></div></div><div class="discussion-panel"><div><p class="eyebrow">大纲讨论</p><h3>讨论一个具体的结构问题</h3></div><div class="discussion-row"><input ref="discussionInput" v-model="discussionIdea" placeholder="例如：第二幕转折是否足够明确？" @keydown.enter="discussOutline" /><button class="button secondary" :disabled="discussing || !discussionIdea.trim()" @click="discussOutline">{{ discussing ? '讨论中…' : '开始讨论' }}</button></div><div v-if="discussionText" class="discussion-result"><p>{{ discussionText }}<span v-if="discussing" class="discussion-cursor">▌</span></p><button v-if="discussionStep" class="button accent" :disabled="approving" @click="approveOutlineDiscussion">{{ approving ? '应用中…' : '采用这份结论' }}</button></div></div><div v-if="contextPreview" class="context-panel"><div><p class="eyebrow">上下文检查</p><h3>本次生成上下文</h3></div><div class="context-metrics"><span><strong>{{ contextPreview.total_estimated_tokens || 0 }}</strong>预计 tokens</span><span><strong>{{ contextPreview.included_block_count || 0 }}</strong>纳入块</span><span><strong>{{ contextPreview.omitted_block_count || 0 }}</strong>省略块</span></div><p class="muted">{{ (contextPreview.warnings || []).join('；') || '当前预算内未发现警告。' }}</p></div><div class="outline-board"><div class="board-column"><span class="column-index">01</span><h3>故事命题</h3><p>检查核心冲突、主角目标和故事承诺。</p><div class="ghost-line"></div><div class="ghost-line short"></div></div><div class="board-column highlighted"><span class="column-index">02</span><h3>世界与人物</h3><p>检查人物动机、关系和世界规则是否支撑主线。</p><button class="button secondary" @click="startSuggestedDiscussion">带入讨论 <span>→</span></button></div><div class="board-column"><span class="column-index">03</span><h3>章节节奏</h3><p>检查关键转折的章节位置和前后铺垫。</p><div class="ghost-line"></div><div class="ghost-line short"></div></div></div></section>
 </template>
 <style scoped>
 .outline-page { max-width: 1180px; margin: 0 auto; }.title-row { display: flex; align-items: end; justify-content: space-between; gap: 25px; margin: 10px 0 45px; }.title-row h2 { margin: 0; font-family: Georgia, serif; font-size: clamp(35px, 4.6vw, 59px); font-weight: 400; letter-spacing: -.055em; }.title-row h2 em { color: var(--accent); font-style: normal; }.title-row p { margin: 18px 0 0; color: var(--muted); font-size: 14px; }.outline-board { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }.board-column { min-height: 310px; padding: 28px; border: 1px solid var(--line); border-radius: 20px; background: rgba(255,253,249,.65); }.board-column.highlighted { color: #f8f2e9; border-color: #3c3833; background: #363330; box-shadow: 0 18px 50px rgba(57,45,35,.13); }.column-index { color: var(--accent); font-family: Georgia, serif; font-size: 21px; }.board-column h3 { margin: 32px 0 15px; font-family: Georgia, serif; font-size: 24px; font-weight: 400; }.board-column p { color: var(--muted); font-size: 13px; line-height: 1.8; }.highlighted p { color: #ada69b; }.board-column .button { margin-top: 32px; }.ghost-line { width: 82%; height: 8px; margin-top: 45px; border-radius: 99px; background: #e9e1d6; }.ghost-line.short { width: 52%; margin-top: 10px; }.highlighted .ghost-line { background: #4e4943; }

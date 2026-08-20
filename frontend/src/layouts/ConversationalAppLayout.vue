@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRouter } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api } from '../api/client'
 import type { CreativeSession } from '../types'
 import { dialog } from '../ui/dialog'
 import { notify } from '../ui/notifications'
+import { clearAllEditorDirty, hasDirtyEditors } from '../ui/dirty'
 
 const workspace = useWorkspaceStore()
 const router = useRouter()
+const route = useRoute()
+const viewKey = computed(() => `${workspace.activeProjectId}:${workspace.activeStoryId}:${route.fullPath}`)
 const projectLabel = computed(() => workspace.activeProject?.title || workspace.activeProject?.name || '未选择项目')
 const sessions = ref<CreativeSession[]>([])
 const sessionError = ref('')
@@ -31,15 +34,21 @@ onMounted(loadSessions)
 watch(() => [workspace.activeProjectId, workspace.activeStoryId], loadSessions)
 
 async function switchToPlan() {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '切换工作台会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续切换', tone: 'danger' })) return
+  clearAllEditorDirty()
   await workspace.setMode('planned')
   await router.push('/planned')
 }
 
 async function changeProject(event: Event) {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '切换项目会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续切换', tone: 'danger' })) return
+  clearAllEditorDirty()
   await workspace.selectProject((event.target as HTMLSelectElement).value)
 }
 
 async function changeStory(event: Event) {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '切换故事会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续切换', tone: 'danger' })) return
+  clearAllEditorDirty()
   await workspace.selectStory((event.target as HTMLSelectElement).value)
 }
 
@@ -91,7 +100,7 @@ function sessionStatusLabel(status: string) {
       <div class="session-list"><p class="eyebrow">最近会话</p><div v-if="sessionError" class="session-empty error">{{ sessionError }}</div><template v-else><div v-for="session in sessions" :key="session.session_id" class="session-row"><RouterLink class="session-link" :to="{ name: 'conversational-session', params: { sessionId: session.session_id } }">{{ session.title || session.session_goal }}<small>{{ sessionStatusLabel(session.status) }}</small></RouterLink><button v-if="session.status !== 'archived'" class="session-archive" aria-label="归档会话" title="归档会话" @click="archiveSession(session)">···</button></div><div v-if="!sessions.length" class="session-empty">暂无会话。<br />点击上方按钮开始一次写作或讨论。</div></template></div>
       <div class="chat-sidebar-footer"><RouterLink to="/conversational/workspace"><span>⌂</span>共享工作区</RouterLink><RouterLink to="/conversational/workspace/content"><span>▦</span>内容浏览</RouterLink><RouterLink to="/conversational/workspace/entities"><span>◎</span>实体与时间线</RouterLink><RouterLink to="/conversational/workspace/graph"><span>◇</span>关系图</RouterLink><RouterLink to="/conversational/workspace/research"><span>⌁</span>网络研究</RouterLink><RouterLink to="/conversational/settings"><span>⚙</span>模型与能力</RouterLink><RouterLink to="/conversational/rules"><span>≡</span>规则与偏好</RouterLink><RouterLink to="/"><span>⇄</span>切换到规划工作台</RouterLink><button class="chat-danger" @click="archiveStory"><span>□</span>归档当前故事</button><button class="chat-danger" @click="deleteProject"><span>×</span>删除项目</button></div>
     </aside>
-    <main class="chat-main"><header class="chat-topbar"><div class="mode-badge"><i></i>自由对话</div><div class="chat-top-actions"><button class="mode-toggle" @click="switchToPlan">切到规划工作台</button><span class="live-dot"></span>本地工作区 <span class="chat-avatar" aria-hidden="true">NF</span></div></header><RouterView /></main>
+    <main class="chat-main"><header class="chat-topbar"><div class="mode-badge"><i></i>自由对话</div><div class="chat-top-actions"><button class="mode-toggle" @click="switchToPlan">切到规划工作台</button><span class="live-dot"></span>本地工作区 <span class="chat-avatar" aria-hidden="true">NF</span></div></header><RouterView :key="viewKey" /></main>
   </div>
 </template>
 

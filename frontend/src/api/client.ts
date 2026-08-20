@@ -90,14 +90,21 @@ async function streamSse(
   let operationId = ''
   let cursor = 0
   let lastError: unknown = new ApiClientError(`${label}连接意外结束`, 499, 'stream_disconnected')
+  let reconnectAttempt = 0
+  const recoveryDeadline = Date.now() + 120_000
 
-  for (let attempt = 0; attempt <= 3; attempt += 1) {
+  while (true) {
     if (operationId) {
-      const replay = await replayOperationEvents(operationId, cursor, onEvent)
-      cursor = replay.cursor
-      if (replay.terminal) return
-      if (attempt >= 3) throw lastError
-      await new Promise((resolve) => globalThis.setTimeout(resolve, 300 * attempt))
+      try {
+        const replay = await replayOperationEvents(operationId, cursor, onEvent)
+        cursor = replay.cursor
+        if (replay.terminal) return
+      } catch (reason) {
+        lastError = reason
+      }
+      if (Date.now() >= recoveryDeadline) throw lastError
+      reconnectAttempt += 1
+      await new Promise((resolve) => globalThis.setTimeout(resolve, Math.min(300 * reconnectAttempt, 2_000)))
       continue
     }
     try {
@@ -133,9 +140,11 @@ async function streamSse(
       lastError = reason
       if (!operationId) throw reason
     }
-    if (!operationId || attempt >= 3) throw lastError
+    if (!operationId) throw lastError
+    if (Date.now() >= recoveryDeadline) throw lastError
+    reconnectAttempt += 1
+    await new Promise((resolve) => globalThis.setTimeout(resolve, Math.min(300 * reconnectAttempt, 2_000)))
   }
-  throw lastError
 }
 
 export const api = {
@@ -170,6 +179,7 @@ export const api = {
   capabilities: () => request<{ capabilities: Record<string, { available: boolean; status: string; message: string; provider?: string }> }>('/capabilities'),
   developerSettings: () => request<{ enabled: boolean; projections: string[] }>('/settings/developer'),
   operationEvents: (operationId: string, after = 0) => request<{ operation_id: string; events: OperationEvent[] }>(`/operations/${encodeURIComponent(operationId)}/events?after=${Math.max(0, after)}`),
+  cancelOperation: (operationId: string) => request<{ operation_id: string; status: string }>(`/operations/${encodeURIComponent(operationId)}/cancel`, { method: 'POST', body: '{}' }),
   usage: (projectId?: string, storyId?: string) => request<{ today: Record<string, unknown>; month: Record<string, unknown>; daily: unknown[]; recent: unknown[] }>(`/usage${projectId ? `?project_id=${encodeURIComponent(projectId)}${storyId ? `&story_id=${encodeURIComponent(storyId)}` : ''}` : ''}`),
   usageBreakdown: (dimension: 'project' | 'story' | 'model' | 'operation' | 'agent', projectId?: string, storyId?: string) => request<{ dimension: string; rows: Record<string, unknown>[] }>(`/usage/breakdown?dimension=${encodeURIComponent(dimension)}${projectId ? `&project_id=${encodeURIComponent(projectId)}` : ''}${storyId ? `&story_id=${encodeURIComponent(storyId)}` : ''}`),
   modelProfiles: () => request<{ active_profile_id: string; profiles: Record<string, unknown>[] }>('/settings/models'),

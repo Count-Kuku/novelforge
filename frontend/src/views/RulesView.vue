@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
 import { dialog } from '../ui/dialog'
+import { clearEditorDirty, markEditorDirty } from '../ui/dirty'
 
 type RuleScope = 'all' | 'outline' | 'chapter_outline' | 'write' | 'review' | 'setting_extraction'
 type RuleLayer = 'global' | 'project' | 'story'
@@ -39,6 +40,13 @@ const saving = ref(false)
 const configuring = ref(false)
 const message = ref('')
 const messageTone = ref<'success' | 'error'>('success')
+const savedSections = ref<string[]>([])
+const editorId = 'rules'
+const hydrated = ref(false)
+
+watch([ruleDrafts, promptOptions], () => {
+  if (hydrated.value) markEditorDirty(editorId)
+}, { deep: true, flush: 'sync' })
 
 function emptyRuleDrafts(): Record<RuleLayer, Record<RuleScope, string>> {
   const layer = () => Object.fromEntries(ruleScopes.map((scope) => [scope.key, ''])) as Record<RuleScope, string>
@@ -66,6 +74,7 @@ function listText(value: unknown): string {
 
 async function load() {
   if (!workspace.activeProjectId || !workspace.activeStory) { loading.value = false; return }
+  hydrated.value = false
   loading.value = true
   message.value = ''
   try {
@@ -80,6 +89,9 @@ async function load() {
     fillLayer('story', data.story || layers.story || {})
     promptOptions.value = (options.options || []).map((item) => ({ ...item }))
     autoConfig.value = auto.state || {}
+    await nextTick()
+    hydrated.value = true
+    clearEditorDirty(editorId)
   } catch (reason) {
     message.value = reason instanceof ApiClientError ? reason.message : '无法读取规则与偏好'
     messageTone.value = 'error'
@@ -88,17 +100,26 @@ async function load() {
 
 async function save() {
   if (!workspace.activeProjectId || !workspace.activeStory || saving.value) return
+  const projectId = workspace.activeProjectId
+  const storyId = workspace.activeStory.story_id
   saving.value = true
   message.value = ''
+  savedSections.value = []
   try {
-    await api.updateSettingsRules('global', serializeLayer('global'), workspace.activeProjectId, workspace.activeStory.story_id)
-    await api.updateSettingsRules('project', serializeLayer('project'), workspace.activeProjectId, workspace.activeStory.story_id)
-    await api.updateRules(workspace.activeProjectId, workspace.activeStory.story_id, serializeLayer('story'))
-    await api.updatePromptOptions('story', promptOptions.value, workspace.activeProjectId, workspace.activeStory.story_id)
+    await api.updateSettingsRules('global', serializeLayer('global'), projectId, storyId)
+    savedSections.value.push('全局规则')
+    await api.updateSettingsRules('project', serializeLayer('project'), projectId, storyId)
+    savedSections.value.push('项目规则')
+    await api.updateRules(projectId, storyId, serializeLayer('story'))
+    savedSections.value.push('故事规则')
+    await api.updatePromptOptions('story', promptOptions.value, projectId, storyId)
+    savedSections.value.push('提示词选项')
     message.value = '规则与提示词选项已保存'
     messageTone.value = 'success'
+    clearEditorDirty(editorId)
   } catch (reason) {
-    message.value = reason instanceof Error ? reason.message : '保存失败'
+    const completed = savedSections.value.length ? `已保存：${savedSections.value.join('、')}。` : ''
+    message.value = `${completed}${reason instanceof Error ? reason.message : '保存失败'} 请检查后重试。`
     messageTone.value = 'error'
   } finally { saving.value = false }
 }
@@ -140,6 +161,7 @@ async function runAutoConfig() {
 }
 
 onMounted(load)
+onUnmounted(() => clearEditorDirty(editorId))
 </script>
 
 <template>

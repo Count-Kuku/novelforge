@@ -68,6 +68,40 @@ def update_creative_action(project_name: str, action_id: str, updates: dict) -> 
     return saved
 
 
+def claim_creative_action(
+    project_name: str,
+    action_id: str,
+    story_id: str,
+    session_id: str,
+    from_statuses: tuple[str, ...],
+    updates: dict | None = None,
+) -> dict:
+    with _open(project_name) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        saved = _memory_api.claim_creative_action_row(
+            conn, action_id, story_id, session_id, from_statuses, updates,
+        )
+        conn.commit()
+    return saved
+
+
+def transition_creative_action(
+    project_name: str,
+    action_id: str,
+    story_id: str,
+    session_id: str,
+    from_status: str,
+    to_status: str,
+) -> dict:
+    with _open(project_name) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        saved = _memory_api.transition_creative_action_row(
+            conn, action_id, story_id, session_id, from_status, to_status,
+        )
+        conn.commit()
+    return saved
+
+
 def save_creative_config_revision(project_name: str, revision: dict) -> dict:
     payload = dict(revision or {})
     payload["revision_id"] = str(

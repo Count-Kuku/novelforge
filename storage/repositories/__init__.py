@@ -50,6 +50,7 @@ from .creative_attachments import (
     upsert_creative_attachment_row,
 )
 from .creative_actions import (
+    claim_creative_action_row,
     insert_creative_action_row,
     insert_creative_config_revision_row,
     insert_creative_message_row,
@@ -58,6 +59,7 @@ from .creative_actions import (
     load_creative_action_row,
     load_creative_config_revision_row,
     mark_creative_config_revision_reversed_row,
+    transition_creative_action_row,
     update_creative_action_row,
 )
 from .knowledge import (
@@ -211,6 +213,7 @@ __all__ = [
     "update_creative_attachment_row",
     "upsert_creative_attachment_row",
     "insert_creative_action_row",
+    "claim_creative_action_row",
     "insert_creative_config_revision_row",
     "insert_creative_message_row",
     "list_creative_action_rows",
@@ -218,6 +221,7 @@ __all__ = [
     "load_creative_action_row",
     "load_creative_config_revision_row",
     "mark_creative_config_revision_reversed_row",
+    "transition_creative_action_row",
     "update_creative_action_row",
     "rename_project_meta",
     "set_project_maintenance_mode",

@@ -28,6 +28,7 @@ from novelforge.workflows.interactive_writing import (
     extract_fragment_knowledge,
     save_writing_session_as_chapter,
 )
+from novelforge.services.memory.creative_actions import claim_creative_action, transition_creative_action
 
 
 def _now() -> str:
@@ -162,22 +163,36 @@ def execute_creative_action(
     project_name: str,
     action_id: str,
     *,
+    story_id: str = "",
+    session_id: str = "",
     confirmed: bool = False,
     stream_callback=None,
 ) -> dict:
     action = load_creative_action(project_name, action_id)
     if not action:
         raise ValueError("创作动作不存在。")
+    expected_story_id = str(story_id or action.get("story_id") or "")
+    expected_session_id = str(session_id or action.get("session_id") or "")
+    if str(action.get("story_id") or "") != expected_story_id or str(action.get("session_id") or "") != expected_session_id:
+        raise ValueError("创作动作不属于当前故事或会话。")
     if action.get("status") in {"completed", "undone", "cancelled"}:
         return action
     if action.get("requires_confirmation") and not confirmed:
         return action
-    if action.get("requires_confirmation"):
-        action = update_creative_action(project_name, action_id, {
-            "status": "running", "confirmed_at": _now(),
-        })
-    else:
-        action = update_creative_action(project_name, action_id, {"status": "running"})
+    claimed = claim_creative_action(
+        project_name,
+        action_id,
+        expected_story_id,
+        expected_session_id,
+        ("awaiting_confirmation", "planned"),
+        {"confirmed_at": _now()} if action.get("requires_confirmation") else None,
+    )
+    if not claimed:
+        current = load_creative_action(project_name, action_id)
+        if current and current.get("status") in {"completed", "undone", "cancelled"}:
+            return current
+        raise ValueError("创作动作正在执行或状态已改变，请刷新后重试。")
+    action = claimed
 
     try:
         action_type = str(action.get("action_type") or "clarify")
@@ -247,66 +262,85 @@ def execute_creative_action(
         raise
 
 
-def cancel_creative_action(project_name: str, action_id: str) -> dict:
+def cancel_creative_action(project_name: str, action_id: str, story_id: str = "", session_id: str = "") -> dict:
     action = load_creative_action(project_name, action_id)
-    if not action or action.get("status") != "awaiting_confirmation":
+    if not action or str(action.get("story_id") or "") != str(story_id or action.get("story_id") or "") or str(action.get("session_id") or "") != str(session_id or action.get("session_id") or ""):
+        raise ValueError("创作动作不属于当前故事或会话。")
+    claimed = transition_creative_action(
+        project_name, action_id, str(story_id or action.get("story_id") or ""),
+        str(session_id or action.get("session_id") or ""), "awaiting_confirmation", "cancelled",
+    )
+    if not claimed:
         raise ValueError("只有等待确认的动作可以取消。")
-    return update_creative_action(project_name, action_id, {
-        "status": "cancelled", "finished_at": _now(),
-    })
+    return update_creative_action(project_name, action_id, {"finished_at": _now()})
 
 
 def undo_creative_action(
     project_name: str,
     action_id: str,
     *,
+    story_id: str = "",
+    session_id: str = "",
     idempotency_key: str = "",
 ) -> dict:
     original = load_creative_action(project_name, action_id)
     if not original or original.get("status") != "completed" or not original.get("undo"):
         raise ValueError("该动作不可撤销或已经撤销。")
-    reverse = save_creative_action(project_name, {
-        "action_id": f"creative_action_{uuid4().hex}",
-        "story_id": original.get("story_id"), "session_id": original.get("session_id"),
-        "action_type": original.get("action_type"), "status": "running",
-        "scope": original.get("scope"), "target": original.get("target"),
-        "patch": {}, "plan": {"undoes": action_id},
-        "idempotency_key": idempotency_key or f"undo:{action_id}",
-    })
-    undo = dict(original.get("undo") or {})
-    if original.get("action_type") == "update_config":
-        revision = load_creative_config_revision(project_name, action_id)
-        before = dict(undo.get("before") or {})
-        if original.get("scope") == "story":
-            save_creative_profile(
-                project_name, before, str(original.get("story_id") or ""),
-                mark_configured=bool(before.get("is_configured")),
-            )
+    expected_story_id = str(story_id or original.get("story_id") or "")
+    expected_session_id = str(session_id or original.get("session_id") or "")
+    if str(original.get("story_id") or "") != expected_story_id or str(original.get("session_id") or "") != expected_session_id:
+        raise ValueError("创作动作不属于当前故事或会话。")
+    claimed_original = transition_creative_action(
+        project_name, action_id, expected_story_id, expected_session_id, "completed", "running",
+    )
+    if not claimed_original:
+        raise ValueError("该动作正在撤销或状态已改变，请刷新后重试。")
+    try:
+        reverse = save_creative_action(project_name, {
+            "action_id": f"creative_action_{uuid4().hex}",
+            "story_id": original.get("story_id"), "session_id": original.get("session_id"),
+            "action_type": original.get("action_type"), "status": "running",
+            "scope": original.get("scope"), "target": original.get("target"),
+            "patch": {}, "plan": {"undoes": action_id},
+            "idempotency_key": idempotency_key or f"undo:{action_id}",
+        })
+        undo = dict(original.get("undo") or {})
+        if original.get("action_type") == "update_config":
+            revision = load_creative_config_revision(project_name, action_id)
+            before = dict(undo.get("before") or {})
+            if original.get("scope") == "story":
+                save_creative_profile(
+                    project_name, before, str(original.get("story_id") or ""),
+                    mark_configured=bool(before.get("is_configured")),
+                )
+            else:
+                update_creative_session(
+                    project_name, str(original.get("session_id") or ""), before,
+                    story_id=str(original.get("story_id") or ""),
+                )
+            if revision:
+                mark_creative_config_revision_reversed(
+                    project_name, str(revision.get("revision_id") or ""),
+                    str(reverse.get("action_id") or ""),
+                )
+        elif original.get("action_type") == "update_knowledge":
+            if not update_confirmed_knowledge_item_record(
+                project_name, str(undo.get("category") or ""),
+                str(undo.get("item_id") or ""), dict(undo.get("before") or {}),
+            ):
+                raise RuntimeError("知识撤销未能提交。")
         else:
-            update_creative_session(
-                project_name, str(original.get("session_id") or ""), before,
-                story_id=str(original.get("story_id") or ""),
-            )
-        if revision:
-            mark_creative_config_revision_reversed(
-                project_name, str(revision.get("revision_id") or ""),
-                str(reverse.get("action_id") or ""),
-            )
-    elif original.get("action_type") == "update_knowledge":
-        if not update_confirmed_knowledge_item_record(
-            project_name, str(undo.get("category") or ""),
-            str(undo.get("item_id") or ""), dict(undo.get("before") or {}),
-        ):
-            raise RuntimeError("知识撤销未能提交。")
-    else:
-        raise ValueError("该动作不支持撤销。")
-    update_creative_action(project_name, action_id, {
-        "status": "undone", "finished_at": original.get("finished_at") or _now(),
-    })
-    return update_creative_action(project_name, str(reverse.get("action_id") or ""), {
-        "status": "completed", "result": {"undone_action_id": action_id},
-        "finished_at": _now(),
-    })
+            raise ValueError("该动作不支持撤销。")
+        update_creative_action(project_name, action_id, {
+            "status": "undone", "finished_at": original.get("finished_at") or _now(),
+        })
+        return update_creative_action(project_name, str(reverse.get("action_id") or ""), {
+            "status": "completed", "result": {"undone_action_id": action_id},
+            "finished_at": _now(),
+        })
+    except Exception:
+        update_creative_action(project_name, action_id, {"status": "completed"})
+        raise
 
 
 def record_creative_generation_action(

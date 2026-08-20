@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,6 +30,7 @@ from novelforge.workflows.creative_actions import (
     plan_creative_action,
     undo_creative_action,
 )
+import novelforge.workflows.creative_actions as creative_actions_workflow
 from tools.verify_utils import isolated_workspace
 
 
@@ -99,6 +102,29 @@ def verify_protocol() -> None:
         undo_creative_action(project_name, config["action_id"])
         undone_bundle = load_creative_session_bundle(project_name, session_id, story_id=story_id) or {}
         check(undone_bundle["session"].get("writing_guidance", {}).get("tone") != "克制", "配置动作可通过新动作撤销")
+        try:
+            execute_creative_action(project_name, config["action_id"], story_id="other-story", session_id=session_id, confirmed=True)
+        except ValueError:
+            check(True, "动作执行拒绝跨故事作用域")
+        else:
+            check(False, "动作执行拒绝跨故事作用域")
+
+        race = plan_creative_action(
+            project_name, story_id, session_id, "/配置 文风=克制，节奏=慢推",
+            idempotency_key="config-race-one",
+        )
+        calls: list[str] = []
+
+        def slow_config(project: str, action: dict) -> tuple[dict, dict]:
+            calls.append(str(action.get("action_id") or ""))
+            time.sleep(0.05)
+            return {"writing_guidance": {}, "target_chapter_no": None}, {"before": {}}
+
+        with patch.object(creative_actions_workflow, "_apply_config", side_effect=slow_config):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(execute_creative_action, project_name, race["action_id"], confirmed=True) for _ in range(2)]
+                outcomes = [future.result() for future in futures if not future.exception()]
+        check(len(calls) == 1 and len(outcomes) == 1, "并发执行同一动作只领取一次")
 
         story_config = plan_creative_action(
             project_name, story_id, session_id, "/配置 参考强度=严格原作",

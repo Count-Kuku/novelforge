@@ -16,6 +16,8 @@ import KnowledgeEntitiesView from './views/KnowledgeEntitiesView.vue'
 import ContentBrowserView from './views/ContentBrowserView.vue'
 import KnowledgeEditorView from './views/KnowledgeEditorView.vue'
 import { useWorkspaceStore } from './stores/workspace'
+import { clearAllEditorDirty, hasDirtyEditors } from './ui/dirty'
+import { dialog } from './ui/dialog'
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -62,7 +64,13 @@ export const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
-  if (to.name === 'mode-picker' || to.name === 'components') return true
+  if (to.name === 'components') return true
+  if (hasDirtyEditors.value) {
+    const proceed = await dialog.confirm({ title: '放弃未保存修改？', message: '离开当前页面会丢失尚未保存的修改。', confirmLabel: '继续离开', tone: 'danger' })
+    if (!proceed) return false
+    clearAllEditorDirty()
+  }
+  if (to.name === 'mode-picker') return true
   const workspace = useWorkspaceStore()
   if (!workspace.ready) await workspace.load()
   const requestedMode = to.path.startsWith('/conversational') ? 'conversational' : 'planned'

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { api } from '../../api/client'
+import { clearEditorDirty, markEditorDirty } from '../../ui/dirty'
 
 const workspace = useWorkspaceStore()
 const hasStory = computed(() => Boolean(workspace.activeStory))
@@ -15,12 +16,14 @@ const discussionText = ref('')
 const discussionStep = ref<Record<string, any> | null>(null)
 const discussing = ref(false)
 const approving = ref(false)
+const editorId = 'planned-direction'
 
 async function loadProfile() {
   if (!workspace.activeProjectId || !workspace.activeStory) return
   profileLoading.value = true
   try {
     profile.value = (await api.profile(workspace.activeProjectId, workspace.activeStory.story_id)).profile || {}
+    clearEditorDirty(editorId)
   } catch (reason) {
     profile.value = {}
     profileMessage.value = reason instanceof Error ? reason.message : '创作方向读取失败'
@@ -35,6 +38,7 @@ async function saveProfile() {
   profileMessage.value = ''
   try {
     profile.value = (await api.updateProfile(workspace.activeProjectId, workspace.activeStory.story_id, profile.value)).profile
+    clearEditorDirty(editorId)
     profileMessage.value = '创作方向已保存'
   } catch (error) {
     profileMessage.value = error instanceof Error ? error.message : '保存失败'
@@ -45,6 +49,7 @@ async function saveProfile() {
 
 function setProfileField(key: string, value: string | boolean) {
   profile.value = { ...profile.value, [key]: value }
+  markEditorDirty(editorId)
   profileMessage.value = ''
 }
 
@@ -58,10 +63,11 @@ async function discussProfile() {
 async function approveProfileDiscussion() {
   if (!workspace.activeProjectId || !workspace.activeStory || !discussionStep.value || approving.value) return
   approving.value = true
-  try { const data = await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionStep.value); if ((data.result as any)?.saved_profile) profile.value = (data.result as any).saved_profile; discussionText.value = '已采用讨论结论并更新创作方向。' } catch (error) { discussionText.value = error instanceof Error ? error.message : '应用结论失败' } finally { approving.value = false }
+  try { const data = await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionStep.value); if ((data.result as any)?.saved_profile) profile.value = (data.result as any).saved_profile; clearEditorDirty(editorId); discussionText.value = '已采用讨论结论并更新创作方向。' } catch (error) { discussionText.value = error instanceof Error ? error.message : '应用结论失败' } finally { approving.value = false }
 }
 
 onMounted(loadProfile)
+onUnmounted(() => clearEditorDirty(editorId))
 </script>
 
 <template>

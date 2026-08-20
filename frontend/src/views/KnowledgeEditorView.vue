@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
+import { clearEditorDirty, markEditorDirty } from '../ui/dirty'
 
 const route = useRoute()
 const workspace = useWorkspaceStore()
@@ -17,6 +18,12 @@ const loading = ref(true)
 const saving = ref(false)
 const message = ref('')
 const selectedRevision = computed(() => revisions.value.find((item) => String(item.revision_id) === selectedRevisionId.value) || null)
+const editorId = 'knowledge-editor'
+const hydrated = ref(false)
+
+watch(values, () => {
+  if (hydrated.value) markEditorDirty(editorId)
+}, { deep: true, flush: 'sync' })
 
 function stringify(value: unknown, kind: string) {
   return kind === 'list' && Array.isArray(value) ? value.join('\n') : String(value ?? '')
@@ -24,6 +31,7 @@ function stringify(value: unknown, kind: string) {
 
 async function load() {
   if (!workspace.activeProjectId) return
+  hydrated.value = false
   const type = String(route.params.recordType || 'knowledge')
   const id = String(route.params.recordId || '')
   try {
@@ -36,6 +44,9 @@ async function load() {
     revisionId.value = String(revisions.value[0]?.revision_id || '')
     selectedRevisionId.value = String(revisions.value[1]?.revision_id || revisions.value[0]?.revision_id || '')
     evidence.value = (await api.knowledgeEvidence(workspace.activeProjectId, type, id)).evidence || []
+    await nextTick()
+    hydrated.value = true
+    clearEditorDirty(editorId)
   } catch (reason) { message.value = reason instanceof ApiClientError ? reason.message : '知识编辑器读取失败' } finally { loading.value = false }
 }
 
@@ -53,10 +64,11 @@ async function save() {
   const typedData: Record<string, unknown> = {}
   const patch: Record<string, unknown> = { typed_data: typedData }
   for (const field of fields.value) typedData[field.key] = field.kind === 'list' ? values.value[field.key].split(/\r?\n|、|；/).map((item) => item.trim()).filter(Boolean) : values.value[field.key]
-  try { const result = await api.updateKnowledge(workspace.activeProjectId, String(route.params.recordType || 'knowledge'), String(route.params.recordId || ''), patch, 'Vue 类型化编辑', revisionId.value || undefined); record.value = result.record; message.value = '类型化知识修订已保存'; await load() } catch (reason) { message.value = reason instanceof ApiClientError && reason.status === 409 ? '条目已被修改，请重新加载后合并。' : reason instanceof Error ? reason.message : '保存失败' } finally { saving.value = false }
+  try { const result = await api.updateKnowledge(workspace.activeProjectId, String(route.params.recordType || 'knowledge'), String(route.params.recordId || ''), patch, 'Vue 类型化编辑', revisionId.value || undefined); record.value = result.record; clearEditorDirty(editorId); message.value = '类型化知识修订已保存'; await load() } catch (reason) { message.value = reason instanceof ApiClientError && reason.status === 409 ? '条目已被修改，请重新加载后合并。' : reason instanceof Error ? reason.message : '保存失败' } finally { saving.value = false }
 }
 
 onMounted(load)
+onUnmounted(() => clearEditorDirty(editorId))
 </script>
 
 <template>

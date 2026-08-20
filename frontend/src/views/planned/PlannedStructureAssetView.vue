@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api, ApiClientError } from '../../api/client'
 import { useWorkspaceStore } from '../../stores/workspace'
 import { dialog } from '../../ui/dialog'
+import { clearEditorDirty, markEditorDirty } from '../../ui/dirty'
 
 const route = useRoute()
 const workspace = useWorkspaceStore()
@@ -26,13 +27,23 @@ const chapterPlanJson = ref('{}')
 const chapterPlanReport = ref('')
 const chapterPlanSaving = ref(false)
 const planValidation = ref<Record<string, any> | null>(null)
+const editorId = 'planned-structure-asset'
+const hydrated = ref(false)
 
 watch(outline, () => {
-  if (!loading.value) saved.value = false
-})
+  if (hydrated.value) {
+    saved.value = false
+    markEditorDirty(editorId)
+  }
+}, { flush: 'sync' })
+
+watch([chapterPlanJson, chapterPlanReport], () => {
+  if (hydrated.value) markEditorDirty(editorId)
+}, { flush: 'sync' })
 
 async function loadAsset() {
   if (!workspace.activeProjectId || !workspace.activeStory) { loading.value = false; return }
+  hydrated.value = false
   loading.value = true
   try {
     const data = assetType.value === 'volume'
@@ -46,13 +57,16 @@ async function loadAsset() {
       chapterPlanJson.value = JSON.stringify(plan.plan || plan, null, 2)
       chapterPlanReport.value = String(plan.report_markdown || '')
     }
+    await nextTick()
+    hydrated.value = true
+    clearEditorDirty(editorId)
   } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '无法读取结构资产' } finally { loading.value = false }
 }
 
 async function saveChapterPlan() {
   if (assetType.value !== 'arc' || !workspace.activeProjectId || !workspace.activeStory || chapterPlanSaving.value) return
   chapterPlanSaving.value = true
-  try { const payload = JSON.parse(chapterPlanJson.value); planValidation.value = await api.validateArcChapterPlan(workspace.activeProjectId, workspace.activeStory.story_id, assetNo.value, payload); if (planValidation.value.valid === false) { error.value = '章节计划存在结构冲突，已保留在编辑器中。'; return } await api.updateArcChapterPlan(workspace.activeProjectId, workspace.activeStory.story_id, assetNo.value, payload, chapterPlanReport.value); discussionText.value = '章节计划已保存，结构校验通过。' }
+  try { const payload = JSON.parse(chapterPlanJson.value); planValidation.value = await api.validateArcChapterPlan(workspace.activeProjectId, workspace.activeStory.story_id, assetNo.value, payload); if (planValidation.value.valid === false) { error.value = '章节计划存在结构冲突，已保留在编辑器中。'; return } await api.updateArcChapterPlan(workspace.activeProjectId, workspace.activeStory.story_id, assetNo.value, payload, chapterPlanReport.value); clearEditorDirty(editorId); discussionText.value = '章节计划已保存，结构校验通过。' }
   catch (reason) { error.value = reason instanceof Error ? reason.message : '章节计划保存失败' }
   finally { chapterPlanSaving.value = false }
 }
@@ -65,6 +79,7 @@ async function save() {
     if (assetType.value === 'volume') await api.updateVolume(workspace.activeProjectId, workspace.activeStory.story_id, assetNo.value, outline.value)
     else await api.updateArc(workspace.activeProjectId, workspace.activeStory.story_id, assetNo.value, outline.value)
     saved.value = true
+    clearEditorDirty(editorId)
   } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '保存失败' } finally { saving.value = false }
 }
 
@@ -94,6 +109,7 @@ async function deleteAsset() {
 }
 
 onMounted(loadAsset)
+onUnmounted(() => clearEditorDirty(editorId))
 </script>
 
 <template>

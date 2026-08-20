@@ -45,14 +45,19 @@ async function createWorkspace() {
   if (!projectName.value.trim() || !storyName.value.trim()) return
   creating.value = true
   error.value = ''
+  let createdProjectId = ''
   try {
     const project = await api.createProject({ name: projectName.value.trim(), title: projectName.value.trim() })
+    createdProjectId = project.project.project_id
     const story = await api.createStory(project.project.project_id, { name: storyName.value.trim(), creation_mode: creationMode.value })
     await workspace.load()
     await workspace.selectProject(project.project.project_id)
     await workspace.selectStory(story.story.story_id)
     await router.push(creationMode.value === 'conversational' ? '/conversational' : '/planned')
   } catch (reason) {
+    if (createdProjectId) {
+      try { await api.deleteProject(createdProjectId) } catch { /* 保留原始错误；服务端会在下次启动时暴露残留项目 */ }
+    }
     error.value = reason instanceof ApiClientError ? reason.message : '创建工作区失败'
   } finally {
     creating.value = false

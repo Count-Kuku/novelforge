@@ -77,6 +77,22 @@ test.describe('双工作台入口', () => {
     expect(creationMode).toBe('planned')
   })
 
+  test('切换故事会重建编辑器并加载新故事内容', async ({ page }) => {
+    await page.route('**/api/v1/bootstrap', async (route) => route.fulfill({ json: { data: { projects: [{ project_id: 'p-context', name: '上下文项目', title: '上下文项目' }], frontend_modes: ['planned', 'conversational'] } } }))
+    await page.route('**/api/v1/projects/p-context/stories', async (route) => route.fulfill({ json: { data: { stories: [{ story_id: 's-context-a', name: '故事 A', creation_mode: 'planned' }, { story_id: 's-context-b', name: '故事 B', creation_mode: 'planned' }] } } }))
+    await page.route('**/api/v1/projects/p-context/stories/*/profile', async (route) => route.fulfill({ json: { data: { profile: {} } } }))
+    await page.route('**/api/v1/projects/p-context/stories/*/structure', async (route) => route.fulfill({ json: { data: { volumes: [], arcs: [], chapters: [] } } }))
+    await page.route('**/api/v1/projects/p-context/stories/*/outline', async (route) => {
+      const content = route.request().url().includes('s-context-b') ? '故事 B 的正式大纲' : '故事 A 的正式大纲'
+      if (route.request().method() === 'GET') await route.fulfill({ json: { data: { content } } })
+      else await route.fulfill({ json: { data: { content } } })
+    })
+    await page.goto('/planned/outline')
+    await expect(page.locator('textarea').first()).toHaveValue('故事 A 的正式大纲')
+    await page.getByLabel('选择故事').selectOption('s-context-b')
+    await expect(page.locator('textarea').first()).toHaveValue('故事 B 的正式大纲')
+  })
+
   test('重命名和危险操作使用工作台内弹窗', async ({ page }) => {
     await page.route('**/api/v1/bootstrap', async (route) => route.fulfill({ json: { data: { projects: [{ project_id: 'p-dialog', name: '弹窗项目', title: '弹窗项目' }], frontend_modes: ['planned', 'conversational'] } } }))
     await page.route('**/api/v1/projects/p-dialog/stories', async (route) => route.fulfill({ json: { data: { stories: [{ story_id: 's-dialog', name: '弹窗故事', creation_mode: 'planned' }] } } }))
@@ -87,7 +103,7 @@ test.describe('双工作台入口', () => {
     await expect(page.getByRole('dialog', { name: '重命名故事' })).toBeVisible()
     await expect(page.getByLabel('故事名称')).toHaveValue('弹窗故事')
     await page.keyboard.press('Shift+Tab')
-    await expect(page.getByRole('button', { name: '保存' })).toBeFocused()
+    await expect(page.getByRole('button', { name: '保存', exact: true })).toBeFocused()
     await page.keyboard.press('Escape')
     await expect(page.getByRole('dialog', { name: '重命名故事' })).toBeHidden()
     await expect(renameButton).toBeFocused()

@@ -12,6 +12,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const loading = ref(false)
   const error = ref('')
   let loadTask: Promise<void> | null = null
+  let storiesRequest = 0
 
   const activeProject = computed(() => projects.value.find((project) => project.project_id === activeProjectId.value) || null)
   const activeStory = computed(() => stories.value.find((story) => story.story_id === activeStoryId.value) || stories.value[0] || null)
@@ -44,13 +45,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
   }
 
-  async function loadStories() {
-    if (!activeProjectId.value) {
-      stories.value = []
-      return
-    }
-    const data = await api.stories(activeProjectId.value)
-    stories.value = data.stories
+  function applyStories(projectId: string, nextStories: StoryItem[]) {
+    if (projectId !== activeProjectId.value) return
+    stories.value = nextStories
     if (!stories.value.some((story) => story.story_id === activeStoryId.value)) {
       activeStoryId.value = stories.value[0]?.story_id || 'default'
     }
@@ -58,9 +55,25 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     localStorage.setItem('novelforge.story', activeStoryId.value)
   }
 
+  async function loadStories() {
+    const projectId = activeProjectId.value
+    if (!projectId) {
+      stories.value = []
+      return
+    }
+    const request = ++storiesRequest
+    const data = await api.stories(projectId)
+    if (request !== storiesRequest || projectId !== activeProjectId.value) return
+    applyStories(projectId, data.stories)
+  }
+
   async function selectProject(projectId: string) {
+    if (!projectId || projectId === activeProjectId.value) return
+    const request = ++storiesRequest
+    const data = await api.stories(projectId)
+    if (request !== storiesRequest) return
     activeProjectId.value = projectId
-    await loadStories()
+    applyStories(projectId, data.stories)
   }
 
   async function selectStory(storyId: string) {

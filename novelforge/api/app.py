@@ -168,7 +168,7 @@ def _sse(event: str, data: Any, *, event_id: str | None = None) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def _threaded_stream(worker: Callable[[Callable[[str, Any], None]], Any]) -> AsyncIterator[str]:
+def _threaded_stream(worker: Callable[[Callable[[str, Any], None], Callable[[], bool]], Any]) -> AsyncIterator[str]:
     """Bridge a synchronous workflow callback into an async SSE iterator."""
 
     async def iterator() -> AsyncIterator[str]:
@@ -183,10 +183,16 @@ def _threaded_stream(worker: Callable[[Callable[[str, Any], None]], Any]) -> Asy
 
         def run() -> None:
             try:
-                result = worker(emit)
+                result = worker(emit, lambda: operation_registry.is_cancel_requested(operation_id))
+                if operation_registry.is_cancel_requested(operation_id):
+                    operation_registry.finish(operation_id, "cancelled")
+                    return
                 operation_registry.finish(operation_id, "completed")
                 emit("done", {"operation_id": operation_id, "result": result})
             except Exception as exc:  # pragma: no cover - exercised by API smoke tests
+                if operation_registry.is_cancel_requested(operation_id):
+                    operation_registry.finish(operation_id, "cancelled")
+                    return
                 LOGGER.exception("SSE workflow failed")
                 operation_registry.finish(operation_id, "failed")
                 emit("error", {"operation_id": operation_id, "code": "workflow_failed", "message": str(exc)})
@@ -1125,7 +1131,7 @@ def create_app() -> FastAPI:
         if asset_type in {"volume", "arc", "chapter"} and not asset_no:
             raise ValueError("分卷或剧情段讨论需要 asset_no。")
 
-        def worker(emit: Callable[[str, Any], None]) -> dict[str, Any]:
+        def worker(emit: Callable[[str, Any], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
             from novelforge.workflows.skills import discussions
 
             stream_callback = lambda text: emit("delta", {"text": str(text or "")})
@@ -1270,7 +1276,10 @@ def create_app() -> FastAPI:
         _story(name, story_id)
         from novelforge.workflows.creative_actions import execute_creative_action
 
-        action = await run_in_threadpool(execute_creative_action, name, action_id, confirmed=payload.confirmed)
+        action = await run_in_threadpool(
+            execute_creative_action, name, action_id,
+            story_id=story_id, session_id=session_id, confirmed=payload.confirmed,
+        )
         return _envelope({"action": action}, request)
 
     @app.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/actions/{{action_id}}/cancel")
@@ -1279,7 +1288,7 @@ def create_app() -> FastAPI:
         _story(name, story_id)
         from novelforge.workflows.creative_actions import cancel_creative_action
 
-        action = await run_in_threadpool(cancel_creative_action, name, action_id)
+        action = await run_in_threadpool(cancel_creative_action, name, action_id, story_id, session_id)
         return _envelope({"action": action}, request)
 
     @app.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/actions/{{action_id}}/undo")
@@ -1288,7 +1297,11 @@ def create_app() -> FastAPI:
         _story(name, story_id)
         from novelforge.workflows.creative_actions import undo_creative_action
 
-        action = await run_in_threadpool(undo_creative_action, name, action_id, idempotency_key=request.headers.get("idempotency-key", ""))
+        action = await run_in_threadpool(
+            undo_creative_action, name, action_id,
+            story_id=story_id, session_id=session_id,
+            idempotency_key=request.headers.get("idempotency-key", ""),
+        )
         return _envelope({"action": action}, request)
 
     @app.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/fragments/accept")
@@ -1308,7 +1321,7 @@ def create_app() -> FastAPI:
         name = _resolve_project_name(project_id)
         _story(name, story_id)
 
-        def worker(emit: Callable[[str, Any], None]) -> dict[str, Any]:
+        def worker(emit: Callable[[str, Any], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
             result = generate_writing_fragment(
                 name,
                 story_id,
@@ -1318,6 +1331,7 @@ def create_app() -> FastAPI:
                 word_count=payload.word_count,
                 branch_from_fragment_id=payload.branch_from_fragment_id,
                 stream_callback=lambda text: emit("delta", {"text": str(text or "")}),
+                cancel_check=cancel_check,
             )
             return result
 

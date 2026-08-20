@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api } from '../api/client'
 import { dialog } from '../ui/dialog'
 import { notify } from '../ui/notifications'
+import { clearAllEditorDirty, hasDirtyEditors } from '../ui/dirty'
 
 const workspace = useWorkspaceStore()
 const router = useRouter()
+const route = useRoute()
+const viewKey = computed(() => `${workspace.activeProjectId}:${workspace.activeStoryId}:${route.fullPath}`)
 const structure = ref<{ volumes: any[]; arcs: any[]; chapters: any[] }>({ volumes: [], arcs: [], chapters: [] })
 const structureOpen = ref(true)
 const structureError = ref('')
@@ -19,15 +22,21 @@ async function loadStructure() {
 }
 
 async function switchToConversation() {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '切换工作台会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续切换', tone: 'danger' })) return
+  clearAllEditorDirty()
   await workspace.setMode('conversational')
   await router.push('/conversational')
 }
 
 async function changeProject(event: Event) {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '切换项目会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续切换', tone: 'danger' })) return
+  clearAllEditorDirty()
   await workspace.selectProject((event.target as HTMLSelectElement).value)
 }
 
 async function changeStory(event: Event) {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '切换故事会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续切换', tone: 'danger' })) return
+  clearAllEditorDirty()
   await workspace.selectStory((event.target as HTMLSelectElement).value)
 }
 
@@ -99,7 +108,7 @@ watch(() => [workspace.activeProjectId, workspace.activeStoryId], loadStructure)
     <main class="planned-main">
       <header class="planned-topbar"><div><p class="eyebrow">当前故事</p><div class="title-line"><select class="story-switcher" :value="workspace.activeStoryId" aria-label="选择故事" @change="changeStory"><option v-for="story in workspace.stories" :key="story.story_id" :value="story.story_id">{{ story.name }}</option></select></div></div><div class="top-actions"><button class="mode-toggle" @click="switchToConversation">切到对话工作台</button><span class="pill">规划模式</span><span class="avatar" aria-hidden="true">NF</span></div></header>
       <section v-if="workspace.error" class="connection-banner">{{ workspace.error }}<span>请确认 NovelForge 本地服务正在运行。</span></section>
-      <RouterView />
+      <RouterView :key="viewKey" />
     </main>
   </div>
 </template>

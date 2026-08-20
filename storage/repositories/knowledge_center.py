@@ -46,7 +46,10 @@ def _fts_query(query: str) -> str:
     clean = " ".join(
         re.sub(r"[\x00-\x1f\x7f]+", " ", str(query or "")).replace('"', " ").split()
     )
-    return " OR ".join(f'"{term}"' for term in list(dict.fromkeys(clean.split()))[:32])
+    terms = list(dict.fromkeys(clean.split()))[:32]
+    # Require every meaningful term so a common word does not force BM25 to
+    # rank the entire project index before applying pagination.
+    return " AND ".join(f'"{term}"' for term in terms)
 
 
 def search_knowledge_center_rows(
@@ -95,7 +98,12 @@ def search_knowledge_center_rows(
     elif not include_archived:
         clauses.append("record_status <> 'archived'")
     where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    rank_sql = "bm25(knowledge_center_fts, 0, 0, 0.8, 2.2, 1.0, 0.5, 0.4)" if match else "0.0"
+    # Use FTS5's hidden ``rank`` column instead of invoking bm25() in the
+    # SELECT/ORDER BY expressions.  The hidden column lets SQLite use the
+    # FTS5 top-N ranking path, which avoids scoring and sorting the entire
+    # posting list for every paged request.  This matters for large projects
+    # where a common term can match thousands of records.
+    rank_sql = "rank" if match else "0.0"
     snippet_sql = (
         "snippet(knowledge_center_fts, 4, '<mark>', '</mark>', '…', 26)"
         if match else "substr(body, 1, 220)"

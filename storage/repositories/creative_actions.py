@@ -161,6 +161,71 @@ def update_creative_action_row(conn: sqlite3.Connection, action_id: str, updates
     return load_creative_action_row(conn, action_id)
 
 
+def claim_creative_action_row(
+    conn: sqlite3.Connection,
+    action_id: str,
+    story_id: str,
+    session_id: str,
+    from_statuses: tuple[str, ...],
+    updates: dict | None = None,
+) -> dict:
+    """Atomically claim an action for execution within its story/session."""
+    allowed = tuple(str(status) for status in from_statuses if str(status))
+    if not allowed:
+        raise ValueError("At least one source status is required.")
+    assignments = ["status = ?", "updated_at = ?"]
+    values: list[Any] = ["running", _now()]
+    for key, value in dict(updates or {}).items():
+        if key == "confirmed_at":
+            assignments.append("confirmed_at = ?")
+            values.append(value)
+        elif key == "error_text":
+            assignments.append("error_text = ?")
+            values.append(str(value or ""))
+    placeholders = ",".join("?" for _ in allowed)
+    values.extend([
+        str(action_id or ""), str(story_id or ""), str(session_id or ""),
+        *allowed,
+    ])
+    result = conn.execute(
+        f"""
+        UPDATE creative_action_runs
+        SET {', '.join(assignments)}
+        WHERE action_id = ? AND story_id = ? AND session_id = ?
+          AND status IN ({placeholders})
+        """,
+        tuple(values),
+    )
+    if result.rowcount != 1:
+        return {}
+    return load_creative_action_row(conn, action_id)
+
+
+def transition_creative_action_row(
+    conn: sqlite3.Connection,
+    action_id: str,
+    story_id: str,
+    session_id: str,
+    from_status: str,
+    to_status: str,
+) -> dict:
+    """Atomically transition one scoped action and return its new row."""
+    result = conn.execute(
+        """
+        UPDATE creative_action_runs
+        SET status = ?, updated_at = ?
+        WHERE action_id = ? AND story_id = ? AND session_id = ? AND status = ?
+        """,
+        (
+            str(to_status or ""), _now(), str(action_id or ""),
+            str(story_id or ""), str(session_id or ""), str(from_status or ""),
+        ),
+    )
+    if result.rowcount != 1:
+        return {}
+    return load_creative_action_row(conn, action_id)
+
+
 def insert_creative_config_revision_row(conn: sqlite3.Connection, revision: dict) -> dict:
     payload = dict(revision or {})
     conn.execute(

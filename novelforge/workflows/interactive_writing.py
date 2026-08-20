@@ -51,6 +51,7 @@ from novelforge.core.prompts import (
 )
 from novelforge.core.schemas import ChapterWritingGuidance
 from novelforge.services.memory import retrieval_sources_path
+from novelforge.workflows.cancellation import raise_if_cancelled
 
 
 LOGGER = logging.getLogger("novelforge.interactive_writing")
@@ -631,7 +632,9 @@ def generate_writing_fragment(
     manual_knowledge_ids: list[str] | None = None,
     branch_from_fragment_id: str | None = None,
     stream_callback=None,
+    cancel_check=None,
 ) -> dict:
+    raise_if_cancelled(cancel_check)
     require_operation_capabilities("creative_writing", action="对话式创作")
     bundle = _bundle_or_raise(project_name, story_id, session_id)
     session = bundle.get("session", {}) or {}
@@ -660,6 +663,7 @@ def generate_writing_fragment(
         story_id=story_id,
     )
     try:
+        raise_if_cancelled(cancel_check)
         claimed_attachments = claim_turn_creative_attachments(
             project_name,
             story_id=story_id,
@@ -698,6 +702,7 @@ def generate_writing_fragment(
             metadata={"turn_id": str(turn.get("turn_id") or "")},
         ):
             content = call_llm(prompt, stream_callback=stream_callback)
+        raise_if_cancelled(cancel_check)
         if not str(content or "").strip():
             raise RuntimeError("模型没有返回创作片段。")
     except Exception as exc:
@@ -733,6 +738,7 @@ def generate_writing_fragment(
     warnings = list(assembly.warnings)
     snapshot_id: str | None = None
     try:
+        raise_if_cancelled(cancel_check)
         snapshot_payload = assembly.model_dump()
         snapshot_payload.update({
             "session_id": session_id,
@@ -754,6 +760,7 @@ def generate_writing_fragment(
         warnings.append(f"片段已生成，但上下文快照保存失败：{exc}")
 
     try:
+        raise_if_cancelled(cancel_check)
         fragment = complete_creative_turn(
             project_name,
             str(turn["turn_id"]),

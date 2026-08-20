@@ -144,6 +144,7 @@ from storage.repositories import (
     release_turn_creative_attachment_rows,
     update_creative_attachment_row,
     upsert_creative_attachment_row,
+    claim_creative_action_row,
     insert_creative_action_row,
     insert_creative_config_revision_row,
     insert_creative_message_row,
@@ -152,6 +153,7 @@ from storage.repositories import (
     load_creative_action_row,
     load_creative_config_revision_row,
     mark_creative_config_revision_reversed_row,
+    transition_creative_action_row,
     update_creative_action_row,
 )
 
