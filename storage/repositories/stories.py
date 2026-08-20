@@ -3,6 +3,14 @@ from __future__ import annotations
 import sqlite3
 
 
+_CREATION_MODES = {"planned", "conversational"}
+
+
+def _normalize_creation_mode(value: object) -> str:
+    candidate = str(value or "").strip().lower()
+    return candidate if candidate in _CREATION_MODES else "planned"
+
+
 def sync_stories_index(conn: sqlite3.Connection, index: dict) -> list[dict]:
     stories = index.get("stories", []) if isinstance(index, dict) else []
     active_story_id = str(index.get("active_story_id") or "default") if isinstance(index, dict) else "default"
@@ -17,13 +25,15 @@ def sync_stories_index(conn: sqlite3.Connection, index: dict) -> list[dict]:
         conn.execute(
             """
             INSERT INTO stories (
-                story_id, name, description, status, is_active, created_at, updated_at, deleted_at
+                story_id, name, description, status, creation_mode,
+                is_active, created_at, updated_at, deleted_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
             ON CONFLICT(story_id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
                 status = excluded.status,
+                creation_mode = excluded.creation_mode,
                 is_active = excluded.is_active,
                 updated_at = excluded.updated_at,
                 deleted_at = NULL
@@ -33,6 +43,7 @@ def sync_stories_index(conn: sqlite3.Connection, index: dict) -> list[dict]:
                 str(story.get("name") or story_id),
                 str(story.get("description") or ""),
                 str(story.get("status") or "active"),
+                _normalize_creation_mode(story.get("creation_mode")),
                 1 if story_id == active_story_id else 0,
                 str(story.get("created_at") or ""),
                 str(story.get("updated_at") or ""),
@@ -73,7 +84,8 @@ def list_story_rows(conn: sqlite3.Connection, *, include_deleted: bool = False) 
     if include_deleted:
         rows = conn.execute(
             """
-            SELECT story_id, name, description, status, is_active, created_at, updated_at, deleted_at
+            SELECT story_id, name, description, status, creation_mode,
+                   is_active, created_at, updated_at, deleted_at
             FROM stories
             ORDER BY is_active DESC, lower(name), story_id
             """
@@ -81,7 +93,8 @@ def list_story_rows(conn: sqlite3.Connection, *, include_deleted: bool = False) 
     else:
         rows = conn.execute(
             """
-            SELECT story_id, name, description, status, is_active, created_at, updated_at, deleted_at
+            SELECT story_id, name, description, status, creation_mode,
+                   is_active, created_at, updated_at, deleted_at
             FROM stories
             WHERE deleted_at IS NULL
             ORDER BY is_active DESC, lower(name), story_id

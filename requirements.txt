@@ -1,4 +1,7 @@
 openai
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.20,<1
 streamlit>=1.58,<2
 python-dotenv
 keyring>=25.0

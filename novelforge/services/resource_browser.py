@@ -600,3 +600,16 @@ def _delete_browser_resource(project_name: str, resource: dict, story_id: str = 
             rebuild_retrieval_assets(project_name, build_vectors=True)
         return deleted
     raise ValueError(f"不支持删除这种资源类型：{group}")
+
+
+def list_resource_browser_items(project_name: str, story_id: str = "default", *, cursor: int = 0, page_size: int = 40) -> dict:
+    """Bounded, serializable content browser projection for the Vue workspace."""
+    items = _build_resource_browser_items(project_name, story_id=story_id)
+    start = max(int(cursor or 0), 0)
+    size = max(1, min(int(page_size or 40), 100))
+    page = items[start : start + size]
+    return {"items": page, "next_cursor": str(start + size) if start + size < len(items) else "", "total": len(items)}
+
+
+def delete_resource_browser_item(project_name: str, resource: dict, story_id: str = "default") -> bool:
+    return bool(_delete_browser_resource(project_name, resource, story_id=story_id))

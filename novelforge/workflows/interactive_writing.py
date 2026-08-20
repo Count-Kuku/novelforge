@@ -30,6 +30,7 @@ from novelforge.services.memory import (
     complete_creative_turn,
     consume_context_directives,
     create_creative_session,
+    get_story_creation_mode,
     fail_creative_turn,
     finalize_creative_session,
     load_creative_profile,
@@ -96,9 +97,15 @@ def create_writing_session(
     title: str = "",
     writing_guidance: dict | None = None,
     target_chapter_no: int | None = None,
-    auto_extract_mode: str = "manual",
+    auto_extract_mode: str | None = None,
 ) -> dict:
     profile = load_creative_profile(project_name, story_id) or {}
+    if auto_extract_mode is None:
+        try:
+            creation_mode = get_story_creation_mode(project_name, story_id)
+        except Exception:
+            creation_mode = "planned"
+        auto_extract_mode = "on_accept" if creation_mode == "conversational" else "manual"
     return create_creative_session(project_name, {
         "session_id": f"session_{uuid4().hex}",
         "story_id": story_id,

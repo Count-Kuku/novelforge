@@ -307,6 +307,7 @@ class StoryMeta(NovelForgeSchema):
     name: str = ""
     description: str = ""
     status: Literal["active", "archived"] = "active"
+    creation_mode: Literal["planned", "conversational"] = "planned"
     created_at: str = ""
     updated_at: str = ""
 

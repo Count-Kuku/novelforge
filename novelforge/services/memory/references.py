@@ -795,6 +795,7 @@ def sync_project_database_from_files(project_name: str) -> dict:
                     name="默认故事",
                     description="",
                     status="active",
+                    creation_mode="planned",
                     created_at=_memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds"),
                     updated_at=_memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds"),
                 )

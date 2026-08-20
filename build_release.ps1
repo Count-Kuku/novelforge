@@ -65,6 +65,8 @@ $ResolvedRuntimeRoot = if ([System.IO.Path]::IsPathRooted($RuntimeRoot)) {
 }
 $PortablePython = Join-Path $ResolvedRuntimeRoot "python.exe"
 $StreamlitConfigRoot = Join-Path $ProjectRoot ".streamlit"
+$FrontendRoot = Join-Path $ProjectRoot "frontend"
+$FrontendDist = Join-Path $FrontendRoot "dist"
 
 if (Test-PathIsEqualOrDescendant -LiteralPath $ProjectRoot -BasePath $ResolvedRuntimeRoot) {
     throw "RuntimeRoot must not equal ProjectRoot or be an ancestor of ProjectRoot; copying it would recursively include the project."
@@ -108,14 +110,39 @@ Assert-PathExists -LiteralPath $BundledPython -Message "Missing .venv\Scripts\py
 Assert-PathExists -LiteralPath $LauncherSpecPath -Message "Missing NovelForge.spec."
 Assert-PathExists -LiteralPath $ResolvedRuntimeRoot -Message "Missing self-contained Python runtime: $ResolvedRuntimeRoot"
 Assert-PathExists -LiteralPath $PortablePython -Message "RuntimeRoot must contain python.exe at its root."
+Assert-PathExists -LiteralPath (Join-Path $FrontendRoot "package.json") -Message "Missing frontend/package.json."
+Assert-PathExists -LiteralPath (Join-Path $FrontendRoot "package-lock.json") -Message "Missing frontend/package-lock.json. Run npm install first."
 if (Test-Path -LiteralPath (Join-Path $ResolvedRuntimeRoot "pyvenv.cfg")) {
     throw "RuntimeRoot points to a virtual environment. A copied venv is tied to its build machine; provide a self-contained Python distribution instead."
 }
 
-& $PortablePython -c "import streamlit, openai, dotenv, pydantic, httpx, ddgs"
+& $PortablePython -c "import streamlit, openai, dotenv, pydantic, httpx, ddgs, fastapi, uvicorn, multipart"
 if (-not $?) {
     throw "The self-contained runtime is missing one or more NovelForge dependencies."
 }
+
+if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
+    throw "npm.cmd is required at build time to compile the Vue frontend."
+}
+Push-Location $FrontendRoot
+try {
+    & npm.cmd ci --no-audit --no-fund
+    if (-not $?) { throw "Failed to install locked frontend dependencies with npm ci." }
+    & $BundledPython (Join-Path $ProjectRoot "tools\export_openapi.py")
+    if (-not $?) { throw "OpenAPI export failed." }
+    & npm.cmd run api:types
+    if (-not $?) { throw "TypeScript API type generation failed." }
+    & npm.cmd run typecheck
+    if (-not $?) { throw "Vue TypeScript check failed." }
+    & npm.cmd run test:unit
+    if (-not $?) { throw "Vue unit tests failed." }
+    & npm.cmd run build
+    if (-not $?) { throw "Vue frontend production build failed." }
+}
+finally {
+    Pop-Location
+}
+Assert-PathExists -LiteralPath (Join-Path $FrontendDist "index.html") -Message "Vue build did not produce frontend/dist/index.html."
 
 & $BundledPython -m pip install pyinstaller
 if (-not $?) {
@@ -167,6 +194,9 @@ foreach ($relativePath in $directoriesToCopy) {
     Assert-PathExists -LiteralPath $sourcePath -Message "Missing required directory: $relativePath"
     Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $PortableRoot $relativePath) -Recurse
 }
+
+New-Item -ItemType Directory -Path (Join-Path $PortableRoot "frontend") | Out-Null
+Copy-Item -LiteralPath $FrontendDist -Destination (Join-Path $PortableRoot "frontend") -Recurse
 
 Copy-Item -LiteralPath (Join-Path $LauncherSpecRoot "NovelForge.exe") -Destination (Join-Path $PortableRoot "NovelForge.exe")
 Copy-Item -LiteralPath $ResolvedRuntimeRoot -Destination (Join-Path $PortableRoot ".runtime") -Recurse

@@ -1343,6 +1343,7 @@ def _load_stories_index_from_db_best_effort(project_name: str) -> dict | None:
             "name": str(row.get("name") or row.get("story_id") or ""),
             "description": str(row.get("description") or ""),
             "status": str(row.get("status") or "active"),
+            "creation_mode": str(row.get("creation_mode") or "planned"),
             "created_at": str(row.get("created_at") or ""),
             "updated_at": str(row.get("updated_at") or ""),
         }

@@ -97,7 +97,7 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 写作工作�
 
 ### 资料处理
 
-1. 一次上传一份或多份 TXT/Markdown/DOCX/EPUB/PDF，或直接粘贴文本；自由创作资料托盘可在本机 Tesseract 就绪时显式启用 PDF OCR，其它导入入口仍需先对扫描件执行 OCR。也可以选择“网络检索”，创建自动研究任务或手动勾选公开网页。
+1. 一次上传一份或多份 TXT/Markdown/DOCX/EPUB/PDF，或直接粘贴文本；在 Vue 项目批量导入或自由创作资料托盘中可在本机 Tesseract 就绪时显式启用 PDF OCR，并先预览页级置信度。也可以选择“网络检索”，创建自动研究任务或手动勾选公开网页。
 2. 选择导入索引、知识提取、自动审核等选项。
 3. 在执行前检查片段、调用数和 Token/费用估算。
 4. 创建后台任务后，在 `资料任务` 查看进度；关闭页面也可以继续处理。
@@ -171,7 +171,13 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 
 ## Windows 便携版构建
 
-便携版包含轻量 `NovelForge.exe` 启动器、自包含 `.runtime` Python、项目源码和本地 `data/` 目录。运行时会在 `127.0.0.1` 启动 Streamlit，优先使用端口 `8501` 并自动打开浏览器。
+便携版包含轻量 `NovelForge.exe` 启动器、自包含 `.runtime` Python、Vue 构建产物、项目源码和本地 `data/` 目录。运行时默认在 `127.0.0.1` 启动 FastAPI/Vue，优先使用端口 `8501` 并自动打开浏览器；缺少 `frontend/dist` 时自动回退 Streamlit。开发时可用 `NOVELFORGE_FRONTEND=streamlit` 显式回退。
+
+## 两套创作工作台
+
+- 规划工作台适合长篇项目：创作方向、结构与大纲、章节推进，以及可持续的规划讨论。
+- 对话工作台适合轻量创作：直接输入想法，流式生成片段，重要内容按需提炼为记忆。
+- 两套工作台共享同一项目和故事资产；故事创建时选择 `planned` 或 `conversational`，之后可在工作台顶部切换。
 
 准备好不含 `pyvenv.cfg` 的自包含 Windows Python runtime 后执行：
 
@@ -184,7 +190,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 ## 当前限制与后续重点
 
 - 当前已完成结构感知切分、父子上下文、FTS/词法/语义 RRF 融合；下一阶段重点是按角色、关系、时间线和硬约束拆分受配额的多查询路由。
-- 稳定导入入口支持粘贴文本、TXT、Markdown、DOCX、EPUB、可提取文本 PDF 和公开静态网页；自由创作资料托盘额外支持显式本地 OCR 和逐页置信度。长篇导入的扫描 PDF OCR、动态渲染页面和目录递归导入尚未提供。
+- 稳定导入入口支持粘贴文本、TXT、Markdown、DOCX、EPUB、可提取文本 PDF 和公开静态网页；Vue 项目批量导入与自由创作资料托盘支持显式本地 OCR、预览和逐页置信度。真实 OCR/provider 评测、动态渲染页面和目录递归导入仍属于发布环境与后续范围。
 - 后台资料任务依赖 NovelForge 应用进程，不是常驻服务或分布式队列。
 - 专用向量数据库和 GraphRAG 只会在本地 SQLite/当前检索链路出现实际规模瓶颈后再评估。
 - 网络研究已经接入持久任务、事实提取、交叉验证、评测和人工审核；LangGraph 只负责单次搜索步骤内的并行分派，SQLite `workflow_runs/workflow_steps` 始终是任务权威状态。
@@ -192,7 +198,8 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 ## 开发文档
 
 - [project.md](./project.md)：当前架构、模块职责、开发边界、技术债和优先级。
-- [storage_architecture.md](./storage_architecture.md)：DB-first 权威边界、schema v15、迁移、任务租约和恢复。
+- [storage_architecture.md](./storage_architecture.md)：DB-first 权威边界、schema v16、迁移、任务租约和恢复。
+- [docs/vue_frontend_migration_plan.md](./docs/vue_frontend_migration_plan.md)：Vue 双工作台迁移规划与执行状态。
 - [docs/releases](./docs/releases)：已发布版本历史。
 
 已完成的一次性计划不会长期保留；完成结果应合并进上述事实文档，避免出现多个相互矛盾的“当前状态”。

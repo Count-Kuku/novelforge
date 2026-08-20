@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
 import subprocess
 import sys
 import tempfile
@@ -168,6 +169,18 @@ def _check_build_version_guard() -> None:
     assert "does not match VERSION" in output
 
 
+def _check_frontend_mode_selection() -> None:
+    with tempfile.TemporaryDirectory(prefix="novelforge-frontend-mode-") as temp_dir:
+        root = Path(temp_dir)
+        (root / "frontend" / "dist").mkdir(parents=True)
+        (root / "frontend" / "dist" / "index.html").write_text("NovelForge", encoding="utf-8")
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop(launcher.FRONTEND_ENV_NAME, None)
+            assert launcher._frontend_mode(root) == "vue"
+        with patch.dict("os.environ", {launcher.FRONTEND_ENV_NAME: "streamlit"}):
+            assert launcher._frontend_mode(root) == "streamlit"
+
+
 def main() -> int:
     checks = 0
     with tempfile.TemporaryDirectory(prefix="novelforge-launcher-check-") as temp_dir:
@@ -183,6 +196,8 @@ def main() -> int:
     _check_build_path_guards()
     checks += 1
     _check_build_version_guard()
+    checks += 1
+    _check_frontend_mode_selection()
     checks += 1
     print(f"Launcher/release guard verification passed: {checks} checks")
     return 0

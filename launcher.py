@@ -24,6 +24,7 @@ LAUNCH_LOCK_FILE_NAME = ".novelforge-launch.lock"
 LAUNCH_LOCK_TIMEOUT_SECONDS = 15
 LAUNCH_LOCK_POLL_INTERVAL_SECONDS = 0.1
 STREAMLIT_MARKERS = ("streamlit", "stapp")
+FRONTEND_ENV_NAME = "NOVELFORGE_FRONTEND"
 
 
 def _project_root() -> Path:
@@ -34,6 +35,20 @@ def _project_root() -> Path:
 
 def _app_entrypoint(root: Path) -> Path:
     return root / "app.py"
+
+
+def _frontend_dist(root: Path) -> Path:
+    return root / "frontend" / "dist"
+
+
+def _frontend_mode(root: Path) -> str:
+    requested = str(os.environ.get(FRONTEND_ENV_NAME, "vue") or "vue").strip().lower()
+    if requested not in {"vue", "streamlit"}:
+        requested = "vue"
+    if requested == "vue" and not (_frontend_dist(root) / "index.html").exists():
+        _write_log(root, "Vue bundle is missing; falling back to Streamlit compatibility mode", append=True)
+        return "streamlit"
+    return requested
 
 
 def _log_path(root: Path) -> Path:
@@ -370,6 +385,65 @@ def _wait_for_http_ready(url: str, timeout_seconds: int) -> bool:
     return False
 
 
+def _spawn_server_process(
+    root: Path,
+    python_executable: Path,
+    port: int,
+    command: list[str],
+    label: str,
+):
+    creation_flags = 0
+    startupinfo = None
+    if os.name == "nt":
+        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
+    _write_log(root, f"Launching {label} with Python: {python_executable}", append=True)
+    _write_log(root, f"Working directory: {root}", append=True)
+    _write_log(root, f"Target URL: {_launch_url(port)}", append=True)
+    log_file = _log_path(root).open("a", encoding="utf-8")
+    try:
+        child_env = _clean_subprocess_env()
+        # The portable distribution uses Python's embeddable runtime, whose
+        # ``python314._pth`` intentionally disables the implicit current
+        # working-directory import path.  Explicitly prepend the extracted
+        # application root so ``novelforge`` and sibling packages resolve in
+        # both FastAPI/Vue and Streamlit compatibility launches.
+        project_path = str(root.resolve())
+        existing_python_path = child_env.get("PYTHONPATH", "")
+        child_env["PYTHONPATH"] = (
+            project_path
+            if not existing_python_path
+            else project_path + os.pathsep + existing_python_path
+        )
+        process = subprocess.Popen(
+            command,
+            cwd=root,
+            env=child_env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            creationflags=creation_flags,
+            startupinfo=startupinfo,
+        )
+        try:
+            _write_server_state(root, process.pid, port)
+        except OSError as exc:
+            _write_log(root, f"Failed to persist server state: {exc}", append=True)
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            raise RuntimeError(
+                "Failed to register the launched server; the child process was stopped."
+            ) from exc
+        _write_log(root, f"Spawned process with pid={process.pid}", append=True)
+        return process
+    finally:
+        log_file.close()
+
+
 def _launch_streamlit(root: Path, python_executable: Path, port: int):
     app_path = _app_entrypoint(root)
     if not app_path.exists():
@@ -403,46 +477,23 @@ def _launch_streamlit(root: Path, python_executable: Path, port: int):
         HOST,
     ]
 
-    creation_flags = 0
-    startupinfo = None
-    if os.name == "nt":
-        creation_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return _spawn_server_process(root, python_executable, port, streamlit_command, "Streamlit")
 
-    _write_log(root, f"Launching Streamlit with Python: {python_executable}", append=True)
-    _write_log(root, f"Working directory: {root}", append=True)
-    _write_log(root, f"Target URL: {_launch_url(port)}", append=True)
-    log_file = _log_path(root).open("a", encoding="utf-8")
-    try:
-        process = subprocess.Popen(
-            streamlit_command,
-            cwd=root,
-            env=_clean_subprocess_env(),
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            creationflags=creation_flags,
-            startupinfo=startupinfo,
-        )
-        try:
-            _write_server_state(root, process.pid, port)
-        except OSError as exc:
-            _write_log(root, f"Failed to persist server state: {exc}", append=True)
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
-            raise RuntimeError(
-                "Failed to register the launched server; the child process was stopped."
-            ) from exc
-        _write_log(root, f"Spawned process with pid={process.pid}", append=True)
-        return process
-    except Exception:
-        log_file.close()
-        raise
-    finally:
-        log_file.close()
+
+def _launch_fastapi(root: Path, python_executable: Path, port: int):
+    command = [
+        str(python_executable),
+        "-m",
+        "uvicorn",
+        "novelforge.api.app:app",
+        "--host",
+        HOST,
+        "--port",
+        str(port),
+        "--log-level",
+        "info",
+    ]
+    return _spawn_server_process(root, python_executable, port, command, "FastAPI/Vue")
 
 
 def _cleanup_process(root: Path, process: subprocess.Popen):
@@ -496,9 +547,15 @@ def main() -> int:
                 )
 
             python_executable = _resolve_python(root)
-            process = _launch_streamlit(root, python_executable, selected_port)
+            frontend_mode = _frontend_mode(root)
+            _write_log(root, f"Selected frontend mode: {frontend_mode}", append=True)
+            process = (
+                _launch_fastapi(root, python_executable, selected_port)
+                if frontend_mode == "vue"
+                else _launch_streamlit(root, python_executable, selected_port)
+            )
     except Exception as exc:
-        return _fail(root, f"Failed to prepare or launch Streamlit: {exc}")
+        return _fail(root, f"Failed to prepare or launch NovelForge: {exc}")
 
     if _wait_for_http_ready(app_url, READY_TIMEOUT_SECONDS):
         _write_log(root, f"NovelForge became ready on port {selected_port}; opening browser", append=True)

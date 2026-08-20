@@ -235,6 +235,10 @@ def verify() -> None:
             interactive_writing,
             "call_llm",
             return_value="钟声落下，青铜鸟终于开口。",
+        ), patch.object(
+            interactive_writing,
+            "require_operation_capabilities",
+            return_value={"ready": True},
         ):
             result = interactive_writing.generate_writing_fragment(
                 project_name,
@@ -273,6 +277,10 @@ def verify() -> None:
             interactive_writing,
             "call_llm",
             side_effect=RuntimeError("injected attachment generation failure"),
+        ), patch.object(
+            interactive_writing,
+            "require_operation_capabilities",
+            return_value={"ready": True},
         ):
             try:
                 interactive_writing.generate_writing_fragment(

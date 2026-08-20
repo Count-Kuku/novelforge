@@ -35,6 +35,7 @@ from novelforge.services.credentials import (
 )
 from novelforge.services.memory import load_llm_profiles, save_llm_profiles
 from storage import get_schema_version, initialize_global_db, open_global_db
+from storage.schema import CURRENT_SCHEMA_VERSION
 from storage.repositories import load_global_setting
 from tools.verify_utils import isolated_workspace
 
@@ -224,7 +225,7 @@ def main() -> int:
         verify_capability_registry()
         verify_automatic_configuration()
         with open_global_db() as conn:
-            check(get_schema_version(conn) == 15, "全局数据库迁移到阶段5版本")
+            check(get_schema_version(conn) == CURRENT_SCHEMA_VERSION, "全局数据库迁移到当前版本")
     print({"ok": True, "checks": CHECKS})
     return 0
 

@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`15`
+当前代码期望的 SQLite schema version：`16`
 
 ## 权威存储边界
 
@@ -94,6 +94,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `013_creative_action_protocol` | 自由创作消息、动作计划/确认/幂等/撤销和配置修订历史 |
 | `014_unified_knowledge_center` | 跨知识/待审核/来源的 trigram FTS、增量索引任务和可重试后台索引状态 |
 | `015_capability_orchestration` | 系统凭据引用元数据、可解释自动配置状态和不可变修订链 |
+| `016_story_creation_mode` | 故事级规划创作/对话创作模式，旧故事默认规划模式 |
 
 ## 表分组
 

@@ -97,7 +97,7 @@ The Library hub combines unified search/editing, priority settings, pending revi
 
 ### Source Processing
 
-1. Upload one or more TXT/Markdown/DOCX/EPUB/PDF files, or paste text. The free-writing source tray can explicitly run local PDF OCR when Tesseract is ready; other ingestion surfaces still require scanned PDFs to be OCRed first. Network search can create an automatic research task or import selected public pages.
+1. Upload one or more TXT/Markdown/DOCX/EPUB/PDF files, or paste text. Vue project batch import and the free-writing source tray can explicitly run local PDF OCR when Tesseract is ready, with a non-persisting page-confidence preview. Network search can create an automatic research task or import selected public pages.
 2. Select indexing, knowledge extraction, and optional automatic-review behavior.
 3. Review segment, call, token, and cost estimates.
 4. Create the background task and monitor it in `资料任务` (Source Tasks); the browser page may be closed.
@@ -165,7 +165,13 @@ Back up the entire `data/` directory regularly. Stop NovelForge before copying i
 
 ## Windows Portable Build
 
-The portable package contains a lightweight `NovelForge.exe` launcher, a self-contained `.runtime` Python distribution, project source, and a local `data/` directory. It starts Streamlit on `127.0.0.1`, prefers port `8501`, and opens the browser.
+The portable package contains a lightweight `NovelForge.exe` launcher, a self-contained `.runtime` Python distribution, the compiled Vue frontend, project source, and a local `data/` directory. It starts FastAPI/Vue on `127.0.0.1` by default, prefers port `8501`, and opens the browser; it falls back to Streamlit when the Vue bundle is missing.
+
+## Two Creative Workspaces
+
+- Planned workspace: direction, architecture, outline, and chapter progression for long-form projects.
+- Conversational workspace: low-friction sessions, streaming fragments, and on-demand memory extraction.
+- Both workspaces share the same project, story, SQLite database, and file assets. Each story stores `planned` or `conversational` as its creation mode and can be switched later.
 
 After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, run:
 
@@ -178,7 +184,7 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 ## Current Limits And Priorities
 
 - Structure-aware splitting, parent/child context, and FTS/lexical/semantic RRF fusion are complete; quota-controlled query routing for characters, relationships, timelines, and hard constraints is the next RAG priority.
-- Stable ingestion supports pasted text, TXT, Markdown, DOCX, EPUB, text-layer PDF, and public static web pages. The free-writing source tray additionally supports explicit local OCR with per-page confidence; scanned-PDF OCR in long-form ingestion, dynamically rendered pages, and recursive folder ingestion are not yet provided.
+- Stable ingestion supports pasted text, TXT, Markdown, DOCX, EPUB, text-layer PDF, and public static web pages. Vue project batch import and the free-writing source tray support explicit local OCR, preview, and per-page confidence. Real OCR/provider evaluation, dynamically rendered pages, and recursive folder ingestion remain release-environment or later-scope work.
 - Durable source tasks depend on the NovelForge application process; they are not a resident service or distributed queue.
 - A dedicated vector database and GraphRAG will be evaluated only after the current local SQLite/retrieval path shows a measured scale bottleneck.
 - Web research now includes durable tasks, claim extraction, cross-source verification, evaluation, and human review. LangGraph only coordinates parallel dispatch inside one search step; SQLite `workflow_runs/workflow_steps` remains authoritative.
@@ -186,7 +192,8 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 ## Development Documentation
 
 - [project.md](./project.md): current architecture, module responsibilities, development boundaries, technical debt, and priorities.
-- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v15, migrations, task leases, and recovery.
+- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v16, migrations, task leases, and recovery.
+- [docs/vue_frontend_migration_plan.md](./docs/vue_frontend_migration_plan.md): Vue workspace migration plan and execution status.
 - [docs/releases](./docs/releases): immutable release history.
 
 Completed one-off plans are not kept as permanent documentation. Their lasting results belong in the fact documents above so the repository has one current source of truth.

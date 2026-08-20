@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from novelforge.services import memory as _memory_api
 
+from novelforge.domain.creation_modes import (
+    DEFAULT_CREATION_MODE,
+    normalize_creation_mode,
+)
+
 # ---------------------------------------------------------------------------
 # Story spaces
 # ---------------------------------------------------------------------------
@@ -589,6 +594,7 @@ def _default_story_meta() -> dict:
         name="默认故事",
         description="",
         status="active",
+        creation_mode=DEFAULT_CREATION_MODE,
         created_at=_memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds"),
         updated_at=_memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds"),
     ).model_dump()
@@ -613,6 +619,7 @@ def _normalize_stories_index_payload(index: dict | None) -> dict:
             continue
         clean_story = dict(story)
         clean_story["story_id"] = clean_story_id
+        clean_story["creation_mode"] = normalize_creation_mode(clean_story.get("creation_mode"))
         stories.append(clean_story)
         seen_story_ids.add(clean_story_id)
 
@@ -655,6 +662,7 @@ def _stories_index_payload_from_rows(
             "name": row.get("name", ""),
             "description": row.get("description", ""),
             "status": row.get("status", "active"),
+            "creation_mode": normalize_creation_mode(row.get("creation_mode")),
             "created_at": row.get("created_at", ""),
             "updated_at": row.get("updated_at", ""),
         }
@@ -771,8 +779,14 @@ def set_active_story(project_name: str, story_id: str):
     _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
 
 
-def create_story(project_name: str, name: str, description: str = "") -> dict:
+def create_story(
+    project_name: str,
+    name: str,
+    description: str = "",
+    creation_mode: str = DEFAULT_CREATION_MODE,
+) -> dict:
     clean_name = str(name or "").strip()
+    clean_creation_mode = normalize_creation_mode(creation_mode)
     if not clean_name:
         raise ValueError("故事名称不能为空。")
     if _memory_api._project_db_marked_unavailable(project_name):
@@ -809,6 +823,7 @@ def create_story(project_name: str, name: str, description: str = "") -> dict:
                 name=clean_name,
                 description=description,
                 status="active",
+                creation_mode=clean_creation_mode,
                 created_at=now,
                 updated_at=now,
             )
@@ -818,6 +833,7 @@ def create_story(project_name: str, name: str, description: str = "") -> dict:
                     "name": row.get("name", ""),
                     "description": row.get("description", ""),
                     "status": row.get("status", "active"),
+                    "creation_mode": normalize_creation_mode(row.get("creation_mode")),
                     "created_at": row.get("created_at", ""),
                     "updated_at": row.get("updated_at", ""),
                 }
@@ -1478,6 +1494,7 @@ def _rollback_story_copy(project_name: str, target_story_id: str, original_index
                     "name": row.get("name", ""),
                     "description": row.get("description", ""),
                     "status": row.get("status", "active"),
+                    "creation_mode": normalize_creation_mode(row.get("creation_mode")),
                     "created_at": row.get("created_at", ""),
                     "updated_at": row.get("updated_at", ""),
                 }
@@ -1589,6 +1606,7 @@ def copy_story(project_name: str, source_story_id: str, new_name: str,
             project_name,
             new_name,
             str(source_story.get("description") or ""),
+            normalize_creation_mode(source_story.get("creation_mode")),
         )
         meta = created_meta
         target_id = str(created_meta["story_id"])
@@ -1691,6 +1709,7 @@ def delete_story(project_name: str, story_id: str) -> bool:
                 "name": row.get("name", ""),
                 "description": row.get("description", ""),
                 "status": row.get("status", "active"),
+                "creation_mode": normalize_creation_mode(row.get("creation_mode")),
                 "created_at": row.get("created_at", ""),
                 "updated_at": row.get("updated_at", ""),
             }
@@ -1798,6 +1817,59 @@ def delete_story(project_name: str, story_id: str) -> bool:
 def list_stories(project_name: str) -> list[dict]:
     index = load_stories_index(project_name)
     return list(index.get("stories", []))
+
+
+def get_story_creation_mode(project_name: str, story_id: str = "default") -> str:
+    """Read the story mode from SQLite first, with the normal compatibility path."""
+
+    clean_story_id = normalize_story_id(story_id)
+    rows = list_stories(project_name)
+    target = next(
+        (row for row in rows if str(row.get("story_id") or "") == clean_story_id),
+        None,
+    )
+    if target is None:
+        raise ValueError(f"故事不存在：{clean_story_id}")
+    return normalize_creation_mode(target.get("creation_mode"))
+
+
+def set_story_creation_mode(
+    project_name: str,
+    story_id: str,
+    creation_mode: str,
+) -> dict:
+    """Change the story's UI/workflow mode without deleting any story asset."""
+
+    clean_story_id = normalize_story_id(story_id)
+    clean_creation_mode = normalize_creation_mode(creation_mode)
+    if _memory_api._project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+
+    normalized_index: dict | None = None
+    with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = [dict(row) for row in _memory_api.list_story_rows(conn)]
+        target = next(
+            (row for row in rows if str(row.get("story_id") or "") == clean_story_id),
+            None,
+        )
+        if target is None:
+            conn.rollback()
+            raise ValueError(f"故事不存在：{clean_story_id}")
+        target["creation_mode"] = clean_creation_mode
+        target["updated_at"] = _memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds")
+        normalized_index = _stories_index_payload_from_rows(rows)
+        _memory_api.sync_stories_index(conn, normalized_index)
+        conn.commit()
+
+    if normalized_index is None:
+        raise RuntimeError("Story mode update did not produce an index.")
+    _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
+    return next(
+        dict(story)
+        for story in normalized_index.get("stories", [])
+        if story.get("story_id") == clean_story_id
+    )
 
 
 def load_story_memory_overrides(project_name: str, story_id: str) -> dict:

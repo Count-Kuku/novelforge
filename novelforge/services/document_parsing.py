@@ -8,7 +8,7 @@ import mimetypes
 from pathlib import Path, PurePosixPath
 import re
 import shutil
-from typing import Iterable
+from typing import Callable, Iterable
 from urllib.parse import unquote
 import xml.etree.ElementTree as ET
 from zipfile import BadZipFile, ZipFile
@@ -568,8 +568,15 @@ def ocr_pdf_bytes(
     *,
     languages: str = "chi_sim+eng",
     dpi: int = 200,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> ParsedDocument:
-    """Run explicitly requested local OCR and retain page confidence evidence."""
+    """Run explicitly requested local OCR and retain page confidence evidence.
+
+    ``progress_callback`` is intentionally an optional local hook.  It lets the
+    ingestion worker/project UI expose deterministic page-level progress without
+    coupling this parser to a queue or a web framework.  Callback failures are
+    ignored so observability cannot make an otherwise valid OCR import fail.
+    """
 
     clean_filename = Path(str(filename or "document.pdf")).name
     _validate_document_size(clean_filename, data)
@@ -590,6 +597,26 @@ def ocr_pdf_bytes(
     if pdf.page_count > MAX_PDF_PAGES:
         pdf.close()
         raise DocumentParsingError(f"PDF 超过 {MAX_PDF_PAGES} 页安全上限。")
+
+    def _report_progress(payload: dict) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(payload)
+        except Exception:
+            # Progress is best-effort telemetry and must never break parsing.
+            return
+
+    total_pages = int(pdf.page_count)
+    _report_progress(
+        {
+            "phase": "ocr",
+            "status": "running",
+            "completed": 0,
+            "total": total_pages,
+            "percent": 0.0,
+        }
+    )
 
     sections: list[ParsedSection] = []
     page_confidences: list[dict] = []
@@ -652,6 +679,19 @@ def ocr_pdf_bytes(
                         location={"page": page_number, "ocr_confidence": mean_confidence},
                     )
                 )
+            _report_progress(
+                {
+                    "phase": "ocr",
+                    "status": "running" if page_number < total_pages else "completed",
+                    "completed": page_number,
+                    "total": total_pages,
+                    "percent": round((page_number / total_pages) * 100, 2)
+                    if total_pages
+                    else 100.0,
+                    "page": page_number,
+                    "confidence": mean_confidence,
+                }
+            )
     finally:
         pdf.close()
 

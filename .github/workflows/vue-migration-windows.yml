@@ -1,0 +1,128 @@
+name: Vue migration Windows acceptance
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - "novelforge/**"
+      - "storage/**"
+      - "tools/**"
+      - "launcher.py"
+      - "requirements.txt"
+      - "package*.json"
+      - ".github/workflows/vue-migration-windows.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "novelforge/**"
+      - "storage/**"
+      - "tools/**"
+      - "launcher.py"
+      - "requirements.txt"
+      - "package*.json"
+      - ".github/workflows/vue-migration-windows.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-contract-and-browser:
+    name: Windows contract + Chromium/Edge browser matrix
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Playwright Chromium
+        working-directory: frontend
+        run: npx playwright install chromium
+
+      - name: Typecheck, unit test and production build
+        working-directory: frontend
+        run: |
+          npm run typecheck
+          npm run test:unit
+          npm run build
+
+      - name: Python compile and OpenAPI drift
+        shell: pwsh
+        run: |
+          python -m compileall -q novelforge tools
+          python -m tools.export_openapi --check
+
+      - name: Data, provider protocol and launcher matrices
+        shell: pwsh
+        env:
+          NOVELFORGE_CREDENTIAL_BACKEND: memory
+          LLM_API_KEY: test-key
+          LLM_MODEL: stub-model
+        run: |
+          python -m tools.verify_legacy_db_upgrade
+          python -m tools.verify_llm_http_provider
+          python -m tools.verify_launcher_runtime_matrix
+          python -m tools.verify_large_knowledge_search
+          python -m tools.verify_api_smoke
+
+      - name: Playwright Chromium + installed Edge matrix
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Upload browser report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vue-migration-playwright-report
+          path: |
+            frontend/playwright-report
+            frontend/test-results
+          if-no-files-found: ignore
+
+  real-provider-stream:
+    name: Optional real provider stream gate
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      PROVIDER_CONFIGURED: ${{ secrets.NOVELFORGE_LLM_API_KEY != '' && secrets.NOVELFORGE_LLM_BASE_URL != '' && secrets.NOVELFORGE_LLM_MODEL != '' }}
+      NOVELFORGE_LLM_API_KEY: ${{ secrets.NOVELFORGE_LLM_API_KEY }}
+      NOVELFORGE_LLM_BASE_URL: ${{ secrets.NOVELFORGE_LLM_BASE_URL }}
+      NOVELFORGE_LLM_MODEL: ${{ secrets.NOVELFORGE_LLM_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install provider client
+        run: python -m pip install openai
+
+      - name: Report missing provider secrets
+        if: ${{ env.PROVIDER_CONFIGURED != 'true' }}
+        run: Write-Output "真实 provider gate skipped: workflow_dispatch 未配置完整 secrets。"
+
+      - name: Verify real provider stream
+        if: ${{ env.PROVIDER_CONFIGURED == 'true' }}
+        run: python -m tools.verify_live_provider_stream

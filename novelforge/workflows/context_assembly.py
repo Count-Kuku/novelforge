@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from novelforge.services.memory import (
+    get_story_creation_mode,
     load_creative_profile,
     load_effective_context_directives,
     load_effective_rule_conflict_resolutions,
@@ -29,6 +30,19 @@ from novelforge.domain.setting_knowledge import (
     build_generation_setting_context,
     list_setting_items,
 )
+from novelforge.domain.creation_modes import should_include_planning_context
+
+
+PLANNING_SOURCE_TYPES = {
+    "outline",
+    "outline_discussion",
+    "creative_profile_discussion",
+    "volume_outline",
+    "arc_outline",
+    "arc_chapter_plan",
+    "chapter_outline",
+    "chapter_planning",
+}
 
 
 DEFAULT_CONTEXT_BUDGET = 12_000
@@ -373,6 +387,11 @@ def assemble_generation_context(
     if manual_knowledge_ids is None and "manual_knowledge_ids" in normalized_guidance:
         manual_knowledge_ids = list(normalized_guidance.get("manual_knowledge_ids") or [])
 
+    try:
+        creation_mode = get_story_creation_mode(project_name, story_id)
+    except Exception:
+        creation_mode = "planned"
+    include_planning_context = should_include_planning_context(creation_mode)
     profile = load_creative_profile(project_name, story_id) or {}
     worldline_id = str(profile.get("worldline_id") or "")
     worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer")
@@ -416,20 +435,21 @@ def assemble_generation_context(
     if rules_block:
         blocks.append(rules_block)
 
-    profile_block = _context_block(
-        block_id="creative_profile",
-        category="creative_profile",
-        content=_format_creative_profile(profile),
-        source_type="creative_profile",
-        placement="story_state",
-        priority=90,
-        scope="story",
-        story_id=story_id,
-        worldline=worldline_id or None,
-        activation_reason="当前故事的创作配置",
-    )
-    if profile_block:
-        blocks.append(profile_block)
+    if include_planning_context:
+        profile_block = _context_block(
+            block_id="creative_profile",
+            category="creative_profile",
+            content=_format_creative_profile(profile),
+            source_type="creative_profile",
+            placement="story_state",
+            priority=90,
+            scope="story",
+            story_id=story_id,
+            worldline=worldline_id or None,
+            activation_reason="当前故事的创作配置",
+        )
+        if profile_block:
+            blocks.append(profile_block)
 
     setting_context = str(memory.get("_setting_context") or "").strip()
     legacy_setting_context = _format_legacy_settings(
@@ -469,12 +489,13 @@ def assemble_generation_context(
     if state_block:
         blocks.append(state_block)
 
-    for directive in load_effective_context_directives(
+    directives = load_effective_context_directives(
         project_name,
         story_id,
         capability=capability,
         chapter_no=chapter_no,
-    ):
+    ) if include_planning_context else []
+    for directive in directives:
         directive_id = str(directive.get("directive_id") or "")
         directive_block = _context_block(
             block_id=f"directive:{directive_id}",
@@ -536,6 +557,8 @@ def assemble_generation_context(
     )
     deduped_hits: list[RetrievalHit] = []
     for hit in hits:
+        if not include_planning_context and str(hit.chunk.source_type or "") in PLANNING_SOURCE_TYPES:
+            continue
         metadata = hit.chunk.metadata if isinstance(hit.chunk.metadata, dict) else {}
         if str(metadata.get("knowledge_id") or "") in direct_knowledge_ids:
             continue

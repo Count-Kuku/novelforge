@@ -42,19 +42,19 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 工作台。�
 - 后台资料任务是应用进程内 worker，不是独立系统服务。关闭浏览器页面不影响任务；停止 NovelForge 进程会中断执行，重新启动应用后由租约恢复机制继续。
 - 尚未实现跨机器分布式 worker，也不会强制终止正在进行的第三方模型 HTTP 请求。
 - 关系知识的幂等边投影和关系图浏览已经具备，但图扩展检索尚未成为正式工作流。
-- 自由创作资料托盘可显式执行本地 Tesseract OCR 并保存逐页置信度；长篇资料导入仍只提取 PDF 文本层，并对高空白页比例给出提示。
+- 自由创作资料托盘与 Vue 项目批量导入均可显式执行本地 Tesseract OCR，并保存逐页置信度；普通文本层导入仍不会静默触发 OCR。
 - 网络研究只支持公开静态文本页面；不执行 JavaScript、不登录网站、不绕过付费墙。LangGraph 只负责单次搜索步骤内的并行分派，SQLite 始终负责持久恢复。
 
 ## 总体架构
 
 ```text
-app.py / launcher.py
+launcher.py
         |
         v
-ui/*  页面与交互组件
-        |
-        +--------------------+
-        v                    v
+FastAPI (`novelforge/api`) + Vue (`frontend/`)
+        |                         |
+        |                         +-- PlannedAppLayout / ConversationalAppLayout
+        v
 novelforge/workflows/*   novelforge/services/*
         |                    |
         v                    v
@@ -71,7 +71,8 @@ novelforge/domain/*      storage/repositories/*
 依赖方向遵循以下约束：
 
 ```text
-ui -> workflows / services
+frontend -> api -> workflows / services
+ui -> workflows / services (兼容期)
 workflows -> domain / services / core
 services -> domain / core / storage
 domain -> core（仅在需要共享模型时）
@@ -90,7 +91,13 @@ storage -> Python 标准库
 novelforge/
 ├── app.py                         # Streamlit 入口与路由
 ├── launcher.py                    # Windows 便携版启动器
+├── frontend/                       # Vue 3 + TypeScript + Vite
+│   ├── src/api/                    # 唯一 typed API client
+│   ├── src/layouts/                # 两套独立创作工作台
+│   ├── src/stores/                 # Pinia server-state 投影
+│   └── src/views/                  # 规划/对话页面
 ├── novelforge/
+│   ├── api/                        # FastAPI application factory、DTO、SSE
 │   ├── core/                      # LLM 客户端、schema、prompt、通用原语
 │   ├── domain/                    # 纯领域规则和状态转换
 │   ├── services/                  # 持久化门面、资源管理和检索服务
@@ -100,7 +107,7 @@ novelforge/
 │   ├── schema.py                  # schema 版本与迁移入口
 │   ├── migrations/                # 连续、不可变的 SQL 迁移
 │   └── repositories/              # 按数据域拆分的 SQL 仓储
-├── ui/                            # Streamlit 页面和可复用展示组件
+├── ui/                            # 兼容期 Streamlit 页面和可复用展示组件
 ├── tools/                         # 检查、迁移和回归验证脚本
 ├── docs/releases/                 # 不可变的发布历史
 ├── README.md
@@ -329,7 +336,13 @@ queued -> running -> completed
 
 ## UI 信息架构
 
-当前侧边栏按使用场景组织：
+当前 Vue 信息架构按故事模式分为两套工作台：
+
+- `规划工作台（PlannedAppLayout）`：创作方向、结构与大纲、章节推进；用于长篇规划设置、讨论和逐级落地。
+- `对话工作台（ConversationalAppLayout）`：会话侧栏、自由对话、流式片段和按需记忆提炼；用于轻量讨论与即时写作。
+- 两套工作台共享项目、故事、SQLite、文件资产和 API；故事 `creation_mode` 决定默认入口，用户可在工作台间切换。
+
+兼容期 Streamlit 侧边栏仍按使用场景组织：
 
 - `工作台`：项目概览、内容管理和项目/故事管理。
 - `创作`：创作方向、小说规划、章节写作和自由模式；章节写作内统一提供快速门禁与综合体检。
@@ -408,7 +421,7 @@ queued -> running -> completed
 
 ### P0：RAG 与资料导入
 
-1. 将自由创作资料托盘已有的显式本地 OCR 复用到长篇资料导入；OCR 结果必须可预览并保存页级置信度，不能覆盖原始文件。
+1. 在发布环境完成真实 Tesseract/provider OCR 评测；Vue 项目批量导入已复用显式本地 OCR，并提供不落库预览和页级置信度，不能覆盖原始文件。
 2. 在现有确定性别名扩展上增加受配额控制的多查询路由，把角色、关系、时间线、硬约束、章节进度和文风分开召回并继续使用 RRF。
 3. 用真实长篇项目建立导入/检索基准集，持续评测章节边界准确率、证据锚点有效率、Recall@K、MRR 与上下文冗余率。
 4. 增加来源修订差异与恢复操作；知识修订恢复已经采用追加新修订的方式，来源恢复也必须遵守同一审计约束。
@@ -433,7 +446,7 @@ queued -> running -> completed
 | 模块体量 | `memory/core.py`、部分 memory/UI/prompt/source 模块仍超过 1000 行 | 按资产、配置、故事、资料和展示职责继续拆分 |
 | UI 复用 | 多类讨论页仍有相似布局、表单解析和保存操作 | 抽取共享讨论 renderer 和动作 helper |
 | 多查询路由 | 当前已融合 FTS、词法和语义排名，但只有单次语义查询 | 增加确定性任务路由与受配额子查询，避免无限增加 Embedding 调用 |
-| OCR | 自由创作附件已支持本地 OCR，长篇导入仍只提示扫描页 | 复用可选 OCR、页级质量和人工预览，不对数字 PDF 重复 OCR |
+| OCR | 自由创作附件与 Vue 项目批量导入支持本地 OCR；真实引擎/provider 评测仍待发布环境 | 继续执行真实评测，不对数字 PDF 重复 OCR |
 | 修订操作 | 知识可恢复为新修订，来源修订仍只有历史列表 | 为来源补充差异与“旧快照复制为新修订”的可审计恢复 |
 | 兼容层 | DB-first 已完成，但仍保留旧 JSON 导入和可选镜像代码 | 等兼容窗口结束后分阶段收缩 |
 | 任务运行时 | worker 与应用进程同生命周期 | 只有明确需要常驻执行时再独立进程化 |
