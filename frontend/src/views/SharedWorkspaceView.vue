@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
+import { dialog } from '../ui/dialog'
+import { notify } from '../ui/notifications'
 
 const workspace = useWorkspaceStore()
 const route = useRoute()
@@ -47,6 +49,10 @@ const resultBottomSpacer = computed(() => Math.max(0, (results.value.length - re
 
 function onResultScroll(event: Event) {
   resultScrollTop.value = (event.currentTarget as HTMLElement).scrollTop
+}
+
+function capabilityLabel(key: string) {
+  return ({ chat: '文本生成', embedding: '语义检索', search: '网络搜索', ocr: '文字识别' } as Record<string, string>)[key.toLowerCase()] || key
 }
 
 onMounted(async () => {
@@ -126,22 +132,47 @@ async function discardPending(item: any) {
 
 async function copyCurrentStory() {
   if (!workspace.activeProjectId || !workspace.activeStory || copyingStory.value) return
-  const name = globalThis.prompt('复制后的故事名称', `${workspace.activeStory.name} · 副本`)
+  const name = await dialog.prompt({ title: '复制当前故事', message: '将复制结构、章节、摘要和讨论记录。项目级资料不会重复复制。', confirmLabel: '开始复制', input: { label: '新故事名称', initialValue: `${workspace.activeStory.name} · 副本` } })
   if (!name?.trim()) return
   copyingStory.value = true
   try {
     const result = await api.copyStory(workspace.activeProjectId, workspace.activeStory.story_id, { name: name.trim(), include_discussions: true, include_summaries: true, include_chapters: true })
     await workspace.loadStories()
     if (result.story?.story_id) await workspace.selectStory(result.story.story_id)
+    notify('故事已复制并切换到新副本', 'success')
   } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '复制故事失败' } finally { copyingStory.value = false }
 }
 </script>
 
 <template>
-  <aside v-if="revisionDiff" class="revision-diff"><div><strong>修订对比</strong><button class="detail-close" @click="revisionDiff = ''">关闭</button></div><pre>{{ revisionDiff }}</pre></aside>
+  <aside v-if="revisionDiff" class="revision-diff" role="dialog" aria-modal="true" aria-label="修订对比"><div><strong>修订对比</strong><button class="detail-close" @click="revisionDiff = ''">关闭</button></div><pre>{{ revisionDiff }}</pre></aside>
   <div v-if="selectedDetail && detailRevisions.length" class="revision-strip"><span>修订：</span><button v-for="revision in detailRevisions.slice(0, 5)" :key="`compare-${revision.revision_id}`" class="pending-button" @click="compareRevision(revision)">{{ revision.revision_no || revision.revision_id }}</button></div>
-  <section class="shared-page"><p class="eyebrow">SHARED WORKSPACE</p><div class="shared-heading"><div><h2>项目概览与资料</h2><p>两种创作方式共用的事实、资产和知识入口。</p></div><div class="heading-actions"><span class="pill">{{ workspace.activeStory?.creation_mode === 'conversational' ? '对话故事' : '规划故事' }}</span><button class="button secondary" :disabled="copyingStory" @click="copyCurrentStory">{{ copyingStory ? '复制中…' : '复制当前故事' }}</button></div></div><div v-if="loading" class="shared-state">正在读取项目摘要…</div><template v-else><div class="summary-grid"><div><strong>{{ summary.chapter_count ?? 0 }}</strong><span>已写章节</span></div><div><strong>{{ summary.outline_exists ? '有' : '无' }}</strong><span>正式大纲</span></div><div><strong>{{ summary.knowledge_item_count ?? 0 }}</strong><span>知识条目</span></div><div><strong>{{ summary.resource_file_count ?? 0 }}</strong><span>资源文件</span></div></div><div class="shared-columns"><div class="search-panel"><div><p class="eyebrow">KNOWLEDGE SEARCH</p><h3>在当前故事里找一条线索</h3></div><div class="search-row"><input v-model="query" placeholder="角色、地点、规则……" @keydown.enter="search" /><select v-model="recordTypeFilter" aria-label="知识类型筛选"><option value="">全部类型</option><option value="knowledge">知识</option><option value="entity">实体</option><option value="source">来源</option></select><button class="button accent" :disabled="searching || !query.trim()" @click="search">{{ searching ? '检索中…' : '搜索' }}</button></div><div v-if="results.length" ref="resultViewport" class="result-list" @scroll="onResultScroll"><div :style="{ height: `${resultTopSpacer}px` }" aria-hidden="true"></div><button v-for="(item, index) in visibleResults" :key="item.id || `${resultStart}-${index}`" class="result-item" @click="openDetail(item)"><strong>{{ item.title || item.name || item.record_type || '知识条目' }}</strong><p>{{ item.summary || item.description || item.content || '点击查看详情' }}</p></button><div :style="{ height: `${resultBottomSpacer}px` }" aria-hidden="true"></div><button v-if="nextCursor" class="pending-button" :disabled="loadingMore" @click="loadMoreSearch">{{ loadingMore ? '加载中…' : '加载更多结果' }}</button></div><p v-else class="muted search-empty">搜索结果会显示在这里；正式知识仍由 Python 服务负责写入和修订。</p><div v-if="detailLoading" class="detail-state">正在读取条目…</div><article v-else-if="selectedDetail" class="knowledge-detail"><button class="detail-close" @click="selectedDetail = null">关闭</button><p class="eyebrow">KNOWLEDGE DETAIL</p><textarea v-model="detailJson" class="detail-editor" aria-label="知识条目 JSON 编辑器"></textarea><div class="detail-actions"><button class="button accent" :disabled="detailSaving" @click="saveDetail">{{ detailSaving ? '保存中…' : '保存修订' }}</button><button v-for="revision in detailRevisions.slice(0, 3)" :key="revision.revision_id" class="pending-button" @click="restoreRevision(revision)">恢复 {{ revision.revision_id }}</button></div><pre>{{ JSON.stringify(selectedDetail, null, 2) }}</pre></article></div><div class="task-panel"><p class="eyebrow">TASK CENTER</p><h3>后台任务与能力</h3><div class="task-counts"><span>资料导入 <strong>{{ tasks.ingestion.length }}</strong></span><span>网络研究 <strong>{{ tasks.web_research.length }}</strong></span></div><div class="capability-list"><div v-for="(item, key) in capabilities" :key="key" class="capability-row"><i :class="{ ready: item.available }"></i><span>{{ key }}</span><small>{{ item.available ? '可用' : (item.message || item.status) }}</small></div></div></div><div class="pending-panel"><p class="eyebrow">MEMORY DRAWER</p><h3>待确认记忆 <small>{{ pending.length }}</small></h3><p v-if="!pending.length" class="muted">对话中提炼的候选知识会出现在这里。</p><div v-for="item in pending.slice(0, 5)" :key="item.pending_id" class="pending-row"><div><strong>{{ item.name || '未命名条目' }}</strong><small>{{ item.category || '知识' }} · {{ item.source_title || '当前会话' }}</small></div><div><button class="pending-button confirm" :disabled="pendingBusy" @click="confirmPending(item)">确认</button><button class="pending-button" :disabled="pendingBusy" @click="discardPending(item)">忽略</button></div></div></div></div></template><p v-if="error" class="shared-error">{{ error }}</p></section>
-<RouterLink v-if="selectedDetail && detailRecordType === 'knowledge'" class="detail-typed-link" :to="{ name: workspace.mode === 'conversational' ? 'conversational-knowledge-editor' : 'planned-knowledge-editor', params: { recordType: detailRecordType, recordId: detailRecordId } }">打开类型化知识编辑器</RouterLink>
+  <section class="shared-page">
+    <p class="eyebrow">共享工作区</p>
+    <div class="shared-heading">
+      <div><h2>项目概览与知识</h2><p>规划和对话工作台共用这里的项目数据、知识和后台任务。</p></div>
+      <div class="heading-actions"><span class="pill">{{ workspace.activeStory?.creation_mode === 'conversational' ? '对话模式' : '规划模式' }}</span><button class="button secondary" :disabled="copyingStory" @click="copyCurrentStory">{{ copyingStory ? '复制中…' : '复制故事' }}</button></div>
+    </div>
+    <div v-if="loading" class="shared-state">正在读取项目摘要…</div>
+    <template v-else>
+      <div class="summary-grid"><div><strong>{{ summary.chapter_count ?? 0 }}</strong><span>已写章节</span></div><div><strong>{{ summary.outline_exists ? '有' : '无' }}</strong><span>正式大纲</span></div><div><strong>{{ summary.knowledge_item_count ?? 0 }}</strong><span>知识条目</span></div><div><strong>{{ summary.resource_file_count ?? 0 }}</strong><span>资源文件</span></div></div>
+      <div class="shared-columns">
+        <div class="search-panel">
+          <div><p class="eyebrow">知识搜索</p><h3>搜索当前故事和项目知识</h3></div>
+          <div class="search-row"><input v-model="query" aria-label="搜索知识" placeholder="输入角色、地点或规则" @keydown.enter="search" /><select v-model="recordTypeFilter" aria-label="知识类型筛选"><option value="">全部类型</option><option value="knowledge">知识</option><option value="entity">实体</option><option value="source">来源</option></select><button class="button accent" :disabled="searching || !query.trim()" @click="search">{{ searching ? '检索中…' : '搜索' }}</button></div>
+          <div v-if="results.length" ref="resultViewport" class="result-list" @scroll="onResultScroll"><div :style="{ height: `${resultTopSpacer}px` }" aria-hidden="true"></div><button v-for="(item, index) in visibleResults" :key="item.id || `${resultStart}-${index}`" class="result-item" @click="openDetail(item)"><strong>{{ item.title || item.name || item.record_type || '知识条目' }}</strong><p>{{ item.summary || item.description || item.content || '打开查看详情' }}</p></button><div :style="{ height: `${resultBottomSpacer}px` }" aria-hidden="true"></div><button v-if="nextCursor" class="pending-button" :disabled="loadingMore" @click="loadMoreSearch">{{ loadingMore ? '加载中…' : '加载更多' }}</button></div>
+          <p v-else class="muted search-empty">输入关键词后，结果会显示在这里。</p>
+          <div v-if="detailLoading" class="detail-state">正在读取条目…</div>
+          <article v-else-if="selectedDetail" class="knowledge-detail"><button class="detail-close" @click="selectedDetail = null">关闭</button><p class="eyebrow">知识详情</p><RouterLink v-if="detailRecordType === 'knowledge'" class="detail-typed-link" :to="{ name: workspace.mode === 'conversational' ? 'conversational-knowledge-editor' : 'planned-knowledge-editor', params: { recordType: detailRecordType, recordId: detailRecordId } }">打开知识编辑器</RouterLink><textarea v-model="detailJson" class="detail-editor" aria-label="知识条目 JSON 编辑器"></textarea><div class="detail-actions"><button class="button accent" :disabled="detailSaving" @click="saveDetail">{{ detailSaving ? '保存中…' : '保存修订' }}</button><button v-for="revision in detailRevisions.slice(0, 3)" :key="revision.revision_id" class="pending-button" @click="restoreRevision(revision)">恢复修订 {{ revision.revision_no || revision.revision_id }}</button></div><pre>{{ JSON.stringify(selectedDetail, null, 2) }}</pre></article>
+        </div>
+        <div class="side-column">
+          <div class="task-panel"><p class="eyebrow">后台任务</p><h3>任务与能力状态</h3><div class="task-counts"><span>资料导入 <strong>{{ tasks.ingestion.length }}</strong></span><span>网络研究 <strong>{{ tasks.web_research.length }}</strong></span></div><div class="capability-list"><div v-for="(item, key) in capabilities" :key="key" class="capability-row"><i :class="{ ready: item.available }"></i><span>{{ capabilityLabel(String(key)) }}</span><small>{{ item.available ? '可用' : (item.message || item.status) }}</small></div></div></div>
+          <div class="pending-panel"><p class="eyebrow">待审核知识</p><h3>候选条目 <small>{{ pending.length }}</small></h3><p v-if="!pending.length" class="muted">暂无待审核条目。</p><div v-for="item in pending.slice(0, 5)" :key="item.pending_id" class="pending-row"><div><strong>{{ item.name || '未命名条目' }}</strong><small>{{ item.category || '知识' }} · {{ item.source_title || '当前会话' }}</small></div><div><button class="pending-button confirm" :disabled="pendingBusy" @click="confirmPending(item)">确认</button><button class="pending-button" :disabled="pendingBusy" @click="discardPending(item)">忽略</button></div></div></div>
+        </div>
+      </div>
+    </template>
+    <p v-if="error" class="shared-error">{{ error }}</p>
+  </section>
 </template>
 
 <style scoped>

@@ -21,8 +21,9 @@ async function loadProfile() {
   profileLoading.value = true
   try {
     profile.value = (await api.profile(workspace.activeProjectId, workspace.activeStory.story_id)).profile || {}
-  } catch {
+  } catch (reason) {
     profile.value = {}
+    profileMessage.value = reason instanceof Error ? reason.message : '创作方向读取失败'
   } finally {
     profileLoading.value = false
   }
@@ -44,6 +45,7 @@ async function saveProfile() {
 
 function setProfileField(key: string, value: string | boolean) {
   profile.value = { ...profile.value, [key]: value }
+  profileMessage.value = ''
 }
 
 async function discussProfile() {
@@ -56,7 +58,7 @@ async function discussProfile() {
 async function approveProfileDiscussion() {
   if (!workspace.activeProjectId || !workspace.activeStory || !discussionStep.value || approving.value) return
   approving.value = true
-  try { const data = await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionStep.value); if ((data.result as any)?.saved_profile) profile.value = (data.result as any).saved_profile; discussionText.value = '创作方向讨论已批准并写入方向卡。' } catch (error) { discussionText.value = error instanceof Error ? error.message : '批准失败' } finally { approving.value = false }
+  try { const data = await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionStep.value); if ((data.result as any)?.saved_profile) profile.value = (data.result as any).saved_profile; discussionText.value = '已采用讨论结论并更新创作方向。' } catch (error) { discussionText.value = error instanceof Error ? error.message : '应用结论失败' } finally { approving.value = false }
 }
 
 onMounted(loadProfile)
@@ -64,13 +66,13 @@ onMounted(loadProfile)
 
 <template>
   <section class="planned-page">
-    <div class="page-lead"><div><p class="eyebrow">01 / CREATIVE DIRECTION</p><h2>先回答，<em>为什么是这个故事？</em></h2><p class="lead-copy">规划工作台把长篇创作拆成可以反复讨论的决定。这里是你的总控台，也是每一次写作前重新找回方向的地方。</p></div><div class="progress-ring"><strong>01</strong><span>/ 04</span><small>当前阶段</small></div></div>
-    <div v-if="!hasStory" class="empty-panel"><span class="empty-icon">✦</span><h3>还没有故事</h3><p>连接 API 后，在这里创建你的第一个长篇故事。</p><button class="button accent">创建故事</button></div>
+    <div class="page-lead"><div><p class="eyebrow">01 / 创作方向</p><h2>明确故事目标和<em>创作边界</em></h2><p class="lead-copy">记录故事形态、工作流程和设定约束。这些内容会参与后续的大纲讨论、章节写作和上下文装配。</p></div><div class="progress-ring"><strong>01</strong><span>/ 04</span><small>当前阶段</small></div></div>
+    <div v-if="!hasStory" class="empty-panel"><span class="empty-icon">✦</span><h3>还没有故事</h3><p>请先返回入口创建项目和第一个故事。</p><RouterLink to="/" class="button accent">返回入口</RouterLink></div>
     <div v-else class="direction-grid">
-      <article class="feature-card"><div class="feature-heading"><span class="number">A</span><div><p class="eyebrow">THE NORTH STAR</p><h3>一句话说清楚你的故事</h3></div></div><p>好的方向不是限制，而是当你迷路时，仍然知道哪条路属于这本书。</p><div class="quote-box">{{ workspace.activeStory?.description || '还没有写下故事简介。把你此刻最想写的那句话放进来。' }}</div><RouterLink to="/planned/outline" class="text-link">继续整理结构 <span>→</span></RouterLink></article>
-      <article class="side-card"><p class="eyebrow">WORKSPACE NOTES</p><h3>一个安静的提醒</h3><p>规划模式不会替你决定故事。它只是把讨论、取舍和共识，留在下一次创作仍然找得到的地方。</p><div class="card-stamp">NF · 规划工作台</div></article>
+      <article class="feature-card"><div class="feature-heading"><span class="number">A</span><div><p class="eyebrow">核心概述</p><h3>故事简介</h3></div></div><p>简介用于概括主角、核心冲突和故事目标，后续结构讨论会引用这段内容。</p><div class="quote-box">{{ workspace.activeStory?.description || '尚未填写故事简介。' }}</div><RouterLink to="/planned/outline" class="text-link">前往结构与大纲 <span>→</span></RouterLink></article>
+      <article class="side-card"><p class="eyebrow">工作方式</p><h3>规划内容如何使用</h3><p>方向卡、讨论结论和正式大纲会分别保存。只有明确采用的结论才会进入后续生成上下文。</p><div class="card-stamp">NF · 规划工作台</div></article>
       <article class="profile-card">
-        <div class="profile-heading"><div><p class="eyebrow">CREATIVE PROFILE</p><h3>创作方向卡</h3></div><span v-if="profileMessage" class="saved-state">{{ profileMessage }}</span></div>
+        <div class="profile-heading"><div><p class="eyebrow">创作配置</p><h3>创作方向卡</h3></div><span v-if="profileMessage" class="saved-state">{{ profileMessage }}</span></div>
         <div v-if="profileLoading" class="profile-loading">正在读取创作方向…</div>
         <div v-else class="profile-form">
           <label>故事形态<input :value="String(profile.target_length || '')" placeholder="长篇" @input="setProfileField('target_length', ($event.target as HTMLInputElement).value)" /></label>
@@ -79,7 +81,7 @@ onMounted(loadProfile)
           <button class="button secondary" :disabled="profileSaving" @click="saveProfile">{{ profileSaving ? '保存中…' : '保存方向卡' }}</button>
         </div>
       </article>
-      <article class="profile-discussion"><div><p class="eyebrow">DIRECTION DISCUSSION</p><h3>把方向说清楚，再交给结构。</h3></div><div class="profile-discussion-row"><input v-model="discussionIdea" placeholder="你想讨论目标读者、风格或流程中的哪一项？" @keydown.enter="discussProfile" /><button class="button secondary" :disabled="discussing || !discussionIdea.trim()" @click="discussProfile">{{ discussing ? '讨论中…' : '开始讨论' }}</button></div><div v-if="discussionText" class="profile-discussion-result"><p>{{ discussionText }}<span v-if="discussing">▌</span></p><button v-if="discussionStep" class="button accent" :disabled="approving" @click="approveProfileDiscussion">{{ approving ? '批准中…' : '批准并应用' }}</button></div></article>
+      <article class="profile-discussion"><div><p class="eyebrow">方向讨论</p><h3>讨论目标读者、风格或工作流程</h3></div><div class="profile-discussion-row"><input v-model="discussionIdea" placeholder="输入要讨论的问题" @keydown.enter="discussProfile" /><button class="button secondary" :disabled="discussing || !discussionIdea.trim()" @click="discussProfile">{{ discussing ? '讨论中…' : '开始讨论' }}</button></div><div v-if="discussionText" class="profile-discussion-result"><p>{{ discussionText }}<span v-if="discussing">▌</span></p><button v-if="discussionStep" class="button accent" :disabled="approving" @click="approveProfileDiscussion">{{ approving ? '应用中…' : '采用并应用' }}</button></div></article>
     </div>
   </section>
 </template>

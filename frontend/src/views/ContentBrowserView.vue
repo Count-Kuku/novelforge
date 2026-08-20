@@ -2,6 +2,8 @@
 import { onMounted, ref } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
+import { dialog } from '../ui/dialog'
+import { notify } from '../ui/notifications'
 
 const workspace = useWorkspaceStore()
 const items = ref<any[]>([])
@@ -18,15 +20,15 @@ async function load(cursor = '') {
 
 async function remove(item: any) {
   if (!workspace.activeProjectId || !workspace.activeStory || !item?.deletable) return
-  if (!globalThis.confirm(`确认删除“${item.label || item.path_label}”？此操作由资源服务执行并可审计。`)) return
-  try { await api.deleteContent(workspace.activeProjectId, item, workspace.activeStory.story_id); items.value = items.value.filter((candidate) => candidate.id !== item.id) } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '删除内容失败' }
+  if (!await dialog.confirm({ title: '删除这项内容？', message: `“${item.label || item.path_label}”将按其资源类型执行删除。`, confirmLabel: '删除', tone: 'danger' })) return
+  try { await api.deleteContent(workspace.activeProjectId, item, workspace.activeStory.story_id); items.value = items.value.filter((candidate) => candidate.id !== item.id); notify('内容已删除', 'success') } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '删除内容失败' }
 }
 
 onMounted(() => load())
 </script>
 
 <template>
-  <section class="content-page"><p class="eyebrow">CONTENT BROWSER</p><h1>所有内容，<em>都有清晰的去处。</em></h1><p class="intro">分页浏览当前故事的结构、章节、审阅、来源和运行记录；删除按钮只提交资源描述，不让前端拼接本地路径。</p><div class="content-meta"><span>共 {{ total }} 项</span><button class="button secondary" :disabled="loading" @click="load()">刷新</button></div><div v-if="loading && !items.length" class="content-state">正在读取内容…</div><div v-else class="content-list"><article v-for="item in items" :key="item.id" class="content-row"><div><p class="eyebrow">{{ item.group }}</p><h2>{{ item.label || item.path_label }}</h2><p>{{ item.path_label }}</p></div><button v-if="item.deletable" class="link-button danger" @click="remove(item)">删除</button></article><button v-if="nextCursor" class="button secondary" :disabled="loading" @click="load(nextCursor)">{{ loading ? '加载中…' : '加载更多' }}</button></div><p v-if="!loading && !items.length" class="content-state">当前故事还没有可浏览内容。</p><p v-if="error" class="content-error">{{ error }}</p></section>
+  <section class="content-page"><p class="eyebrow">内容浏览</p><h1>查看当前故事的<em>全部内容</em></h1><p class="intro">按类型浏览结构、大纲、章节、来源和运行记录。只有明确标记为可删除的内容会显示删除按钮。</p><div class="content-meta"><span>共 {{ total }} 项</span><button class="button secondary" :disabled="loading" @click="load()">刷新</button></div><div v-if="loading && !items.length" class="content-state">正在读取内容…</div><div v-else class="content-list"><article v-for="item in items" :key="item.id" class="content-row"><div><p class="eyebrow">{{ item.group }}</p><h2>{{ item.label || item.path_label }}</h2><p>{{ item.path_label }}</p></div><button v-if="item.deletable" class="link-button danger" @click="remove(item)">删除</button></article><button v-if="nextCursor" class="button secondary" :disabled="loading" @click="load(nextCursor)">{{ loading ? '加载中…' : '加载更多' }}</button></div><p v-if="!loading && !items.length" class="content-state">当前故事还没有可浏览内容。</p><p v-if="error" class="content-error">{{ error }}</p></section>
 </template>
 
 <style scoped>
