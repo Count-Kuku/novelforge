@@ -121,7 +121,8 @@ jobs:
 
       - name: Report missing provider secrets
         if: ${{ env.PROVIDER_CONFIGURED != 'true' }}
-        run: Write-Output "真实 provider gate skipped: workflow_dispatch 未配置完整 secrets。"
+        run: |
+          Write-Output "真实 provider gate skipped: workflow_dispatch 未配置完整 secrets。"
 
       - name: Verify real provider stream
         if: ${{ env.PROVIDER_CONFIGURED == 'true' }}
