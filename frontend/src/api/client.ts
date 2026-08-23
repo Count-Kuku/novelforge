@@ -160,6 +160,8 @@ export const api = {
   copyStory: (projectId: string, storyId: string, payload: { name: string; include_discussions?: boolean; include_summaries?: boolean; include_chapters?: boolean }) =>
     request<{ story: StoryItem }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/copy`, { method: 'POST', body: JSON.stringify(payload) }),
   archiveStory: (projectId: string, storyId: string) => request<{ archived: boolean }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/archive`, { method: 'POST' }),
+  restoreStory: (projectId: string, storyId: string) => request<{ restored: boolean }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/restore`, { method: 'POST' }),
+  deleteStory: (projectId: string, storyId: string) => request<{ deleted: boolean }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}`, { method: 'DELETE' }),
   setStoryMode: (projectId: string, storyId: string, creationMode: CreationMode) =>
     request<{ story: StoryItem }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/mode`, {
       method: 'PATCH',
@@ -212,6 +214,9 @@ export const api = {
   summary: (projectId: string, storyId = 'default') =>
     request<Record<string, unknown>>(`/projects/${encodeURIComponent(projectId)}/summary?story_id=${encodeURIComponent(storyId)}`),
   content: (projectId: string, storyId = 'default', cursor = '', pageSize = 40) => request<{ items: any[]; next_cursor?: string; total?: number }>(`/projects/${encodeURIComponent(projectId)}/content?story_id=${encodeURIComponent(storyId)}&cursor=${encodeURIComponent(cursor)}&page_size=${pageSize}`),
+  works: (projectId: string, storyId: string, cursor = '', pageSize = 40) => request<{ items: any[]; next_cursor?: string; total?: number }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/works?page_size=${pageSize}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`),
+  deleteChapterWork: (projectId: string, storyId: string, chapterNo: number) => request<{ deleted: boolean }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/works/chapters/${chapterNo}`, { method: 'DELETE' }),
+  removeFragmentWork: (projectId: string, storyId: string, fragmentId: string) => request<{ removed: boolean }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/works/fragments/${encodeURIComponent(fragmentId)}`, { method: 'DELETE' }),
   deleteContent: (projectId: string, resource: Record<string, unknown>, storyId = 'default') => request<{ deleted: boolean }>(`/projects/${encodeURIComponent(projectId)}/content/delete?story_id=${encodeURIComponent(storyId)}`, { method: 'POST', body: JSON.stringify({ resource, confirm: true }) }),
   tasks: (projectId: string, status?: string) =>
     request<{ ingestion: unknown[]; web_research: unknown[] }>(`/projects/${encodeURIComponent(projectId)}/tasks${status ? `?status_filter=${encodeURIComponent(status)}` : ''}`),

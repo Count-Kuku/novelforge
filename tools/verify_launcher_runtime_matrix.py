@@ -89,6 +89,7 @@ def main() -> int:
                 patch.object(launcher, "_project_root", return_value=root),
                 patch.object(launcher, "_resolve_python", return_value=Path(sys.executable)),
                 patch.object(launcher.webbrowser, "open", side_effect=lambda url: browser_calls.append(url) or True),
+                patch.object(launcher, "_show_error", return_value=None),
             ):
                 result = launcher.main()
                 check(result == 0, "真实 launcher 子进程启动 FastAPI/Vue 并通过 ready")
@@ -97,6 +98,17 @@ def main() -> int:
                 check(child_pid > 0 and launcher._process_is_running(child_pid), "launcher 持久化运行中的 pid/port 状态")
                 selected, conflict = launcher._find_available_port(root)
                 check(selected is None and conflict is None, "已有本项目实例不会重复启动")
+
+                index_path = root / "frontend" / "dist" / "index.html"
+                updated_time = max(time.time() + 2, float(state.get("runtime_mtime") or 0) + 2)
+                os.utime(index_path, (updated_time, updated_time))
+                result = launcher.main()
+                check(result == 0, "代码更新后重复运行 launcher 会自动重启")
+                restarted_state = launcher._load_server_state(root)
+                restarted_pid = int(restarted_state.get("pid") or 0)
+                check(restarted_pid > 0 and restarted_pid != child_pid, "自动重启登记了新的服务进程")
+                check(not launcher._process_is_running(child_pid), "自动重启已结束旧服务进程")
+                child_pid = restarted_pid
 
                 stop_pid(child_pid)
                 for _ in range(30):

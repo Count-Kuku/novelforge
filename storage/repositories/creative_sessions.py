@@ -385,6 +385,31 @@ def list_creative_fragment_rows(conn: sqlite3.Connection, session_id: str) -> li
     return [dict(row) for row in rows]
 
 
+def list_creative_work_rows(conn: sqlite3.Connection, story_id: str) -> list[dict]:
+    """Project accepted/finalized fragments as a story-level works projection."""
+    rows = conn.execute(
+        """
+        SELECT fragment.fragment_id, fragment.session_id, fragment.turn_id,
+               fragment.parent_fragment_id, fragment.content, fragment.status,
+               fragment.content_hash, fragment.word_count,
+               fragment.context_snapshot_id, fragment.extraction_status,
+               fragment.created_at, fragment.accepted_at,
+               session.title AS session_title,
+               session.session_goal, session.status AS session_status,
+               session.target_chapter_no
+        FROM creative_fragments AS fragment
+        JOIN creative_sessions AS session
+          ON session.session_id = fragment.session_id
+        WHERE session.story_id = ?
+          AND fragment.status IN ('accepted', 'finalized')
+        ORDER BY COALESCE(fragment.accepted_at, fragment.created_at) DESC,
+                 fragment.fragment_id DESC
+        """,
+        (str(story_id or "").strip(),),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def load_creative_fragment_row(conn: sqlite3.Connection, fragment_id: str) -> dict | None:
     row = conn.execute(
         """

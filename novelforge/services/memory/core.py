@@ -85,7 +85,7 @@ from storage.repositories import (
     load_retrieval_vector_store_payload,
     list_asset_file_rows,
     list_asset_payload_rows,
-    list_creative_fragment_rows,
+    list_creative_fragment_rows, list_creative_work_rows,
     list_creative_session_rows,
     list_creative_turn_rows,
     list_retrieval_source_file_rows,

@@ -61,6 +61,26 @@ def main() -> None:
         assert response.status_code == 200, response.text
         assert any(item["story_id"] == story["story_id"] for item in response.json()["data"]["stories"])
 
+        response = client.post(
+            f"/api/v1/projects/{project_id}/stories",
+            json={"name": "归档生命周期", "creation_mode": "conversational"},
+        )
+        lifecycle_story = response.json()["data"]["story"]
+        lifecycle_path = f"/api/v1/projects/{project_id}/stories/{lifecycle_story['story_id']}"
+        response = client.post(f"{lifecycle_path}/archive")
+        assert response.status_code == 200 and response.json()["data"]["archived"], response.text
+        response = client.get(f"/api/v1/projects/{project_id}/stories")
+        assert next(item for item in response.json()["data"]["stories"] if item["story_id"] == lifecycle_story["story_id"])["status"] == "archived"
+        response = client.post(f"{lifecycle_path}/restore")
+        assert response.status_code == 200 and response.json()["data"]["restored"], response.text
+        response = client.get(f"/api/v1/projects/{project_id}/stories")
+        assert next(item for item in response.json()["data"]["stories"] if item["story_id"] == lifecycle_story["story_id"])["status"] == "active"
+        assert client.post(f"{lifecycle_path}/archive").json()["data"]["archived"]
+        response = client.delete(lifecycle_path)
+        assert response.status_code == 200 and response.json()["data"]["deleted"], response.text
+        response = client.get(f"/api/v1/projects/{project_id}/stories")
+        assert not any(item["story_id"] == lifecycle_story["story_id"] for item in response.json()["data"]["stories"])
+
         response = client.patch(
             f"/api/v1/projects/{project_id}/stories/{story['story_id']}/mode",
             json={"creation_mode": "planned"},
@@ -149,14 +169,47 @@ def main() -> None:
         assert response.status_code == 200 and response.json()["data"]["content"] == "第一章正文", response.text
         response = client.get(f"/api/v1/projects/{project_id}/stories/{story['story_id']}/chapters/1/versions")
         assert response.status_code == 200 and response.json()["data"]["versions"], response.text
+        response = client.get(f"/api/v1/projects/{project_id}/stories/{story['story_id']}/works")
+        assert response.status_code == 200 and any(
+            item["kind"] == "chapter" and item["title"] == "第 1 章"
+            for item in response.json()["data"]["items"]
+        ), response.text
         response = client.get(f"/api/v1/projects/{project_id}/stories/{story['story_id']}/discussions/chapter?asset_no=1")
         assert response.status_code == 200 and response.json()["data"]["asset_type"] == "chapter", response.text
+        response = client.delete(f"/api/v1/projects/{project_id}/stories/{story['story_id']}/works/chapters/1")
+        assert response.status_code == 200 and response.json()["data"]["deleted"], response.text
+        response = client.get(f"/api/v1/projects/{project_id}/stories/{story['story_id']}/works")
+        assert not any(item["kind"] == "chapter" for item in response.json()["data"]["items"]), response.text
         response = client.post(
             f"/api/v1/projects/{project_id}/stories/{story['story_id']}/sessions",
             json={"session_goal": "附件冒烟"},
         )
         assert response.status_code == 201, response.text
         session_id = response.json()["data"]["session"]["session_id"]
+        from novelforge.services import memory
+
+        turn = memory.begin_creative_turn(
+            project["name"], session_id, "写一段开场",
+            action_type="generate", parent_fragment_id=None, story_id=story["story_id"],
+        )
+        fragment = memory.complete_creative_turn(
+            project["name"], turn["turn_id"],
+            {"session_id": session_id, "content": "雨落在旧车站的玻璃顶上。"},
+            story_id=story["story_id"],
+        )
+        memory.accept_creative_fragment(
+            project["name"], session_id, fragment["fragment_id"], story_id=story["story_id"],
+        )
+        response = client.get(f"/api/v1/projects/{project_id}/stories/{story['story_id']}/works")
+        assert any(item["fragment_id"] == fragment["fragment_id"] for item in response.json()["data"]["items"]), response.text
+        response = client.delete(
+            f"/api/v1/projects/{project_id}/stories/{story['story_id']}/works/fragments/{fragment['fragment_id']}"
+        )
+        assert response.status_code == 200 and response.json()["data"]["removed"], response.text
+        response = client.get(f"/api/v1/projects/{project_id}/stories/{story['story_id']}/works")
+        assert not any(item.get("fragment_id") == fragment["fragment_id"] for item in response.json()["data"]["items"]), response.text
+        bundle = memory.load_creative_session_bundle(project["name"], session_id, story_id=story["story_id"])
+        assert next(item for item in bundle["fragments"] if item["fragment_id"] == fragment["fragment_id"])["status"] == "discarded"
         response = client.post(
             f"/api/v1/projects/{project_id}/stories/{story['story_id']}/sessions/{session_id}/attachments",
             json={"text": "一段只在本轮使用的资料", "title": "冒烟资料"},

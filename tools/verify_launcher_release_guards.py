@@ -181,6 +181,20 @@ def _check_frontend_mode_selection() -> None:
             assert launcher._frontend_mode(root) == "streamlit"
 
 
+def _check_runtime_update_detection() -> None:
+    with tempfile.TemporaryDirectory(prefix="novelforge-launcher-update-") as temp_dir:
+        root = Path(temp_dir)
+        runtime_file = root / "novelforge" / "api" / "app.py"
+        runtime_file.parent.mkdir(parents=True)
+        runtime_file.write_text("before", encoding="utf-8")
+        baseline = launcher._latest_runtime_mtime(root)
+        state = {"runtime_mtime": baseline}
+        assert not launcher._runtime_update_pending(root, state)
+        updated_time = max(time.time() + 2, baseline + 2)
+        os.utime(runtime_file, (updated_time, updated_time))
+        assert launcher._runtime_update_pending(root, state)
+
+
 def main() -> int:
     checks = 0
     with tempfile.TemporaryDirectory(prefix="novelforge-launcher-check-") as temp_dir:
@@ -198,6 +212,8 @@ def main() -> int:
     _check_build_version_guard()
     checks += 1
     _check_frontend_mode_selection()
+    checks += 1
+    _check_runtime_update_detection()
     checks += 1
     print(f"Launcher/release guard verification passed: {checks} checks")
     return 0

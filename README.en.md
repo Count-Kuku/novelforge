@@ -84,6 +84,8 @@ Research tasks reuse SQLite `workflow_runs/workflow_steps` and support backgroun
 
 The standard sidebar has exactly four top-level entries. Content management, retrieval diagnostics, standalone chapter review, generation rules, and prompt options are no longer separate entries. Set `NOVELFORGE_DEVELOPER_MODE=1` to add developer tools inside Settings without changing the top-level count.
 
+The Vue conversational workspace also exposes only four primary entries: `Conversation`, `Works`, `Library`, and `Settings`. Full conversation history is saved automatically for continuity and traceability, while accepted/finalized generated passages and formally saved chapters appear under Works instead of being mixed with imported references or knowledge records.
+
 The Library hub combines unified search/editing, priority settings, pending review, importing, processing, and source management. Priority Settings are a high-priority subset of confirmed knowledge, not a separate store. In normal use, follow the workbench's recommended next action instead of working from internal storage concepts.
 
 ## Recommended Workflow
@@ -165,7 +167,7 @@ Back up the entire `data/` directory regularly. Stop NovelForge before copying i
 
 ## Windows Portable Build
 
-The portable package contains a lightweight `NovelForge.exe` launcher, a self-contained `.runtime` Python distribution, the compiled Vue frontend, project source, and a local `data/` directory. It starts FastAPI/Vue on `127.0.0.1` by default, prefers port `8501`, and opens the browser; it falls back to Streamlit when the Vue bundle is missing.
+The portable package contains a lightweight `NovelForge.exe` launcher, a self-contained `.runtime` Python distribution, the compiled Vue frontend, project source, and a local `data/` directory. It starts FastAPI/Vue on `127.0.0.1` by default, prefers port `8501`, and opens the browser; it falls back to Streamlit when the Vue bundle is missing. Running the launcher again after source or frontend build updates automatically replaces the tracked service with the new version; without updates it only reopens the existing page.
 
 ## Two Creative Workspaces
 

@@ -15,7 +15,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   let storiesRequest = 0
 
   const activeProject = computed(() => projects.value.find((project) => project.project_id === activeProjectId.value) || null)
-  const activeStory = computed(() => stories.value.find((story) => story.story_id === activeStoryId.value) || stories.value[0] || null)
+  const activeStories = computed(() => stories.value.filter((story) => story.status !== 'archived'))
+  const archivedStories = computed(() => stories.value.filter((story) => story.status === 'archived'))
+  const activeStory = computed(() => activeStories.value.find((story) => story.story_id === activeStoryId.value) || activeStories.value[0] || null)
   const mode = computed<CreationMode>(() => activeStory.value?.creation_mode || 'planned')
 
   async function load() {
@@ -48,11 +50,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   function applyStories(projectId: string, nextStories: StoryItem[]) {
     if (projectId !== activeProjectId.value) return
     stories.value = nextStories
-    if (!stories.value.some((story) => story.story_id === activeStoryId.value)) {
-      activeStoryId.value = stories.value[0]?.story_id || 'default'
+    if (!activeStories.value.some((story) => story.story_id === activeStoryId.value)) {
+      activeStoryId.value = activeStories.value[0]?.story_id || ''
     }
     localStorage.setItem('novelforge.project', activeProjectId.value)
-    localStorage.setItem('novelforge.story', activeStoryId.value)
+    if (activeStoryId.value) localStorage.setItem('novelforge.story', activeStoryId.value)
+    else localStorage.removeItem('novelforge.story')
   }
 
   async function loadStories() {
@@ -77,6 +80,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }
 
   async function selectStory(storyId: string) {
+    if (!activeStories.value.some((story) => story.story_id === storyId)) return
     activeStoryId.value = storyId
     localStorage.setItem('novelforge.story', storyId)
   }
@@ -97,6 +101,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     loading,
     error,
     activeProject,
+    activeStories,
+    archivedStories,
     activeStory,
     mode,
     load,

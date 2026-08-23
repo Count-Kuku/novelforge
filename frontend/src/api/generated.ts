@@ -910,6 +910,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/stories/{story_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Story Endpoint */
+        post: operations["restore_story_endpoint_api_v1_projects__project_id__stories__story_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/stories/{story_id}/rules": {
         parameters: {
             query?: never;
@@ -1184,6 +1201,57 @@ export interface paths {
         post?: never;
         /** Delete Volume */
         delete: operations["delete_volume_api_v1_projects__project_id__stories__story_id__volumes__volume_no__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/works": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Story Works */
+        get: operations["story_works_api_v1_projects__project_id__stories__story_id__works_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/works/chapters/{chapter_no}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Chapter Work Endpoint */
+        delete: operations["delete_chapter_work_endpoint_api_v1_projects__project_id__stories__story_id__works_chapters__chapter_no__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/works/fragments/{fragment_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Fragment Work Endpoint */
+        delete: operations["remove_fragment_work_endpoint_api_v1_projects__project_id__stories__story_id__works_fragments__fragment_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4189,6 +4257,40 @@ export interface operations {
             };
         };
     };
+    restore_story_endpoint_api_v1_projects__project_id__stories__story_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     story_rules_api_v1_projects__project_id__stories__story_id__rules_get: {
         parameters: {
             query?: never;
@@ -5011,6 +5113,113 @@ export interface operations {
                 project_id: string;
                 story_id: string;
                 volume_no: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    story_works_api_v1_projects__project_id__stories__story_id__works_get: {
+        parameters: {
+            query?: {
+                cursor?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_chapter_work_endpoint_api_v1_projects__project_id__stories__story_id__works_chapters__chapter_no__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                chapter_no: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_fragment_work_endpoint_api_v1_projects__project_id__stories__story_id__works_fragments__fragment_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                fragment_id: string;
             };
             cookie?: never;
         };

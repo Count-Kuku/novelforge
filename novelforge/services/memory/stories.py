@@ -125,6 +125,40 @@ def list_creative_sessions(
     return [_memory_api.CreativeSession.model_validate(row).model_dump() for row in rows]
 
 
+def list_creative_works(project_name: str, story_id: str = "default") -> list[dict]:
+    clean_story_id = normalize_story_id(story_id)
+    if _memory_api._project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+        return _memory_api.list_creative_work_rows(conn, clean_story_id)
+
+
+def remove_creative_work(project_name: str, fragment_id: str, *, story_id: str) -> bool:
+    """Hide an accepted fragment from Works without erasing its source conversation."""
+    clean_fragment_id = str(fragment_id or "").strip()
+    if not clean_fragment_id:
+        raise ValueError("创作片段 ID 不能为空。")
+    if _memory_api._project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        fragment = _memory_api.load_creative_fragment_row(conn, clean_fragment_id)
+        if fragment is None:
+            conn.rollback()
+            return False
+        _creative_session_owner(conn, str(fragment["session_id"]), story_id)
+        if str(fragment.get("status") or "") not in {"accepted", "finalized"}:
+            conn.rollback()
+            return False
+        _memory_api.update_creative_fragment_row(
+            conn,
+            clean_fragment_id,
+            {"status": "discarded"},
+        )
+        conn.commit()
+    return True
+
+
 def load_creative_session_bundle(
     project_name: str,
     session_id: str,
@@ -1662,7 +1696,7 @@ def copy_story(project_name: str, source_story_id: str, new_name: str,
         raise
 
 
-def archive_story(project_name: str, story_id: str) -> bool:
+def _set_story_status(project_name: str, story_id: str, next_status: str) -> bool:
     clean_story_id = normalize_story_id(story_id)
     if _memory_api._project_db_marked_unavailable(project_name):
         raise RuntimeError(f"Project database is unavailable for {project_name}.")
@@ -1676,13 +1710,29 @@ def archive_story(project_name: str, story_id: str) -> bool:
         if target is None:
             conn.rollback()
             return False
-        target["status"] = "archived"
+        target["status"] = next_status
         target["updated_at"] = _memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds")
-        normalized_index = _stories_index_payload_from_rows(rows)
+        active_story_id = clean_story_id if next_status == "active" else next(
+            (
+                str(row.get("story_id") or "")
+                for row in rows
+                if str(row.get("status") or "active") != "archived"
+            ),
+            clean_story_id,
+        )
+        normalized_index = _stories_index_payload_from_rows(rows, active_story_id=active_story_id)
         _memory_api.sync_stories_index(conn, normalized_index)
         conn.commit()
     _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
     return True
+
+
+def archive_story(project_name: str, story_id: str) -> bool:
+    return _set_story_status(project_name, story_id, "archived")
+
+
+def restore_story(project_name: str, story_id: str) -> bool:
+    return _set_story_status(project_name, story_id, "active")
 
 
 def delete_story(project_name: str, story_id: str) -> bool:
