@@ -25,6 +25,7 @@ from novelforge.core.token_estimation import estimate_text_tokens
 from novelforge.services.retrieval import retrieve_context
 from novelforge.core.schemas import ChapterWritingGuidance, ContextAssembly, ContextBlock, RetrievalHit
 from novelforge.domain.setting_knowledge import (
+    ALWAYS_INJECTION_LIMIT,
     GLOBAL_WORLDLINE_IDS,
     SETTING_FIELD_SPECS,
     build_generation_setting_context,
@@ -281,9 +282,28 @@ def _apply_context_budget(
     if hard_total > budget:
         warnings.append(f"硬约束预计占用 {hard_total} tokens，已经超过上下文预算 {budget}。")
 
+    # Reserve a floor for retrieval so hard constraints can never starve it
+    # out entirely — narrative detail continuity depends on some recall.
+    retrieval_blocks = [
+        (index, block)
+        for index, block in optional_blocks
+        if block.category == "retrieval"
+    ]
+    non_retrieval_blocks = [
+        (index, block)
+        for index, block in optional_blocks
+        if block.category != "retrieval"
+    ]
+    # Only reserve a floor when retrieval blocks actually exist; otherwise the
+    # full remaining budget is available to other optional blocks.
+    retrieval_reserve = int(budget * 0.25) if retrieval_blocks else 0
+    retrieval_remaining = min(remaining, retrieval_reserve)
+
     selected_optional_indexes: set[int] = set()
+
+    # Non-retrieval blocks first (prompt options, story state, guidance, ...).
     for index, block in sorted(
-        optional_blocks,
+        non_retrieval_blocks,
         key=lambda item: (
             -item[1].priority,
             PLACEMENT_ORDER.get(item[1].placement, 99),
@@ -291,9 +311,22 @@ def _apply_context_budget(
             item[0],
         ),
     ):
-        if block.estimated_tokens <= remaining:
+        if block.estimated_tokens <= remaining - retrieval_remaining:
             selected_optional_indexes.add(index)
             remaining -= block.estimated_tokens
+
+    # Retrieval blocks draw from their own floor.
+    for index, block in sorted(
+        retrieval_blocks,
+        key=lambda item: (
+            -item[1].priority,
+            item[1].block_id,
+            item[0],
+        ),
+    ):
+        if block.estimated_tokens <= retrieval_remaining:
+            selected_optional_indexes.add(index)
+            retrieval_remaining -= block.estimated_tokens
 
     included: list[ContextBlock] = []
     omitted: list[ContextBlock] = []
@@ -395,7 +428,7 @@ def assemble_generation_context(
     profile = load_creative_profile(project_name, story_id) or {}
     worldline_id = str(profile.get("worldline_id") or "")
     worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer")
-    memory = build_generation_setting_context(project_name, story_id)
+    memory = build_generation_setting_context(project_name, story_id, chapter_no=chapter_no)
     all_setting_items = list_setting_items(project_name, story_id, core_only=True)
     structured_setting_fields = {
         str(item.get("setting_field") or "")
@@ -410,6 +443,8 @@ def assemble_generation_context(
         injection_policies={"always"},
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
+        limit=ALWAYS_INJECTION_LIMIT,
+        chapter_no=chapter_no,
     )
     blocks: list[ContextBlock] = []
 

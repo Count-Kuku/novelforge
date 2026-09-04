@@ -225,7 +225,6 @@ SOURCE_TYPE_LABELS = {
     "knowledge_writing_style": "知识库：写作风格",
     "knowledge_dialogue_style": "知识库：对白风格",
     "knowledge_narrative_techniques": "知识库：写作手法",
-    "knowledge_constraints": "知识库：硬性约束",
 }
 
 KNOWLEDGE_SOURCE_TYPES = [
@@ -240,7 +239,6 @@ KNOWLEDGE_SOURCE_TYPES = [
     "knowledge_writing_style",
     "knowledge_dialogue_style",
     "knowledge_narrative_techniques",
-    "knowledge_constraints",
 ]
 
 COMMON_RETRIEVAL_SOURCE_TYPES = [
@@ -708,6 +706,23 @@ SETTING_EXTRACTION_KNOWLEDGE_FIELDS = {
     "foreshadowing_updates": ("narrative_techniques", "foreshadowing", "伏笔"),
 }
 
+# Fine-grained dynamic slots that, when present as keys on a dict candidate,
+# produce one knowledge item each (fact_key = slot) so same-slot supersession
+# can fire across chapters. Mirrors the merge-policy table in
+# storage/repositories/entity_identity.py: replace-policy slots invalidate the
+# previous value; append-policy slots accumulate instead.
+DYNAMIC_SLOT_KEYS = {
+    "location": "location",
+    "status": "status",
+    "holding": "holding",
+    "holder": "holder",
+    "owner": "owner",
+    "current_goal": "current_goal",
+    "appearance": "appearance",
+    "personality": "personality",
+    "abilities": "abilities",
+}
+
 
 def _stringify_knowledge_candidate(value) -> str:
     if isinstance(value, str):
@@ -793,6 +808,53 @@ def build_pending_knowledge_from_setting_extraction(
         if not isinstance(values, list):
             values = [values]
         for index, value in enumerate(values, start=1):
+            # Fine-grained slot expansion: a dict candidate that carries a
+            # `name` plus dynamic-slot keys (location/status/holding/...) is
+            # split into one item per slot so same-slot supersession can fire.
+            if isinstance(value, dict):
+                entity_name = str(value.get("name") or value.get("角色") or "").strip()
+                slot_entries = []
+                for key, slot_name in DYNAMIC_SLOT_KEYS.items():
+                    slot_value = _stringify_knowledge_candidate(value.get(key))
+                    if not slot_value:
+                        continue
+                    slot_entries.append((slot_name, slot_value))
+                if entity_name and slot_entries:
+                    for slot_idx, (slot_name, slot_value) in enumerate(slot_entries, start=1):
+                        summary = f"{entity_name}：{slot_value}"
+                        items.append({
+                            "pending_id": _stable_pending_knowledge_id(
+                                story_id, chapter_no, field_name, index * 100 + slot_idx, summary
+                            ),
+                            "category": category,
+                            "name": entity_name,
+                            "summary": summary,
+                            "details": {
+                                "原始提炼": slot_value,
+                                "来源字段": slot_name,
+                                "来源章节": str(chapter_no),
+                                "实体": entity_name,
+                            },
+                            "evidence": [{
+                                "source_title": f"第 {chapter_no} 章正文",
+                                "quote": summary[:160],
+                                "note": "由章节设定提炼流程生成，确认后成为故事级优先设定条目。",
+                            }],
+                            "confidence": 0.7,
+                            "importance": 0.75,
+                            "evidence_strength": 0.6,
+                            "canon_status": "project",
+                            "extraction_mode": "chapter_update",
+                            "tags": ["章节更新", label, f"chapter:{chapter_no}", slot_name],
+                            "setting_role": "core",
+                            "setting_scope": "story",
+                            "setting_field": slot_name,
+                            **version_context,
+                            "injection_policy": "retrieval",
+                            "source_chapter_no": chapter_no,
+                        })
+                    continue
+
             summary = _stringify_knowledge_candidate(value)
             if not summary:
                 continue
@@ -828,7 +890,9 @@ def build_pending_knowledge_from_setting_extraction(
                 "setting_scope": "story",
                 "setting_field": setting_field,
                 **version_context,
-                "injection_policy": "always",
+                # 章节抽取产物默认不强制注入：存进知识库、可被检索召回。
+                # 若设为 always，硬约束块会随章数无上限膨胀，先饿死检索、最终撞破上下文预算。
+                "injection_policy": "retrieval",
                 "source_chapter_no": chapter_no,
             })
     return items

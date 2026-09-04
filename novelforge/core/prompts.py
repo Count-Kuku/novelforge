@@ -1280,8 +1280,12 @@ def setting_extraction_prompt(memory: dict, chapter: str, rules_text: str = "当
 }}
 
 要求：
-1. `new_characters` 必须是数组，元素为字符串或对象
-2. `world_updates` 必须是数组
+1. `new_characters` 必须是数组，元素为字符串或对象；对象可带 `name`（角色名）与下列槽位字段：
+   `location`（当前位置）、`status`（当前状态）、`holding`（持有物）、`appearance`（外貌）、
+   `personality`（性格）、`abilities`（能力）、`affiliations`（所属组织）。
+   只有明确发生变化或首次出现的槽位才写，不要重复已有设定。
+2. `world_updates` 必须是数组，元素为字符串或对象；对象可带 `name`（规则/地点/势力名）与
+   `status`（地点/势力的当前状态，如"被围困""覆灭""结盟"）。
 3. `timeline_updates` 必须是数组
 4. `foreshadowing_updates` 必须是数组
 5. `chapter_summary` 必须是字符串

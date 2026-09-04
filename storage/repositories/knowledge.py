@@ -6,6 +6,15 @@ import sqlite3
 from hashlib import sha256
 from typing import Any
 
+from .entity_identity import (
+    entity_id_for,
+    entity_type_for_category,
+    isolation_domain,
+    merge_policy_for,
+    normalize_name,
+    supersession_enabled,
+)
+
 
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -18,6 +27,31 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _chapter_no_from_item(item: dict) -> int | None:
+    """Extract the source chapter number from an item, tolerant of its absence.
+
+    Prefers the explicit ``source_chapter_no`` field; falls back to parsing
+    ``chapter:{n}`` out of the ``tags`` list (which survives inside content_json).
+    """
+    raw = item.get("source_chapter_no")
+    if raw is not None:
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            pass
+    tags = item.get("tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            text = str(tag or "").strip()
+            match = re.match(r"^chapter:(\d+)$", text)
+            if match:
+                try:
+                    return int(match.group(1))
+                except ValueError:
+                    return None
+    return None
 
 
 def _stable_id(prefix: str, payload: dict, fallback_index: int) -> str:
@@ -271,6 +305,60 @@ def _sync_item_evidence(
         )
 
 
+def _compute_entity_fact(category: str, item: dict) -> dict:
+    """Compute the Entity-Fact linkage fields for a knowledge item.
+
+    Returns a dict with entity_type, entity_id, fact_key, chapter_no,
+    merge_policy, valid_from_chapter. Shared by both write paths so grouping
+    and supersession semantics never drift.
+    """
+    entity_type = entity_type_for_category(category)
+    name = str(item.get("name") or item.get("canonical_name") or "").strip()
+    entity_id = entity_id_for(entity_type, name, isolation_domain(item)) if entity_type and name else None
+    fact_key = str(item.get("setting_field") or item.get("fact_key") or "").strip() or None
+    chapter_no = _chapter_no_from_item(item)
+    return {
+        "entity_type": entity_type,
+        "name": name,
+        "entity_id": entity_id,
+        "fact_key": fact_key,
+        "chapter_no": chapter_no,
+        "merge_policy": merge_policy_for(fact_key),
+        "valid_from_chapter": chapter_no,
+    }
+
+
+def _apply_supersession(
+    conn: sqlite3.Connection,
+    *,
+    entity_id: str,
+    fact_key: str | None,
+    valid_from_chapter: int | None,
+    knowledge_id: str,
+) -> None:
+    """Invalidate the currently-active fact in the same (entity, fact_key) slot.
+
+    Only fires for replace-policy facts; append-policy and slotless facts are
+    left untouched so multiple values can coexist where that is the intended
+    semantics.
+    """
+    if not entity_id or not supersession_enabled(fact_key) or valid_from_chapter is None:
+        return
+    conn.execute(
+        """
+        UPDATE knowledge_items
+        SET valid_to_chapter = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE entity_id = ? AND fact_key = ?
+          AND knowledge_id != ?
+          AND deleted_at IS NULL
+          AND valid_to_chapter IS NULL
+          AND valid_from_chapter IS NOT NULL
+          AND valid_from_chapter < ?
+        """,
+        (valid_from_chapter, entity_id, fact_key, knowledge_id, valid_from_chapter),
+    )
+
+
 def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list[dict]) -> list[dict]:
     clean_category = str(category or "").strip()
     normalized_items = [dict(item) for item in items if isinstance(item, dict)]
@@ -292,6 +380,19 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             conn, "source_segments", "segment_id", item.get("source_segment_id") or item.get("segment_id")
         )
         typed_data = item.get("typed_data") if isinstance(item.get("typed_data"), dict) else {}
+        ef = _compute_entity_fact(clean_category, item)
+        entity_type = ef["entity_type"]
+        name = ef["name"]
+        entity_id = ef["entity_id"]
+        fact_key = ef["fact_key"]
+        chapter_no = ef["chapter_no"]
+        merge_policy = ef["merge_policy"]
+        valid_from_chapter = ef["valid_from_chapter"]
+
+        _apply_supersession(
+            conn, entity_id=entity_id, fact_key=fact_key,
+            valid_from_chapter=valid_from_chapter, knowledge_id=knowledge_id,
+        )
         conn.execute(
             """
             INSERT INTO knowledge_items (
@@ -299,10 +400,13 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 canon_status, worldline_id, worldline_name, confidence, importance,
                 evidence_strength, source_id, segment_id, extraction_mode, setting_scope,
                 setting_role, injection_policy, status, schema_version, structured_json,
+                entity_id, fact_key, chapter_no, valid_from_chapter, valid_to_chapter,
+                merge_policy,
                 created_at, updated_at, deleted_at
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, NULL, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
@@ -329,6 +433,11 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 status = excluded.status,
                 schema_version = excluded.schema_version,
                 structured_json = excluded.structured_json,
+                entity_id = excluded.entity_id,
+                fact_key = excluded.fact_key,
+                chapter_no = excluded.chapter_no,
+                valid_from_chapter = excluded.valid_from_chapter,
+                merge_policy = excluded.merge_policy,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 deleted_at = NULL
             """,
@@ -355,24 +464,33 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 str(item.get("status") or "confirmed"),
                 int(item.get("schema_version") or 1),
                 _json_dumps(typed_data),
+                entity_id,
+                fact_key,
+                chapter_no,
+                valid_from_chapter,
+                merge_policy,
             ),
         )
+        if entity_id:
+            _upsert_entity_master(
+                conn,
+                entity_id=entity_id,
+                entity_type=entity_type,
+                canonical_name=name,
+                item=item,
+                story_id=story_id,
+            )
         _sync_knowledge_revision(
             conn,
             knowledge_id=knowledge_id,
             item=item,
             previous_snapshot=previous_snapshot,
         )
-        _upsert_graph_node_for_knowledge(
-            conn,
-            knowledge_id=knowledge_id,
-            category=clean_category,
-            item=item,
-            story_id=story_id,
-        )
-        # A knowledge item owns at most one active projected relationship edge.
-        # Clear the previous projection first so edits, category moves and
-        # incomplete relationship data cannot leave stale edges behind.
+        # Graph projection is now entity-centric (entities table is the node set;
+        # graph_edges endpoints are entity_id). The legacy graph_nodes write is
+        # removed — see storage-refactor-plan 2.3.
+        # A knowledge item owns its projected edges (relationship + references).
+        # Clear previous projections first so edits/category moves cannot leave stale edges.
         _soft_delete_graph_edge_ids(conn, graph_edges_by_owner.pop(knowledge_id, []))
         if clean_category == "relationships":
             _upsert_graph_relationship_edges(
@@ -380,6 +498,15 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 knowledge_id=knowledge_id,
                 item=item,
                 story_id=story_id,
+            )
+        else:
+            _upsert_entity_reference_edges(
+                conn,
+                knowledge_id=knowledge_id,
+                category=clean_category,
+                item=item,
+                story_id=story_id,
+                source_entity_id=entity_id,
             )
         _sync_item_evidence(conn, item=item, knowledge_id=knowledge_id)
     if active_ids:
@@ -393,19 +520,6 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             """,
             (clean_category, *active_ids),
         )
-        conn.execute(
-            f"""
-            UPDATE graph_nodes
-            SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-            WHERE knowledge_id IN (
-                SELECT knowledge_id FROM knowledge_items
-                WHERE category = ? AND knowledge_id NOT IN ({placeholders})
-            )
-              AND deleted_at IS NULL
-            """,
-            (clean_category, *active_ids),
-        )
     else:
         conn.execute(
             """
@@ -413,18 +527,6 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
             WHERE category = ? AND deleted_at IS NULL
-            """,
-            (clean_category,),
-        )
-        conn.execute(
-            """
-            UPDATE graph_nodes
-            SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-            WHERE knowledge_id IN (
-                SELECT knowledge_id FROM knowledge_items WHERE category = ?
-            )
-              AND deleted_at IS NULL
             """,
             (clean_category,),
         )
@@ -470,7 +572,8 @@ def load_knowledge_category_rows(conn: sqlite3.Connection, category: str) -> lis
         SELECT knowledge_id, story_id, category, name, title, summary, content_json,
                canon_status, worldline_id, worldline_name, confidence, importance,
                evidence_strength, extraction_mode, setting_scope, setting_role,
-               injection_policy, created_at, updated_at
+               injection_policy, created_at, updated_at,
+               entity_id, fact_key, chapter_no, valid_from_chapter, valid_to_chapter, merge_policy
         FROM knowledge_items
         WHERE category = ? AND deleted_at IS NULL
         ORDER BY created_at, knowledge_id
@@ -507,6 +610,14 @@ def load_knowledge_category_rows(conn: sqlite3.Connection, category: str) -> lis
                 for key, value in zip(keys, row)
                 if value is not None and key not in {"content_json", "deleted_at"}
             }
+        # Merge the entity-fact columns (added in 017) onto the item so the
+        # chapter-scoped validity and slot identity are visible to readers.
+        payload["entity_id"] = _row_value(row, 19, "entity_id") or None
+        payload["fact_key"] = _row_value(row, 20, "fact_key") or None
+        payload["chapter_no"] = _row_value(row, 21, "chapter_no")
+        payload["valid_from_chapter"] = _row_value(row, 22, "valid_from_chapter")
+        payload["valid_to_chapter"] = _row_value(row, 23, "valid_to_chapter")
+        payload["merge_policy"] = _row_value(row, 24, "merge_policy") or "append"
         knowledge_id = _row_value(row, 0, "knowledge_id")
         if "id" not in payload:
             payload["id"] = knowledge_id
@@ -610,6 +721,19 @@ def upsert_knowledge_category_item(
         normalized.get("source_segment_id") or normalized.get("segment_id"),
     )
     typed_data = normalized.get("typed_data") if isinstance(normalized.get("typed_data"), dict) else {}
+    ef = _compute_entity_fact(clean_category, normalized)
+    entity_type = ef["entity_type"]
+    name = ef["name"]
+    entity_id = ef["entity_id"]
+    fact_key = ef["fact_key"]
+    chapter_no = ef["chapter_no"]
+    merge_policy = ef["merge_policy"]
+    valid_from_chapter = ef["valid_from_chapter"]
+
+    _apply_supersession(
+        conn, entity_id=entity_id, fact_key=fact_key,
+        valid_from_chapter=valid_from_chapter, knowledge_id=item_id,
+    )
     conn.execute(
         """
         INSERT INTO knowledge_items (
@@ -617,9 +741,11 @@ def upsert_knowledge_category_item(
             canon_status, worldline_id, worldline_name, confidence, importance,
             evidence_strength, source_id, segment_id, extraction_mode, setting_scope,
             setting_role, injection_policy, status, schema_version, structured_json,
+            entity_id, fact_key, chapter_no, valid_from_chapter, valid_to_chapter, merge_policy,
             created_at, updated_at, deleted_at
         ) VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, NULL, ?,
             COALESCE(?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL
         )
@@ -634,6 +760,9 @@ def upsert_knowledge_category_item(
             setting_role=excluded.setting_role, injection_policy=excluded.injection_policy,
             status=excluded.status, schema_version=excluded.schema_version,
             structured_json=excluded.structured_json,
+            entity_id=excluded.entity_id, fact_key=excluded.fact_key,
+            chapter_no=excluded.chapter_no, valid_from_chapter=excluded.valid_from_chapter,
+            merge_policy=excluded.merge_policy,
             updated_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), deleted_at=NULL
         """,
         (
@@ -650,19 +779,28 @@ def upsert_knowledge_category_item(
             str(normalized.get("setting_role") or "").strip() or None,
             str(normalized.get("injection_policy") or "").strip() or None,
             str(normalized.get("status") or "confirmed"), int(normalized.get("schema_version") or 1),
-            _json_dumps(typed_data), normalized.get("created_at"),
+            _json_dumps(typed_data),
+            entity_id, fact_key, chapter_no, valid_from_chapter, merge_policy,
+            normalized.get("created_at"),
         ),
     )
+    if entity_id:
+        _upsert_entity_master(
+            conn, entity_id=entity_id, entity_type=entity_type, canonical_name=name,
+            item=normalized, story_id=story_id,
+        )
     _sync_knowledge_revision(
         conn, knowledge_id=item_id, item=normalized, previous_snapshot=previous_snapshot,
     )
     _soft_delete_graph_edge_ids(conn, _active_graph_edges_by_owner(conn).get(item_id, []))
-    _upsert_graph_node_for_knowledge(
-        conn, knowledge_id=item_id, category=clean_category, item=normalized, story_id=story_id,
-    )
     if clean_category == "relationships":
         _upsert_graph_relationship_edges(
             conn, knowledge_id=item_id, item=normalized, story_id=story_id,
+        )
+    else:
+        _upsert_entity_reference_edges(
+            conn, knowledge_id=item_id, category=clean_category, item=normalized,
+            story_id=story_id, source_entity_id=entity_id,
         )
     _sync_item_evidence(conn, item=normalized, knowledge_id=item_id)
     return normalized, load_knowledge_category_rows(conn, clean_category)
@@ -696,131 +834,141 @@ def delete_knowledge_category_item(
         """,
         (clean_item_id, clean_category),
     )
-    conn.execute(
-        """
-        UPDATE graph_nodes
-        SET deleted_at=COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-            updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-        WHERE knowledge_id=? AND deleted_at IS NULL
-        """,
-        (clean_item_id,),
-    )
     _soft_delete_graph_edge_ids(conn, _active_graph_edges_by_owner(conn).get(clean_item_id, []))
     return True, load_knowledge_category_rows(conn, clean_category)
 
 
-def _graph_node_type_for_category(category: str) -> str:
-    return {
-        "characters": "character",
-        "items": "item",
-        "abilities": "ability",
-        "world_rules": "world_rule",
-        "locations": "location",
-        "organizations": "organization",
-        "timeline_events": "event",
-        "relationships": "relationship",
-        "writing_style": "style",
-        "dialogue_style": "style",
-        "narrative_techniques": "style",
-        "constraints": "constraint",
-    }.get(category, "knowledge")
-
-
-def _upsert_graph_node_for_knowledge(
+def _upsert_entity_master(
     conn: sqlite3.Connection,
     *,
-    knowledge_id: str,
-    category: str,
+    entity_id: str,
+    entity_type: str,
+    canonical_name: str,
     item: dict,
     story_id: str | None,
-) -> str | None:
-    name = str(item.get("name") or item.get("canonical_name") or item.get("title") or "").strip()
-    if not name:
-        return None
-    node_id = f"knowledge_node_{knowledge_id}"
+) -> None:
+    """Create or refresh the entity master row for a fact's owning entity.
+
+    Only additive: it never deletes or rewrites history. The summary is the
+    fact's summary (the most recently written fact becomes the current summary);
+    importance is carried over when the incoming item has one.
+    """
+    if not entity_id or not entity_type or not canonical_name:
+        return
+    domain = isolation_domain(item)
+    setting_scope, entity_story_id, worldline_id, version_scope = domain
+    summary = str(item.get("summary") or item.get("name") or "").strip()
+    importance = _float_or_none(item.get("importance"))
+    if importance is None:
+        importance = 0
+    display_name = str(item.get("display_name") or canonical_name).strip() or canonical_name
+    # Event entities carry a world-time sort key (world_t) and human label.
+    world_t = None
+    world_time_label = None
+    if entity_type == "event":
+        details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+        typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
+        raw_t = item.get("world_t") or typed_data.get("world_t")
+        if raw_t is not None:
+            try:
+                world_t = float(raw_t)
+            except (TypeError, ValueError):
+                world_t = None
+        if world_t is None:
+            chapter = _chapter_no_from_item(item)
+            if chapter is not None:
+                world_t = float(chapter)
+        label = (
+            item.get("time")
+            or typed_data.get("time")
+            or details.get("time")
+            or details.get("时间")
+        )
+        if label:
+            world_time_label = str(label).strip()[:80]
     conn.execute(
         """
-        INSERT INTO graph_nodes (
-            node_id, story_id, node_type, canonical_name, display_name,
-            knowledge_id, alias_group_id, canon_status, worldline_id,
-            metadata_json, created_at, updated_at, deleted_at
-        )
-        VALUES (
-            ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?,
+        INSERT INTO entities (
+            entity_id, entity_type, canonical_name, display_name, story_id, worldline_id,
+            setting_scope, version_scope, summary, importance,
+            world_t, world_time_label,
+            created_at, updated_at, deleted_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             NULL
         )
-        ON CONFLICT(node_id) DO UPDATE SET
-            story_id = excluded.story_id,
-            node_type = excluded.node_type,
+        ON CONFLICT(entity_id) DO UPDATE SET
             canonical_name = excluded.canonical_name,
             display_name = excluded.display_name,
-            knowledge_id = excluded.knowledge_id,
-            canon_status = excluded.canon_status,
-            worldline_id = excluded.worldline_id,
-            metadata_json = excluded.metadata_json,
+            summary = CASE WHEN excluded.summary != '' THEN excluded.summary ELSE entities.summary END,
+            importance = COALESCE(excluded.importance, entities.importance),
+            world_t = COALESCE(excluded.world_t, entities.world_t),
+            world_time_label = COALESCE(excluded.world_time_label, entities.world_time_label),
             updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             deleted_at = NULL
         """,
         (
-            node_id,
-            story_id,
-            _graph_node_type_for_category(category),
-            name,
-            name,
-            knowledge_id,
-            str(item.get("canon_status") or item.get("scope") or "").strip() or None,
-            str(item.get("worldline_id") or "").strip() or None,
-            _json_dumps({"category": category, "item": item}),
+            entity_id, entity_type, canonical_name, display_name,
+            entity_story_id or None, worldline_id or None,
+            setting_scope or "project", version_scope or "project_main",
+            summary, importance, world_t, world_time_label,
         ),
     )
-    return node_id
 
 
-def _entity_node_id(name: str, story_id: str | None = None, worldline_id: str | None = None) -> str:
-    identity = "|".join((name.strip().lower(), str(story_id or ""), str(worldline_id or "")))
-    digest = sha256(identity.encode("utf-8")).hexdigest()[:24]
-    return f"entity_node_{digest}"
-
-
-def _upsert_named_entity_node(
+def _resolve_entity_id(
     conn: sqlite3.Connection,
     *,
     name: str,
+    entity_type: str,
     story_id: str | None,
-    worldline_id: str | None,
-    canon_status: str | None,
+    worldline_id: str | None = None,
+    setting_scope: str = "story",
 ) -> str | None:
+    """Resolve an entity name to an entity_id, creating the master row if absent.
+
+    Matches an existing entity by normalized name within the same entity_type and
+    isolation domain first (so "林越" and "林公子" only merge if they are the same
+    type and continuity); otherwise creates a deterministic entity_id and master.
+    """
     clean_name = str(name or "").strip()
     if not clean_name:
         return None
-    node_id = _entity_node_id(clean_name, story_id, worldline_id)
+    domain = (setting_scope, story_id or "", worldline_id or "", "project_main")
+    # Look for an existing entity with the same normalized name + type + domain.
+    normalized = normalize_name(clean_name)
+    if normalized:
+        rows = conn.execute(
+            "SELECT entity_id, canonical_name FROM entities WHERE entity_type = ? AND deleted_at IS NULL",
+            (entity_type,),
+        ).fetchall()
+        for entity_id, canonical in rows:
+            if normalize_name(canonical) == normalized:
+                # domain must also match (story/worldline/scope).
+                edom = conn.execute(
+                    "SELECT setting_scope, story_id, worldline_id FROM entities WHERE entity_id = ?",
+                    (entity_id,),
+                ).fetchone()
+                if edom:
+                    existing_domain = (edom[0] or "project", edom[1] or "", edom[2] or "", "project_main")
+                    if existing_domain == domain:
+                        return entity_id
+    eid = entity_id_for(entity_type, clean_name, domain)
     conn.execute(
         """
-        INSERT INTO graph_nodes (
-            node_id, story_id, node_type, canonical_name, display_name,
-            knowledge_id, alias_group_id, canon_status, worldline_id,
-            metadata_json, created_at, updated_at, deleted_at
-        )
-        VALUES (
-            ?, ?, 'entity', ?, ?, NULL, NULL, ?, ?, '{}',
+        INSERT INTO entities (
+            entity_id, entity_type, canonical_name, display_name, story_id, worldline_id,
+            setting_scope, version_scope, summary, importance, created_at, updated_at, deleted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'project_main', '', 0,
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-            strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-            NULL
-        )
-        ON CONFLICT(node_id) DO UPDATE SET
-            story_id = COALESCE(excluded.story_id, story_id),
-            canonical_name = excluded.canonical_name,
-            display_name = excluded.display_name,
-            canon_status = COALESCE(excluded.canon_status, canon_status),
-            worldline_id = COALESCE(excluded.worldline_id, worldline_id),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-            deleted_at = NULL
+            strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)
+        ON CONFLICT(entity_id) DO UPDATE SET deleted_at = NULL
         """,
-        (node_id, story_id, clean_name, clean_name, canon_status, worldline_id),
+        (eid, entity_type, clean_name, clean_name, story_id or None, worldline_id or None, setting_scope),
     )
-    return node_id
+    return eid
 
 
 def _relationship_fields(item: dict) -> tuple[str, str, str]:
@@ -937,6 +1085,13 @@ def _active_graph_edges_by_owner(conn: sqlite3.Connection) -> dict[str, list[str
 
 
 def _soft_delete_inactive_graph_edges(conn: sqlite3.Connection) -> None:
+    """Soft-delete orphaned relationship edges (not reference edges).
+
+    Reference edges (metadata carries `reference_field`) are owned by their
+    originating knowledge item and are cleaned by the per-item logic; they must
+    not be swept here. This function only reaps relationship-projection edges
+    whose owning relationship item is gone.
+    """
     active_relationship_ids = {
         str(row[0])
         for row in conn.execute(
@@ -947,14 +1102,18 @@ def _soft_delete_inactive_graph_edges(conn: sqlite3.Connection) -> None:
             """
         ).fetchall()
     }
-    _soft_delete_graph_edge_ids(
-        conn,
-        [
-            edge_id
-            for edge_id, owner_id in _active_graph_edge_owners(conn)
-            if owner_id not in active_relationship_ids
-        ],
-    )
+    stale_relationship_edges: list[str] = []
+    rows = conn.execute(
+        "SELECT edge_id, metadata_json FROM graph_edges WHERE deleted_at IS NULL"
+    ).fetchall()
+    for row in rows:
+        metadata = _json_loads_dict(row[1])
+        if metadata.get("reference_field"):
+            continue  # reference edge, owned by its item, not a relationship projection
+        owner_id = str(metadata.get("knowledge_id") or "").strip()
+        if owner_id and owner_id not in active_relationship_ids:
+            stale_relationship_edges.append(str(row[0]))
+    _soft_delete_graph_edge_ids(conn, stale_relationship_edges)
 
 
 def _upsert_graph_relationship_edges(
@@ -968,20 +1127,16 @@ def _upsert_graph_relationship_edges(
     if not source_name or not target_name:
         return
     worldline_id = str(item.get("worldline_id") or "").strip() or None
-    canon_status = str(item.get("canon_status") or item.get("scope") or "").strip() or None
-    source_node_id = _upsert_named_entity_node(
-        conn,
-        name=source_name,
-        story_id=story_id,
-        worldline_id=worldline_id,
-        canon_status=canon_status,
+    setting_scope = str(item.get("setting_scope") or "story").strip() or "story"
+    # Relationship endpoints are bare names; resolve them to entities (character
+    # is the default; organization relationships resolve by existing entity).
+    source_node_id = _resolve_entity_id(
+        conn, name=source_name, entity_type="character",
+        story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
     )
-    target_node_id = _upsert_named_entity_node(
-        conn,
-        name=target_name,
-        story_id=story_id,
-        worldline_id=worldline_id,
-        canon_status=canon_status,
+    target_node_id = _resolve_entity_id(
+        conn, name=target_name, entity_type="character",
+        story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
     )
     if not source_node_id or not target_node_id:
         return
@@ -1025,6 +1180,88 @@ def _upsert_graph_relationship_edges(
             _json_dumps({"knowledge_id": knowledge_id, "item": item}),
         ),
     )
+
+
+# Reference-field -> (relation_type, target_entity_type). When a knowledge item
+# carries one of these list fields, each value becomes a graph edge from the
+# item's owning entity to the referenced entity.
+_REFERENCE_FIELD_SPECS: dict[str, tuple[str, str]] = {
+    "owners": ("owns", "character"),
+    "users": ("wields", "character"),
+    "leaders": ("leads", "character"),
+    "members": ("member_of", "character"),
+    "inhabitants": ("inhabits", "character"),
+    "participants": ("participated_in", "character"),
+    "affiliations": ("affiliated_with", "organization"),
+    "parent_location": ("located_in", "location"),
+    "relations": ("related_to", "organization"),
+}
+
+
+def _upsert_entity_reference_edges(
+    conn: sqlite3.Connection,
+    *,
+    knowledge_id: str,
+    category: str,
+    item: dict,
+    story_id: str | None,
+    source_entity_id: str | None,
+) -> None:
+    """Project an item's reference fields (owners/members/participants/...) into graph edges.
+
+    The source endpoint is the item's owning entity (already computed by the
+    caller); each referenced name resolves to a target entity via _resolve_entity_id.
+    Reference fields are additive — edges are keyed by (knowledge_id, field, value).
+    """
+    if not source_entity_id:
+        return
+    worldline_id = str(item.get("worldline_id") or "").strip() or None
+    setting_scope = str(item.get("setting_scope") or "story").strip() or "story"
+    details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+    typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
+    for field, (relation_type, target_type) in _REFERENCE_FIELD_SPECS.items():
+        raw_values = item.get(field) or typed_data.get(field) or details.get(field)
+        if not isinstance(raw_values, list):
+            if raw_values:
+                raw_values = [raw_values]
+            else:
+                continue
+        for value in raw_values:
+            target_name = str(value or "").strip()
+            if not target_name:
+                continue
+            # parent_location is a single-value location reference.
+            target_entity_id = _resolve_entity_id(
+                conn, name=target_name, entity_type=target_type,
+                story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
+            )
+            if not target_entity_id or target_entity_id == source_entity_id:
+                continue
+            edge_id_source = f"{knowledge_id}:{field}:{target_entity_id}"
+            edge_id = "edge_" + sha256(edge_id_source.encode("utf-8")).hexdigest()[:24]
+            conn.execute(
+                """
+                INSERT INTO graph_edges (
+                    edge_id, story_id, source_node_id, target_node_id, relation_type,
+                    direction, confidence, evidence_id, metadata_json, created_at, updated_at, deleted_at
+                ) VALUES (?, ?, ?, ?, ?, 'directed', ?, NULL, ?,
+                    strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                    strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)
+                ON CONFLICT(edge_id) DO UPDATE SET
+                    story_id = excluded.story_id,
+                    source_node_id = excluded.source_node_id,
+                    target_node_id = excluded.target_node_id,
+                    relation_type = excluded.relation_type,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+                    deleted_at = NULL
+                """,
+                (
+                    edge_id, story_id, source_entity_id, target_entity_id, relation_type,
+                    _float_or_none(item.get("confidence")),
+                    _json_dumps({"knowledge_id": knowledge_id, "reference_field": field}),
+                ),
+            )
 
 
 def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:

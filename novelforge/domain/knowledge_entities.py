@@ -4,6 +4,10 @@ import re
 from novelforge.domain.knowledge_quality import merge_list_values, merge_text_values, normalize_knowledge_match_name
 from novelforge.domain.knowledge_workflows import safe_confidence
 from novelforge.services.memory import load_entity_aliases, load_knowledge_base
+from novelforge.services.memory.knowledge_center import (
+    load_character_entity_cards as _load_character_entity_cards,
+    load_setting_entity_cards as _load_setting_entity_cards,
+)
 
 
 DEFAULT_WORLDLINE_ID = "main"
@@ -275,145 +279,10 @@ def timeline_item_sort_key(item: dict) -> tuple:
 
 
 def build_character_entity_cards(project_name: str, max_characters: int = 80) -> list[dict]:
-    knowledge_base = load_knowledge_base(project_name)
-    alias_groups = load_entity_aliases(project_name)
-    character_items = [
-        item for item in knowledge_base.get("characters", [])
-        if isinstance(item, dict) and str(item.get("name", "")).strip()
-    ]
-    grouped: dict[tuple[str, tuple[str, str, str, str]], list[dict]] = {}
-    for item in character_items:
-        normalized_name = normalize_knowledge_match_name(item.get("name", ""))
-        if not normalized_name:
-            continue
-        grouped.setdefault((normalized_name, _isolation_group_key(item)), []).append(item)
-
-    cards = []
-    for index, ((normalized_name, _), items) in enumerate(grouped.items(), start=1):
-        if len(cards) >= max_characters:
-            break
-        primary = items[0]
-        name = str(primary.get("name", "") or f"角色 {index}").strip()
-        merged_character = build_merged_knowledge_item("characters", items)
-        aliases = aliases_for_entity(alias_groups, "characters", name, primary)
-        sources = collect_character_card_sources(knowledge_base, primary, alias_groups)
-        related_relationships = summarize_items_for_card(sources["relationships"])
-        related_abilities = summarize_items_for_card(sources["abilities"] + sources["items"])
-        dialogue_notes = summarize_items_for_card(sources["dialogue_style"], max_items=5)
-        constraints = summarize_items_for_card(sources["constraints"], max_items=5)
-        timeline = summarize_items_for_card(sources["timeline_events"], max_items=6)
-        evidence = merge_list_values([
-            item.get("evidence", []) for source_items in sources.values() for item in source_items
-        ])[:8]
-        source_ids = merge_list_values([
-            [item.get("id", "") for source_items in sources.values() for item in source_items if item.get("id")]
-        ])
-        tags = merge_list_values([merged_character.get("tags", []), ["角色实体卡", "entity_character"]])
-        card = {
-            "id": _entity_card_id("character_entity", "characters", normalized_name, primary),
-            "entity_type": "character",
-            "name": name,
-            "aliases": aliases,
-            "summary": merged_character.get("summary", ""),
-            "profile": {**merged_character.get("details", {}), **merge_typed_values(items)},
-            "relationships": related_relationships,
-            "abilities": summarize_items_for_card(sources["abilities"]),
-            "items": summarize_items_for_card(sources["items"]),
-            "abilities_and_items": related_abilities,
-            "dialogue_style": dialogue_notes,
-            "constraints": constraints,
-            "timeline": timeline,
-            "events": timeline,
-            "evidence": evidence,
-            "sources": source_chips_for_items([
-                item for source_items in sources.values() for item in source_items
-            ]),
-            "confidence": merged_character.get("confidence", 0.7),
-            "importance": max([safe_confidence(item.get("importance", 0.5)) for item in items] or [0.5]),
-            "canon_status": primary.get("canon_status", "unknown"),
-            "scope": primary.get("scope", "project"),
-            "setting_scope": primary.get("setting_scope", "story" if primary.get("story_id") else "project"),
-            "story_id": primary.get("story_id", ""),
-            "version_scope": primary.get("version_scope", ""),
-            "worldline_id": primary.get("worldline_id", ""),
-            "worldline_label": primary.get("worldline_label", ""),
-            "source_knowledge_ids": source_ids,
-            "primary_knowledge_id": str(primary.get("id") or primary.get("knowledge_id") or ""),
-            "tags": tags,
-            "status": "entity_card",
-        }
-        cards.append(card)
-    return cards
+    """Entity-centric character cards (delegates to the DB-backed read path)."""
+    return _load_character_entity_cards(project_name, max_characters=max_characters)
 
 
 def build_setting_entity_cards(project_name: str, max_cards: int = 120) -> list[dict]:
-    knowledge = load_knowledge_base(project_name)
-    cards = []
-    source_categories = ["world_rules", "locations", "organizations", "abilities", "items", "constraints"]
-    index = 1
-    for category in source_categories:
-        items = [item for item in knowledge.get(category, []) if isinstance(item, dict)]
-        groups: dict[tuple[str, tuple[str, str, str, str]], list[dict]] = {}
-        for item in items:
-            name_key = normalize_knowledge_match_name(item.get("name", ""))
-            if not name_key:
-                continue
-            groups.setdefault((name_key, _isolation_group_key(item)), []).append(item)
-        for (name_key, _), group_items in sorted(groups.items(), key=lambda pair: -max(safe_confidence(item.get("importance", 0.5)) for item in pair[1])):
-            primary = sorted(
-                group_items,
-                key=lambda item: (
-                    -safe_confidence(item.get("importance", 0.5)),
-                    -safe_confidence(item.get("evidence_strength", 0.5)),
-                    -safe_confidence(item.get("confidence", 0.7)),
-                ),
-            )[0]
-            related_timeline = related_items_for_character(
-                primary.get("name", ""),
-                [item for item in knowledge.get("timeline_events", []) if isinstance(item, dict) and _isolation_compatible(item, primary)],
-                [],
-            )[:6]
-            related_relationships = related_items_for_character(
-                primary.get("name", ""),
-                [item for item in knowledge.get("relationships", []) if isinstance(item, dict) and _isolation_compatible(item, primary)],
-                [],
-            )[:6]
-            related_conflicts = [
-                item for item in related_relationships
-                if any(token in item_search_text(item).lower() for token in ("冲突", "敌对", "战争", "矛盾", "conflict", "hostile"))
-            ]
-            details = primary.get("details", {}) if isinstance(primary.get("details", {}), dict) else {}
-            profile = {**details, **merge_typed_values(group_items)}
-            evidence = merge_list_values([item.get("evidence", []) for item in group_items])[:8]
-            card = {
-                "id": _entity_card_id("setting_entity", category, name_key, primary),
-                "entity_type": "setting",
-                "setting_type": category,
-                "name": primary.get("name", "未命名设定"),
-                "summary": merge_text_values([item.get("summary", "") for item in group_items])[:1200],
-                "profile": profile,
-                "rules": summarize_items_for_card(group_items, max_items=8),
-                "timeline": summarize_items_for_card(related_timeline, max_items=6),
-                "related_entities": summarize_items_for_card(related_relationships, max_items=6),
-                "conflicts": summarize_items_for_card(related_conflicts, max_items=6),
-                "evidence": evidence,
-                "sources": source_chips_for_items(group_items + related_timeline + related_relationships),
-                "confidence": primary.get("confidence", 0.7),
-                "importance": max([safe_confidence(item.get("importance", 0.5)) for item in group_items] or [0.5]),
-                "canon_status": primary.get("canon_status", "unknown"),
-                "scope": primary.get("scope", "project"),
-                "setting_scope": primary.get("setting_scope", "story" if primary.get("story_id") else "project"),
-                "story_id": primary.get("story_id", ""),
-                "version_scope": primary.get("version_scope", ""),
-                "worldline_id": primary.get("worldline_id", ""),
-                "worldline_label": primary.get("worldline_label", ""),
-                "source_knowledge_ids": merge_list_values([[item.get("id", "") for item in group_items if item.get("id")]]),
-                "primary_knowledge_id": str(primary.get("id") or primary.get("knowledge_id") or ""),
-                "tags": merge_list_values([[SETTING_ENTITY_CATEGORY_GROUPS.get(category, category), "设定实体卡", "entity_setting"], primary.get("tags", [])]),
-                "status": "entity_card",
-            }
-            cards.append(card)
-            index += 1
-            if len(cards) >= max_cards:
-                return cards
-    return cards
+    """Entity-centric setting cards (delegates to the DB-backed read path)."""
+    return _load_setting_entity_cards(project_name, max_cards=max_cards)

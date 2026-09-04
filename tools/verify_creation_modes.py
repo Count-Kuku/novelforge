@@ -65,7 +65,7 @@ def main() -> None:
         _assert(copied["creation_mode"] == "planned", "复制故事未继承源故事模式")
 
         db_info = inspect_project_db(Path("data") / project_name)
-        _assert(db_info["schema_version"] == 16, "项目数据库未升级到 schema 16")
+        _assert(db_info["schema_version"] == 17, "项目数据库未升级到 schema 17")
         rows = list_stories(project_name)
         _assert({row["creation_mode"] for row in rows} == {"planned", "conversational"}, "故事列表存在未规范化的模式值")
 

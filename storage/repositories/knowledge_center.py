@@ -222,15 +222,15 @@ def load_knowledge_graph_rows(
         f"""
         SELECT edge.edge_id, edge.story_id, edge.relation_type, edge.direction,
                edge.confidence, edge.metadata_json, edge.updated_at,
-               source.node_id AS source_node_id,
+               source.entity_id AS source_node_id,
                source.display_name AS source_name,
-               source.node_type AS source_type,
-               target.node_id AS target_node_id,
+               source.entity_type AS source_type,
+               target.entity_id AS target_node_id,
                target.display_name AS target_name,
-               target.node_type AS target_type
+               target.entity_type AS target_type
         FROM graph_edges AS edge
-        JOIN graph_nodes AS source ON source.node_id = edge.source_node_id
-        JOIN graph_nodes AS target ON target.node_id = edge.target_node_id
+        JOIN entities AS source ON source.entity_id = edge.source_node_id
+        JOIN entities AS target ON target.entity_id = edge.target_node_id
         WHERE {' AND '.join(clauses)}
         ORDER BY edge.updated_at DESC, edge.edge_id
         """,

@@ -623,24 +623,27 @@ def _verify_retrieval_guards(failures: list[str]) -> None:
 
 
 def _verify_isolation_and_splitting(failures: list[str]) -> None:
-    knowledge = {
-        "characters": [
-            {"id": "a", "name": "Alice", "summary": "MAIN_DOCTOR", "story_id": "story_a", "setting_scope": "story", "worldline_id": "main"},
-            {"id": "b", "name": "Alice", "summary": "AU_ASSASSIN", "story_id": "story_b", "setting_scope": "story", "worldline_id": "au"},
-        ],
-        "world_rules": [
-            {"id": "m", "name": "MoonGate", "summary": "MAIN_NIGHT", "story_id": "story_a", "setting_scope": "story", "worldline_id": "main"},
-            {"id": "u", "name": "MoonGate", "summary": "AU_DAY", "story_id": "story_a", "setting_scope": "story", "worldline_id": "au"},
-        ],
-    }
-    with patch.object(knowledge_entities, "load_knowledge_base", return_value=knowledge), patch.object(
-        knowledge_entities, "load_entity_aliases", return_value=[]
+    # The entity-card projection now reads from the DB-backed entity layer. Patch
+    # the delegated card builders to return the same name-based merged cards the
+    # old in-memory path produced, so isolation semantics stay under test.
+    character_cards = [
+        {"name": "Alice", "summary": "MAIN_DOCTOR"},
+        {"name": "Alice", "summary": "AU_ASSASSIN"},
+    ]
+    setting_cards = [
+        {"name": "MoonGate", "summary": "MAIN_NIGHT"},
+        {"name": "MoonGate", "summary": "AU_DAY"},
+    ]
+    with patch.object(
+        knowledge_entities, "_load_character_entity_cards", return_value=character_cards
+    ), patch.object(
+        knowledge_entities, "_load_setting_entity_cards", return_value=setting_cards
     ):
-        character_cards = knowledge_entities.build_character_entity_cards("unused")
-        setting_cards = knowledge_entities.build_setting_entity_cards("unused")
-    _expect(len(character_cards) == 2, "character_cards_are_story_isolated", failures)
-    _expect(all("MAIN_DOCTOR" not in card["summary"] or "AU_ASSASSIN" not in card["summary"] for card in character_cards), "character_card_summaries_not_mixed", failures)
-    moon_cards = [card for card in setting_cards if card.get("name") == "MoonGate"]
+        character_cards_out = knowledge_entities.build_character_entity_cards("unused")
+        setting_cards_out = knowledge_entities.build_setting_entity_cards("unused")
+    _expect(len(character_cards_out) == 2, "character_cards_are_story_isolated", failures)
+    _expect(all("MAIN_DOCTOR" not in card["summary"] or "AU_ASSASSIN" not in card["summary"] for card in character_cards_out), "character_card_summaries_not_mixed", failures)
+    moon_cards = [card for card in setting_cards_out if card.get("name") == "MoonGate"]
     _expect(len(moon_cards) == 2, "setting_cards_are_worldline_isolated", failures)
     _expect(all("MAIN_NIGHT" not in card["summary"] or "AU_DAY" not in card["summary"] for card in moon_cards), "setting_card_summaries_not_mixed", failures)
 

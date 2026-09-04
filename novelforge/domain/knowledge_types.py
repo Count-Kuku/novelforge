@@ -26,6 +26,9 @@ KNOWLEDGE_TYPE_FIELDS: dict[str, tuple[KnowledgeField, ...]] = {
         KnowledgeField("motivations", "目标/动机", "list", ("目标", "动机", "motivation")),
         KnowledgeField("abilities", "能力", "list", ("能力", "技能")),
         KnowledgeField("affiliations", "所属组织", "list", ("组织", "阵营", "affiliation")),
+        KnowledgeField("location", "当前位置", aliases=("位置", "所在地", "location")),
+        KnowledgeField("status", "当前状态", aliases=("状态", "status")),
+        KnowledgeField("holding", "持有物", "list", ("持有", "持有物", "holding")),
     ),
     "items": (
         KnowledgeField("item_type", "道具类型", aliases=("类型", "item_type")),
@@ -53,6 +56,7 @@ KNOWLEDGE_TYPE_FIELDS: dict[str, tuple[KnowledgeField, ...]] = {
         KnowledgeField("parent_location", "上级地点", aliases=("上级地点", "隶属", "parent")),
         KnowledgeField("features", "特征", "list", ("特征", "features")),
         KnowledgeField("inhabitants", "相关人物/居民", "list", ("居民", "人物", "inhabitants")),
+        KnowledgeField("status", "当前状态", aliases=("状态", "status")),
     ),
     "organizations": COMMON_FIELDS + (
         KnowledgeField("organization_type", "组织类型", aliases=("类型", "organization_type")),
@@ -60,6 +64,7 @@ KNOWLEDGE_TYPE_FIELDS: dict[str, tuple[KnowledgeField, ...]] = {
         KnowledgeField("members", "成员", "list", ("成员", "member")),
         KnowledgeField("goals", "目标", "list", ("目标", "宗旨", "goal")),
         KnowledgeField("relations", "组织关系", "list", ("关系", "relation")),
+        KnowledgeField("status", "当前状态", aliases=("状态", "status")),
     ),
     "timeline_events": (
         KnowledgeField("time", "时间", aliases=("时间", "日期", "time")),
@@ -93,13 +98,6 @@ KNOWLEDGE_TYPE_FIELDS: dict[str, tuple[KnowledgeField, ...]] = {
         KnowledgeField("purpose", "作用", aliases=("作用", "目的", "purpose")),
         KnowledgeField("conditions", "使用条件", "list", ("条件", "condition")),
         KnowledgeField("examples", "例证", "list", ("例证", "示例", "example")),
-    ),
-    "constraints": (
-        KnowledgeField("constraint_type", "约束类型", aliases=("类型", "constraint_type")),
-        KnowledgeField("rule", "约束正文", aliases=("规则", "约束", "rule"), required=True),
-        KnowledgeField("applies_to", "适用范围", "list", ("范围", "适用", "applies_to")),
-        KnowledgeField("severity", "严格程度", aliases=("严格程度", "severity")),
-        KnowledgeField("exceptions", "例外", "list", ("例外", "exception")),
     ),
 }
 

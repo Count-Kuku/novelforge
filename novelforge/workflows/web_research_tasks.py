@@ -69,7 +69,6 @@ DEFAULT_RESEARCH_CATEGORIES = [
     "organizations",
     "timeline_events",
     "relationships",
-    "constraints",
 ]
 ALL_RESEARCH_CATEGORIES = {
     *DEFAULT_RESEARCH_CATEGORIES,

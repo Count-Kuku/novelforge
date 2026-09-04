@@ -29,3 +29,4 @@ release/
 *~*
 *.bak
 *.tmp
+.workbuddy/

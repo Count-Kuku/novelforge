@@ -64,7 +64,7 @@ DEFAULT_AUTO_REVIEW_POLICY = {
     "grade_a_evidence_strength": 0.65,
     "allow_grade_b_auto_confirm": True,
     "require_evidence": True,
-    "manual_review_categories": ["constraints"],
+    "manual_review_categories": ["world_rules"],
 }
 
 

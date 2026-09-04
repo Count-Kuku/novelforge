@@ -86,6 +86,12 @@ from .knowledge_center import (
     retry_knowledge_index_jobs,
     search_knowledge_center_rows,
 )
+from .entity_query import (
+    load_entities,
+    load_entity_facts,
+    load_entity_relations,
+    load_timeline,
+)
 from .projects import (
     get_project_meta,
     project_maintenance_mode,

@@ -20,14 +20,15 @@ from novelforge.services.memory import (
 
 
 SETTING_FIELD_SPECS = {
-    "canon_mode": {"category": "constraints", "label": "原作对齐方式", "scalar": True},
-    "au_rules": {"category": "constraints", "label": "架空规则", "scalar": False},
+    # canon_mode 是 story memory 的一等字段（core.py:216），由 prompt 直接读取，
+    # 不再作为知识条目单存——此处已移除（见 storage-refactor-plan 2.7）。
+    "au_rules": {"category": "world_rules", "label": "架空规则", "scalar": False},
     "world": {"category": "world_rules", "label": "世界观", "scalar": False},
     "characters": {"category": "characters", "label": "角色", "scalar": False},
     "relationships": {"category": "relationships", "label": "角色关系", "scalar": False},
     "timeline": {"category": "timeline_events", "label": "时间线", "scalar": False},
     "foreshadowing": {"category": "narrative_techniques", "label": "伏笔", "scalar": False},
-    "active_constraints": {"category": "constraints", "label": "硬性约束", "scalar": False},
+    "active_constraints": {"category": "world_rules", "label": "硬性约束", "scalar": False},
     "locations": {"category": "locations", "label": "地点资料", "scalar": False},
     "organizations": {"category": "organizations", "label": "组织资料", "scalar": False},
     "power_systems": {"category": "world_rules", "label": "能力体系", "scalar": False},
@@ -39,7 +40,6 @@ SETTING_CATEGORY_ORDER = [
     "relationships",
     "world_rules",
     "timeline_events",
-    "constraints",
     "locations",
     "organizations",
     "abilities",
@@ -51,6 +51,12 @@ SETTING_CATEGORY_ORDER = [
 
 INJECTION_POLICIES = {"always", "retrieval", "manual_only"}
 GLOBAL_WORLDLINE_IDS = {"", "all", "global", "shared", "common", "canon", "unknown"}
+
+# Upper bound for the always-injection setting block (L0 constant layer).
+# Keeps the hard-constraint block from growing without bound as chapters
+# accumulate; the most important items (by importance) win. See P2 in
+# storage-refactor-plan.md.
+ALWAYS_INJECTION_LIMIT = 40
 
 
 def _now() -> str:
@@ -516,6 +522,8 @@ def list_setting_items(
     injection_policies: set[str] | None = None,
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
+    limit: int | None = None,
+    chapter_no: int | None = None,
 ) -> list[dict]:
     allowed_policies = (
         {normalize_injection_policy(value) for value in injection_policies}
@@ -546,6 +554,10 @@ def list_setting_items(
                 continue
             if not _setting_worldline_allowed(item, worldline_id, worldline_mode):
                 continue
+            if chapter_no is not None:
+                valid_to = item.get("valid_to_chapter")
+                if isinstance(valid_to, (int, float)) and valid_to <= chapter_no:
+                    continue  # superseded before this chapter — skip stale fact
             row = dict(item)
             row["category"] = category
             row["injection_policy"] = injection_policy
@@ -556,6 +568,14 @@ def list_setting_items(
         str(item.get("setting_field") or ""),
         str(item.get("name") or ""),
     ))
+    if limit is not None:
+        # Cap the always-injection block. Importance first, then the stable sort
+        # above as a tiebreak, so a large knowledge base cannot inflate the
+        # hard-constraint block without bound (see storage-refactor-plan P2).
+        rows.sort(key=lambda item: (
+            -(item.get("importance") if isinstance(item.get("importance"), (int, float)) else 0),
+        ))
+        rows = rows[: max(int(limit), 0)]
     return rows
 
 
@@ -568,7 +588,12 @@ def group_setting_items_by_field(items: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
-def build_generation_setting_context(project_name: str, story_id: str = "default") -> dict:
+def build_generation_setting_context(
+    project_name: str,
+    story_id: str = "default",
+    *,
+    chapter_no: int | None = None,
+) -> dict:
     try:
         profile = load_creative_profile(project_name, story_id) or {}
     except Exception:
@@ -578,7 +603,7 @@ def build_generation_setting_context(project_name: str, story_id: str = "default
     memory = load_story_memory(project_name, story_id)
     structured_items = [
         item
-        for item in list_setting_items(project_name, story_id, core_only=True)
+        for item in list_setting_items(project_name, story_id, core_only=True, chapter_no=chapter_no)
         if str(item.get("setting_role") or "") == "core"
     ]
     items = list_setting_items(
@@ -588,6 +613,8 @@ def build_generation_setting_context(project_name: str, story_id: str = "default
         injection_policies={"always"},
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
+        limit=ALWAYS_INJECTION_LIMIT,
+        chapter_no=chapter_no,
     )
     structured_fields = {
         str(item.get("setting_field") or "")

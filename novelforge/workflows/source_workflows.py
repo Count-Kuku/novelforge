@@ -152,12 +152,12 @@ def build_source_package_report(project_name: str, max_items_per_category: int =
         if len(items) > max_items_per_category:
             lines.append(f"> 当前分类仅列出前 {max_items_per_category} 条，共 {len(items)} 条。")
 
-    constraints = knowledge_base.get("constraints", [])
+    constraints = knowledge_base.get("world_rules", [])
     style_items = knowledge_base.get("writing_style", []) + knowledge_base.get("dialogue_style", []) + knowledge_base.get("narrative_techniques", [])
     if constraints or style_items:
         lines.extend(["", "## 同人写作注意事项", ""])
         for item in constraints[:20]:
-            lines.append(f"- 硬性约束：{item.get('name', '未命名')}。{item.get('summary', '')}")
+            lines.append(f"- 世界规则：{item.get('name', '未命名')}。{item.get('summary', '')}")
         for item in style_items[:20]:
             lines.append(f"- 风格参考：{item.get('name', '未命名')}。{item.get('summary', '')}")
 

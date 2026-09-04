@@ -83,7 +83,7 @@ def verify_injection_policy(project_name: str, story_id: str) -> None:
     supplemental = _setting_item("setting_supplemental", "必须保留的补充约束", "always", story_id)
     supplemental["setting_role"] = "supplemental"
     supplemental["setting_field"] = ""
-    upsert_setting_item(project_name, "constraints", supplemental)
+    upsert_setting_item(project_name, "world_rules", supplemental)
     upsert_knowledge_category_item_record(
         project_name,
         "characters",

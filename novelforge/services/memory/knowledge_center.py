@@ -6,6 +6,9 @@ import difflib
 
 from novelforge.services import memory as _memory_api
 from storage.repositories import (
+    load_entities,
+    load_entity_facts,
+    load_entity_relations,
     load_knowledge_graph_rows,
     load_knowledge_center_record_row,
     load_knowledge_index_state_row,
@@ -13,6 +16,7 @@ from storage.repositories import (
     process_knowledge_index_jobs,
     retry_knowledge_index_jobs,
     search_knowledge_center_rows,
+    load_timeline,
 )
 
 
@@ -204,3 +208,187 @@ def restore_archived_knowledge_item(
         "restored_from_archive": True,
     })
     return {"knowledge_id": knowledge_id, "restored": True, "item": restored}
+
+
+def load_character_entity_cards(project_name: str, *, max_characters: int = 80) -> list[dict]:
+    """Entity-centric character cards read from the entities table (not name-based merge).
+
+    Returns the same card shape as ``build_character_entity_cards`` so callers are
+    unchanged, but the source of truth is now the entity master + its facts + edges.
+    """
+    if _memory_api._project_db_marked_unavailable(project_name):
+        return []
+    try:
+        with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+            entities = load_entities(conn, entity_type="character")
+    except Exception:
+        return []
+    cards: list[dict] = []
+    for entity in entities[:max_characters]:
+        entity_id = entity["entity_id"]
+        try:
+            with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+                facts = load_entity_facts(conn, entity_id)
+                relations = load_entity_relations(conn, entity_id)
+        except Exception:
+            facts, relations = [], []
+        # Group facts by fact_key into a profile; summary from entity master.
+        profile: dict[str, str] = {}
+        fact_summaries: list[str] = []
+        for fact in facts:
+            summary = str(fact.get("summary") or "").strip()
+            if not summary:
+                continue
+            fact_summaries.append(summary)
+            key = fact.get("fact_key")
+            if key:
+                profile[key] = summary
+        # Classify edges by relation semantics. Incoming edges reference this
+        # entity from the other side (ability -> character, item -> character,
+        # event -> character); outgoing edges go from this entity to others
+        # (character -> organization).
+        abilities: list[str] = []
+        items: list[str] = []
+        events: list[str] = []
+        affiliations: list[str] = []
+        relationships: list[str] = []
+        for r in relations:
+            name = r["other_name"]
+            otype = r["other_type"]
+            rel = r["relation_type"]
+            if not r["outgoing"] and otype == "ability":
+                abilities.append(name)
+            elif not r["outgoing"] and otype == "item":
+                items.append(name)
+            elif not r["outgoing"] and otype == "event":
+                events.append(name)
+            elif r["outgoing"] and otype == "organization":
+                affiliations.append(name)
+            else:
+                relationships.append(f"{name}（{rel}）")
+        # Source chips from the owning facts (source_title / source_origin).
+        sources: list[dict] = []
+        seen_sources: set[tuple[str, str, str]] = set()
+        for fact in facts:
+            payload = fact.get("content_json") if isinstance(fact.get("content_json"), dict) else {}
+            key = (
+                str(payload.get("source_title") or "").strip(),
+                str(payload.get("source_origin") or "").strip(),
+                str(payload.get("source_segment_id") or "").strip(),
+            )
+            if not any(key) or key in seen_sources:
+                continue
+            seen_sources.add(key)
+            sources.append({
+                "title": key[0] or "未命名来源",
+                "origin": key[1],
+                "segment_id": key[2],
+                "knowledge_id": str(fact.get("knowledge_id") or ""),
+            })
+        cards.append({
+            "id": entity_id,
+            "entity_type": "character",
+            "name": entity["canonical_name"],
+            "aliases": [],
+            "summary": entity.get("summary") or (fact_summaries[0] if fact_summaries else ""),
+            "profile": profile,
+            "relationships": relationships,
+            "abilities": abilities,
+            "items": items,
+            "abilities_and_items": abilities + items,
+            "dialogue_style": [],
+            "constraints": [],
+            "timeline": events,
+            "events": events,
+            "evidence": [],
+            "sources": sources,
+            "confidence": 0.7,
+            "importance": entity.get("importance") or 0.5,
+            "canon_status": "unknown",
+            "scope": entity.get("setting_scope") or "project",
+            "setting_scope": entity.get("setting_scope") or "project",
+            "story_id": entity.get("story_id") or "",
+            "version_scope": entity.get("version_scope") or "",
+            "worldline_id": entity.get("worldline_id") or "",
+            "worldline_label": "",
+            "source_knowledge_ids": [f.get("knowledge_id") for f in facts if f.get("knowledge_id")],
+            "primary_knowledge_id": facts[0].get("knowledge_id") if facts else "",
+            "affiliations": affiliations,
+            "tags": ["角色实体卡", "entity_character"],
+            "status": "entity_card",
+        })
+    return cards
+
+
+def load_setting_entity_cards(project_name: str, *, max_cards: int = 120) -> list[dict]:
+    """Entity-centric setting cards (organizations/locations/items/abilities/world_rules)."""
+    if _memory_api._project_db_marked_unavailable(project_name):
+        return []
+    setting_types = ("organization", "location", "item", "ability", "world_rule")
+    try:
+        with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+            entities = [e for e in load_entities(conn) if e["entity_type"] in setting_types]
+    except Exception:
+        return []
+    cards: list[dict] = []
+    for entity in entities[:max_cards]:
+        entity_id = entity["entity_id"]
+        try:
+            with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+                facts = load_entity_facts(conn, entity_id)
+                relations = load_entity_relations(conn, entity_id)
+        except Exception:
+            facts, relations = [], []
+        fact_summaries = [str(f.get("summary") or "").strip() for f in facts if str(f.get("summary") or "").strip()]
+        related = [
+            f"{r['other_name']}（{r['relation_type']}）"
+            for r in relations
+        ]
+        # setting_type mirrors the legacy category name (world_rules, not world_rule).
+        setting_type = facts[0].get("category") if facts else entity["entity_type"]
+        sources: list[dict] = []
+        seen_sources: set[tuple[str, str, str]] = set()
+        for fact in facts:
+            payload = fact.get("content_json") if isinstance(fact.get("content_json"), dict) else {}
+            key = (
+                str(payload.get("source_title") or "").strip(),
+                str(payload.get("source_origin") or "").strip(),
+                str(payload.get("source_segment_id") or "").strip(),
+            )
+            if not any(key) or key in seen_sources:
+                continue
+            seen_sources.add(key)
+            sources.append({
+                "title": key[0] or "未命名来源",
+                "origin": key[1],
+                "segment_id": key[2],
+                "knowledge_id": str(fact.get("knowledge_id") or ""),
+            })
+        cards.append({
+            "id": entity_id,
+            "entity_type": "setting",
+            "setting_type": setting_type,
+            "name": entity["canonical_name"],
+            "summary": entity.get("summary") or (fact_summaries[0] if fact_summaries else ""),
+            "profile": {},
+            "rules": fact_summaries,
+            "timeline": [],
+            "related_entities": related,
+            "conflicts": [],
+            "evidence": [],
+            "sources": sources,
+            "confidence": 0.7,
+            "importance": entity.get("importance") or 0.5,
+            "canon_status": "unknown",
+            "scope": entity.get("setting_scope") or "project",
+            "setting_scope": entity.get("setting_scope") or "project",
+            "story_id": entity.get("story_id") or "",
+            "version_scope": entity.get("version_scope") or "",
+            "worldline_id": entity.get("worldline_id") or "",
+            "worldline_label": "",
+            "source_knowledge_ids": [f.get("knowledge_id") for f in facts if f.get("knowledge_id")],
+            "primary_knowledge_id": facts[0].get("knowledge_id") if facts else "",
+            "tags": ["设定实体卡", "entity_setting"],
+            "status": "entity_card",
+        })
+    return cards

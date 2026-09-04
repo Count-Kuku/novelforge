@@ -240,7 +240,6 @@ KNOWLEDGE_CATEGORIES = {
     "writing_style": "写作风格",
     "dialogue_style": "对白风格",
     "narrative_techniques": "写作手法",
-    "constraints": "硬性约束",
 }
 _DB_UNAVAILABLE_PROJECTS: set[str] = set()
 _GLOBAL_DB_UNAVAILABLE = False
