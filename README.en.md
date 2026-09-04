@@ -194,7 +194,8 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 ## Development Documentation
 
 - [project.md](./project.md): current architecture, module responsibilities, development boundaries, technical debt, and priorities.
-- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v16, migrations, task leases, and recovery.
+- [storage_architecture.md](./storage_architecture.md): DB-first authority, schema v17, migrations, task leases, and recovery.
+- [docs/storage-refactor-plan.md](./docs/storage-refactor-plan.md): Entity-Fact-Relation storage refactor design and decisions.
 - [docs/vue_frontend_migration_plan.md](./docs/vue_frontend_migration_plan.md): Vue workspace migration plan and execution status.
 - [docs/releases](./docs/releases): immutable release history.
 

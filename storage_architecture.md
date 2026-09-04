@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`16`
+当前代码期望的 SQLite schema version：`17`
 
 ## 权威存储边界
 
@@ -95,6 +95,7 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `014_unified_knowledge_center` | 跨知识/待审核/来源的 trigram FTS、增量索引任务和可重试后台索引状态 |
 | `015_capability_orchestration` | 系统凭据引用元数据、可解释自动配置状态和不可变修订链 |
 | `016_story_creation_mode` | 故事级规划创作/对话创作模式，旧故事默认规划模式 |
+| `017_entity_fact_relation` | 实体-事实-关系时序存储：新增 `entities` 实体主档表；`knowledge_items` 增加 `entity_id`/`fact_key`/`chapter_no`/`valid_from_chapter`/`valid_to_chapter`/`superseded_by`/`merge_policy`；`graph_edges` 增加时序列并将端点改为指向 `entities`（废弃 `graph_nodes` 实体节点） |
 
 ## 表分组
 
@@ -146,7 +147,8 @@ DB-only 错误语义并提前删除待迁移镜像。
 - `source_documents`：资料来源、权威、类型、hash、来源资产和当前活动修订。
 - `source_revisions`：以 `(source_id, content_hash)` 唯一确定的不可变来源版本，保存解析器、文件哈希、字符数和上一修订；批次去重指纹不替代精确原文哈希，重复保存任务状态不会覆盖既有修订元数据。
 - `source_segments`：长篇分段、导入/提取状态、来源修订、标题路径、内容类型和起止字符。
-- `knowledge_items`：已确认结构化知识；`schema_version/structured_json` 保存分类专属稳定字段。
+- `knowledge_items`：已确认结构化知识；`schema_version/structured_json` 保存分类专属稳定字段。自 schema 17 起，还承载实体关联与时序字段：`entity_id`（归属实体）、`fact_key`（槽位键，如 `location`/`status`）、`chapter_no`（来源章）、`valid_from_chapter`/`valid_to_chapter`（生效区间，用于同槽位取代）、`superseded_by`（被取代指向）、`merge_policy`（追加或取代）。
+- `entities`：实体主档表（schema 17 新增）。每个角色/势力/地点/道具/能力/事件是一条实体，`entity_id` 由 `(entity_type, 归一化名, setting_scope, story_id, worldline_id, version_scope)` 确定；`event` 类型额外保存 `world_t`（世界时间排序键）与 `world_time_label`（人类可读时间标签）。
 - `pending_knowledge_items`：待审核知识、质量状态、类型化字段和来源修订。
 - `knowledge_revisions`：正式知识每次创建/内容更新的追加快照；恢复旧版也必须追加新快照。
 - `knowledge_evidence`：知识到来源、修订、片段和检索 chunk 的证据关系，保存引文 hash、字符锚点、前后文和验证状态；网络研究结论还会在 `location_json` 中保存 URL 与来源信息。
@@ -188,10 +190,10 @@ DB-only 错误语义并提前删除待迁移镜像。
 
 ### 关系图投影与 GraphRAG 边界
 
-- `graph_nodes`
-- `graph_edges`
+- `graph_edges`：关系边与实体间引用边，端点（`source_node_id`/`target_node_id`）自 schema 17 起指向 `entities.entity_id`；承载正式关系（如师徒、敌对）与实体引用（持有 `owns`、隶属 `member_of`/`affiliated_with`、参与 `participated_in`、位于 `located_in` 等）。自 schema 17 起带时序列（`valid_from_chapter`/`valid_to_chapter`/`merge_policy`/`chapter_no`）。
+- `graph_nodes`：自 schema 17 起**废弃**（停写不停表），实体节点统一由 `entities` 承载，仅保留表结构用于兼容清理与健康检查。
 
-正式关系知识会幂等投影到这些表，供角色关系图按故事和世界线浏览；关系编辑仍写回正式知识并追加修订。当前尚未建立图扩展检索或完整 GraphRAG 查询链路，关系图浏览不能被表述为 GraphRAG 检索能力。
+正式关系知识会幂等投影到 `graph_edges`，供角色关系图按故事和世界线浏览；关系编辑仍写回正式知识并追加修订。实体间引用（持有/隶属/参与/位于）同样收编进 `graph_edges`，使"某角色持有哪些物品""某势力有哪些成员""某角色参与过哪些事件"可结构化查询，不再依赖纯文本匹配。当前尚未建立图扩展检索或完整 GraphRAG 查询链路，关系图浏览不能被表述为 GraphRAG 检索能力。
 
 ## 持久资料任务
 
