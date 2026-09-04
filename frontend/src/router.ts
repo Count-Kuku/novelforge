@@ -5,6 +5,8 @@ import PlannedOutlineView from './views/planned/PlannedOutlineView.vue'
 import PlannedChaptersView from './views/planned/PlannedChaptersView.vue'
 import ConversationalHomeView from './views/conversational/ConversationalHomeView.vue'
 import ConversationalSessionView from './views/conversational/ConversationalSessionView.vue'
+import ConversationalWorksView from './views/conversational/ConversationalWorksView.vue'
+import ConversationalSettingsHub from './views/conversational/ConversationalSettingsHub.vue'
 import ComponentPreviewView from './views/ComponentPreviewView.vue'
 import SharedWorkspaceView from './views/SharedWorkspaceView.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -50,14 +52,26 @@ export const router = createRouter({
       children: [
         { path: '', name: 'conversational-home', component: ConversationalHomeView },
         { path: 'session/:sessionId', name: 'conversational-session', component: ConversationalSessionView },
-        { path: 'workspace', name: 'conversational-workspace', component: SharedWorkspaceView },
-        { path: 'workspace/graph', name: 'conversational-knowledge-graph', component: KnowledgeGraphView },
-        { path: 'workspace/entities', name: 'conversational-knowledge-entities', component: KnowledgeEntitiesView },
-        { path: 'workspace/content', name: 'conversational-content', component: ContentBrowserView },
-        { path: 'workspace/knowledge/:recordType/:recordId', name: 'conversational-knowledge-editor', component: KnowledgeEditorView },
-        { path: 'workspace/research', name: 'conversational-research', component: ResearchView },
-        { path: 'settings', name: 'conversational-settings', component: SettingsView },
-        { path: 'rules', name: 'conversational-rules', component: RulesView },
+        { path: 'works', name: 'conversational-works', component: ConversationalWorksView },
+        {
+          path: 'library',
+          component: () => import('./layouts/ConversationalLibraryLayout.vue'),
+          children: [
+            { path: '', name: 'conversational-library', component: SharedWorkspaceView },
+            { path: 'graph', name: 'conversational-knowledge-graph', component: KnowledgeGraphView },
+            { path: 'entities', name: 'conversational-knowledge-entities', component: KnowledgeEntitiesView },
+            { path: 'knowledge/:recordType/:recordId', name: 'conversational-knowledge-editor', component: KnowledgeEditorView },
+            { path: 'research', name: 'conversational-research', component: ResearchView },
+          ],
+        },
+        { path: 'workspace', name: 'conversational-workspace', redirect: { name: 'conversational-library' } },
+        { path: 'workspace/graph', redirect: { name: 'conversational-knowledge-graph' } },
+        { path: 'workspace/entities', redirect: { name: 'conversational-knowledge-entities' } },
+        { path: 'workspace/content', name: 'conversational-content', redirect: { name: 'conversational-works' } },
+        { path: 'workspace/knowledge/:recordType/:recordId', redirect: (to) => ({ name: 'conversational-knowledge-editor', params: to.params }) },
+        { path: 'workspace/research', redirect: { name: 'conversational-research' } },
+        { path: 'settings', name: 'conversational-settings', component: ConversationalSettingsHub },
+        { path: 'rules', name: 'conversational-rules', redirect: { name: 'conversational-settings', query: { section: 'rules' } } },
       ],
     },
   ],

@@ -4472,6 +4472,56 @@
         "summary": "Update Story Profile"
       }
     },
+    "/api/v1/projects/{project_id}/stories/{story_id}/restore": {
+      "post": {
+        "operationId": "restore_story_endpoint_api_v1_projects__project_id__stories__story_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Restore Story Endpoint Api V1 Projects  Project Id  Stories  Story Id  Restore Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Story Endpoint"
+      }
+    },
     "/api/v1/projects/{project_id}/stories/{story_id}/rules": {
       "get": {
         "operationId": "story_rules_api_v1_projects__project_id__stories__story_id__rules_get",
@@ -5911,6 +5961,194 @@
           }
         },
         "summary": "Update Volume"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/works": {
+      "get": {
+        "operationId": "story_works_api_v1_projects__project_id__stories__story_id__works_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "title": "Cursor",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 40,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Story Works Api V1 Projects  Project Id  Stories  Story Id  Works Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Story Works"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/works/chapters/{chapter_no}": {
+      "delete": {
+        "operationId": "delete_chapter_work_endpoint_api_v1_projects__project_id__stories__story_id__works_chapters__chapter_no__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "chapter_no",
+            "required": true,
+            "schema": {
+              "title": "Chapter No",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Delete Chapter Work Endpoint Api V1 Projects  Project Id  Stories  Story Id  Works Chapters  Chapter No  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Chapter Work Endpoint"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/works/fragments/{fragment_id}": {
+      "delete": {
+        "operationId": "remove_fragment_work_endpoint_api_v1_projects__project_id__stories__story_id__works_fragments__fragment_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "fragment_id",
+            "required": true,
+            "schema": {
+              "title": "Fragment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Remove Fragment Work Endpoint Api V1 Projects  Project Id  Stories  Story Id  Works Fragments  Fragment Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Fragment Work Endpoint"
       }
     },
     "/api/v1/projects/{project_id}/stories/{story_id}/workspace": {

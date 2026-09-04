@@ -10,6 +10,8 @@ describe('双工作台路由', () => {
       'planned-chapters',
       'conversational-home',
       'conversational-session',
+      'conversational-works',
+      'conversational-library',
       'planned-settings',
       'conversational-settings',
       'planned-volume',
@@ -28,6 +30,7 @@ describe('双工作台路由', () => {
     const conversational = router.options.routes.find((route) => route.path === '/conversational')
     expect(planned?.children?.map((child) => child.name)).toContain('planned-outline')
     expect(conversational?.children?.map((child) => child.name)).toContain('conversational-session')
+    expect(conversational?.children?.map((child) => child.name)).toContain('conversational-works')
     expect(planned?.component).not.toBe(conversational?.component)
   })
 })

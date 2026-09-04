@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -17,6 +18,7 @@ DEFAULT_PORT = 8501
 PORT_CANDIDATES = [8501, 8502, 8503, 8504, 8505]
 READY_TIMEOUT_SECONDS = 45
 READY_POLL_INTERVAL_SECONDS = 0.5
+PROCESS_STOP_TIMEOUT_SECONDS = 8
 APP_MARKER = "NovelForge"
 LOG_FILE_NAME = "launcher.log"
 SERVER_STATE_FILE_NAME = ".novelforge-server.json"
@@ -25,6 +27,14 @@ LAUNCH_LOCK_TIMEOUT_SECONDS = 15
 LAUNCH_LOCK_POLL_INTERVAL_SECONDS = 0.1
 STREAMLIT_MARKERS = ("streamlit", "stapp")
 FRONTEND_ENV_NAME = "NOVELFORGE_FRONTEND"
+RUNTIME_UPDATE_PATHS = (
+    "launcher.py",
+    "app.py",
+    "VERSION",
+    "novelforge",
+    "storage",
+    "frontend/dist",
+)
 
 
 def _project_root() -> Path:
@@ -61,6 +71,34 @@ def _server_state_path(root: Path) -> Path:
 
 def _launch_lock_path(root: Path) -> Path:
     return root / LAUNCH_LOCK_FILE_NAME
+
+
+def _latest_runtime_mtime(root: Path) -> float:
+    latest = 0.0
+    for relative_path in RUNTIME_UPDATE_PATHS:
+        target = root / relative_path
+        candidates = [target] if target.is_file() else target.rglob("*") if target.is_dir() else []
+        for candidate in candidates:
+            if not candidate.is_file():
+                continue
+            try:
+                latest = max(latest, candidate.stat().st_mtime)
+            except OSError:
+                continue
+    return latest
+
+
+def _runtime_update_pending(root: Path, state: dict) -> bool:
+    try:
+        baseline = float(state.get("runtime_mtime") or 0)
+    except (TypeError, ValueError):
+        baseline = 0.0
+    if baseline <= 0:
+        try:
+            baseline = datetime.fromisoformat(str(state.get("started_at") or "")).timestamp() + 1.0
+        except (TypeError, ValueError):
+            return False
+    return _latest_runtime_mtime(root) > baseline + 0.001
 
 
 def _load_server_state(root: Path) -> dict:
@@ -102,6 +140,7 @@ def _write_server_state(root: Path, pid: int, port: int) -> None:
                 "port": int(port),
                 "root": str(root.resolve()),
                 "started_at": datetime.now().isoformat(timespec="seconds"),
+                "runtime_mtime": _latest_runtime_mtime(root),
             },
             ensure_ascii=False,
             indent=2,
@@ -332,12 +371,47 @@ def _clean_subprocess_env() -> dict[str, str]:
     return env
 
 
+def _stop_tracked_process(root: Path, pid: int, port: int) -> None:
+    _write_log(root, f"Runtime update detected; restarting tracked process pid={pid} on port {port}", append=True)
+    try:
+        if os.name == "nt":
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                check=False,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            if completed.returncode != 0 and _process_is_running(pid):
+                raise RuntimeError(completed.stderr.decode(errors="ignore").strip() or "taskkill failed")
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+    deadline = time.monotonic() + PROCESS_STOP_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if not _process_is_running(pid) and not _is_port_open(HOST, port):
+            _remove_server_state(root, expected_pid=pid)
+            return
+        time.sleep(0.1)
+
+    if os.name != "nt" and _process_is_running(pid):
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.2)
+    if _process_is_running(pid) or _is_port_open(HOST, port):
+        raise RuntimeError(f"旧服务未能在 {PROCESS_STOP_TIMEOUT_SECONDS} 秒内退出，请稍后重试。")
+    _remove_server_state(root, expected_pid=pid)
+
+
 def _find_available_port(root: Path) -> tuple[int | None, int | None]:
     state = _load_server_state(root)
     state_pid = int(state.get("pid") or 0)
     state_port = int(state.get("port") or 0)
     state_root = str(state.get("root") or "")
     if state_root == str(root.resolve()) and state_port in PORT_CANDIDATES and _process_is_running(state_pid):
+        if _runtime_update_pending(root, state):
+            _stop_tracked_process(root, state_pid, state_port)
+            return state_port, None
         url = _launch_url(state_port)
         if _is_port_open(HOST, state_port):
             try:
