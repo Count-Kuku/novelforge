@@ -211,7 +211,10 @@ export const api = {
   deleteArc: (projectId: string, storyId: string, arcNo: number) => request<{ deleted: boolean }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/arcs/${arcNo}`, { method: 'DELETE' }),
   summary: (projectId: string, storyId = 'default') =>
     request<Record<string, unknown>>(`/projects/${encodeURIComponent(projectId)}/summary?story_id=${encodeURIComponent(storyId)}`),
-  content: (projectId: string, storyId = 'default', cursor = '', pageSize = 40) => request<{ items: any[]; next_cursor?: string; total?: number }>(`/projects/${encodeURIComponent(projectId)}/content?story_id=${encodeURIComponent(storyId)}&cursor=${encodeURIComponent(cursor)}&page_size=${pageSize}`),
+  content: (projectId: string, storyId = 'default', cursor: number | string = '', pageSize = 40) => {
+    const cursorParam = cursor === '' ? '' : `&cursor=${encodeURIComponent(String(cursor))}`
+    return request<{ items: any[]; next_cursor?: string; total?: number }>(`/projects/${encodeURIComponent(projectId)}/content?story_id=${encodeURIComponent(storyId)}${cursorParam}&page_size=${pageSize}`)
+  },
   deleteContent: (projectId: string, resource: Record<string, unknown>, storyId = 'default') => request<{ deleted: boolean }>(`/projects/${encodeURIComponent(projectId)}/content/delete?story_id=${encodeURIComponent(storyId)}`, { method: 'POST', body: JSON.stringify({ resource, confirm: true }) }),
   tasks: (projectId: string, status?: string) =>
     request<{ ingestion: unknown[]; web_research: unknown[] }>(`/projects/${encodeURIComponent(projectId)}/tasks${status ? `?status_filter=${encodeURIComponent(status)}` : ''}`),

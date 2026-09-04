@@ -29,6 +29,20 @@ describe('typed API client', () => {
     expect(batchInit.headers['X-NovelForge-Client']).toBe('vue')
   })
 
+  it('omits the empty content cursor required by the integer API contract', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { items: [], next_cursor: '40', total: 0 } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.content('project-1', 'story-1')
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/projects/project-1/content?story_id=story-1&page_size=40')
+
+    await api.content('project-1', 'story-1', '40')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/projects/project-1/content?story_id=story-1&cursor=40&page_size=40')
+  })
+
   it('replays bounded operation events after an SSE disconnect', async () => {
     const encoder = new TextEncoder()
     let sent = false
