@@ -142,8 +142,14 @@ _export_module(_knowledge_records)
 from . import content_reports as _content_reports
 _export_module(_content_reports)
 
-from . import references as _references
-_export_module(_references)
+from . import long_reference_batches as _long_reference_batches
+_export_module(_long_reference_batches)
+
+from . import retrieval_assets as _retrieval_assets
+_export_module(_retrieval_assets)
+
+from . import database_sync as _database_sync
+_export_module(_database_sync)
 
 from . import ingestion_tasks as _ingestion_tasks
 _export_module(_ingestion_tasks)
