@@ -97,8 +97,17 @@ _export_module(_knowledge)
 from . import knowledge_center as _knowledge_center
 _export_module(_knowledge_center)
 
-from . import content as _content
-_export_module(_content)
+from . import content_structure as _content_structure
+_export_module(_content_structure)
+
+from . import content_chapter as _content_chapter
+_export_module(_content_chapter)
+
+from . import knowledge_records as _knowledge_records
+_export_module(_knowledge_records)
+
+from . import content_reports as _content_reports
+_export_module(_content_reports)
 
 from . import references as _references
 _export_module(_references)
