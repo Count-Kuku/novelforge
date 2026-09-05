@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from novelforge.core.llm import test_llm_capabilities
-from novelforge.services.memory.core import _normalize_llm_profile
+from novelforge.services.memory.llm_profiles import _normalize_llm_profile
 from novelforge.services.model_readiness import get_model_readiness, require_chat_ready
 from novelforge.services.retrieval import resolve_retrieval_params
 from novelforge.workflows import ingestion_tasks

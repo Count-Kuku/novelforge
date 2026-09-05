@@ -7,17 +7,36 @@ implementation small enough to review and test independently.
 from __future__ import annotations
 
 import importlib
+import logging
 import sys
 from types import ModuleType
 
+_LOGGER = logging.getLogger("novelforge.services.memory")
+
 _IMPLEMENTATION_MODULES: list[ModuleType] = []
+# 符号名 -> 首次导出它的实现模块名，用于检测跨模块覆盖。
+_SYMBOL_OWNER: dict[str, str] = {}
 
 
 def _export_module(module: ModuleType) -> None:
     _IMPLEMENTATION_MODULES.append(module)
+    module_name = getattr(module, "__name__", "")
     for name, value in vars(module).items():
         if name.startswith("__"):
             continue
+        owner = _SYMBOL_OWNER.get(name)
+        # 跨模块覆盖告警：facade 用 globals() 平铺导出，两个模块定义同名函数时后者
+        # 会静默顶替前者。这是真实事故源——服务门面版 load_entities(project_name)
+        # 曾被 repository 版 load_entities(conn) 顶替，调用方拿到错误签名却无报错。
+        # 同一模块因 importlib.reload 重复导出属正常，不告警。
+        if owner is not None and owner != module_name and globals().get(name) is not value:
+            _LOGGER.warning(
+                "memory facade 符号冲突：%s 由 %s 覆盖 %s 中的定义，调用方可能拿到错误签名",
+                name,
+                module_name,
+                owner,
+            )
+        _SYMBOL_OWNER[name] = module_name
         globals()[name] = value
 
 
@@ -25,12 +44,43 @@ def reload_implementation_modules():
     """Reload every implementation slice and refresh the public facade."""
     modules = list(_IMPLEMENTATION_MODULES)
     _IMPLEMENTATION_MODULES.clear()
+    _SYMBOL_OWNER.clear()
     for module in modules:
         _export_module(importlib.reload(module))
     return sys.modules[__name__]
 
-from . import core as _core
-_export_module(_core)
+from . import paths as _paths
+_export_module(_paths)
+
+from . import rules as _rules
+_export_module(_rules)
+
+from . import storage_access as _storage_access
+_export_module(_storage_access)
+
+from . import project_registry as _project_registry
+_export_module(_project_registry)
+
+from . import json_mirrors as _json_mirrors
+_export_module(_json_mirrors)
+
+from . import db_availability as _db_availability
+_export_module(_db_availability)
+
+from . import llm_profiles as _llm_profiles
+_export_module(_llm_profiles)
+
+from . import asset_records as _asset_records
+_export_module(_asset_records)
+
+from . import context_directives as _context_directives
+_export_module(_context_directives)
+
+from . import domain_sync as _domain_sync
+_export_module(_domain_sync)
+
+from . import project_memory as _project_memory
+_export_module(_project_memory)
 
 from . import stories as _stories
 _export_module(_stories)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from novelforge.core.llm import PROVIDER_PRESETS
-from novelforge.services.memory.core import _normalize_llm_profile
+from novelforge.services.memory.llm_profiles import _normalize_llm_profile
 import ui.llm_settings as settings_ui
 
 

@@ -452,7 +452,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 
 ### P1：可维护性与操作体验
 
-1. 拆分当前超过约 1000 行且职责混杂的 memory、UI、prompt 和 source workflow 模块。
+1. 拆分当前超过约 1000 行且职责混杂的 UI、prompt 和 source workflow 模块（memory/core.py 已于 2026-09-05 拆分为 paths/rules/json_mirrors/project_registry/db_availability/llm_profiles/asset_records/context_directives/domain_sync/project_memory/storage_access 十一个单一职责模块，门面导出保持不变）。
 2. 抽取大纲/分卷/剧情段/章节讨论页的重复交互骨架。
 3. 给后台任务增加更明确的应用关闭提示、失败通知和运行日志入口。
 
@@ -467,7 +467,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 
 | 领域 | 当前问题 | 处理方向 |
 |---|---|---|
-| 模块体量 | `memory/core.py`、部分 memory/UI/prompt/source 模块仍超过 1000 行 | 按资产、配置、故事、资料和展示职责继续拆分 |
+| 模块体量 | 部分 UI/prompt/source workflow 模块仍超过 1000 行（`memory/core.py` 已拆分完毕） | 按展示、提示词和资料职责继续拆分 |
 | UI 复用 | 多类讨论页仍有相似布局、表单解析和保存操作 | 抽取共享讨论 renderer 和动作 helper |
 | 多查询路由 | ~~只有单次语义查询~~ → 已实现实体路由分检（角色/世界/时间线）与实体聚焦注入（refactor 2） | 增强方向收敛为：跨路由 RRF 融合、检索反查实体并集、受配额子查询防 Embedding 调用膨胀 |
 | OCR | 自由创作附件与 Vue 项目批量导入支持本地 OCR；真实引擎/provider 评测仍待发布环境 | 继续执行真实评测，不对数字 PDF 重复 OCR |

@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from novelforge.services.memory.core import _normalize_llm_profile
+from novelforge.services.memory.llm_profiles import _normalize_llm_profile
 from novelforge.core.cost_currency import DEFAULT_USD_TO_CNY_RATE, convert_cost
 
 
