@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`17`
+当前代码期望的 SQLite schema version：`19`
 
 ## 权威存储边界
 
@@ -96,6 +96,8 @@ DB-only 错误语义并提前删除待迁移镜像。
 | `015_capability_orchestration` | 系统凭据引用元数据、可解释自动配置状态和不可变修订链 |
 | `016_story_creation_mode` | 故事级规划创作/对话创作模式，旧故事默认规划模式 |
 | `017_entity_fact_relation` | 实体-事实-关系时序存储：新增 `entities` 实体主档表；`knowledge_items` 增加 `entity_id`/`fact_key`/`chapter_no`/`valid_from_chapter`/`valid_to_chapter`/`superseded_by`/`merge_policy`；`graph_edges` 增加时序列并将端点改为指向 `entities`（废弃 `graph_nodes` 实体节点） |
+| `018_sequence_order` | `knowledge_items` 增加 `sequence_order`：资料事件落 `world_t` 的排序键，取值 `source_segment_index × 1000 + order_hint`（refactor 1 D 期新增） |
+| `019_graph_edges_endpoint_index` | 补建 `graph_edges` 端点索引 `idx_graph_edges_source`/`idx_graph_edges_target`：017 迁移以「建新表 → 搬运 → DROP → RENAME」重建 `graph_edges` 时，连带删除 001 建立的两个端点索引且重建后未补，导致端点+关系类型查询退化为全表扫描（refactor 2 审查修复） |
 
 ## 表分组
 

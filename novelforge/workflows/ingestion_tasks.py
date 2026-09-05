@@ -437,6 +437,8 @@ def run_long_reference_ingestion_task(
                 import_to_index=bool(configuration.get("import_to_index", True)),
                 consolidate_after_extract=bool(configuration.get("consolidate_after_extract", False)),
                 auto_confirm_safe_items=bool(configuration.get("auto_confirm_safe_items", True)),
+                # 遗留 #4 收口：recall 补抽取经任务配置开启（默认关，开启需先验证 LLM 行为）。
+                recall_enabled=bool(configuration.get("recall_enabled", False)),
                 custom_instructions=str(configuration.get("custom_instructions") or ""),
                 progress_callback=checkpoint_progress,
                 stream_callback=stream_callback,

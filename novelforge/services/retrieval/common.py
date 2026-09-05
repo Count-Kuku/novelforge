@@ -86,8 +86,9 @@ MAX_ALIAS_EXPANDED_TERMS = 80
 DEFAULT_WORLDLINE_ID = "main"
 DEFAULT_CHUNK_SIZE = 900
 DEFAULT_CHUNK_OVERLAP = 150
+# 权威定义在 `novelforge.domain.knowledge_entities`；此处 re-export，避免同一常量多处定义。
+from novelforge.domain.knowledge_entities import GLOBAL_WORLDLINE_IDS
 DEFAULT_TOP_K = 6
-GLOBAL_WORLDLINE_IDS = {"", "all", "global", "shared", "common", "canon", "unknown"}
 AUTHORITY_WEIGHTS = {
     "project": 2.0,
     "official": 1.5,
@@ -109,7 +110,7 @@ REFERENCE_FOCUS_SOURCE_MAP = {
     "道具能力": ["entity_setting_card", "knowledge_items", "knowledge_abilities"],
     "时间线": ["knowledge_timeline_events", "memory_timeline"],
     "写作风格": ["knowledge_writing_style", "knowledge_dialogue_style", "knowledge_narrative_techniques"],
-    "硬性约束": ["entity_setting_card", "knowledge_constraints"],
+    "硬性约束": ["memory_active_constraint", "knowledge_world_rules"],
 }
 
 KNOWLEDGE_SOURCE_TYPES = [
@@ -124,7 +125,6 @@ KNOWLEDGE_SOURCE_TYPES = [
     "knowledge_writing_style",
     "knowledge_dialogue_style",
     "knowledge_narrative_techniques",
-    "knowledge_constraints",
 ]
 
 
@@ -184,7 +184,6 @@ RETRIEVAL_TASK_PROFILES = {
             "external_source",
             "conflict_resolution",
             "knowledge_world_rules",
-            "knowledge_constraints",
             "knowledge_writing_style",
             "knowledge_dialogue_style",
             "knowledge_narrative_techniques",
@@ -211,7 +210,6 @@ RETRIEVAL_TASK_PROFILES = {
             "knowledge_world_rules",
             "knowledge_timeline_events",
             "knowledge_relationships",
-            "knowledge_constraints",
         ],
     },
     "volume_discussion": {
@@ -235,7 +233,6 @@ RETRIEVAL_TASK_PROFILES = {
             "knowledge_world_rules",
             "knowledge_timeline_events",
             "knowledge_relationships",
-            "knowledge_constraints",
         ],
     },
     "arc_discussion": {
@@ -260,7 +257,6 @@ RETRIEVAL_TASK_PROFILES = {
             "knowledge_characters",
             "knowledge_timeline_events",
             "knowledge_relationships",
-            "knowledge_constraints",
         ],
     },
     "chapter_discussion": {
@@ -285,7 +281,6 @@ RETRIEVAL_TASK_PROFILES = {
             "knowledge_characters",
             "knowledge_timeline_events",
             "knowledge_relationships",
-            "knowledge_constraints",
         ],
     },
     "outline_generation": {
@@ -309,7 +304,7 @@ RETRIEVAL_TASK_PROFILES = {
         ] + KNOWLEDGE_SOURCE_TYPES,
     },
     "chapter_planning": {
-        "top_k": 8,
+        "top_k": 6,
         "source_types": [
             "outline",
             "creative_profile_discussion",

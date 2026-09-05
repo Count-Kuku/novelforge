@@ -2076,3 +2076,51 @@ def comprehensive_chapter_evaluation_prompt(
 6. `revision_priorities` 按修改优先级排序，最多 6 条。
 7. 不要把报告写得过长，重点是能指导下一步改稿。
 """
+
+
+def plan_entity_context_query_prompt(
+    capability: str,
+    query_text: str,
+    known_entities_text: str = "",
+    rules_text: str = "当前无额外规则。",
+) -> str:
+    """P1：实体识别 + 查询规划 prompt（refactor 2 · D1）。
+
+    输入本次生成/规划场景的文本（正文时是大纲/细纲，规划时是创作想法/上一级大纲），
+    让模型输出「本次上下文真正需要的实体清单」，供生成侧按实体取事实并分路由召回。
+    只识别「本次写作会用到的事实承载者」，不要求枚举整库设定。
+    """
+    return f"""你是生成上下文实体识别 Agent。
+
+你的任务：判断「这一次生成/规划」，上下文里真正需要哪些**已确认实体**的事实，输出实体清单。
+识别准则是「本次写作会用到的设定承载者」——不是资料库里所有角色，而是本次文本明确涉及或
+明显隐含、写下去必须知道其设定/状态的那批实体。
+
+规则约束：
+{rules_text}
+
+本次生成场景类型：{capability}
+
+待分析文本（细纲/大纲/创作想法/写作要求）：
+{query_text}
+
+{"知识库中已确认的核心实体（供名称对齐，不要照单全收）：\n" + known_entities_text if known_entities_text else ""}
+
+请输出 JSON，不要附带额外解释或 Markdown。格式：
+{{
+  "entities": [
+    {{
+      "name": "实体的规范名（与知识库一致的规范名；别名请归一到规范名）",
+      "type": "character|organization|location|item|ability|event|rule",
+      "mention": "direct|alias|implicit",
+      "purpose": "一句话说明为什么本次需要它"
+    }}
+  ]
+}}
+
+要求：
+1. `entities` 是数组；不确定是否与知识库对应时，仍给出名称，由系统做别名解析。
+2. `mention` 说明它在文本里以什么形式出现：direct=直接点名，alias=用了别名/称呼，implicit=没点名但情节隐含需要。
+3. 只输出真正必要的实体，宁缺毋滥——每多一个实体都会挤占上下文预算。
+4. 若文本没有足够的实体线索（如全新创作、无任何设定依赖），输出空数组即可，不要臆造。
+"""

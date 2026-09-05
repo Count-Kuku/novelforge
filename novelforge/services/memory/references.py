@@ -85,7 +85,13 @@ def normalize_long_reference_batch(batch: dict | None) -> dict:
         "source_file_name": str(raw.get("source_file_name") or ""),
         "content_fingerprint": str(raw.get("content_fingerprint") or ""),
         "source_content_hash": str(raw.get("source_content_hash") or ""),
-        "content_char_count": int(raw.get("content_char_count") or sum(len(item.get("content", "")) for item in segments)),
+        # 显式 None 判断：上游可能传 0 表示「未统计/空批次」，`or` 会把它当假值
+        # 转而重算 sum()，覆盖掉调用方明确给出的 0。
+        "content_char_count": int(
+            raw["content_char_count"]
+            if raw.get("content_char_count") is not None
+            else sum(len(item.get("content", "")) for item in segments)
+        ),
         "created_at": str(raw.get("created_at") or now),
         "updated_at": str(raw.get("updated_at") or now),
         "segments": segments,

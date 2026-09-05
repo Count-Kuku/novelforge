@@ -616,6 +616,8 @@ def preview_writing_context(
         retrieval_profile="drafting",
         context_budget=context_budget,
         retrieval_session_id=session_id,
+        # 自由创作正文默认开启实体聚焦（refactor 2 P1 接线，遗留 #5 收口）。
+        enable_entity_planning=True,
     )
 
 
@@ -1132,6 +1134,25 @@ def extract_fragment_knowledge(
             source_title=source_title,
             source_origin="interactive_fragment",
         )
+        # refactor 2 P4（D10）：接受片段提炼的候选自动确认，不再堆积待人工审核。
+        # 入队函数返回 int 不返回 ids —— pending_ids 从 candidates 的 pending_id 键提取。
+        auto_confirm: dict = {}
+        pending_ids_for_confirm = [
+            str(item.get("pending_id") or "") for item in candidates if str(item.get("pending_id") or "")
+        ]
+        if pending_ids_for_confirm:
+            try:
+                from novelforge.workflows.source_workflows import auto_confirm_pending_items_without_risk
+
+                auto_confirm = auto_confirm_pending_items_without_risk(
+                    project_name,
+                    pending_ids_for_confirm,
+                    source_type="interactive_fragment",
+                    source_title=source_title,
+                    note="接受创作片段后自动提炼并确认",
+                )
+            except Exception as exc:
+                LOGGER.warning("自动确认创作片段提炼候选失败：fragment=%s error=%s", fragment_id, exc)
         update_creative_fragment(
             project_name,
             fragment_id,
@@ -1150,6 +1171,7 @@ def extract_fragment_knowledge(
                 if str(item.get("pending_id") or "")
             ],
             "queued_count": queued_count,
+            "auto_confirm": auto_confirm,
             "extraction_step": extraction_step,
         }
     except Exception:

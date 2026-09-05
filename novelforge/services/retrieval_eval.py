@@ -156,7 +156,7 @@ def build_retrieval_usage_report_from_payload(
             "可信度": label_authority_func(meta.get("authority", "unknown")),
             "命中词": "、".join(str(term) for term in hit.get("matched_terms", [])[:6]),
         })
-        if source_type in {"knowledge_constraints", "memory_active_constraint", "entity_setting_card"}:
+        if source_type in {"memory_active_constraint", "entity_setting_card", "knowledge_world_rules"}:
             constraints.append({
                 "来源": f"{label_source_type_func(source_type)} / {title}",
                 "内容": content[:260],

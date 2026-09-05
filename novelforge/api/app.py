@@ -341,6 +341,21 @@ def create_app() -> FastAPI:
     async def runtime_handler(request: Request, exc: RuntimeError):
         return JSONResponse(status_code=409, content=_error_payload(request, "operation_conflict", str(exc)))
 
+    @app.exception_handler(Exception)
+    async def unhandled_handler(request: Request, exc: Exception):
+        """未分类异常的统一出口。
+
+        前端 client 依赖 `{error:{code,message}}` 结构取错误文案；FastAPI 默认对未捕获
+        异常返回 `{"detail":...}`，会让前端读不到 message 而显示笼统提示。这里统一成
+        约定结构，同时落服务端日志保留堆栈，便于追踪真实缺陷（不静默吞错）。
+        异常明细不外传，避免泄漏内部路径等实现信息。
+        """
+        LOGGER.exception("Unhandled API error: %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content=_error_payload(request, "internal_error", "服务器处理请求时发生未预期的错误，请查看服务端日志。"),
+        )
+
     @app.get("/health/live", include_in_schema=False)
     async def live() -> dict[str, Any]:
         return {"status": "ok", "service": "novelforge-api", "time": datetime.now(timezone.utc).isoformat()}
@@ -611,8 +626,21 @@ def create_app() -> FastAPI:
             raise ValueError("批量导入只支持故事或项目作用域。")
         if not files or len(files) > 20:
             raise ValueError("批量导入一次最多选择 20 个文件。")
-        from novelforge.services.document_parsing import ocr_pdf_bytes, parse_document_bytes
+        from novelforge.services.document_parsing import SUPPORTED_DOCUMENT_EXTENSIONS, ocr_pdf_bytes, parse_document_bytes
         from novelforge.workflows.creative_attachments import import_creative_documents
+
+        # 前置校验：为不支持的格式尽早失败，避免读完整个（可能很大的）文件才报错。
+        unsupported = [
+            (file.filename or "attachment.txt")
+            for file in files
+            if Path(file.filename or "attachment.txt").suffix.lower() not in SUPPORTED_DOCUMENT_EXTENSIONS
+        ]
+        if unsupported:
+            raise ValueError(
+                "不支持的资料格式：{}；仅支持 {}。".format(
+                    "、".join(unsupported), "、".join(sorted(SUPPORTED_DOCUMENT_EXTENSIONS))
+                )
+            )
 
         documents = []
         warnings: list[str] = []

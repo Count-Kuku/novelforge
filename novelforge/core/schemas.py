@@ -537,6 +537,9 @@ class ArcOutlineMetadata(NovelForgeSchema):
     estimated_chapter_count: int | None = None
     target_word_count_range: str = ""
     has_approved_discussion: bool = False
+    # refactor 2 P2（D6）：章节/arc 级世界线注入来源。None=继承 profile/story 主世界线。
+    worldline_id: str | None = None
+    worldline_label: str = ""
 
 
 class ChapterOutlineMetadata(NovelForgeSchema):

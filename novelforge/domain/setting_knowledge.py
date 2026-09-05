@@ -3,6 +3,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from novelforge.domain.knowledge_entities import GLOBAL_WORLDLINE_IDS, worldline_allowed
+
 from novelforge.services.memory import (
     delete_knowledge_category_item_record,
     KNOWLEDGE_CATEGORIES,
@@ -13,6 +15,7 @@ from novelforge.services.memory import (
     load_memory,
     load_story_memory,
     load_story_memory_overrides,
+    merge_worldline_baseline,
     save_knowledge_category,
     sync_project_retrieval_assets,
     upsert_knowledge_category_item_record,
@@ -21,7 +24,7 @@ from novelforge.services.memory import (
 
 SETTING_FIELD_SPECS = {
     # canon_mode 是 story memory 的一等字段（core.py:216），由 prompt 直接读取，
-    # 不再作为知识条目单存——此处已移除（见 storage-refactor-plan 2.7）。
+    # 不再作为知识条目单存（Entity-Fact-Relation 重构后移除）。
     "au_rules": {"category": "world_rules", "label": "架空规则", "scalar": False},
     "world": {"category": "world_rules", "label": "世界观", "scalar": False},
     "characters": {"category": "characters", "label": "角色", "scalar": False},
@@ -50,12 +53,13 @@ SETTING_CATEGORY_ORDER = [
 ]
 
 INJECTION_POLICIES = {"always", "retrieval", "manual_only"}
-GLOBAL_WORLDLINE_IDS = {"", "all", "global", "shared", "common", "canon", "unknown"}
+# 权威定义与 strict 判定实现在 `domain/knowledge_entities`（曾在本模块、retrieval/common
+# 各存一份，改一处会漏两处）。此处 re-export 保持既有 `from ...setting_knowledge import
+# GLOBAL_WORLDLINE_IDS` 调用方不受影响。
 
 # Upper bound for the always-injection setting block (L0 constant layer).
 # Keeps the hard-constraint block from growing without bound as chapters
-# accumulate; the most important items (by importance) win. See P2 in
-# storage-refactor-plan.md.
+# accumulate; the most important items (by importance) win.
 ALWAYS_INJECTION_LIMIT = 40
 
 
@@ -149,13 +153,7 @@ def normalize_injection_policy(value: str | None, *, default: str = "always") ->
 
 
 def _setting_worldline_allowed(item: dict, worldline_id: str | None, worldline_mode: str) -> bool:
-    if str(worldline_mode or "prefer").strip().lower() != "strict":
-        return True
-    target = str(worldline_id or "").strip().lower()
-    if not target:
-        return True
-    item_worldline = str(item.get("worldline_id") or "").strip().lower()
-    return not item_worldline or item_worldline in GLOBAL_WORLDLINE_IDS or item_worldline == target
+    return worldline_allowed(item.get("worldline_id"), worldline_id, worldline_mode)
 
 
 def _setting_category_rank(category: str) -> int:
@@ -571,7 +569,7 @@ def list_setting_items(
     if limit is not None:
         # Cap the always-injection block. Importance first, then the stable sort
         # above as a tiebreak, so a large knowledge base cannot inflate the
-        # hard-constraint block without bound (see storage-refactor-plan P2).
+        # hard-constraint block without bound（重要度优先截断的注入配额）。
         rows.sort(key=lambda item: (
             -(item.get("importance") if isinstance(item.get("importance"), (int, float)) else 0),
         ))
@@ -588,34 +586,149 @@ def group_setting_items_by_field(items: list[dict]) -> dict[str, list[dict]]:
     return grouped
 
 
+def _merged_effective_items(
+    project_name: str,
+    story_id: str,
+    *,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+    chapter_no: int | None = None,
+    entity_names: set[str] | None = None,
+) -> list[dict]:
+    """P0/P1：经 `merge_worldline_baseline` 取「跨 canon/story 叠加 + 章号过滤」的有效设定行。
+
+    每个 group 的 facts 展开为平铺行，`fact_key` 映射回 `setting_field`。返回行的字段对齐
+    `list_setting_items` 消费方所需的 subset：`summary/category/setting_field/importance/
+    injection_policy/setting_role`。replace 槽位已由 merge 取最新一条，注入不再出现矛盾值。
+    `entity_names` 非空时只保留 canonical_name 命中集合的实体组（P1 实体聚焦取数）。
+    """
+    merged = merge_worldline_baseline(
+        project_name,
+        story_id=story_id,
+        worldline_id=worldline_id,
+        worldline_mode=worldline_mode,
+        chapter_no=chapter_no,
+    )
+    wanted = set(str(item).strip() for item in entity_names) if entity_names else None
+    rows: list[dict] = []
+    for group in merged:
+        if not isinstance(group, dict):
+            continue
+        if wanted is not None and str(group.get("canonical_name") or "") not in wanted:
+            continue
+        canonical = str(group.get("canonical_name") or "")
+        for fact in group.get("facts") or []:
+            if not isinstance(fact, dict):
+                continue
+            row = dict(fact)
+            row["setting_field"] = str(fact.get("fact_key") or "")
+            row["canonical_name"] = canonical
+            rows.append(row)
+    return rows
+
+
+def _valid_start(row: dict) -> int:
+    value = row.get("valid_from_chapter")
+    return int(value) if isinstance(value, (int, float)) else 0
+
+
+def _valid_end(row: dict) -> int | None:
+    value = row.get("valid_to_chapter")
+    return int(value) if isinstance(value, (int, float)) else None
+
+
+def validate_temporal_conflicts(rows: list[dict]) -> list[str]:
+    """P2：纯规则时序矛盾校验器（无需 LLM）。
+
+    对每一 (canonical_name, setting_field) 槽位按生效起点排序，检测 replace 语义下
+    前后两条的区间是否重叠/倒挂（前一条仍未关闭就开后一条），返回人类可读警告。
+
+    正常 supersede 写入后区间是半开 [from, to)（前条 valid_to == 后条 valid_from），
+    不会误报；只有 valid_from/valid_to 被标错（重叠/倒挂）时才触发。
+    """
+    warnings: list[str] = []
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        canonical = str(row.get("canonical_name") or "").strip()
+        field = str(row.get("setting_field") or "").strip()
+        if not canonical or not field:
+            continue
+        buckets.setdefault((canonical, field), []).append(row)
+    for (canonical, field), items in buckets.items():
+        ordered = sorted(items, key=lambda row: (_valid_start(row), str(row.get("knowledge_id") or "")))
+        for index in range(1, len(ordered)):
+            previous = ordered[index - 1]
+            current = ordered[index]
+            prev_start = _valid_start(previous)
+            curr_start = _valid_start(current)
+            if curr_start < prev_start:
+                warnings.append(f"时序倒挂：{canonical} 的 {field} 生效起点倒挂（{curr_start} 早于 {prev_start}）")
+                continue
+            prev_end = _valid_end(previous)
+            if prev_end is not None and prev_end > curr_start:
+                warnings.append(
+                    f"时序重叠：{canonical} 的 {field} 前一条(至第{prev_end}章)未关闭即开启第{curr_start}章新值"
+                )
+    return warnings
+
+
 def build_generation_setting_context(
     project_name: str,
     story_id: str = "default",
     *,
     chapter_no: int | None = None,
+    worldline_override: str | None = None,
 ) -> dict:
     try:
         profile = load_creative_profile(project_name, story_id) or {}
     except Exception:
         profile = {}
-    worldline_id = str(profile.get("worldline_id") or "")
+    # P2（D6）：worldline 来源可被章节/arc 级元数据覆盖（worldline_override），否则回退 profile。
+    worldline_id = str(worldline_override) if worldline_override else str(profile.get("worldline_id") or "")
     worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer")
     memory = load_story_memory(project_name, story_id)
-    structured_items = [
-        item
-        for item in list_setting_items(project_name, story_id, core_only=True, chapter_no=chapter_no)
-        if str(item.get("setting_role") or "") == "core"
-    ]
-    items = list_setting_items(
+
+    merged_rows = _merged_effective_items(
         project_name,
         story_id,
-        core_only=True,
-        injection_policies={"always"},
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
-        limit=ALWAYS_INJECTION_LIMIT,
         chapter_no=chapter_no,
     )
+    if merged_rows:
+        # 实体+世界线视图优先：跨 scope 叠加 + 章号过滤，消除同槽位矛盾值（D3/P0）。
+        structured_items = [
+            item for item in merged_rows
+            if str(item.get("setting_role") or "") == "core"
+        ]
+        # 与原 list_setting_items(core_only=True, injection_policies={"always"}) 语义一致：
+        # 保留所有 injection_policy=always 的行（含 supplemental 等非 core 的 always 条目）。
+        items = [
+            item for item in merged_rows
+            if normalize_injection_policy(item.get("injection_policy")) == "always"
+        ]
+        items.sort(key=lambda item: -(
+            item.get("importance") if isinstance(item.get("importance"), (int, float)) else 0
+        ))
+        items = items[: ALWAYS_INJECTION_LIMIT]
+    else:
+        # 回退：实体视图为空（旧库未回填 entity_id / DB 不可用）时退回全量过滤路径，
+        # 保证 always 注入不因重构而空掉。
+        structured_items = [
+            item
+            for item in list_setting_items(project_name, story_id, core_only=True, chapter_no=chapter_no)
+            if str(item.get("setting_role") or "") == "core"
+        ]
+        items = list_setting_items(
+            project_name,
+            story_id,
+            core_only=True,
+            injection_policies={"always"},
+            worldline_id=worldline_id,
+            worldline_mode=worldline_mode,
+            limit=ALWAYS_INJECTION_LIMIT,
+            chapter_no=chapter_no,
+        )
     structured_fields = {
         str(item.get("setting_field") or "")
         for item in structured_items
@@ -637,7 +750,82 @@ def build_generation_setting_context(
         else:
             memory[field_name] = summaries
     memory["_setting_context"] = format_setting_items_for_prompt(items)
+    # 内部契约键（refactor 2 P0）：让 context_assembly 免做第二次全量 list_setting_items。
+    # 前缀下划线 + 已知键名，消费方只读，不做结构化 field，向后兼容。
+    memory["_setting_structured_fields"] = sorted(
+        str(item.get("setting_field") or "")
+        for item in structured_items
+        if str(item.get("setting_field") or "") in SETTING_FIELD_SPECS
+    )
+    memory["_setting_knowledge_ids"] = sorted({
+        str(item.get("knowledge_id") or item.get("id") or "")
+        for item in items
+        if str(item.get("knowledge_id") or item.get("id") or "")
+    })
     return memory
+
+
+def build_entity_scoped_setting_context(
+    project_name: str,
+    story_id: str,
+    *,
+    canonical_names: list[str],
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+    chapter_no: int | None = None,
+    concise: bool = False,
+) -> dict:
+    """P1：按「本章实体清单」聚焦 always 注入块。
+
+    与 `build_generation_setting_context` 同构但只保留 `canonical_names` 命中实体的
+    有效事实（跨 canon/story 叠加 + 章号过滤），把上下文预算从「全实体」收窄到
+    「本次写作真正需要的实体」。返回 `{text, ids, items}`。
+
+    `concise=True`（遗留 #8 收口，G15）：细纲等「中观结构」层只取每个实体的
+    「清单 + 概要」——每实体至多 2 条、摘要截断到 140 字，而非完整事实。
+    """
+    rows = _merged_effective_items(
+        project_name,
+        story_id,
+        worldline_id=worldline_id,
+        worldline_mode=worldline_mode,
+        chapter_no=chapter_no,
+        entity_names=set(str(name) for name in canonical_names if str(name)),
+    )
+    items = [
+        item for item in rows
+        if normalize_injection_policy(item.get("injection_policy")) == "always"
+    ]
+    items.sort(key=lambda item: -(
+        item.get("importance") if isinstance(item.get("importance"), (int, float)) else 0
+    ))
+    if concise:
+        # 细纲层：清单级概要。每实体至多保留 2 条最高 importance 事实，单条摘要截断。
+        per_entity_kept: dict[str, int] = {}
+        concise_items: list[dict] = []
+        for item in items:
+            entity_key = str(item.get("canonical_name") or item.get("name") or "")
+            if not entity_key:
+                continue
+            kept = per_entity_kept.get(entity_key, 0)
+            if kept >= 2:
+                continue
+            per_entity_kept[entity_key] = kept + 1
+            clipped = dict(item)
+            summary = str(clipped.get("summary") or "").strip()
+            clipped["summary"] = summary[:140] + ("…" if len(summary) > 140 else "")
+            concise_items.append(clipped)
+        items = concise_items
+    items = items[: ALWAYS_INJECTION_LIMIT]
+    return {
+        "text": format_setting_items_for_prompt(items),
+        "ids": sorted({
+            str(item.get("knowledge_id") or item.get("id") or "")
+            for item in items
+            if str(item.get("knowledge_id") or item.get("id") or "")
+        }),
+        "items": items,
+    }
 
 
 def format_setting_items_for_prompt(items: list[dict]) -> str:

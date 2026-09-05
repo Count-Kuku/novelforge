@@ -200,8 +200,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 ## 开发文档
 
 - [project.md](./project.md)：当前架构、模块职责、开发边界、技术债和优先级。
-- [storage_architecture.md](./storage_architecture.md)：DB-first 权威边界、schema v17、迁移、任务租约和恢复。
-- [docs/storage-refactor-plan.md](./docs/storage-refactor-plan.md)：实体-事实-关系（Entity-Fact-Relation）时序存储重构的方案与决策记录。
+- [storage_architecture.md](./storage_architecture.md)：DB-first 权威边界、schema（当前 v19）、迁移、任务租约和恢复。
 - [docs/vue_frontend_migration_plan.md](./docs/vue_frontend_migration_plan.md)：Vue 双工作台迁移规划与执行状态。
 - [docs/releases](./docs/releases)：已发布版本历史。
 

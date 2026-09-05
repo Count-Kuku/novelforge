@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from novelforge.services import memory as _memory_api
 from novelforge.domain.knowledge_types import normalize_typed_knowledge_item
+from storage.repositories import entity_query
 from storage.repositories.knowledge import (
+    fetch_knowledge_entity_rows,
     load_knowledge_evidence_rows,
     load_knowledge_revision_rows,
     summarize_knowledge_storage_health,
@@ -57,14 +59,20 @@ def auto_review_policy_path(project_name: str) -> _memory_api.Path:
     return knowledge_dir_path(project_name) / "auto_review_policy.json"
 
 
+# 默认审核策略：全自动确认（用户偏好「提取后无需人工逐条审核」）。
+# 仅保留两道与策略无关的硬门槛（见 evaluate_pending_auto_review_decision）：
+#   1) typed_errors —— 结构校验失败，确认会破坏 schema；
+#   2) issue —— 提取阶段质检标记的问题条目。
+# 这两道独立于本策略，无法也不应通过放宽策略放开；其余（置信度/证据强度/缺证据/分类强制人工）全部放开。
+# 纠错兜底由「直接编辑条目」与「LLM 对话改条目」两条修改途径承担，而非事前人工审核。
 DEFAULT_AUTO_REVIEW_POLICY = {
-    "min_confidence": 0.45,
-    "min_evidence_strength": 0.35,
+    "min_confidence": 0.0,
+    "min_evidence_strength": 0.0,
     "grade_a_confidence": 0.75,
     "grade_a_evidence_strength": 0.65,
     "allow_grade_b_auto_confirm": True,
-    "require_evidence": True,
-    "manual_review_categories": ["world_rules"],
+    "require_evidence": False,
+    "manual_review_categories": [],
 }
 
 
@@ -101,6 +109,269 @@ def load_knowledge_base(project_name: str) -> dict[str, list[dict]]:
         category: load_knowledge_category(project_name, category)
         for category in _memory_api.KNOWLEDGE_CATEGORIES
     }
+
+
+# ---- Entity-Fact 查询门面（refactor 2 P0/P1）----
+# domain 层不得直接碰 sqlite；统一经此门面走 entity_query 的 Entity-Fact-Relation 读取。
+# 注意：`memory` 顶层命名空间的 load_entities/load_entity_facts/load_entity_relations 是
+# 既有 re-export 的 repository 版（收 conn），因此这里的服务门面用带前缀的名字避免被覆盖。
+
+
+def load_entity_master_rows(
+    project_name: str,
+    *,
+    story_id: str | None = None,
+    worldline_id: str | None = None,
+) -> list[dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: entity_query.load_entities(conn, story_id=story_id, worldline_id=worldline_id),
+        "entities",
+    )
+    return result if isinstance(result, list) else []
+
+
+def fetch_entity_facts(
+    project_name: str,
+    entity_id: str,
+    *,
+    chapter_no: int | None = None,
+) -> list[dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: entity_query.load_entity_facts(conn, entity_id, chapter_no=chapter_no),
+        "entity facts",
+    )
+    return result if isinstance(result, list) else []
+
+
+def load_entity_facts_for_entities(
+    project_name: str,
+    entity_ids: list[str],
+    *,
+    chapter_no: int | None = None,
+) -> list[dict]:
+    if not entity_ids:
+        return []
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: entity_query.load_entity_facts_for_entities(conn, entity_ids, chapter_no=chapter_no),
+        "entity facts batch",
+    )
+    return result if isinstance(result, list) else []
+
+
+def merge_worldline_baseline(
+    project_name: str,
+    *,
+    story_id: str = "default",
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+    chapter_no: int | None = None,
+) -> list[dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: entity_query.merge_worldline_baseline(
+            conn,
+            story_id=story_id,
+            worldline_id=worldline_id,
+            worldline_mode=worldline_mode,
+            chapter_no=chapter_no,
+        ),
+        "worldline baseline",
+    )
+    return result if isinstance(result, list) else []
+
+
+def resolve_entity_ids_by_names(
+    project_name: str,
+    names: list[str],
+    *,
+    story_id: str | None = None,
+    worldline_id: str | None = None,
+) -> dict[str, dict]:
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: entity_query.resolve_entity_ids_by_names(
+            conn, names, story_id=story_id, worldline_id=worldline_id
+        ),
+        "entity name resolution",
+    )
+    return result if isinstance(result, dict) else {}
+
+
+def fetch_knowledge_entity_map(project_name: str, knowledge_ids: list[str]) -> dict[str, dict]:
+    """knowledge_id → {entity_id, canonical_name, entity_type}（两段式检索反查，遗留 #7 收口）。"""
+    result = _memory_api._load_runtime_from_db_best_effort(
+        project_name,
+        lambda conn: fetch_knowledge_entity_rows(conn, knowledge_ids),
+        "knowledge entity map",
+    )
+    rows = result if isinstance(result, list) else []
+    mapping: dict[str, dict] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("knowledge_id"):
+            continue
+        mapping.setdefault(str(row["knowledge_id"]), {
+            "entity_id": str(row.get("entity_id") or ""),
+            "canonical_name": str(row.get("canonical_name") or ""),
+            "entity_type": str(row.get("entity_type") or ""),
+        })
+    return mapping
+
+
+def load_chapter_world_snapshot(
+    project_name: str,
+    story_id: str,
+    chapter_no: int,
+    *,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+) -> dict:
+    """P4/遗留 #10 收口：只读「第 N 章世界快照」。
+
+    聚合截至当前章仍有效的事实（跨 canon/story 叠加 + 章号过滤）与时间线事件，
+    供「世界状态总览」等展示/评测直接取用。当前按需查询即够；若大规模实测成为瓶颈，
+    再在此之上加物化缓存（经评估：当前规模不做物化）。
+    """
+    merged = merge_worldline_baseline(
+        project_name,
+        story_id=story_id,
+        worldline_id=worldline_id,
+        worldline_mode=worldline_mode,
+        chapter_no=chapter_no,
+    )
+    entities: list[dict] = []
+    for group in merged:
+        if not isinstance(group, dict):
+            continue
+        facts = [
+            str(fact.get("summary") or "")
+            for fact in (group.get("facts") or [])
+            if isinstance(fact, dict) and str(fact.get("summary") or "").strip()
+        ]
+        if facts:
+            entities.append({
+                "entity_type": str(group.get("entity_type") or ""),
+                "canonical_name": str(group.get("canonical_name") or ""),
+                "facts": facts,
+            })
+    timeline: list[dict] = []
+    for entity in entities:
+        if entity["entity_type"] == "event":
+            timeline.append(entity)
+    return {
+        "chapter_no": chapter_no,
+        "worldline_id": worldline_id,
+        "story_id": story_id,
+        "entities": sorted(entities, key=lambda e: (e["entity_type"], e["canonical_name"])),
+        "timeline_events": sorted(timeline, key=lambda e: e["canonical_name"]),
+    }
+
+
+def sync_aliases_to_groups(project_name: str, items: list[dict]) -> int:
+    """refactor 1 遗留 #1 收口：把条目携带的 aliases 同步进 `entity_alias_groups`。
+
+    提取（`build_pending_knowledge_from_reference_extraction` 等）已把别名解析进条目的
+    `aliases` 键；本条在条目确认入库后调用，把 aliases 合并进别名组，使别名解析
+    （`resolve_entity_ids_by_names`）能覆盖提取别名。返回本次新增别名组数。
+    """
+    from storage.repositories.entity_identity import entity_type_for_category
+
+    candidates: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        aliases = item.get("aliases")
+        if not isinstance(aliases, list) or not aliases:
+            continue
+        clean_aliases = [str(a).strip() for a in aliases if str(a).strip()]
+        if not clean_aliases:
+            continue
+        name = str(item.get("name") or "").strip()
+        category = str(item.get("category") or "").strip()
+        if not name or not category:
+            continue
+        entity_type = entity_type_for_category(category)
+        if not entity_type:
+            continue
+        candidates.append({
+            "canonical_name": name,
+            "aliases": clean_aliases,
+            "entity_type": entity_type,
+            "story_id": str(item.get("story_id") or ""),
+            "worldline_id": str(item.get("worldline_id") or ""),
+        })
+    if not candidates:
+        return 0
+    existing = load_entity_aliases(project_name)
+    if not isinstance(existing, list):
+        existing = []
+    index: dict[tuple[str, str, str, str], dict] = {}
+    for group in existing:
+        if not isinstance(group, dict):
+            continue
+        key = (
+            str(group.get("canonical_name") or ""),
+            str(group.get("entity_type") or ""),
+            str(group.get("story_id") or ""),
+            str(group.get("worldline_id") or ""),
+        )
+        index.setdefault(key, group)
+    added = 0
+    changed_groups: list[dict] = []
+    for candidate in candidates:
+        key = (
+            candidate["canonical_name"],
+            candidate["entity_type"],
+            candidate["story_id"],
+            candidate["worldline_id"],
+        )
+        group = index.get(key)
+        if group is None:
+            index[key] = {
+                "canonical_name": candidate["canonical_name"],
+                "aliases": list(candidate["aliases"]),
+                "entity_type": candidate["entity_type"],
+                "story_id": candidate["story_id"] or None,
+                "worldline_id": candidate["worldline_id"] or None,
+            }
+            changed_groups.append(index[key])
+            added += 1
+            continue
+        merged_aliases = list(group.get("aliases") or [])
+        seen = set(str(a) for a in merged_aliases)
+        new_aliases = [a for a in candidate["aliases"] if a not in seen and not seen.add(a)]
+        if new_aliases:
+            group["aliases"] = merged_aliases + new_aliases
+            changed_groups.append(group)
+    if not changed_groups:
+        return 0
+    merged_existing = list(existing)
+    for group in changed_groups:
+        replaced = False
+        for i, existing_group in enumerate(merged_existing):
+            if not isinstance(existing_group, dict):
+                continue
+            if (
+                str(existing_group.get("canonical_name") or "") == str(group.get("canonical_name") or "")
+                and str(existing_group.get("entity_type") or "") == str(group.get("entity_type") or "")
+                and str(existing_group.get("story_id") or "") == str(group.get("story_id") or "")
+                and str(existing_group.get("worldline_id") or "") == str(group.get("worldline_id") or "")
+            ):
+                merged_existing[i] = group
+                replaced = True
+                break
+        if not replaced:
+            merged_existing.append(group)
+    try:
+        save_entity_aliases(project_name, merged_existing)
+    except Exception as exc:
+        _memory_api.logging.getLogger("novelforge").warning(
+            "sync aliases to groups failed for %s: %s", project_name, exc
+        )
+        return 0
+    return added
 
 
 def load_knowledge_revisions(project_name: str, knowledge_id: str) -> list[dict]:
@@ -363,6 +634,12 @@ def queue_pending_knowledge_items(
         normalized["source_title"] = source_title or normalized.get("source_title", "")
         normalized["source_origin"] = source_origin
         normalized["version_scope"] = normalized.get("version_scope") or ("canon" if scope == "canon" else "project_main")
+        if not str(normalized.get("worldline_id") or "").strip():
+            # 遗留 #2 收口：缺世界线时兜底 main 并显式告警（避免无感知落入错误世界线）。
+            _memory_api.logging.getLogger("novelforge").warning(
+                "Pending knowledge item 缺 worldline_id（category=%s name=%s），已兜底为 main。",
+                category, name,
+            )
         normalized["worldline_id"] = normalized.get("worldline_id") or "main"
         normalized["worldline_label"] = normalized.get("worldline_label") or "本项目主线"
         normalized["status"] = "pending"

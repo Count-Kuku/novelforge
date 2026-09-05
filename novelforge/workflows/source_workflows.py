@@ -1574,6 +1574,17 @@ def auto_confirm_pending_items_without_risk(
                 project_name,
                 exc,
             )
+        # 遗留 #1 收口：已确认条目携带的 aliases 同步进别名组（供别名解析命中）。
+        try:
+            confirmed_id_set = set(confirmed_ids)
+            from novelforge.services.memory.knowledge import sync_aliases_to_groups
+
+            sync_aliases_to_groups(
+                project_name,
+                [item for item in candidate_items if str(item.get("pending_id") or "") in confirmed_id_set],
+            )
+        except Exception as exc:
+            LOGGER.warning("Sync aliases to groups failed for %s: %s", project_name, exc)
     return {
         "confirmed_ids": confirmed_ids,
         "blocked_ids": blocked_ids,

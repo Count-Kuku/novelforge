@@ -74,6 +74,7 @@ def run_long_reference_quick_process(
     import_to_index: bool,
     consolidate_after_extract: bool,
     auto_confirm_safe_items: bool,
+    recall_enabled: bool = False,
     custom_instructions: str = "",
     progress_callback=None,
     stream_callback=None,
@@ -229,6 +230,7 @@ def run_long_reference_quick_process(
                 task_id=task_id,
                 worker_id=worker_id,
                 story_id=story_id,
+                recall_enabled=recall_enabled,
             )
             processed += newly_processed
             queued_total += newly_queued

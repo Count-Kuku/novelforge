@@ -482,6 +482,8 @@ def write_chapter(
         manual_knowledge_ids=normalized_guidance.get("manual_knowledge_ids"),
         allowed_scopes=["project", "canon", "reference"],
         retrieval_profile="drafting",
+        # 正文写作默认开启实体聚焦（refactor 2 P1 接线，遗留 #5 收口）：识别失败/冷启动自动降级。
+        enable_entity_planning=True,
     )
     _skills_api.ensure_context_budget(context_assembly)
     _skills_api._LAST_RETRIEVAL_TRACES[trace_key] = list(context_assembly.retrieval_hits)
@@ -832,6 +834,29 @@ def extract_setting_candidates_from_chapter(
         source_title=f"第 {chapter_no} 章正文",
         source_origin="chapter_update",
     )
+    # refactor 2 P4（D10）：生成时提取的候选自动确认，不再堆积待人工审核。
+    # 入队函数返回 int 不返回 ids —— pending_ids 须从产物（pending_items）的 pending_id 键提取。
+    auto_confirm: dict = {}
+    pending_ids_for_confirm = [
+        str(item.get("pending_id") or "") for item in pending_items if str(item.get("pending_id") or "")
+    ]
+    if pending_ids_for_confirm:
+        try:
+            # 函数内局部导入，避免 skills 切片 ↔ source_workflows 循环依赖。
+            from novelforge.workflows.source_workflows import auto_confirm_pending_items_without_risk
+
+            auto_confirm = auto_confirm_pending_items_without_risk(
+                project_name,
+                pending_ids_for_confirm,
+                source_type="chapter_update",
+                source_title=f"第 {chapter_no} 章正文",
+                note="章节设定提炼自动确认",
+            )
+        except Exception as exc:
+            _skills_api.logging.getLogger("novelforge").warning(
+                "自动确认章节设定提炼候选失败：project=%s chapter=%s error=%s",
+                project_name, chapter_no, exc,
+            )
     chapter_summary_saved = False
     chapter_summary_error = ""
     try:
@@ -860,19 +885,20 @@ def extract_setting_candidates_from_chapter(
             "pending_knowledge_items": pending_items,
             "queued_knowledge_count": queued_count,
             "chapter_summary_saved": chapter_summary_saved,
+            "auto_confirm": auto_confirm,
         },
         error=chapter_summary_error,
         warnings=(
             []
             if chapter_summary_saved
-            else ["候选设定已加入待确认知识队列，但章节摘要未保存；可重试设定提炼步骤。"]
+            else ["候选设定已自动确认入库，但章节摘要保存失败；可重试设定提炼步骤。"]
         ),
         retrieval_hits=retrieval_hits,
         validation=_skills_api._make_validation_status(
             status="passed",
             schema_name="MemoryUpdateResult",
             message=(
-                "章节设定提炼已通过结构校验，候选设定已加入待确认知识队列。"
+                "章节设定提炼已通过结构校验，候选设定已自动确认入库。"
                 if chapter_summary_saved
                 else "章节设定提炼已通过结构校验，但章节摘要保存失败。"
             ),
@@ -881,6 +907,8 @@ def extract_setting_candidates_from_chapter(
             "memory_saved": False,
             "pending_knowledge_count": len(pending_items),
             "queued_knowledge_count": queued_count,
+            "auto_confirmed_count": int((auto_confirm or {}).get("confirmed_count") or len((auto_confirm or {}).get("confirmed_ids") or [])),
+            "auto_review_run_id": (auto_confirm or {}).get("run_id") or "",
             "chapter_summary_saved": chapter_summary_saved,
         },
     ).model_dump()

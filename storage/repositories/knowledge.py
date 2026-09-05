@@ -500,7 +500,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
         )
         # Graph projection is now entity-centric (entities table is the node set;
         # graph_edges endpoints are entity_id). The legacy graph_nodes write is
-        # removed — see storage-refactor-plan 2.3.
+        # removed — graph_nodes 已废弃，节点统一由 entities 承载。
         # A knowledge item owns its projected edges (relationship + references).
         # Clear previous projections first so edits/category moves cannot leave stale edges.
         _soft_delete_graph_edge_ids(conn, graph_edges_by_owner.pop(knowledge_id, []))
@@ -575,6 +575,39 @@ def _row_value(row: Any, index: int, key: str) -> Any:
     if isinstance(row, sqlite3.Row):
         return row[key]
     return row[index]
+
+
+def fetch_knowledge_entity_rows(conn: sqlite3.Connection, knowledge_ids: list[str]) -> list[dict]:
+    """按 knowledge_id 反查其归属实体的规范名/类型（refactor 2 两段式反查用）。
+
+    只返回 entities 主档仍存在（未 soft delete）且 knowledge 行活跃的结果。
+    """
+    clean_ids = [str(item) for item in knowledge_ids if str(item)]
+    if not clean_ids:
+        return []
+    rows = conn.execute(
+        f"""
+        SELECT ki.knowledge_id, e.entity_id, e.canonical_name, e.entity_type,
+               e.story_id, e.worldline_id, e.version_scope
+        FROM knowledge_items AS ki
+        JOIN entities AS e ON e.entity_id = ki.entity_id
+        WHERE ki.knowledge_id IN ({", ".join("?" * len(clean_ids))})
+          AND ki.deleted_at IS NULL AND e.deleted_at IS NULL
+        """,
+        tuple(clean_ids),
+    ).fetchall()
+    items: list[dict] = []
+    for row in rows:
+        items.append({
+            "knowledge_id": _row_value(row, 0, "knowledge_id"),
+            "entity_id": _row_value(row, 1, "entity_id"),
+            "canonical_name": _row_value(row, 2, "canonical_name"),
+            "entity_type": _row_value(row, 3, "entity_type"),
+            "story_id": _row_value(row, 4, "story_id"),
+            "worldline_id": _row_value(row, 5, "worldline_id"),
+            "version_scope": _row_value(row, 6, "version_scope"),
+        })
+    return items
 
 
 def load_knowledge_category_rows(conn: sqlite3.Connection, category: str) -> list[dict]:

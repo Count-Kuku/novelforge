@@ -63,6 +63,7 @@ class KnowledgeIndexDispatcher:
         from novelforge.services.retrieval import rebuild_retrieval_assets
 
         self.active_project = project_name
+        idle_rounds = 0
         try:
             while True:
                 batch = process_knowledge_center_index(project_name, limit=1000)
@@ -70,6 +71,21 @@ class KnowledgeIndexDispatcher:
                     raise RuntimeError(f"有 {batch.get('failed_total')} 条知识索引更新失败。")
                 if not batch.get("remaining"):
                     break
+                # 进度保护：`remaining` 统计的是 queued+running，但本轮只能消费 queued。
+                # 若存在「updated_at 在 5 分钟重置窗口内」的 running 作业（另一实例正在处理、
+                # 或上次进程在处理途中被中断），它既不会被重置也不会被消费，remaining 恒 > 0，
+                # 循环会以两次 COUNT 查询满速空转占死 CPU。此处检测「本轮零进展」并退出；
+                # 残留作业会在超过重置窗口后由下一轮 process 重新排队，不会永久丢失。
+                if not batch.get("processed") and not batch.get("failed"):
+                    idle_rounds += 1
+                    if idle_rounds >= 3:
+                        LOGGER.warning(
+                            "知识索引刷新无进展，疑似有作业卡在 running 状态，退出本轮等待重试：%s",
+                            project_name,
+                        )
+                        break
+                else:
+                    idle_rounds = 0
             state = load_knowledge_center_index_state(project_name)
             requested_revision = int(state.get("requested_revision") or 0)
             set_knowledge_retrieval_index_state(project_name, "running")

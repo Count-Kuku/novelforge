@@ -25,6 +25,30 @@ SETTING_ENTITY_CATEGORY_GROUPS = {
 GLOBAL_WORLDLINE_IDS = {"", "all", "global", "shared", "common", "canon", "unknown"}
 
 
+def worldline_allowed(
+    item_worldline: str | None,
+    target_worldline: str | None,
+    worldline_mode: str = "prefer",
+) -> bool:
+    """世界线隔离判定的**唯一权威实现**（供 domain/services/workflows 共用）。
+
+    此前该判定在 `setting_knowledge`、`retrieval/search`、`context_assembly` 各实现一遍，
+    常量 `GLOBAL_WORLDLINE_IDS` 也在三处重复定义——改一处会漏两处，属隐性不一致风险。
+
+    - `prefer`（默认）：不做隔离，任何条目都允许。
+    - `strict`：仅放行「属于目标世界线」与「全局世界线」的条目。
+      目标世界线为空（上游未解析出）时**放行全部**而非拒绝——此时拒绝会让项目
+      完全拿不到设定，比放行更糟；调用方应保证 strict 时传入明确的 worldline_id。
+    """
+    if str(worldline_mode or "prefer").strip().lower() != "strict":
+        return True
+    target = str(target_worldline or "").strip().lower()
+    if not target:
+        return True
+    item = str(item_worldline or "").strip().lower()
+    return not item or item in GLOBAL_WORLDLINE_IDS or item == target
+
+
 def _isolation_group_key(item: dict) -> tuple[str, str, str, str]:
     """Return the domain in which same-named facts may be merged."""
 

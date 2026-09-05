@@ -24,12 +24,11 @@ from novelforge.core.prompts import format_rules_for_prompt
 from novelforge.core.token_estimation import estimate_text_tokens
 from novelforge.services.retrieval import retrieve_context
 from novelforge.core.schemas import ChapterWritingGuidance, ContextAssembly, ContextBlock, RetrievalHit
+from novelforge.domain.knowledge_entities import worldline_allowed
 from novelforge.domain.setting_knowledge import (
-    ALWAYS_INJECTION_LIMIT,
-    GLOBAL_WORLDLINE_IDS,
     SETTING_FIELD_SPECS,
+    build_entity_scoped_setting_context,
     build_generation_setting_context,
-    list_setting_items,
 )
 from novelforge.domain.creation_modes import should_include_planning_context
 
@@ -44,6 +43,35 @@ PLANNING_SOURCE_TYPES = {
     "chapter_outline",
     "chapter_planning",
 }
+
+
+def _resolve_worldline_id(
+    project_name: str,
+    story_id: str,
+    chapter_no: int | None,
+    profile_worldline_id: str,
+) -> str:
+    """P2（D6）：生效 worldline 解析——profile 显式 > 章节所属 arc 元数据 > 空（回退 main）。
+
+    章节细纲元数据带 arc_no；arc 元数据可带 worldline_id（refactor 2 P2 扩展）。
+    解析失败或链路缺失时返回原 profile 值（甚至为空，由下游按 prefer 回退 main）。
+    """
+    if str(profile_worldline_id or "").strip():
+        return str(profile_worldline_id).strip()
+    if chapter_no is None:
+        return ""
+    try:
+        from novelforge.services.memory import load_arc_metadata, load_chapter_outline_metadata
+
+        chapter_meta = load_chapter_outline_metadata(project_name, int(chapter_no), story_id)
+        arc_no = chapter_meta.get("arc_no") if isinstance(chapter_meta, dict) else None
+        if arc_no is not None:
+            arc_meta = load_arc_metadata(project_name, int(arc_no), story_id)
+            arc_worldline = str(arc_meta.get("worldline_id") or "") if isinstance(arc_meta, dict) else ""
+            return arc_worldline
+    except Exception:
+        return ""
+    return ""
 
 
 DEFAULT_CONTEXT_BUDGET = 12_000
@@ -178,11 +206,8 @@ def _format_generation_guidance(guidance: dict) -> str:
 
 
 def _worldline_allowed(item: dict, worldline_id: str, worldline_mode: str) -> bool:
-    if str(worldline_mode or "prefer").strip().lower() != "strict":
-        return True
-    target = str(worldline_id or "").strip().lower()
-    item_worldline = str(item.get("worldline_id") or "").strip().lower()
-    return not target or not item_worldline or item_worldline in GLOBAL_WORLDLINE_IDS or item_worldline == target
+    # 世界线隔离判定统一委托 domain 权威实现（曾在此处重复实现一份）。
+    return worldline_allowed(item.get("worldline_id"), worldline_id, worldline_mode)
 
 
 def _manual_knowledge_blocks(
@@ -265,9 +290,38 @@ def _format_retrieval_hit(hit: RetrievalHit) -> str:
     return "\n".join(lines)
 
 
+# refactor 2 P2（D7）：检索保底 floor 比例按 capability 画像配置。
+# 写作/细纲类需要更多参考资料召回；高层规划类以骨架为主，检索比例调低。
+RETRIEVAL_FLOOR_RATIO_BY_CAPABILITY = {
+    "write": 0.30,
+    "rewrite": 0.30,
+    "drafting": 0.30,
+    "chapter_outline": 0.28,
+    "creative_structure": 0.28,
+    "outline": 0.20,
+    "volume_outline": 0.20,
+    "arc_outline": 0.20,
+}
+
+
+def _retrieval_reserve_ratio_for(
+    capability: str,
+    *,
+    entity_plan_active: bool = False,
+    entity_count: int = 0,
+) -> float:
+    """按 capability 取检索 floor 比例；实体识别聚焦生效时适当上调（本章实体越少、召回越关键）。"""
+    ratio = RETRIEVAL_FLOOR_RATIO_BY_CAPABILITY.get(str(capability or "").strip(), 0.25)
+    if entity_plan_active and int(entity_count or 0) > 0:
+        ratio = max(ratio, 0.28)
+    return ratio
+
+
 def _apply_context_budget(
     blocks: list[ContextBlock],
     context_budget: int,
+    *,
+    retrieval_reserve_ratio: float | None = None,
 ) -> tuple[list[ContextBlock], list[ContextBlock], list[str], bool]:
     budget = max(int(context_budget), 1)
     warnings: list[str] = []
@@ -284,6 +338,7 @@ def _apply_context_budget(
 
     # Reserve a floor for retrieval so hard constraints can never starve it
     # out entirely — narrative detail continuity depends on some recall.
+    # refactor 2 P2（D7）：floor 比例按 capability 画像配置（默认保持 0.25）。
     retrieval_blocks = [
         (index, block)
         for index, block in optional_blocks
@@ -296,7 +351,9 @@ def _apply_context_budget(
     ]
     # Only reserve a floor when retrieval blocks actually exist; otherwise the
     # full remaining budget is available to other optional blocks.
-    retrieval_reserve = int(budget * 0.25) if retrieval_blocks else 0
+    floor_ratio = float(retrieval_reserve_ratio) if retrieval_reserve_ratio is not None else 0.25
+    floor_ratio = max(0.0, min(1.0, floor_ratio))
+    retrieval_reserve = int(budget * floor_ratio) if retrieval_blocks else 0
     retrieval_remaining = min(remaining, retrieval_reserve)
 
     selected_optional_indexes: set[int] = set()
@@ -383,6 +440,81 @@ def _assembly_fingerprint(
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+_ROUTE_QUERY_GUIDE = {
+    "character": "角色的设定、关系、当前状态",
+    "world": "世界规则、地点、组织、物品、能力设定",
+    "timeline": "相关事件、故事时间线、当前进度",
+}
+
+
+def _routed_retrieval_hits(
+    project_name: str,
+    story_id: str,
+    query: str,
+    entity_plan,
+    *,
+    top_k: int | None = None,
+    allowed_scopes: list[str] | None = None,
+    retrieval_profile: str | None = None,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+    retrieval_mode: str = "hybrid",
+    retrieval_session_id: str = "",
+    retrieval_turn_id: str = "",
+) -> list:
+    """P1/P1.5：按实体路由分检召回（D4），用 RRF 融合多路由命中（遗留 #6 收口）。
+
+    对 plan.route_names 的每条路由（角色/世界观/时间线）用针对性 query + source_types
+    白名单各检索一次；同一 chunk 被多条路由命中时按 RRF（Reciprocal Rank Fusion，
+    k=60）叠加分数，再与内部 score 混合排序。多路由共同命中 = 与本章更相关 → 排前。
+    """
+    from novelforge.domain.entity_planning import ROUTE_SOURCE_TYPES
+
+    route_top = max(2, (int(top_k) if isinstance(top_k, int) and top_k > 0 else 8) // 2 + 1)
+    rrf_k = 60.0
+    contributions: dict[str, list[int]] = {}  # chunk_id -> [各路由内的排名]
+    best_hit: dict[str, object] = {}
+    for route, names in (entity_plan.route_names or {}).items():
+        source_types = ROUTE_SOURCE_TYPES.get(route)
+        if not source_types or not names:
+            continue
+        guide = _ROUTE_QUERY_GUIDE.get(route, "")
+        query_fragment = str(query)[:240]
+        route_query = " ".join(part for part in (guide, *names, query_fragment) if str(part).strip())
+        try:
+            hits = retrieve_context(
+                project_name,
+                route_query,
+                top_k=route_top,
+                allowed_scopes=allowed_scopes,
+                allowed_source_types=source_types,
+                retrieval_mode=retrieval_mode,
+                retrieval_profile=retrieval_profile,
+                worldline_id=worldline_id,
+                worldline_mode=worldline_mode,
+                story_id=story_id,
+                source_type_strategy="union",
+                session_id=retrieval_session_id,
+                turn_id=retrieval_turn_id,
+            )
+        except Exception:
+            hits = []
+        for rank, hit in enumerate(hits):
+            chunk_id = hit.chunk.chunk_id
+            contributions.setdefault(chunk_id, []).append(rank)
+            current = best_hit.get(chunk_id)
+            if current is None or hit.score > current.score:
+                best_hit[chunk_id] = hit
+    ranked = []
+    for chunk_id, ranks in contributions.items():
+        rrf_score = sum(1.0 / (rrf_k + rank + 1.0) for rank in ranks)
+        best = best_hit[chunk_id]
+        # RRF 优先；同分用内部 score 兜底，保持确定性。
+        ranked.append((rrf_score, best.score, chunk_id, best))
+    ranked.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    return [item[3] for item in ranked]
+
+
 def assemble_generation_context(
     project_name: str,
     *,
@@ -403,6 +535,8 @@ def assemble_generation_context(
     context_budget: int = DEFAULT_CONTEXT_BUDGET,
     retrieval_session_id: str = "",
     retrieval_turn_id: str = "",
+    enable_entity_planning: bool | None = None,
+    _entity_plan_responder=None,
 ) -> ContextAssembly:
     if top_k is None:
         try:
@@ -426,26 +560,66 @@ def assemble_generation_context(
         creation_mode = "planned"
     include_planning_context = should_include_planning_context(creation_mode)
     profile = load_creative_profile(project_name, story_id) or {}
-    worldline_id = str(profile.get("worldline_id") or "")
+    profile_worldline = str(profile.get("worldline_id") or "")
+    worldline_id = _resolve_worldline_id(project_name, story_id, chapter_no, profile_worldline)
     worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer")
-    memory = build_generation_setting_context(project_name, story_id, chapter_no=chapter_no)
-    all_setting_items = list_setting_items(project_name, story_id, core_only=True)
-    structured_setting_fields = {
-        str(item.get("setting_field") or "")
-        for item in all_setting_items
-        if str(item.get("setting_role") or "") == "core"
-        and str(item.get("setting_field") or "") in SETTING_FIELD_SPECS
-    }
-    always_setting_items = list_setting_items(
-        project_name,
-        story_id,
-        core_only=True,
-        injection_policies={"always"},
-        worldline_id=worldline_id,
-        worldline_mode=worldline_mode,
-        limit=ALWAYS_INJECTION_LIMIT,
-        chapter_no=chapter_no,
+    memory = build_generation_setting_context(
+        project_name, story_id, chapter_no=chapter_no, worldline_override=worldline_id or None
     )
+    # refactor 2 P0：结构化 field 集合与 always 注入的知识 id 由 build_generation_setting_context
+    # 附带返回，避免这里再做第二次全量 list_setting_items（load_knowledge_base 全表读）。
+    structured_setting_fields = set(
+        str(value) for value in (memory.get("_setting_structured_fields") or []) if str(value)
+    )
+    always_setting_ids = set(
+        str(value) for value in (memory.get("_setting_knowledge_ids") or []) if str(value)
+    )
+    # refactor 2 P1：实体识别（D1）。默认关闭——打开后把 always 注入与检索聚焦到
+    # 「本次写作需要的实体」，消除无关设定；关闭/冷启动/识别失败时走原单查询路径。
+    entity_plan = None
+    if enable_entity_planning is None:
+        enable_entity_planning = bool(profile.get("entity_planning_enabled") or False)
+    if enable_entity_planning:
+        from novelforge.domain.entity_planning import plan_entity_context
+
+        entity_plan = plan_entity_context(
+            project_name,
+            story_id,
+            capability=capability,
+            query_text=query,
+            chapter_no=chapter_no,
+            worldline_id=worldline_id,
+            worldline_mode=worldline_mode,
+            responder=_entity_plan_responder,
+        )
+        # P1 两段式：检索反查补集（遗留 #7 收口）。识别失败名经词法检索反查 entity_id，
+        # 把库中真实存在的相关实体补入；检索不可用/冷启动时 no-op。
+        if entity_plan and entity_plan.unresolved_names and not entity_plan.skipped:
+            from novelforge.domain.entity_planning import enrich_plan_via_retrieval
+
+            entity_plan = enrich_plan_via_retrieval(
+                project_name,
+                story_id,
+                entity_plan,
+                worldline_id=worldline_id,
+                worldline_mode=worldline_mode,
+            )
+        if entity_plan and entity_plan.entity_ids:
+            # #8 收口（G15）：细纲等「中观结构」层注入每实体的清单+概要（concise），
+            # 正文层注入完整当前事实。
+            concise_capabilities = {"chapter_outline", "creative_structure"}
+            scoped = build_entity_scoped_setting_context(
+                project_name,
+                story_id,
+                canonical_names=[e.get("canonical_name") or e.get("name") for e in entity_plan.entities],
+                worldline_id=worldline_id,
+                worldline_mode=worldline_mode,
+                chapter_no=chapter_no,
+                concise=capability in concise_capabilities,
+            )
+            if scoped.get("text"):
+                memory["_setting_context"] = scoped["text"]
+                always_setting_ids = set(scoped["ids"])
     blocks: list[ContextBlock] = []
 
     rules_text = format_rules_for_prompt(
@@ -566,30 +740,43 @@ def assemble_generation_context(
         for block in manual_blocks
         if str(block.metadata.get("knowledge_id") or "")
     }
-    direct_knowledge_ids.update(
-        str(item.get("id") or "")
-        for item in always_setting_items
-        if str(item.get("id") or "")
-    )
+    direct_knowledge_ids.update(always_setting_ids)
 
-    hits = retrieve_context(
-        project_name,
-        query,
-        top_k=top_k,
-        allowed_scopes=allowed_scopes,
-        allowed_source_types=allowed_source_types,
-        retrieval_mode=retrieval_mode,
-        retrieval_profile=retrieval_profile,
-        worldline_id=worldline_id,
-        worldline_mode=worldline_mode,
-        story_id=story_id,
-        source_type_strategy=source_type_strategy,
-        explicit_knowledge_ids=manual_knowledge_ids,
-        reference_focus=list(profile.get("reference_focus") or []),
-        reference_strength=str(profile.get("reference_strength") or "").strip() or None,
-        session_id=retrieval_session_id,
-        turn_id=retrieval_turn_id,
-    )
+    if entity_plan is not None and entity_plan.route_names:
+        # P1：实体路由分检
+        hits = _routed_retrieval_hits(
+            project_name,
+            story_id,
+            query,
+            entity_plan,
+            top_k=top_k,
+            allowed_scopes=allowed_scopes,
+            retrieval_profile=retrieval_profile,
+            worldline_id=worldline_id,
+            worldline_mode=worldline_mode,
+            retrieval_mode=retrieval_mode,
+            retrieval_session_id=retrieval_session_id,
+            retrieval_turn_id=retrieval_turn_id,
+        )
+    else:
+        hits = retrieve_context(
+            project_name,
+            query,
+            top_k=top_k,
+            allowed_scopes=allowed_scopes,
+            allowed_source_types=allowed_source_types,
+            retrieval_mode=retrieval_mode,
+            retrieval_profile=retrieval_profile,
+            worldline_id=worldline_id,
+            worldline_mode=worldline_mode,
+            story_id=story_id,
+            source_type_strategy=source_type_strategy,
+            explicit_knowledge_ids=manual_knowledge_ids,
+            reference_focus=list(profile.get("reference_focus") or []),
+            reference_strength=str(profile.get("reference_strength") or "").strip() or None,
+            session_id=retrieval_session_id,
+            turn_id=retrieval_turn_id,
+        )
     deduped_hits: list[RetrievalHit] = []
     for hit in hits:
         if not include_planning_context and str(hit.chunk.source_type or "") in PLANNING_SOURCE_TYPES:
@@ -678,7 +865,15 @@ def assemble_generation_context(
         if additional_block:
             blocks.append(additional_block)
 
-    included, omitted, budget_warnings, hard_budget_exceeded = _apply_context_budget(blocks, context_budget)
+    entity_plan_active = bool(entity_plan is not None and entity_plan.entity_ids)
+    budget_ratio = _retrieval_reserve_ratio_for(
+        capability,
+        entity_plan_active=entity_plan_active,
+        entity_count=len(entity_plan.entity_ids) if entity_plan_active else 0,
+    )
+    included, omitted, budget_warnings, hard_budget_exceeded = _apply_context_budget(
+        blocks, context_budget, retrieval_reserve_ratio=budget_ratio
+    )
     included_retrieval_refs = {
         str(block.source_ref or "")
         for block in included

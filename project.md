@@ -334,7 +334,7 @@ queued -> running -> completed
 - 任何影响检索的保存或删除操作都必须同步检索资产，或在代码中明确说明无需同步的原因。
 - 删除结构化记录优先使用 repository 的软删除/级联语义，不能只删除文件镜像。
 
-知识存储采用「实体-事实-关系」时序模型（schema 17，详见 [storage-refactor-plan.md](./docs/storage-refactor-plan.md)）：角色/势力/地点/道具/事件等实体有独立主档（`entities`）；每条知识事实归属实体并带 `fact_key` 槽位键与 `valid_from/to_chapter` 生效区间，同槽位新值使旧值失效（消除矛盾值并存）；实体间关系与引用统一收编 `graph_edges`；事件用 `world_t` 排序。`constraints` 分类已取消，规则归位到 `world_rules` 与 `rules` 表。
+知识存储采用「实体-事实-关系」时序模型（自 schema 17 引入，当前 schema 19；迁移历史与表结构见 [storage_architecture.md](./storage_architecture.md)）：角色/势力/地点/道具/事件等实体有独立主档（`entities`）；每条知识事实归属实体并带 `fact_key` 槽位键与 `valid_from/to_chapter` 生效区间，同槽位新值使旧值失效（消除矛盾值并存）；实体间关系与引用统一收编 `graph_edges`；事件用 `world_t` 排序。`constraints` 分类已取消，规则归位到 `world_rules` 与 `rules` 表。
 
 ## UI 信息架构
 
@@ -421,12 +421,32 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 
 运行验证产生的 `_verify_*` 或临时项目只能由对应脚本清理，不得对真实 `data/projects/` 使用通配删除。
 
+## 重构收口记录（2026-09-05，遗留项已全部了结）
+
+> 存储重构（refactor 1）、生成上下文装配重构（refactor 2）的方案文档已完成使命后删除（git 历史可回溯）。此前集中保留的 10 项遗留/差异已于 2026-09-05 **全部收口**，代码状态如下：
+
+**存储/提取侧（refactor 1）**
+- aliases → `entity_alias_groups` 同步接线 ✅：`services.memory.knowledge.sync_aliases_to_groups` 在自动确认后统一触发（别名→解析命中已验证）。
+- worldline 必设校验 ✅：入队缺 `worldline_id` 显式告警并兜底 `main`；strict 前置校验保留于构造期。
+- 长资料「多 pass 并行子抽取」→ **决策收口**：以 `recall_missed_knowledge` 单轮补抽取为当前形态（可经任务配置开启），跨轮基准调优待真实长文本数据出现后再评估，不提前实现。
+- recall 门控 ✅：`recall_enabled` 经 `task.configuration → run_long_reference_quick_process → extract_long_reference_segments_to_queue` 全链透传（默认关，开启前需验证 LLM 行为）。
+
+**生成消费侧（refactor 2）**
+- 实体识别默认开启接线 ✅：正文/自由创作写入口（`generation.py` write、`interactive_writing.py`）默认 `enable_entity_planning=True`；识别失败/冷启动自动降级单查询。
+- 跨路由 RRF 融合 ✅：`_routed_retrieval_hits` 按 RRF(k=60) 融合多路由命中（替代多路由命中优先排序）。
+- 两段式「检索反查补集」✅：`entity_planning.enrich_plan_via_retrieval`（knowledge_id→entity 反查，检索不可用静默 no-op）已接入装配。
+- 细纲/正文画像区分 ✅：`build_entity_scoped_setting_context(concise=True)` 让细纲注入「每实体清单+概要（≤2 条/截断 140 字）」，正文注入完整事实；细纲检索 top_k 8→6。
+- `worldline_mode` prefer/strict ✅：`merge_worldline_baseline` 实现 strict 语义（仅空/共享 + 目标世界线）。
+- 世界快照（P4）→ **接口收口**：新增只读 `load_chapter_world_snapshot`（按章聚合），物化缓存经评估当前规模不做，待实测瓶颈再物化。
+
+> 后续演进方向见「下一阶段优先级」（以用户使用层面为主）。
+
 ## 下一阶段优先级
 
 ### P0：RAG 与资料导入
 
 1. 在发布环境完成真实 Tesseract/provider OCR 评测；Vue 项目批量导入已复用显式本地 OCR，并提供不落库预览和页级置信度，不能覆盖原始文件。
-2. 在现有确定性别名扩展上增加受配额控制的多查询路由，把角色、关系、时间线、硬约束、章节进度和文风分开召回并继续使用 RRF。
+2. ~~在现有确定性别名扩展上增加受配额控制的多查询路由，把角色、关系、时间线、硬约束、章节进度和文风分开召回并继续使用 RRF。~~ **已完成（refactor 2，2026-09-05）**：实体识别 + 角色/世界/时间线三路由分检 + 实体聚焦 always 注入 + 实体别名解析落地（方案文档已归档删除，见上方"已完成重构的遗留工作"节）。
 3. 用真实长篇项目建立导入/检索基准集，持续评测章节边界准确率、证据锚点有效率、Recall@K、MRR 与上下文冗余率。
 4. 增加来源修订差异与恢复操作；知识修订恢复已经采用追加新修订的方式，来源恢复也必须遵守同一审计约束。
 
@@ -449,7 +469,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 |---|---|---|
 | 模块体量 | `memory/core.py`、部分 memory/UI/prompt/source 模块仍超过 1000 行 | 按资产、配置、故事、资料和展示职责继续拆分 |
 | UI 复用 | 多类讨论页仍有相似布局、表单解析和保存操作 | 抽取共享讨论 renderer 和动作 helper |
-| 多查询路由 | 当前已融合 FTS、词法和语义排名，但只有单次语义查询 | 增加确定性任务路由与受配额子查询，避免无限增加 Embedding 调用 |
+| 多查询路由 | ~~只有单次语义查询~~ → 已实现实体路由分检（角色/世界/时间线）与实体聚焦注入（refactor 2） | 增强方向收敛为：跨路由 RRF 融合、检索反查实体并集、受配额子查询防 Embedding 调用膨胀 |
 | OCR | 自由创作附件与 Vue 项目批量导入支持本地 OCR；真实引擎/provider 评测仍待发布环境 | 继续执行真实评测，不对数字 PDF 重复 OCR |
 | 修订操作 | 知识可恢复为新修订，来源修订仍只有历史列表 | 为来源补充差异与“旧快照复制为新修订”的可审计恢复 |
 | 兼容层 | DB-first 已完成，但仍保留旧 JSON 导入和可选镜像代码 | 等兼容窗口结束后分阶段收缩 |

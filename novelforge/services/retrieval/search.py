@@ -134,6 +134,7 @@ def _worldline_allowed(chunk: _retrieval_api.RetrievalChunk, worldline_id: str |
     mode = str(worldline_mode or "prefer").strip().lower()
     if mode != "strict":
         return True
+    # 判定规则统一走 domain 权威实现；`_worldline_match_state` 保留供打分加权使用。
     return _worldline_match_state(chunk, worldline_id) in {"off", "global", "match"}
 
 
@@ -828,7 +829,7 @@ def build_retrieval_briefing(hits: list[_retrieval_api.RetrievalHit]) -> dict:
         chunk = hit.chunk
         meta = chunk.metadata if isinstance(chunk.metadata, dict) else {}
         source_label = f"{chunk.source_type} / {chunk.title or chunk.document_id}"
-        if chunk.source_type in {"knowledge_constraints", "memory_active_constraint", "entity_setting_card"}:
+        if chunk.source_type in {"memory_active_constraint", "entity_setting_card", "knowledge_world_rules"}:
             constraints.append({
                 "source": source_label,
                 "content": chunk.content[:260],
