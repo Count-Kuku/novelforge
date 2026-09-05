@@ -91,8 +91,23 @@ _export_module(_creative_attachments)
 from . import creative_actions as _creative_actions
 _export_module(_creative_actions)
 
-from . import knowledge as _knowledge
-_export_module(_knowledge)
+from . import knowledge_paths as _knowledge_paths
+_export_module(_knowledge_paths)
+
+from . import knowledge_entities as _knowledge_entities
+_export_module(_knowledge_entities)
+
+from . import knowledge_revisions as _knowledge_revisions
+_export_module(_knowledge_revisions)
+
+from . import auto_review as _auto_review
+_export_module(_auto_review)
+
+from . import pending_knowledge as _pending_knowledge
+_export_module(_pending_knowledge)
+
+from . import knowledge_rules_options as _knowledge_rules_options
+_export_module(_knowledge_rules_options)
 
 from . import knowledge_center as _knowledge_center
 _export_module(_knowledge_center)
