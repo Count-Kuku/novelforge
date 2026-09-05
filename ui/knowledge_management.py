@@ -1919,8 +1919,6 @@ def render_ingestion_health_panel(project_name: str):
         with st.expander("查看资料卡与存储质量", expanded=False):
             render_stat_strip(
                 [
-                    ("角色卡", report["character_entity_count"], "张"),
-                    ("设定卡", report["setting_entity_count"], "张"),
                     ("别名组", report["alias_group_count"], "组"),
                     ("类型化", f"{float(storage_health.get('typed_coverage') or 0):.0%}", "覆盖率"),
                     ("证据锚点", f"{float(storage_health.get('anchored_evidence_coverage') or 0):.0%}", "覆盖率"),

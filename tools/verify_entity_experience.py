@@ -19,11 +19,9 @@ from novelforge.services.memory import (
     create_story,
     load_knowledge_graph,
     load_knowledge_revisions,
-    save_character_entities,
     update_confirmed_knowledge_item_record,
     upsert_knowledge_category_item_record,
 )
-from novelforge.services.retrieval.documents import gather_retrieval_documents
 from tools.verify_utils import isolated_workspace
 from ui.common import developer_mode_enabled
 
@@ -86,13 +84,6 @@ def verify_live_projections(project_name: str, story_id: str) -> None:
     check(any("星灯" in value for value in card.get("items", [])), "角色中心聚合道具")
     check(any("城门夜袭" in value for value in card.get("events", [])), "角色中心聚合参与事件")
     check(any(item.get("title") == "人物设定集" for item in card.get("sources", [])), "角色中心投影来源 chip")
-
-    legacy = [{"id": "legacy", "name": "漂移副本", "summary": "不应参与实时投影或检索"}]
-    save_character_entities(project_name, legacy)
-    cards_after_legacy = build_character_entity_cards(project_name)
-    check(not any(item.get("name") == "漂移副本" for item in cards_after_legacy), "旧实体资产不影响实时角色投影")
-    source_types = {document.source_type for document in gather_retrieval_documents(project_name)}
-    check("entity_character_card" not in source_types and "entity_setting_card" not in source_types, "检索不索引漂移实体副本")
 
     # Update the authoritative item and assert that the next projection changes
     # without a separate card save.

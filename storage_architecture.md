@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`19`
+当前代码期望的 SQLite schema version：`20`
 
 ## 权威存储边界
 
@@ -98,6 +98,7 @@ DB-only 失败语义。
 | `017_entity_fact_relation` | 实体-事实-关系时序存储：新增 `entities` 实体主档表；`knowledge_items` 增加 `entity_id`/`fact_key`/`chapter_no`/`valid_from_chapter`/`valid_to_chapter`/`superseded_by`/`merge_policy`；`graph_edges` 增加时序列并将端点改为指向 `entities`（废弃 `graph_nodes` 实体节点） |
 | `018_sequence_order` | `knowledge_items` 增加 `sequence_order`：资料事件落 `world_t` 的排序键，取值 `source_segment_index × 1000 + order_hint`（refactor 1 D 期新增） |
 | `019_graph_edges_endpoint_index` | 补建 `graph_edges` 端点索引 `idx_graph_edges_source`/`idx_graph_edges_target`：017 迁移以「建新表 → 搬运 → DROP → RENAME」重建 `graph_edges` 时，连带删除 001 建立的两个端点索引且重建后未补，导致端点+关系类型查询退化为全表扫描（refactor 2 审查修复） |
+| `020_drop_graph_nodes` | 删除废弃的 `graph_nodes` 表及其索引：节点自 schema 17 起统一由 `entities` 承载，`graph_edges` 端点已改指向 `entities.entity_id`，`graph_nodes` 无历史数据、无需兼容，正式删除 |
 
 ## 表分组
 
@@ -193,7 +194,6 @@ DB-only 失败语义。
 ### 关系图投影与 GraphRAG 边界
 
 - `graph_edges`：关系边与实体间引用边，端点（`source_node_id`/`target_node_id`）自 schema 17 起指向 `entities.entity_id`；承载正式关系（如师徒、敌对）与实体引用（持有 `owns`、隶属 `member_of`/`affiliated_with`、参与 `participated_in`、位于 `located_in` 等）。自 schema 17 起带时序列（`valid_from_chapter`/`valid_to_chapter`/`merge_policy`/`chapter_no`）。
-- `graph_nodes`：自 schema 17 起**废弃**（停写不停表），实体节点统一由 `entities` 承载，仅保留表结构用于兼容清理与健康检查。
 
 正式关系知识会幂等投影到 `graph_edges`，供角色关系图按故事和世界线浏览；关系编辑仍写回正式知识并追加修订。实体间引用（持有/隶属/参与/位于）同样收编进 `graph_edges`，使"某角色持有哪些物品""某势力有哪些成员""某角色参与过哪些事件"可结构化查询，不再依赖纯文本匹配。当前尚未建立图扩展检索或完整 GraphRAG 查询链路，关系图浏览不能被表述为 GraphRAG 检索能力。
 

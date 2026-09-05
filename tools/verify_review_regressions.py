@@ -551,9 +551,7 @@ def _verify_retrieval_guards(failures: list[str]) -> None:
     document_helpers = [
         "_documents_from_memory",
         "_documents_from_knowledge",
-        "_documents_from_character_entities",
         "_documents_from_entity_aliases",
-        "_documents_from_setting_entities",
         "_documents_from_external_sources",
     ]
     with ExitStack() as stack:

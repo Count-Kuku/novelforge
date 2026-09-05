@@ -498,11 +498,10 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             item=item,
             previous_snapshot=previous_snapshot,
         )
-        # Graph projection is now entity-centric (entities table is the node set;
-        # graph_edges endpoints are entity_id). The legacy graph_nodes write is
-        # removed — graph_nodes 已废弃，节点统一由 entities 承载。
-        # A knowledge item owns its projected edges (relationship + references).
-        # Clear previous projections first so edits/category moves cannot leave stale edges.
+        # Graph projection is entity-centric: entities is the node set and
+        # graph_edges endpoints are entity_id. A knowledge item owns its projected
+        # edges (relationship + references); clear previous projections first so
+        # edits/category moves cannot leave stale edges.
         _soft_delete_graph_edge_ids(conn, graph_edges_by_owner.pop(knowledge_id, []))
         if clean_category == "relationships":
             _upsert_graph_relationship_edges(

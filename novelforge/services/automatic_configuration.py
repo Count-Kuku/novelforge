@@ -111,7 +111,7 @@ def recommend_automatic_configuration(signals: dict) -> tuple[dict, list[str]]:
         }
         reasons.append("资料规模较小，采用聚焦检索以降低延迟和成本。")
 
-    categories = ["characters", "world_rules", "relationships", "timeline_events", "constraints"]
+    categories = ["characters", "world_rules", "relationships", "timeline_events"]
     category_signals = (
         ("对白", "dialogue_style"),
         ("风格", "writing_style"),

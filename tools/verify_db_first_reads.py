@@ -21,7 +21,6 @@ from novelforge.services.memory import (
     _story_rules_overrides_path,
     auto_review_policy_path,
     auto_review_runs_path,
-    character_entities_path,
     create_long_reference_batch,
     create_project,
     creative_profile_path,
@@ -37,7 +36,6 @@ from novelforge.services.memory import (
     load_arc_metadata,
     load_chapter_discussion_artifact,
     load_chapter_outline_metadata,
-    load_character_entities,
     load_creative_profile,
     load_creative_profile_discussion_artifact,
     load_entity_aliases,
@@ -57,7 +55,6 @@ from novelforge.services.memory import (
     load_retrieval_manifest,
     load_retrieval_vectors,
     load_review_json,
-    load_setting_entities,
     load_stories_index,
     load_story_chapter_summaries,
     load_story_prompt_options,
@@ -84,7 +81,6 @@ from novelforge.services.memory import (
     save_arc_metadata,
     save_chapter_discussion_artifact,
     save_chapter_outline_metadata,
-    save_character_entities,
     save_creative_profile,
     save_creative_profile_discussion_artifact,
     save_entity_aliases,
@@ -101,13 +97,11 @@ from novelforge.services.memory import (
     save_retrieval_manifest,
     save_retrieval_vectors,
     save_review_json,
-    save_setting_entities,
     save_story_chapter_summaries,
     save_story_prompt_options,
     save_story_rules,
     save_volume_discussion_artifact,
     save_volume_metadata,
-    setting_entities_path,
     stories_index_path,
     upsert_retrieval_eval_case,
 )
@@ -186,8 +180,6 @@ def _run_verification() -> int:
     save_arc_chapter_plan(project_name, 1, {"marker": "arc_plan", "chapters": [{"chapter_no": 2}]}, "arc plan report")
     save_chapter_outline_metadata(project_name, 2, {"volume_no": 1, "arc_no": 1})
     save_chapter_discussion_artifact(project_name, 2, {"approval_ready": True, "marker": "chapter_discussion"}, "chapter discussion report")
-    save_character_entities(project_name, [{"name": "Character Verify"}])
-    save_setting_entities(project_name, [{"name": "Setting Verify"}])
     save_extraction_plan_templates(project_name, [{"name": "Template Verify"}])
 
     save_knowledge_category(project_name, "characters", [{"id": "char_verify", "name": "Character Verify"}])
@@ -288,8 +280,6 @@ def _run_verification() -> int:
         root / "stories" / "default" / "arcs" / "arc_001.chapter_plan.json",
         root / "stories" / "default" / "chapter_outlines" / "chapter_002.meta.json",
         root / "stories" / "default" / "chapter_outlines" / "chapter_002.discussion.json",
-        character_entities_path(project_name),
-        setting_entities_path(project_name),
         extraction_plan_templates_path(project_name),
         knowledge_category_path(project_name, "characters"),
         pending_knowledge_path(project_name),
@@ -333,8 +323,6 @@ def _run_verification() -> int:
     _expect(any(arc.get("arc_no") == 1 for arc in list_arcs(project_name)), "arc_list", failures)
     _expect(load_chapter_outline_metadata(project_name, 2).get("volume_no") == 1, "chapter_outline_metadata", failures)
     _expect(load_chapter_discussion_artifact(project_name, 2).get("discussion", {}).get("marker") == "chapter_discussion", "chapter_discussion", failures)
-    _expect(load_character_entities(project_name)[0].get("name") == "Character Verify", "character_entities", failures)
-    _expect(load_setting_entities(project_name)[0].get("name") == "Setting Verify", "setting_entities", failures)
     _expect(load_extraction_plan_templates(project_name)[0].get("name") == "Template Verify", "extraction_templates", failures)
     _expect(load_knowledge_category(project_name, "characters")[0].get("name") == "Character Verify", "knowledge", failures)
     _expect(load_pending_knowledge_items(project_name)[0].get("pending_id") == "pending_verify", "pending_knowledge", failures)

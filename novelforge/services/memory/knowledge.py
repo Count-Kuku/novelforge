@@ -31,14 +31,6 @@ def knowledge_entities_dir_path(project_name: str) -> _memory_api.Path:
     return path
 
 
-def character_entities_path(project_name: str) -> _memory_api.Path:
-    return knowledge_entities_dir_path(project_name) / "characters.json"
-
-
-def setting_entities_path(project_name: str) -> _memory_api.Path:
-    return knowledge_entities_dir_path(project_name) / "settings.json"
-
-
 def entity_aliases_path(project_name: str) -> _memory_api.Path:
     return knowledge_entities_dir_path(project_name) / "aliases.json"
 
@@ -398,56 +390,6 @@ def load_knowledge_storage_health(project_name: str) -> dict:
         "knowledge storage health",
     )
     return result if isinstance(result, dict) else {}
-
-
-def load_character_entities(project_name: str) -> list[dict]:
-    db_items = _memory_api._load_asset_payload_from_db_best_effort(
-        project_name,
-        asset_type="character_entities",
-        logical_key="characters",
-    )
-    if isinstance(db_items, list):
-        return [item for item in db_items if isinstance(item, dict)]
-    return _load_json_list(character_entities_path(project_name))
-
-
-def save_character_entities(project_name: str, items: list[dict]):
-    path = character_entities_path(project_name)
-    normalized = [item for item in items if isinstance(item, dict)]
-    _memory_api._sync_asset_payload_to_db_best_effort(
-        project_name,
-        path,
-        asset_type="character_entities",
-        logical_key="characters",
-        title="Character Entities",
-        payload=normalized,
-    )
-    _memory_api.sync_project_retrieval_assets(project_name)
-
-
-def load_setting_entities(project_name: str) -> list[dict]:
-    db_items = _memory_api._load_asset_payload_from_db_best_effort(
-        project_name,
-        asset_type="setting_entities",
-        logical_key="settings",
-    )
-    if isinstance(db_items, list):
-        return [item for item in db_items if isinstance(item, dict)]
-    return _load_json_list(setting_entities_path(project_name))
-
-
-def save_setting_entities(project_name: str, items: list[dict]):
-    path = setting_entities_path(project_name)
-    normalized = [item for item in items if isinstance(item, dict)]
-    _memory_api._sync_asset_payload_to_db_best_effort(
-        project_name,
-        path,
-        asset_type="setting_entities",
-        logical_key="settings",
-        title="Setting Entities",
-        payload=normalized,
-    )
-    _memory_api.sync_project_retrieval_assets(project_name)
 
 
 def load_entity_aliases(project_name: str) -> list[dict]:

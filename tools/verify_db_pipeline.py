@@ -20,7 +20,6 @@ from novelforge.services.memory import (
     create_project,
     inspect_project_database,
     save_creative_profile,
-    save_character_entities,
     save_entity_aliases,
     save_evaluation_json,
     save_extraction_plan_templates,
@@ -32,7 +31,6 @@ from novelforge.services.memory import (
     save_review_json,
     save_retrieval_manifest,
     save_retrieval_vectors,
-    save_setting_entities,
     save_story_chapter_summaries,
     save_story_prompt_options,
     save_story_rules,
@@ -88,12 +86,6 @@ def _run_verification() -> int:
     ])
     save_story_chapter_summaries(project_name, "default", [
         {"chapter_no": 1, "summary": "验证章节摘要。"}
-    ])
-    save_character_entities(project_name, [
-        {"name": "验证角色A", "summary": "验证角色卡。"}
-    ])
-    save_setting_entities(project_name, [
-        {"name": "验证地点", "summary": "验证设定卡。"}
     ])
     save_extraction_plan_templates(project_name, [
         {"name": "验证抽取模板", "steps": ["extract", "review"]}

@@ -225,70 +225,6 @@ def _documents_from_knowledge(project_name: str) -> list[_retrieval_api.Retrieva
     return documents
 
 
-def _documents_from_character_entities(project_name: str) -> list[_retrieval_api.RetrievalDocument]:
-    documents: list[_retrieval_api.RetrievalDocument] = []
-    for index, card in enumerate(_retrieval_api.load_character_entities(project_name), start=1):
-        if not isinstance(card, dict):
-            continue
-        name = str(card.get("name", "")).strip() or f"角色实体卡 {index}"
-        profile = card.get("profile", {}) if isinstance(card.get("profile"), dict) else {}
-        profile_lines = [f"{key}: {value}" for key, value in profile.items() if str(value).strip()]
-        list_fields = [
-            ("relationships", "relationship"),
-            ("abilities_and_items", "ability_or_item"),
-            ("dialogue_style", "dialogue_style"),
-            ("constraints", "constraint"),
-            ("timeline", "timeline"),
-        ]
-        content_lines = [
-            f"name: {name}",
-            "aliases: " + " / ".join(str(value) for value in card.get("aliases", []) if str(value).strip()) if isinstance(card.get("aliases", []), list) else "",
-            f"summary: {str(card.get('summary', '')).strip()}",
-            *profile_lines,
-        ]
-        for field_name, label in list_fields:
-            values = card.get(field_name, [])
-            if not isinstance(values, list):
-                continue
-            for value in values:
-                text = str(value or "").strip()
-                if text:
-                    content_lines.append(f"{label}: {text}")
-        evidence = card.get("evidence", []) if isinstance(card.get("evidence"), list) else []
-        for evidence_item in evidence[:5]:
-            if not isinstance(evidence_item, dict):
-                continue
-            quote = str(evidence_item.get("quote", "") or evidence_item.get("note", "")).strip()
-            if quote:
-                content_lines.append(f"evidence: {quote}")
-        doc = _retrieval_api._make_document(
-            project_name,
-            "entity_character_card",
-            str(card.get("id") or index),
-            name,
-            "\n".join(content_lines),
-            scope=str(card.get("scope") or "project"),
-            path=str(_retrieval_api.project_path(project_name) / "knowledge" / "entities" / "characters.json"),
-            tags=[str(tag) for tag in card.get("tags", []) if str(tag).strip()] if isinstance(card.get("tags"), list) else ["character_entity"],
-            metadata={
-                "entity_type": "character",
-                "authority": str(card.get("authority") or "project"),
-                "confidence": card.get("confidence", 0.7),
-                "importance": card.get("importance", 0.5),
-                "canon_status": str(card.get("canon_status") or "unknown"),
-                "setting_scope": str(card.get("setting_scope") or ""),
-                "story_id": str(card.get("story_id") or ""),
-                "version_scope": str(card.get("version_scope") or ""),
-                "worldline_id": str(card.get("worldline_id") or ""),
-                "worldline_label": str(card.get("worldline_label") or ""),
-                "source_knowledge_ids": card.get("source_knowledge_ids", []),
-            },
-        )
-        if doc:
-            documents.append(doc)
-    return documents
-
-
 def _documents_from_entity_aliases(project_name: str) -> list[_retrieval_api.RetrievalDocument]:
     documents: list[_retrieval_api.RetrievalDocument] = []
     for index, group in enumerate(_retrieval_api.load_entity_aliases(project_name), start=1):
@@ -321,54 +257,6 @@ def _documents_from_entity_aliases(project_name: str) -> list[_retrieval_api.Ret
                 "aliases": aliases,
                 "source_pending_ids": group.get("source_pending_ids", []),
                 "authority": "project",
-            },
-        )
-        if doc:
-            documents.append(doc)
-    return documents
-
-
-def _documents_from_setting_entities(project_name: str) -> list[_retrieval_api.RetrievalDocument]:
-    documents: list[_retrieval_api.RetrievalDocument] = []
-    for index, card in enumerate(_retrieval_api.load_setting_entities(project_name), start=1):
-        if not isinstance(card, dict):
-            continue
-        name = str(card.get("name") or "").strip()
-        if not name:
-            continue
-        content_lines = [
-            f"name: {name}",
-            f"setting_type: {card.get('setting_type', '')}",
-            f"summary: {card.get('summary', '')}",
-        ]
-        for field in ["rules", "locations", "organizations", "abilities", "constraints", "timeline", "related_entities"]:
-            values = card.get(field, [])
-            if isinstance(values, list) and values:
-                content_lines.append(f"{field}: " + "；".join(str(item) for item in values[:12]))
-            elif isinstance(values, dict) and values:
-                content_lines.append(f"{field}: " + _retrieval_api.json.dumps(values, ensure_ascii=False))
-        doc = _retrieval_api._make_document(
-            project_name,
-            "entity_setting_card",
-            str(card.get("id") or index),
-            name,
-            "\n".join(content_lines),
-            scope=str(card.get("scope") or "project"),
-            path=str(_retrieval_api.project_path(project_name) / "knowledge" / "entities" / "settings.json"),
-            tags=[str(tag) for tag in card.get("tags", []) if str(tag).strip()] if isinstance(card.get("tags"), list) else ["setting_entity"],
-            metadata={
-                "entity_type": "setting",
-                "setting_type": str(card.get("setting_type") or ""),
-                "authority": str(card.get("authority") or "project"),
-                "confidence": card.get("confidence", 0.7),
-                "importance": card.get("importance", 0.5),
-                "canon_status": str(card.get("canon_status") or "unknown"),
-                "setting_scope": str(card.get("setting_scope") or ""),
-                "story_id": str(card.get("story_id") or ""),
-                "worldline_id": str(card.get("worldline_id") or ""),
-                "worldline_label": str(card.get("worldline_label") or ""),
-                "version_scope": str(card.get("version_scope") or ""),
-                "source_knowledge_ids": card.get("source_knowledge_ids", []),
             },
         )
         if doc:

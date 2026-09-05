@@ -276,8 +276,7 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 已经提交的知识，但必须展示失败状态并允许重试。普通编辑、移动、归档、合并和历史恢复均追加知识修订，
 其中恢复历史内容必须保存为新修订，不能覆盖修订链。
 
-角色中心、世界观中心、时间轴和关系图均是正式知识的实时投影。旧版
-`character_entities/setting_entities` 资产仅用于兼容读取，不再进入检索或作为编辑目标；实体视图
+角色中心、世界观中心、时间轴和关系图均是正式知识的实时投影。实体视图
 修改通过单条知识事务写回正式知识并追加修订。关系图节点按故事和世界线隔离，关系编辑由知识
 投影触发器替换活动边。普通界面不显示原始 JSON；显式设置 `NOVELFORGE_DEVELOPER_MODE=1`
 后才开放技术数据和原始差异视图。
@@ -334,7 +333,7 @@ queued -> running -> completed
 - 任何影响检索的保存或删除操作都必须同步检索资产，或在代码中明确说明无需同步的原因。
 - 删除结构化记录优先使用 repository 的软删除/级联语义，不能只删除文件镜像。
 
-知识存储采用「实体-事实-关系」时序模型（自 schema 17 引入，当前 schema 19；迁移历史与表结构见 [storage_architecture.md](./storage_architecture.md)）：角色/势力/地点/道具/事件等实体有独立主档（`entities`）；每条知识事实归属实体并带 `fact_key` 槽位键与 `valid_from/to_chapter` 生效区间，同槽位新值使旧值失效（消除矛盾值并存）；实体间关系与引用统一收编 `graph_edges`；事件用 `world_t` 排序。`constraints` 分类已取消，规则归位到 `world_rules` 与 `rules` 表。
+知识存储采用「实体-事实-关系」时序模型（自 schema 17 引入，当前 schema 20；迁移历史与表结构见 [storage_architecture.md](./storage_architecture.md)）：角色/势力/地点/道具/事件等实体有独立主档（`entities`）；每条知识事实归属实体并带 `fact_key` 槽位键与 `valid_from/to_chapter` 生效区间，同槽位新值使旧值失效（消除矛盾值并存）；实体间关系与引用统一收编 `graph_edges`；事件用 `world_t` 排序。`constraints` 分类已取消，规则归位到 `world_rules` 与 `rules` 表。
 
 ## UI 信息架构
 
@@ -452,7 +451,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 
 ### P1：可维护性与操作体验
 
-1. 拆分当前超过约 1000 行且职责混杂的 UI、prompt 和 source workflow 模块（memory/core.py 已于 2026-09-05 拆分为 paths/rules/project_registry/db_availability/llm_profiles/asset_records/context_directives/domain_sync/project_memory/storage_access 等单一职责模块，门面导出保持不变；JSON 镜像兼容层已同日删除）。
+1. 拆分当前超过约 1000 行且职责混杂的 UI、prompt 和 source workflow 模块（`memory/core.py` 已于 2026-09-05 拆分为 paths/rules/project_registry/db_availability/llm_profiles/asset_records/context_directives/domain_sync/project_memory/storage_access 等单一职责模块，`core/prompts.py` 已拆分为 _formatting/planning/discussion_turns/writing/analysis/extraction/evaluation 七个模块，门面导出均保持不变；JSON 镜像兼容层已同日删除）。
 2. 抽取大纲/分卷/剧情段/章节讨论页的重复交互骨架。
 3. 给后台任务增加更明确的应用关闭提示、失败通知和运行日志入口。
 
@@ -467,7 +466,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 
 | 领域 | 当前问题 | 处理方向 |
 |---|---|---|
-| 模块体量 | 部分 UI/prompt/source workflow 模块仍超过 1000 行（`memory/core.py` 已拆分完毕） | 按展示、提示词和资料职责继续拆分 |
+| 模块体量 | 部分 UI/source workflow 模块仍超过 1000 行（`memory/core.py`、`core/prompts.py` 已拆分完毕） | 按展示、提示词和资料职责继续拆分 |
 | UI 复用 | 多类讨论页仍有相似布局、表单解析和保存操作 | 抽取共享讨论 renderer 和动作 helper |
 | 多查询路由 | ~~只有单次语义查询~~ → 已实现实体路由分检（角色/世界/时间线）与实体聚焦注入（refactor 2） | 增强方向收敛为：跨路由 RRF 融合、检索反查实体并集、受配额子查询防 Embedding 调用膨胀 |
 | OCR | 自由创作附件与 Vue 项目批量导入支持本地 OCR；真实引擎/provider 评测仍待发布环境 | 继续执行真实评测，不对数字 PDF 重复 OCR |

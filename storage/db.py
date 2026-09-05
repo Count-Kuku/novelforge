@@ -210,7 +210,6 @@ def inspect_project_db(project_path: Path) -> dict:
         "retrieval_chunks",
         "retrieval_vectors",
         "retrieval_vector_store_meta",
-        "graph_nodes",
         "graph_edges",
         "workflow_runs",
         "workflow_steps",

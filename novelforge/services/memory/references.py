@@ -1061,8 +1061,6 @@ def sync_project_database_from_files(project_name: str) -> dict:
 
             project_payload_count = 0
             for file, asset_type, logical_key, title in [
-                (_memory_api.character_entities_path(normalized_name), "character_entities", "characters", "Character Entities"),
-                (_memory_api.setting_entities_path(normalized_name), "setting_entities", "settings", "Setting Entities"),
                 (_memory_api.extraction_plan_templates_path(normalized_name), "extraction_plan_templates", "templates", "Extraction Plan Templates"),
             ]:
                 if not file.exists():

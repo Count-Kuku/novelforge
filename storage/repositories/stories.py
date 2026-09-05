@@ -201,7 +201,6 @@ def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
         "retrieval_conflict_resolutions",
         "workflow_runs",
         "graph_edges",
-        "graph_nodes",
         "retrieval_documents",
         "retrieval_eval_cases",
         "knowledge_items",
