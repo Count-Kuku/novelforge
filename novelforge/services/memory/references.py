@@ -162,19 +162,6 @@ def save_long_reference_batch(
             raise FileNotFoundError(f"项目不存在或已被移动：{project_name}")
         raise RuntimeError("资料批次未能写入项目数据库。")
     normalized = normalize_long_reference_batch(persisted)
-    path = long_reference_batch_path(project_name, normalized["batch_id"])
-    try:
-        _memory_api._write_json_mirror(path, normalized)
-    except Exception as exc:
-        logging.getLogger("novelforge.storage").warning(
-            "Long-reference batch committed to DB but JSON mirror write failed for %s/%s: %s",
-            project_name,
-            normalized["batch_id"],
-            exc,
-        )
-    if not _memory_api._write_json_mirrors_enabled():
-        pending = _memory_api._take_project_pending_mirror_deletions(project_name)
-        _memory_api._delete_pending_mirrors(pending)
     return normalized
 
 
@@ -247,24 +234,7 @@ def delete_long_reference_batch(project_name: str, batch_id: str) -> bool:
         if not _memory_api.project_is_discoverable(project_name):
             return False
         raise RuntimeError("资料批次未能从项目数据库删除。")
-    path = long_reference_batch_path(project_name, clean_batch_id)
-    file_existed = path.exists()
-    if file_existed:
-        try:
-            path.unlink()
-        except OSError as exc:
-            _memory_api._queue_mirror_deletion(path)
-            logging.getLogger("novelforge.storage").warning(
-                "Long-reference batch deleted from DB but JSON mirror cleanup failed for %s/%s: %s",
-                project_name,
-                clean_batch_id,
-                exc,
-            )
-        else:
-            _memory_api._discard_pending_mirror_deletion(path)
-    else:
-        _memory_api._discard_pending_mirror_deletion(path)
-    return bool(deleted or file_existed)
+    return bool(deleted)
 
 
 def retrieval_path(project_name: str) -> _memory_api.Path:
@@ -359,7 +329,6 @@ def save_conflict_resolution(project_name: str, resolution: dict) -> dict:
     ]
     resolutions.append(normalized)
     file = conflict_resolutions_path(project_name)
-    _memory_api._write_json_mirror(file, resolutions)
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_conflict_resolution(conn, normalized),
@@ -454,7 +423,6 @@ def save_retrieval_eval_cases(project_name: str, cases: list[dict]):
         for item in (cases or [])
         if isinstance(item, dict)
     ]
-    _memory_api._write_json_mirror(retrieval_eval_cases_path(project_name), normalized)
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_retrieval_eval_cases(conn, normalized),
@@ -513,7 +481,6 @@ def append_retrieval_eval_run(project_name: str, run: dict) -> dict:
     normalized["created_at"] = str(normalized.get("created_at") or _memory_api.datetime.now(_memory_api.timezone.utc).isoformat())
     runs = load_retrieval_eval_runs(project_name)
     runs.append(normalized)
-    _memory_api._write_json_mirror(retrieval_eval_runs_path(project_name), runs[-200:])
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_retrieval_eval_run(conn, normalized),
@@ -562,7 +529,6 @@ def append_retrieval_feedback(project_name: str, feedback: dict) -> dict:
     }
     items = load_retrieval_feedback(project_name)
     items.append(normalized)
-    _memory_api._write_json_mirror(retrieval_feedback_path(project_name), items[-1000:])
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.append_retrieval_feedback_row(conn, normalized),
@@ -625,13 +591,11 @@ def delete_retrieval_source_file(project_name: str, relative_path: str) -> bool:
 
 def save_retrieval_manifest(project_name: str, content: str):
     file = retrieval_path(project_name) / "manifest.json"
-    _memory_api._write_text_mirror(file, content)
     try:
         manifest_payload = _memory_api.json.loads(content)
     except Exception:
         manifest_payload = None
     if not isinstance(manifest_payload, dict):
-        _memory_api._discard_pending_mirror_deletion(file)
         _memory_api._raise_if_db_only(f"Retrieval manifest for {project_name} must be valid JSON object in DB-only mode.")
         return
     _memory_api._sync_retrieval_to_db_best_effort(
@@ -667,13 +631,11 @@ def load_retrieval_manifest(project_name: str) -> str:
 
 def save_retrieval_vectors(project_name: str, content: str):
     file = retrieval_path(project_name) / "vectors.json"
-    _memory_api._write_text_mirror(file, content)
     try:
         vector_payload = _memory_api.json.loads(content)
     except Exception:
         vector_payload = None
     if not isinstance(vector_payload, dict):
-        _memory_api._discard_pending_mirror_deletion(file)
         _memory_api._raise_if_db_only(f"Retrieval vectors for {project_name} must be valid JSON object in DB-only mode.")
         return
     _memory_api._sync_retrieval_to_db_best_effort(

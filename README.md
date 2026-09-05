@@ -167,7 +167,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 - 全局结构化配置和 LLM 用量账本保存在 `data/global.db`。
 - 每个项目的结构化数据保存在 `data/projects/{project_name}/project.db`。
 - 章节、大纲、审阅、分析和导入原文等长文本继续保存为 Markdown/TXT 文件，并由数据库登记。
-- 结构化 JSON 默认不再写入；旧文件只承担兼容导入职责。
+- 结构化 JSON 不再写入；旧文件只承担旧项目一次性导入职责。
 
 定期备份整个 `data/`。为获得一致备份，建议先停止 NovelForge，再复制目录；`.env` 含有密钥，应单独安全保存，不要提交到版本库。完整存储契约见 [storage_architecture.md](./storage_architecture.md)。
 

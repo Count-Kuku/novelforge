@@ -237,7 +237,6 @@ def _mark_asset_deleted_best_effort(
             story_id=story_id,
         ),
         action_label="mark asset deleted",
-        drain_mirrors=False,
     )
 
 

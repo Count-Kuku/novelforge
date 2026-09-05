@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
 from novelforge.services import memory
 from novelforge.domain.knowledge_workflows import execute_pending_clear_plan
@@ -212,10 +211,7 @@ def _verify_destructive_compensation(project_name: str, failures: list[str]) -> 
     guarded_story = create_story(project_name, "Guarded Delete")
     guarded_file = story_path(project_name, guarded_story["story_id"]) / "user-note.txt"
     guarded_file.write_text("keep on DB failure", encoding="utf-8")
-    with (
-        patch.dict(os.environ, {"NOVELFORGE_WRITE_JSON_MIRRORS": "1"}),
-        patch.object(memory, "purge_story_scoped_rows", side_effect=OSError("injected purge failure")),
-    ):
+    with patch.object(memory, "purge_story_scoped_rows", side_effect=OSError("injected purge failure")):
         _expect_raises(
             lambda: memory.delete_story(project_name, guarded_story["story_id"]),
             OSError,

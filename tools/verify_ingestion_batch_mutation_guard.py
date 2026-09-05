@@ -37,12 +37,9 @@ def expect_value_error(callback, label: str) -> str:
 def main() -> None:
     workspace = make_workspace("novelforge_batch_mutation_guard_")
     previous_cwd = Path.cwd()
-    previous_mirror_setting = os.environ.get("NOVELFORGE_WRITE_JSON_MIRRORS")
-    os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "1"
     os.chdir(workspace)
     try:
         from novelforge.domain.ingestion_tasks import create_ingestion_task, set_ingestion_task_status
-        from novelforge.services import memory as memory_api
         from novelforge.services.memory import (
             claim_source_ingestion_task,
             create_long_reference_batch,
@@ -95,8 +92,6 @@ def main() -> None:
 
         batch = new_batch("权限批次")
         task = save_source_ingestion_task(project_name, new_task(batch))
-        mirror_path = long_reference_batch_path(project_name, batch["batch_id"])
-        mirror_before = mirror_path.read_text(encoding="utf-8")
 
         manual_payload = {**load_long_reference_batch(project_name, batch["batch_id"]), "title": "人工越权"}
         message = expect_value_error(
@@ -105,7 +100,6 @@ def main() -> None:
         )
         check(task["task_id"] in message, "manual save rejection names the occupying task")
         check(load_long_reference_batch(project_name, batch["batch_id"])["title"] == "权限批次", "rejected save preserves DB batch")
-        check(mirror_path.read_text(encoding="utf-8") == mirror_before, "rejected save does not alter JSON mirror")
 
         expect_value_error(
             lambda: save_long_reference_batch(
@@ -128,7 +122,6 @@ def main() -> None:
             "active task atomically rejects batch deletion",
         )
         check(bool(load_long_reference_batch(project_name, batch["batch_id"])), "rejected deletion preserves DB batch")
-        check(mirror_path.exists(), "rejected deletion preserves JSON mirror")
 
         claimed_a = claim_source_ingestion_task(
             project_name,
@@ -180,20 +173,8 @@ def main() -> None:
 
         terminal = set_ingestion_task_status(load_source_ingestion_task(project_name, task["task_id"]), "completed")
         finalize_source_ingestion_task(project_name, terminal, "worker-b")
-        original_unlink = Path.unlink
-
-        def fail_batch_mirror_unlink(path: Path, *args, **kwargs):
-            if path.resolve() == mirror_path.resolve():
-                raise OSError("synthetic mirror lock")
-            return original_unlink(path, *args, **kwargs)
-
-        with patch.object(Path, "unlink", new=fail_batch_mirror_unlink):
-            check(delete_long_reference_batch(project_name, batch["batch_id"]), "terminal task releases batch deletion")
-        check(not load_long_reference_batch(project_name, batch["batch_id"]), "DB deletion commits despite mirror cleanup failure")
-        check(mirror_path.exists(), "failed mirror unlink leaves the file for retry")
-        check(mirror_path in memory_api._PENDING_MIRROR_DELETIONS, "failed mirror unlink remains queued for retry")
-        original_unlink(mirror_path)
-        memory_api._discard_pending_mirror_deletion(mirror_path)
+        check(delete_long_reference_batch(project_name, batch["batch_id"]), "terminal task releases batch deletion")
+        check(not load_long_reference_batch(project_name, batch["batch_id"]), "DB deletion commits for terminal task")
 
         deleted_first_batch = new_batch("先删除")
         stale_task = new_task(deleted_first_batch)
@@ -310,7 +291,6 @@ def main() -> None:
 
         trigger_batch = new_batch("事务回滚")
         trigger_path = long_reference_batch_path(project_name, trigger_batch["batch_id"])
-        trigger_mirror_before = trigger_path.read_text(encoding="utf-8")
         source_id = f"long_batch_{trigger_batch['batch_id']}"
         with open_project_db(project_path(project_name)) as conn:
             conn.execute(
@@ -331,7 +311,6 @@ def main() -> None:
         else:
             raise AssertionError("DB save failure is surfaced after atomic rollback")
         check(load_long_reference_batch(project_name, trigger_batch["batch_id"])["title"] == "事务回滚", "failed DB save rolls back batch")
-        check(trigger_path.read_text(encoding="utf-8") == trigger_mirror_before, "failed DB save leaves mirror unchanged")
         with open_project_db(project_path(project_name)) as conn:
             conn.execute("DROP TRIGGER reject_batch_save")
             conn.execute(
@@ -352,7 +331,6 @@ def main() -> None:
         else:
             raise AssertionError("DB delete failure is surfaced after atomic rollback")
         check(bool(load_long_reference_batch(project_name, trigger_batch["batch_id"])), "failed DB delete preserves batch")
-        check(trigger_path.read_text(encoding="utf-8") == trigger_mirror_before, "failed DB delete leaves mirror unchanged")
         with open_project_db(project_path(project_name)) as conn:
             conn.execute("DROP TRIGGER reject_batch_delete")
             conn.commit()
@@ -415,10 +393,6 @@ def main() -> None:
         print(f"Ingestion batch mutation guard verification passed: {len(CHECKS)} checks")
     finally:
         os.chdir(previous_cwd)
-        if previous_mirror_setting is None:
-            os.environ.pop("NOVELFORGE_WRITE_JSON_MIRRORS", None)
-        else:
-            os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = previous_mirror_setting
         retry_rmtree(workspace)
 
 

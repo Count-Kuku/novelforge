@@ -19,12 +19,6 @@ from storage import (
     open_project_db,
 )
 
-from .json_mirrors import (
-    _delete_pending_mirrors,
-    _take_global_pending_mirror_deletions,
-    _take_project_pending_mirror_deletions,
-    _write_json_mirrors_enabled,
-)
 from .project_registry import (
     _project_dir_looks_like_project,
     ensure_project_path,
@@ -38,13 +32,9 @@ _PROJECT_DB_BOOTSTRAP_IN_PROGRESS: set[str] = set()
 _GLOBAL_DB_BOOTSTRAP_IN_PROGRESS = False
 
 
-def _db_only_storage_required() -> bool:
-    return not _write_json_mirrors_enabled()
-
-
 def _raise_if_db_only(message: str, exc: Exception | None = None) -> None:
-    if not _db_only_storage_required():
-        return
+    """SQLite is the only authoritative store: persistence failures always raise."""
+
     if exc is None:
         raise RuntimeError(message)
     raise RuntimeError(message) from exc
@@ -166,8 +156,6 @@ def _sync_global_to_db_best_effort(callback) -> None:
             exc,
         )
         _raise_if_db_only("Failed to sync global record to database.", exc)
-    else:
-        _delete_pending_mirrors(_take_global_pending_mirror_deletions())
 
 
 def _load_global_from_db_best_effort(loader, description: str):
@@ -208,13 +196,11 @@ def _mutate_project_db_best_effort(
     *,
     action_label: str,
     subject: str | None = None,
-    drain_mirrors: bool = True,
 ):
     """Run one atomic project-db mutation with the shared failure policy.
 
-    Marks the project database unavailable on error, re-raises under DB-only
-    semantics, and (unless suppressed) drains pending JSON-mirror deletions
-    after a successful commit.
+    Marks the project database unavailable on error and re-raises under
+    DB-only semantics.
     """
 
     if _project_db_marked_unavailable(project_name):
@@ -234,8 +220,6 @@ def _mutate_project_db_best_effort(
         )
         _raise_if_db_only(f"Failed to {action_label} for {subject}.", exc)
         return None
-    if drain_mirrors:
-        _delete_pending_mirrors(_take_project_pending_mirror_deletions(project_name))
     return result
 
 

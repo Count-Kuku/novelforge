@@ -9,7 +9,6 @@ from novelforge.services import memory as _memory_api
 from storage.repositories import get_project_meta, upsert_project_meta
 
 from .db_availability import _initialize_project_db_best_effort
-from .json_mirrors import _write_json_mirror
 from .project_registry import (
     ensure_project_path,
     project_is_discoverable,
@@ -143,9 +142,7 @@ def load_memory(project_name: str) -> dict:
 
 
 def save_memory(project_name: str, memory: dict):
-    path = project_path(project_name) / "memory.json"
     normalized = slim_memory_for_storage(project_name, memory)
-    _write_json_mirror(path, normalized)
     _sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: upsert_project_meta(

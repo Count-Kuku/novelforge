@@ -11,7 +11,6 @@ if str(ROOT) not in sys.path:
 
 from tools.verify_utils import isolated_workspace
 
-os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
 from novelforge.services.memory import (  # noqa: E402
     auto_review_runs_path,

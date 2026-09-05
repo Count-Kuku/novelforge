@@ -19,7 +19,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
 from novelforge.core.schemas import ContextAssembly
 from novelforge.domain.entity_planning import plan_entity_context

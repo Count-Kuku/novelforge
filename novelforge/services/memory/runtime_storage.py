@@ -96,9 +96,6 @@ def _sync_runtime_to_db_best_effort(project_name: str, callback) -> None:
             f"Failed to sync runtime record to project database for {normalized_name}.",
             exc,
         )
-    else:
-        pending = _memory_api._take_project_pending_mirror_deletions(normalized_name)
-        _memory_api._delete_pending_mirrors(pending)
 
 
 def _mutate_workflow_in_db(project_name: str, callback, description: str):

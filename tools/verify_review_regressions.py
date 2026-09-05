@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
 from novelforge.domain import knowledge_entities, knowledge_quality
 import novelforge.services.memory as memory_module
@@ -259,27 +258,6 @@ def _verify_storage_and_story_guards(failures: list[str]) -> None:
         "story_create_failure_leaves_no_index_row",
         failures,
     )
-
-    stale_category_mirror = knowledge_category_path(project_name, "items")
-    stale_category_mirror.parent.mkdir(parents=True, exist_ok=True)
-    stale_category_mirror.write_text("[]", encoding="utf-8")
-    upsert_knowledge_category_item_record(
-        project_name,
-        "items",
-        {"id": "mirror-cleanup", "name": "Mirror Cleanup", "category": "items"},
-    )
-    _expect(not stale_category_mirror.exists(), "atomic_upsert_removes_stale_category_mirror", failures)
-
-    stale_pending_mirror = pending_knowledge_path(project_name)
-    stale_pending_mirror.parent.mkdir(parents=True, exist_ok=True)
-    stale_pending_mirror.write_text("[]", encoding="utf-8")
-    queue_pending_knowledge_items(
-        project_name,
-        [{"pending_id": "mirror-pending", "category": "items", "name": "Mirror Pending"}],
-        scope="project",
-        authority="curated",
-    )
-    _expect(not stale_pending_mirror.exists(), "atomic_pending_upsert_removes_stale_mirror", failures)
 
     upsert_knowledge_category_item_record(
         project_name,

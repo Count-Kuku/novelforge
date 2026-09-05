@@ -61,9 +61,6 @@ _export_module(_storage_access)
 from . import project_registry as _project_registry
 _export_module(_project_registry)
 
-from . import json_mirrors as _json_mirrors
-_export_module(_json_mirrors)
-
 from . import db_availability as _db_availability
 _export_module(_db_availability)
 

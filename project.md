@@ -312,7 +312,7 @@ queued -> running -> completed
 - worker 检查点带 fencing；终态快照和清理租约在同一事务完成，旧 worker 不能覆盖接管者。
 - 多个浏览器窗口或多个应用实例可以竞争，但同一任务同时只有一个有效 owner，同一批次同时只有一个未完成任务。
 - 批次保存、删除和任务创建使用同一 SQLite 写锁串行；任务创建校验批次版本与所选片段，人工写入不能越过已占用批次。
-- 运行中任务写回批次必须同时匹配 `task_id`、`worker_id` 和有效租约；DB 提交成功后才尽力同步非权威 JSON 镜像。
+- 运行中任务写回批次必须同时匹配 `task_id`、`worker_id` 和有效租约；数据库事务失败时整体回滚。
 - 租约过期的 `running` 任务可被新 worker 接管。
 - 调度器按项目 round-robin 轮询，避免首个项目持续有任务时饿死其它项目。
 - 暂停和取消在片段/阶段检查点生效，不强杀正在进行的模型 HTTP 请求。
@@ -452,7 +452,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 
 ### P1：可维护性与操作体验
 
-1. 拆分当前超过约 1000 行且职责混杂的 UI、prompt 和 source workflow 模块（memory/core.py 已于 2026-09-05 拆分为 paths/rules/json_mirrors/project_registry/db_availability/llm_profiles/asset_records/context_directives/domain_sync/project_memory/storage_access 十一个单一职责模块，门面导出保持不变）。
+1. 拆分当前超过约 1000 行且职责混杂的 UI、prompt 和 source workflow 模块（memory/core.py 已于 2026-09-05 拆分为 paths/rules/project_registry/db_availability/llm_profiles/asset_records/context_directives/domain_sync/project_memory/storage_access 等单一职责模块，门面导出保持不变；JSON 镜像兼容层已同日删除）。
 2. 抽取大纲/分卷/剧情段/章节讨论页的重复交互骨架。
 3. 给后台任务增加更明确的应用关闭提示、失败通知和运行日志入口。
 
@@ -472,7 +472,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 | 多查询路由 | ~~只有单次语义查询~~ → 已实现实体路由分检（角色/世界/时间线）与实体聚焦注入（refactor 2） | 增强方向收敛为：跨路由 RRF 融合、检索反查实体并集、受配额子查询防 Embedding 调用膨胀 |
 | OCR | 自由创作附件与 Vue 项目批量导入支持本地 OCR；真实引擎/provider 评测仍待发布环境 | 继续执行真实评测，不对数字 PDF 重复 OCR |
 | 修订操作 | 知识可恢复为新修订，来源修订仍只有历史列表 | 为来源补充差异与“旧快照复制为新修订”的可审计恢复 |
-| 兼容层 | DB-first 已完成，但仍保留旧 JSON 导入和可选镜像代码 | 等兼容窗口结束后分阶段收缩 |
+| 兼容层 | DB-first 已完成；JSON 镜像写入层已删除，旧 JSON 仅保留一次性导入路径 | 旧项目全量迁移后可评估移除导入代码 |
 | 任务运行时 | worker 与应用进程同生命周期 | 只有明确需要常驻执行时再独立进程化 |
 | 网络研究 | 当前只抓取公开静态文本；自动选择模型原生搜索或 DDGS 免密通用搜索 | 根据真实失败样本评估动态渲染抓取和更多原生 Provider；不以绕过登录或反爬为目标 |
 | 启动器 | Windows 支持完整，Linux/macOS 主要回退到当前解释器 | 增加跨平台运行时发现和发布验证 |

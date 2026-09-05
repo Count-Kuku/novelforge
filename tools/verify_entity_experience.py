@@ -8,7 +8,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
 from novelforge.domain.knowledge_entities import (
     build_character_entity_cards,

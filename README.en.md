@@ -161,7 +161,7 @@ Model and embedding keys are configured in the UI and stored in Windows Credenti
 - Global structured settings and the LLM usage ledger are stored in `data/global.db`.
 - Each project's structured data is stored in `data/projects/{project_name}/project.db`.
 - Long-form outlines, chapters, reviews, analyses, and imported sources remain Markdown/TXT assets registered in the database.
-- Structured JSON mirrors are disabled by default; legacy files are compatibility import sources only.
+- Structured JSON is no longer written; legacy files serve only as one-time import sources for old projects.
 
 Back up the entire `data/` directory regularly. Stop NovelForge before copying it for the most consistent snapshot. `.env` contains secrets and should be backed up securely without committing it. See [storage_architecture.md](./storage_architecture.md) for the complete storage contract.
 

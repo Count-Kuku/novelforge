@@ -49,7 +49,6 @@ def save_creative_profile(
     if mark_configured is not None:
         normalized["is_configured"] = bool(mark_configured)
     path = creative_profile_path(project_name, story_id)
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_story_profile(conn, story_id, normalized),
@@ -76,7 +75,6 @@ def save_creative_profile_discussion_artifact(
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
-    _memory_api._write_json_mirror(path, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         path,

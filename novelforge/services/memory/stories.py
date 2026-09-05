@@ -785,7 +785,6 @@ def load_stories_index(project_name: str) -> dict:
 def save_stories_index(project_name: str, index: dict):
     normalized = _normalize_stories_index_payload(index)
     path = stories_index_path(project_name)
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_stories_index_to_db_best_effort(project_name, normalized)
 
 
@@ -810,7 +809,6 @@ def set_active_story(project_name: str, story_id: str):
         )
         _memory_api.sync_stories_index(conn, normalized_index)
         conn.commit()
-    _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
 
 
 def create_story(
@@ -901,8 +899,6 @@ def create_story(
                     rollback_exc,
                 )
         raise
-    if normalized_index is not None:
-        _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
     if meta is None:
         raise RuntimeError("Story creation did not produce metadata.")
     return meta.model_dump()
@@ -933,7 +929,6 @@ def rename_story(project_name: str, story_id: str, name: str, description: str |
         normalized_index = _stories_index_payload_from_rows(rows)
         _memory_api.sync_stories_index(conn, normalized_index)
         conn.commit()
-    _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
     return next(
         dict(story)
         for story in normalized_index.get("stories", [])
@@ -1073,7 +1068,6 @@ def merge_project_to_story_memory(project_name: str, story_id: str, field_resolu
         if base.get(key) != value:
             overrides[key] = value
     path = _story_memory_overrides_path(project_name, story_id)
-    _memory_api._write_json_mirror(path, overrides)
     _memory_api.sync_project_retrieval_assets(project_name)
     return {**base, **overrides}
 
@@ -1226,7 +1220,6 @@ def save_rule_conflict_resolutions(project_name: str, layer: str, resolutions: l
                 story_id=story_id if layer == "story" else None,
             )
         return []
-    _memory_api._write_json_mirror(path, normalized)
     if layer == "global":
         _memory_api._sync_global_to_db_best_effort(
             lambda conn: _memory_api.sync_global_setting(conn, "rule_conflict_resolutions", normalized)
@@ -1419,93 +1412,6 @@ def _copy_story_files(
         shutil.copy2(str(resolved_item), str(target_file))
 
 
-def _copied_story_json_mirror_path(
-    project_name: str,
-    target_story_id: str,
-    project_relative_path: str,
-) -> _memory_api.Path:
-    normalized = str(project_relative_path or "").replace("\\", "/")
-    parts = tuple(normalized.split("/"))
-    if (
-        len(parts) < 3
-        or parts[:2] != ("stories", target_story_id)
-        or any(part in {"", ".", ".."} or ":" in part for part in parts)
-        or not parts[-1].casefold().endswith(".json")
-    ):
-        raise ValueError(f"Invalid copied story JSON mirror path: {project_relative_path}")
-    target_root = story_path(project_name, target_story_id).resolve()
-    target_file = _memory_api.project_path(project_name).joinpath(*parts).resolve()
-    if target_root not in target_file.parents:
-        raise ValueError(f"Copied story JSON mirror escaped its story directory: {project_relative_path}")
-    return target_file
-
-
-def _materialize_copied_story_json_mirrors(project_name: str, target_story_id: str) -> None:
-    if not _memory_api._write_json_mirrors_enabled():
-        return
-    project_root = _memory_api.project_path(project_name).resolve()
-    with _memory_api.open_project_db(project_root) as conn:
-        asset_rows = conn.execute(
-            """
-            SELECT asset.asset_id, asset.relative_path, payload.payload_json
-            FROM asset_files AS asset
-            INNER JOIN asset_payloads AS payload ON payload.asset_id = asset.asset_id
-            WHERE asset.story_id = ? AND asset.deleted_at IS NULL
-            ORDER BY asset.asset_id
-            """,
-            (target_story_id,),
-        ).fetchall()
-        for row in asset_rows:
-            relative_path = str(row["relative_path"] or "")
-            if not relative_path.replace("\\", "/").casefold().endswith(".json"):
-                continue
-            target_file = _copied_story_json_mirror_path(
-                project_name,
-                target_story_id,
-                relative_path,
-            )
-            payload = _memory_api.json.loads(str(row["payload_json"] or "null"))
-            _memory_api._write_json_mirror(target_file, payload)
-            content_hash = _memory_api.hashlib.sha256(target_file.read_bytes()).hexdigest()
-            conn.execute(
-                "UPDATE asset_files SET content_hash = ? WHERE asset_id = ?",
-                (content_hash, str(row["asset_id"])),
-            )
-
-        workflow_rows = conn.execute(
-            """
-            SELECT run_id, output_json
-            FROM workflow_runs
-            WHERE story_id = ?
-            ORDER BY run_id
-            """,
-            (target_story_id,),
-        ).fetchall()
-        for row in workflow_rows:
-            run_id = _memory_api.normalize_storage_component(str(row["run_id"]), "Workflow run ID")
-            relative_path = f"stories/{target_story_id}/runs/{run_id}.json"
-            target_file = _copied_story_json_mirror_path(
-                project_name,
-                target_story_id,
-                relative_path,
-            )
-            payload = _memory_api.json.loads(str(row["output_json"] or "{}"))
-            _memory_api._write_json_mirror(target_file, payload)
-            content_hash = _memory_api.hashlib.sha256(target_file.read_bytes()).hexdigest()
-            conn.execute(
-                """
-                UPDATE asset_files
-                SET content_hash = ?
-                WHERE story_id = ?
-                  AND asset_type = 'workflow_run_snapshot'
-                  AND logical_key = ?
-                  AND deleted_at IS NULL
-                """,
-                (content_hash, target_story_id, run_id),
-            )
-        conn.commit()
-
-
 def _rollback_story_copy(project_name: str, target_story_id: str, original_index: dict) -> list[str]:
     import shutil
 
@@ -1562,14 +1468,6 @@ def _rollback_story_copy(project_name: str, target_story_id: str, original_index
         database_cleaned = True
     except Exception as exc:
         errors.append(f"database cleanup failed: {exc}")
-
-    if database_cleaned and normalized_index is not None:
-        try:
-            _memory_api._write_json_mirror(stories_index_path(project_name), normalized_index)
-            if not _memory_api._write_json_mirrors_enabled():
-                _memory_api._delete_pending_mirrors(_memory_api._take_project_pending_mirror_deletions(project_name))
-        except Exception as exc:
-            errors.append(f"index mirror cleanup failed: {exc}")
 
     target_dir = story_path(project_name, target_story_id)
     if database_cleaned:
@@ -1679,7 +1577,6 @@ def copy_story(project_name: str, source_story_id: str, new_name: str,
         from novelforge.services.automatic_configuration import copy_story_automatic_configurations
 
         copy_story_automatic_configurations(project_name, source_story_id, target_id)
-        _materialize_copied_story_json_mirrors(project_name, target_id)
         _memory_api.sync_project_retrieval_assets(project_name)
         return meta
     except Exception as exc:
@@ -1723,7 +1620,6 @@ def _set_story_status(project_name: str, story_id: str, next_status: str) -> boo
         normalized_index = _stories_index_payload_from_rows(rows, active_story_id=active_story_id)
         _memory_api.sync_stories_index(conn, normalized_index)
         conn.commit()
-    _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
     return True
 
 
@@ -1787,56 +1683,6 @@ def delete_story(project_name: str, story_id: str) -> bool:
         _memory_api.sync_stories_index(conn, normalized_index)
         _memory_api.purge_story_scoped_rows(conn, story_id)
         conn.commit()
-
-    try:
-        _memory_api._write_json_mirror(stories_index_path(project_name), normalized_index)
-        if not _memory_api._write_json_mirrors_enabled():
-            _memory_api._delete_pending_mirrors(_memory_api._take_project_pending_mirror_deletions(project_name))
-    except OSError as exc:
-        _memory_api.logging.getLogger("novelforge.storage").warning(
-            "Story %s was deleted from SQLite, but its index mirror could not be refreshed: %s",
-            story_id,
-            exc,
-        )
-
-    # Compatibility mirrors are non-authoritative. Keep shared knowledge files
-    # consistent when mirror mode is explicitly enabled, without performing a
-    # second series of whole-category database writes.
-    if _memory_api._write_json_mirrors_enabled():
-        for category in _memory_api.KNOWLEDGE_CATEGORIES:
-            path = _memory_api.knowledge_category_path(project_name, category)
-            if not path.exists():
-                continue
-            items = _memory_api._load_json_list(path)
-            remaining = [
-                item for item in items
-                if str(item.get("story_id") or "").strip() != story_id
-            ]
-            if remaining != items:
-                try:
-                    _memory_api._write_json_mirror(path, remaining)
-                except OSError as exc:
-                    _memory_api.logging.getLogger("novelforge.storage").warning(
-                        "Failed to refresh knowledge mirror %s after story deletion: %s",
-                        path,
-                        exc,
-                    )
-        pending_path = _memory_api.pending_knowledge_path(project_name)
-        if pending_path.exists():
-            pending_items = _memory_api._load_json_list(pending_path)
-            remaining_pending = [
-                item for item in pending_items
-                if str(item.get("story_id") or "").strip() != story_id
-            ]
-            if remaining_pending != pending_items:
-                try:
-                    _memory_api._write_json_mirror(pending_path, remaining_pending)
-                except OSError as exc:
-                    _memory_api.logging.getLogger("novelforge.storage").warning(
-                        "Failed to refresh pending mirror %s after story deletion: %s",
-                        pending_path,
-                        exc,
-                    )
 
     try:
         delete_automatic_configurations(project_name, story_id=story_id)
@@ -1914,7 +1760,6 @@ def set_story_creation_mode(
 
     if normalized_index is None:
         raise RuntimeError("Story mode update did not produce an index.")
-    _memory_api._refresh_project_json_mirror(project_name, stories_index_path(project_name), normalized_index)
     return next(
         dict(story)
         for story in normalized_index.get("stories", [])
@@ -2004,7 +1849,6 @@ def save_story_memory(project_name: str, story_id: str, memory: dict):
             overrides[key] = value
 
     path = _story_memory_overrides_path(project_name, story_id)
-    _memory_api._write_json_mirror(path, overrides)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         path,
@@ -2050,7 +1894,6 @@ def load_story_chapter_summaries(project_name: str, story_id: str) -> list[dict]
 def save_story_chapter_summaries(project_name: str, story_id: str, summaries: list[dict]):
     path = _story_chapter_summaries_path(project_name, story_id)
     normalized = [item for item in list(summaries or []) if isinstance(item, dict)]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         path,

@@ -15,7 +15,6 @@ from .db_availability import (
     _global_db_marked_unavailable,
     _load_global_from_db_best_effort,
 )
-from .json_mirrors import _write_json_mirror
 from .paths import ENV_PATH, LLM_PROFILES_PATH
 from storage.repositories import load_global_setting
 
@@ -176,8 +175,6 @@ def _persist_llm_profiles_payload(payload: dict) -> dict:
         payload,
         normalize=_normalize_llm_profiles_payload,
         global_db_unavailable=_global_db_marked_unavailable,
-        write_json_mirror=_write_json_mirror,
-        profiles_path=LLM_PROFILES_PATH,
         env_path=ENV_PATH,
     )
 

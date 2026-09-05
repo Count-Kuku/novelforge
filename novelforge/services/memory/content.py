@@ -37,7 +37,6 @@ def save_outline_discussion_artifact(project_name: str, discussion: dict, report
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
-    _memory_api._write_json_mirror(path, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         path,
@@ -180,7 +179,6 @@ def save_volume_metadata(project_name: str, volume_no: int, metadata: dict, stor
     normalized = _memory_api.VolumeOutlineMetadata.model_validate({**current, **metadata, "volume_no": volume_no})
     file = _volume_meta_path(project_name, volume_no, story_id)
     payload = normalized.model_dump()
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -202,7 +200,6 @@ def save_volume_discussion_artifact(project_name: str, volume_no: int, discussio
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -413,7 +410,6 @@ def delete_volume(project_name: str, volume_no: int, story_id: str = "default") 
                 normalized["volume_no"] = None
                 if normalized.get("arc_no") is not None:
                     normalized["arc_no"] = None
-                _memory_api._write_json_mirror(file, normalized)
                 chapter_no = int(normalized.get("chapter_no") or file.name.replace("chapter_", "").replace(".meta.json", ""))
                 _memory_api._sync_asset_payload_to_db_best_effort(
                     project_name,
@@ -458,7 +454,6 @@ def save_arc_metadata(project_name: str, arc_no: int, metadata: dict, story_id: 
     normalized = _memory_api.ArcOutlineMetadata.model_validate({**current, **metadata, "arc_no": arc_no})
     file = _arc_meta_path(project_name, arc_no, story_id)
     payload = normalized.model_dump()
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -480,7 +475,6 @@ def save_arc_discussion_artifact(project_name: str, arc_no: int, discussion: dic
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -568,7 +562,6 @@ def save_arc_chapter_plan(project_name: str, arc_no: int, plan: dict, report_mar
         "plan": plan if isinstance(plan, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -791,7 +784,6 @@ def delete_arc(project_name: str, arc_no: int, story_id: str = "default") -> boo
                 if normalized.get("arc_no") != arc_no:
                     continue
                 normalized["arc_no"] = None
-                _memory_api._write_json_mirror(file, normalized)
                 chapter_no = int(normalized.get("chapter_no") or file.name.replace("chapter_", "").replace(".meta.json", ""))
                 _memory_api._sync_asset_payload_to_db_best_effort(
                     project_name,
@@ -842,7 +834,6 @@ def save_chapter_outline_metadata(project_name: str, chapter_no: int, metadata: 
     normalized = _memory_api.ChapterOutlineMetadata.model_validate({**metadata, "chapter_no": chapter_no})
     file = _chapter_outline_meta_path(project_name, chapter_no, story_id=story_id)
     payload = normalized.model_dump()
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -864,7 +855,6 @@ def save_chapter_discussion_artifact(project_name: str, chapter_no: int, discuss
         "discussion": discussion if isinstance(discussion, dict) else {},
         "report_markdown": str(report_markdown or ""),
     }
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -1051,7 +1041,6 @@ def save_review_json(project_name: str, chapter_no: int, data: dict, story_id: s
     path.mkdir(parents=True, exist_ok=True)
     file = path / f"chapter_{chapter_no:03d}.json"
     payload = data if isinstance(data, dict) else {}
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -1076,7 +1065,6 @@ def upsert_knowledge_category_item_record(project_name: str, category: str, item
     with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
         saved, items = _memory_api.upsert_knowledge_category_item(conn, category, item)
         conn.commit()
-    _memory_api._refresh_project_json_mirror(project_name, _memory_api.knowledge_category_path(project_name, category), items)
     _memory_api._refresh_knowledge_retrieval_best_effort(project_name)
     return saved
 
@@ -1092,7 +1080,6 @@ def delete_knowledge_category_item_record(project_name: str, category: str, item
         deleted, items = _memory_api.delete_knowledge_category_item(conn, category, item_id)
         conn.commit()
     if deleted:
-        _memory_api._refresh_project_json_mirror(project_name, _memory_api.knowledge_category_path(project_name, category), items)
         _memory_api._refresh_knowledge_retrieval_best_effort(project_name)
     return deleted
 
@@ -1414,7 +1401,6 @@ def save_evaluation_report(project_name: str, chapter_no: int, content: str, sto
 def save_evaluation_json(project_name: str, chapter_no: int, data: dict, story_id: str = "default"):
     file = evaluation_path(project_name, story_id) / f"chapter_{chapter_no:03d}.json"
     payload = data if isinstance(data, dict) else {}
-    _memory_api._write_json_mirror(file, payload)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         file,
@@ -1476,7 +1462,6 @@ def runs_path(project_name: str, story_id: str = "default") -> _memory_api.Path:
 def save_pipeline_run(project_name: str, run_id: str, content: str, story_id: str = "default"):
     run_id = _memory_api.normalize_storage_component(run_id, "Workflow run ID")
     file = runs_path(project_name, story_id) / f"{run_id}.json"
-    _memory_api._write_text_mirror(file, content)
     try:
         payload = _memory_api.json.loads(content)
     except Exception:

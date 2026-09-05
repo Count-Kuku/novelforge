@@ -11,7 +11,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 os.environ["NOVELFORGE_CREDENTIAL_BACKEND"] = "memory"
-os.environ["NOVELFORGE_WRITE_JSON_MIRRORS"] = "0"
 
 from novelforge.services.automatic_configuration import (
     copy_story_automatic_configurations,

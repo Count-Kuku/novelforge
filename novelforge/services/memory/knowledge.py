@@ -99,7 +99,6 @@ def load_knowledge_category(project_name: str, category: str) -> list[dict]:
 def save_knowledge_category(project_name: str, category: str, items: list[dict]):
     path = knowledge_category_path(project_name, category)
     normalized = [normalize_typed_knowledge_item(item, category) for item in items if isinstance(item, dict)]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_knowledge_category_to_db_best_effort(project_name, category, normalized)
     _memory_api.sync_project_retrieval_assets(project_name)
 
@@ -415,7 +414,6 @@ def load_character_entities(project_name: str) -> list[dict]:
 def save_character_entities(project_name: str, items: list[dict]):
     path = character_entities_path(project_name)
     normalized = [item for item in items if isinstance(item, dict)]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         path,
@@ -441,7 +439,6 @@ def load_setting_entities(project_name: str) -> list[dict]:
 def save_setting_entities(project_name: str, items: list[dict]):
     path = setting_entities_path(project_name)
     normalized = [item for item in items if isinstance(item, dict)]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         path,
@@ -466,7 +463,6 @@ def load_entity_aliases(project_name: str) -> list[dict]:
 def save_entity_aliases(project_name: str, items: list[dict]):
     path = entity_aliases_path(project_name)
     normalized = [item for item in items if isinstance(item, dict)]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_entity_aliases_to_db_best_effort(project_name, normalized)
     _memory_api.sync_project_retrieval_assets(project_name)
 
@@ -485,7 +481,6 @@ def load_extraction_plan_templates(project_name: str) -> list[dict]:
 def save_extraction_plan_templates(project_name: str, items: list[dict]):
     path = extraction_plan_templates_path(project_name)
     normalized = [item for item in items if isinstance(item, dict)]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_asset_payload_to_db_best_effort(
         project_name,
         path,
@@ -514,7 +509,6 @@ def save_pending_knowledge_items(project_name: str, items: list[dict]):
         for item in items
         if isinstance(item, dict)
     ]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_pending_knowledge_to_db_best_effort(project_name, normalized)
 
 
@@ -534,7 +528,6 @@ def load_auto_review_runs(project_name: str) -> list[dict]:
 def save_auto_review_runs(project_name: str, runs: list[dict]):
     path = auto_review_runs_path(project_name)
     normalized = [item for item in runs if isinstance(item, dict)]
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_auto_review_runs(conn, normalized),
@@ -586,7 +579,6 @@ def load_auto_review_policy(project_name: str) -> dict:
 def save_auto_review_policy(project_name: str, policy: dict) -> dict:
     normalized = normalize_auto_review_policy(policy)
     path = auto_review_policy_path(project_name)
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_auto_review_policy(conn, normalized),
@@ -666,9 +658,6 @@ def queue_pending_knowledge_items(
         if replacement_ids:
             _, pending = _memory_api.delete_pending_knowledge_items(conn, replacement_ids)
         conn.commit()
-    _memory_api._write_json_mirror(pending_knowledge_path(project_name), pending)
-    if not _memory_api._write_json_mirrors_enabled():
-        _memory_api._delete_pending_mirrors(_memory_api._take_project_pending_mirror_deletions(project_name))
     return len(incoming_ids) if replace_pending_ids is not None else added_count
 
 
@@ -681,10 +670,6 @@ def discard_pending_knowledge_items(project_name: str, pending_ids: list[str]) -
     with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
         removed_count, remaining = _memory_api.delete_pending_knowledge_items(conn, id_set)
         conn.commit()
-    if removed_count:
-        _memory_api._write_json_mirror(pending_knowledge_path(project_name), remaining)
-        if not _memory_api._write_json_mirrors_enabled():
-            _memory_api._delete_pending_mirrors(_memory_api._take_project_pending_mirror_deletions(project_name))
     return removed_count
 
 
@@ -779,19 +764,6 @@ def _append_knowledge_items_in_transaction(
         _memory_api.sync_knowledge_category(conn, category, existing)
         category_snapshots[category] = existing
     return saved_count, saved_records, category_snapshots
-
-
-def _refresh_project_json_mirror(project_name: str, path: _memory_api.Path, payload) -> None:
-    try:
-        _memory_api._write_json_mirror(path, payload)
-        if not _memory_api._write_json_mirrors_enabled():
-            _memory_api._delete_pending_mirrors(_memory_api._take_project_pending_mirror_deletions(project_name))
-    except OSError as exc:
-        _memory_api.logging.getLogger("novelforge.storage").warning(
-            "SQLite commit succeeded, but JSON mirror refresh failed for %s: %s",
-            path,
-            exc,
-        )
 
 
 def _refresh_knowledge_retrieval_best_effort(project_name: str) -> None:
@@ -966,16 +938,6 @@ def confirm_pending_knowledge_items_with_records(
             _memory_api.sync_auto_review_runs(conn, [audit_record])
         conn.commit()
 
-    for category, items in category_snapshots.items():
-        _refresh_project_json_mirror(project_name, knowledge_category_path(project_name, category), items)
-    if removed_pending_ids:
-        _refresh_project_json_mirror(project_name, pending_knowledge_path(project_name), remaining)
-    if audit_record:
-        _refresh_project_json_mirror(
-            project_name,
-            auto_review_runs_path(project_name),
-            load_auto_review_runs(project_name),
-        )
     if saved_count:
         _refresh_knowledge_retrieval_best_effort(project_name)
     return {
@@ -1040,12 +1002,6 @@ def append_knowledge_items_with_records(
             confirmation_metadata=confirmation_metadata,
         )
         conn.commit()
-    for category, category_items in category_snapshots.items():
-        _refresh_project_json_mirror(
-            project_name,
-            knowledge_category_path(project_name, category),
-            category_items,
-        )
     if saved_count:
         _refresh_knowledge_retrieval_best_effort(project_name)
     return saved_count, saved_records
@@ -1312,7 +1268,6 @@ def save_story_rules(project_name: str, story_id: str, rules: dict):
             lambda conn: _memory_api.sync_rules_payload(conn, "story", normalized, story_id),
         )
         return
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_rules_payload(conn, "story", normalized, story_id),
@@ -1350,7 +1305,6 @@ def load_global_rules() -> dict:
 
 def save_global_rules(rules: dict):
     normalized = _memory_api.normalize_rules(rules)
-    _memory_api._write_json_mirror(_memory_api.GLOBAL_RULES_PATH, normalized)
     _memory_api._sync_global_to_db_best_effort(
         lambda conn: _memory_api.sync_rules_payload(conn, "global", normalized)
     )
@@ -1390,7 +1344,6 @@ def load_project_rules(project_name: str) -> dict:
 def save_project_rules(project_name: str, rules: dict):
     path = _memory_api.project_path(project_name) / "rules.json"
     normalized = _memory_api.normalize_rules(rules)
-    _memory_api._write_json_mirror(path, normalized)
     _memory_api._sync_runtime_to_db_best_effort(
         project_name,
         lambda conn: _memory_api.sync_rules_payload(conn, "project", normalized),
@@ -1409,7 +1362,6 @@ def _load_prompt_options_file(path: _memory_api.Path, scope: str) -> list[dict]:
 
 def _save_prompt_options_file(path: _memory_api.Path, options: list[dict], scope: str) -> list[dict]:
     normalized = _memory_api.normalize_prompt_options_payload(options, scope=scope)
-    _memory_api._write_json_mirror(path, normalized)
     return normalized
 
 

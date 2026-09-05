@@ -21,8 +21,6 @@ def persist_llm_profiles_payload(
     *,
     normalize: Callable[[dict], dict],
     global_db_unavailable: Callable[[], bool],
-    write_json_mirror: Callable[[Path, object], None],
-    profiles_path: Path,
     env_path: Path,
     data_path: Path = Path("data"),
 ) -> dict:
@@ -43,13 +41,6 @@ def persist_llm_profiles_payload(
         _remove_credentials(new_refs - old_refs)
         raise RuntimeError("全局数据库写入失败，未清理旧密钥来源。") from exc
     _remove_credentials(old_refs - new_refs, warn=True)
-    try:
-        write_json_mirror(profiles_path, secured)
-    except OSError as exc:
-        logging.getLogger("novelforge.storage").warning(
-            "Model profiles were saved to SQLite, but the compatibility mirror failed: %s",
-            exc,
-        )
     scrub_legacy_model_secrets_safely(env_path)
     return secured
 
