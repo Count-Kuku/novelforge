@@ -52,7 +52,7 @@ from novelforge.services.retrieval import (
     rebuild_retrieval_assets,
 )
 from novelforge.core.schemas import KNOWLEDGE_CATEGORY_LABELS, label_knowledge_category
-from novelforge.workflows.skills import consolidate_extracted_knowledge, extract_reference_knowledge
+from novelforge.workflows.skills import consolidate_extracted_knowledge, extract_reference_knowledge, build_pending_knowledge_from_reference_extraction, recall_missed_knowledge
 
 
 LOGGER = logging.getLogger("novelforge.source_workflows")
@@ -85,6 +85,19 @@ AUTHORITY_LABELS = {
 
 DEFAULT_WORLDLINE_ID = "main"
 DEFAULT_WORLDLINE_LABEL = "本项目主线"
+
+
+def derive_worldline_id(source_id: str | None) -> str:
+    """从 source_id 确定性派生独立世界线 id（D10/D16）。
+
+    每个独立原著 = 独立 worldline_id，避免多源同名实体撞同一 entity_id（F10）。
+    用 source_id（不可变）而非标题/slug（可变）派生，保证改名不导致 entity_id 全量重算（D16）。
+    """
+    clean = str(source_id or "").strip()
+    if not clean:
+        return DEFAULT_WORLDLINE_ID
+    digest = hashlib.sha256(clean.encode("utf-8")).hexdigest()[:12]
+    return f"world_{digest}"
 
 CHAPTER_TITLE_PATTERN = re.compile(
     r"^\s*(?:第\s*[0-9零一二三四五六七八九十百千万两〇]+\s*[章节卷回部篇]|Chapter\s+\d+|CHAPTER\s+\d+|番外|楔子|序章|终章).*$"
@@ -476,6 +489,7 @@ def extract_pasted_reference_to_pending(
         for item in items
         if isinstance(item, dict)
     ]
+    items = build_pending_knowledge_from_reference_extraction(items, scope=scope)
     queued_count = queue_pending_knowledge_items(
         project_name,
         items,
@@ -520,6 +534,7 @@ def extract_long_reference_segments_to_queue(
     task_id: str = "",
     worker_id: str = "",
     story_id: str = "default",
+    recall_enabled: bool = False,
 ) -> tuple[dict, int, int, list[str]]:
     queued_total = 0
     processed = 0
@@ -569,6 +584,20 @@ def extract_long_reference_segments_to_queue(
             )
             payload = result.get("data", {}).get("knowledge_extraction", {})
             items = payload.get("items", []) if isinstance(payload, dict) else []
+            if recall_enabled:
+                recall_result = recall_missed_knowledge(
+                    project_name,
+                    segment.get("title", batch.get("title", "长篇资料")),
+                    segment.get("content", ""),
+                    items,
+                    enabled_categories=enabled_categories,
+                    story_id=story_id,
+                    stream_callback=stream_callback,
+                    task_id=task_id,
+                )
+                recall_payload = recall_result.get("data", {}).get("knowledge_extraction", {})
+                recalled = recall_payload.get("items", []) if isinstance(recall_payload, dict) else []
+                items = list(items) + list(recalled)
             enriched_items = []
             for item in items:
                 if not isinstance(item, dict):
@@ -592,8 +621,13 @@ def extract_long_reference_segments_to_queue(
                 enriched["source_start_offset"] = segment.get("start_offset")
                 enriched["source_end_offset"] = segment.get("end_offset")
                 enriched["version_scope"] = str(enriched.get("version_scope") or ("canon" if batch.get("scope") == "canon" else "project_main"))
-                enriched["worldline_id"] = str(enriched.get("worldline_id") or DEFAULT_WORLDLINE_ID)
-                enriched["worldline_label"] = str(enriched.get("worldline_label") or DEFAULT_WORLDLINE_LABEL)
+                # D10/D16：canon 原著按 source_id 派生独立世界线；非 canon（图鉴/参考）保持 main
+                if batch.get("scope") == "canon":
+                    enriched["worldline_id"] = str(enriched.get("worldline_id") or derive_worldline_id(batch.get("source_id")))
+                    enriched["worldline_label"] = str(enriched.get("worldline_label") or batch.get("title") or "原著世界")
+                else:
+                    enriched["worldline_id"] = str(enriched.get("worldline_id") or DEFAULT_WORLDLINE_ID)
+                    enriched["worldline_label"] = str(enriched.get("worldline_label") or DEFAULT_WORLDLINE_LABEL)
                 evidence_contexts = locate_evidence_contexts(
                     segment.get("content", ""),
                     enriched.get("evidence", []),
@@ -603,9 +637,12 @@ def extract_long_reference_segments_to_queue(
                     enriched["evidence_contexts"] = evidence_contexts
                 enriched_items.append(enriched)
             comparison = compare_extracted_items(existing_related, enriched_items)
+            pending_items = build_pending_knowledge_from_reference_extraction(
+                enriched_items, scope=batch.get("scope", "reference")
+            )
             queued_count = queue_pending_knowledge_items(
                 project_name,
-                enriched_items,
+                pending_items,
                 scope=batch.get("scope", "reference"),
                 authority=batch.get("authority", "curated"),
                 source_title=payload.get("source_title", "") or segment.get("title", ""),
@@ -1431,10 +1468,12 @@ def consolidate_batch_pending_items(
         }
 
     target_ids = [str(item.get("pending_id", "")) for item in target_items if item.get("pending_id")]
+    scope_value = target_items[0].get("scope", batch.get("scope", "reference"))
+    pending_items = build_pending_knowledge_from_reference_extraction(enriched_items, scope=scope_value)
     queued_count = queue_pending_knowledge_items(
         project_name,
-        enriched_items,
-        scope=target_items[0].get("scope", batch.get("scope", "reference")),
+        pending_items,
+        scope=scope_value,
         authority=target_items[0].get("authority", batch.get("authority", "curated")),
         source_title=batch.get("title", payload.get("source_title", "")),
         source_origin=batch.get("source_origin", ""),

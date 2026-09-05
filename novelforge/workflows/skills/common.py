@@ -37,6 +37,7 @@ from novelforge.core.prompts import (
     creative_structure_prompt,
     extract_reference_knowledge_prompt,
     consolidate_extracted_knowledge_prompt,
+    recall_missed_knowledge_prompt,
     organize_reference_prompt,
     character_analysis_prompt,
     consistency_check_prompt,
@@ -151,6 +152,7 @@ from novelforge.core.schemas import (
 )
 from novelforge.services.retrieval import format_retrieval_context, retrieve_context
 from novelforge.domain.setting_knowledge import build_generation_setting_context
+from novelforge.domain.knowledge_types import build_category_field_specs
 
 
 _LAST_RETRIEVAL_TRACES: dict[str, list[dict]] = {}
@@ -723,6 +725,14 @@ DYNAMIC_SLOT_KEYS = {
     "abilities": "abilities",
 }
 
+# 各类别适用的动态槽位（槽位展开按类别过滤，避免 locations/items 被塞进不相关的槽位）。
+_CATEGORY_DYNAMIC_SLOTS: dict[str, tuple[str, ...]] = {
+    "characters": ("location", "status", "holding", "current_goal", "appearance", "personality", "abilities"),
+    "items": ("owner", "holder", "status"),
+    "locations": ("status",),
+    "organizations": ("current_goal", "status"),
+}
+
 
 def _stringify_knowledge_candidate(value) -> str:
     if isinstance(value, str):
@@ -895,6 +905,130 @@ def build_pending_knowledge_from_setting_extraction(
                 "injection_policy": "retrieval",
                 "source_chapter_no": chapter_no,
             })
+    return items
+
+
+def _sequence_order_for_item(item: dict) -> int | None:
+    """计算资料条目的时间线排序键（D8）：source_segment_index × 1000 + order_hint。"""
+    seg_idx = item.get("source_segment_index")
+    if seg_idx is None:
+        return None
+    try:
+        base = int(seg_idx) * 1000
+    except (TypeError, ValueError):
+        return None
+    details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+    typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
+    hint = typed_data.get("order_hint") or details.get("order_hint")
+    if hint is not None:
+        try:
+            return base + int(str(hint).strip())
+        except (TypeError, ValueError):
+            pass
+    return base
+
+
+def _extract_aliases(item: dict) -> list[str]:
+    """从顶层 aliases / details / typed_data 提取别名列表（P7）。"""
+    raw = item.get("aliases")
+    if isinstance(raw, list):
+        vals: list[Any] = raw
+    else:
+        details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+        typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
+        raw = typed_data.get("aliases") or details.get("aliases") or raw
+        if isinstance(raw, list):
+            vals = raw
+        elif isinstance(raw, str):
+            vals = [s for s in re.split(r"[、；;,，]", raw) if s.strip()]
+        else:
+            vals = []
+    result: list[str] = []
+    for value in vals:
+        cleaned = str(value or "").strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    return result
+
+
+def build_pending_knowledge_from_reference_extraction(
+    extracted_items: list[dict],
+    *,
+    scope: str = "reference",
+) -> list[dict]:
+    """构造资料提取的待审核条目（对称于 ``build_pending_knowledge_from_setting_extraction``）。
+
+    三处不同（F27）：`setting_scope="project"`（原著库，非 story）、`version_scope` 由 scope 决定
+    （canon/project_main）、无 `source_chapter_no`。实体类条目（characters/items/locations/organizations）
+    做 ``DYNAMIC_SLOT_KEYS`` 槽位展开（`setting_field=槽位名`，由确认链路 ``_compute_entity_fact`` 转
+    fact_key）；非槽位/非实体类不设 setting_field（→ fact_key=None → merge_policy=append）。
+    其余字段（worldline_id/source_id/source_segment_* 等）由上游 enrich 步骤负责，本函数原样保留。
+    """
+    version_scope = "canon" if scope == "canon" else "project_main"
+    setting_scope = "project" if scope == "canon" else "story"
+    entity_categories = {"characters", "items", "locations", "organizations"}
+    items: list[dict] = []
+    for item in extracted_items:
+        if not isinstance(item, dict):
+            continue
+        category = str(item.get("category") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not category or not name:
+            continue
+        details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
+        typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
+        base = {
+            "category": category,
+            "name": name,
+            "summary": str(item.get("summary") or "").strip() or name,
+            "details": details,
+            "evidence": item.get("evidence", []),
+            "confidence": item.get("confidence", 0.7),
+            "importance": item.get("importance", 0.5),
+            "evidence_strength": item.get("evidence_strength", 0.5),
+            "canon_status": item.get("canon_status", "canon" if version_scope == "canon" else "unknown"),
+            "extraction_mode": item.get("extraction_mode", "reference"),
+            "tags": list(item.get("tags", [])),
+            "source_title": item.get("source_title", ""),
+            "source_segment_id": item.get("source_segment_id", ""),
+            "source_segment_index": item.get("source_segment_index"),
+            "source_segment_title": item.get("source_segment_title", ""),
+            "sequence_order": _sequence_order_for_item(item),
+            "aliases": _extract_aliases(item),
+            "setting_role": "core",
+            "setting_scope": setting_scope,
+            "version_scope": version_scope,
+            "injection_policy": "retrieval",
+        }
+        # F17：资料 timeline 事件无 chapter_no 兜底，须由构造器填 world_t（= sequence_order）
+        if category == "timeline_events" and base.get("sequence_order") is not None:
+            base["world_t"] = base["sequence_order"]
+        for passthrough in ("worldline_id", "worldline_label", "source_id", "source_revision_id"):
+            if item.get(passthrough):
+                base[passthrough] = item[passthrough]
+        # D14：canon 条目不保留 story_id（→ isolation_domain 推导 project 库作用域）；
+        # 非 canon 保留 story_id（落 story 作用域）。
+        if setting_scope == "story" and item.get("story_id"):
+            base["story_id"] = item["story_id"]
+        slot_entries: list[tuple[str, str]] = []
+        if category in entity_categories:
+            allowed_slots = _CATEGORY_DYNAMIC_SLOTS.get(category, ())
+            for key in allowed_slots:
+                slot_name = DYNAMIC_SLOT_KEYS[key]
+                slot_value = _stringify_knowledge_candidate(
+                    typed_data.get(key) if typed_data.get(key) not in (None, "", []) else details.get(key)
+                )
+                if slot_value:
+                    slot_entries.append((slot_name, slot_value))
+        if slot_entries:
+            for slot_name, slot_value in slot_entries:
+                entry = dict(base)
+                entry["summary"] = f"{name}：{slot_value}"
+                entry["setting_field"] = slot_name
+                entry["tags"] = list(base["tags"]) + [slot_name]
+                items.append(entry)
+        else:
+            items.append(dict(base))
     return items
 
 
@@ -1219,6 +1353,7 @@ def extract_reference_knowledge(
         extraction_mode=extraction_mode,
         alias_context=_format_entity_alias_context(project_name),
         custom_instructions=custom_instructions,
+        field_specs_text=build_category_field_specs(enabled_categories),
     )
     payload = _call_json_llm(
         prompt,
@@ -1255,6 +1390,60 @@ def extract_reference_knowledge(
     ).model_dump()
 
 
+def recall_missed_knowledge(
+    project_name: str,
+    source_title: str,
+    raw_text: str,
+    extracted_items: list[dict],
+    enabled_categories: list[str] | None = None,
+    story_id: str = "default",
+    stream_callback=None,
+    task_id: str = "",
+) -> dict:
+    """二次召回校验（C 期/D3）：对照原文列出被遗漏的重要条目。
+
+    仅长资料默认开启，返回补充条目由调用方并入提取结果。
+    """
+    prompt = recall_missed_knowledge_prompt(
+        source_title.strip() or "未命名资料",
+        raw_text,
+        json.dumps(extracted_items, ensure_ascii=False),
+        enabled_categories or [],
+        rules_text=_build_rules_text(project_name, "all", story_id=story_id),
+    )
+    payload = _call_json_llm(
+        prompt,
+        "模型没有返回遗漏条目。",
+        stream_callback=stream_callback,
+        usage_context={
+            "project_name": project_name,
+            "story_id": story_id,
+            "task_id": task_id,
+            "workflow_run_id": task_id,
+            "operation": "reference.recall",
+            "agent_role": "recaller",
+        },
+    )
+    try:
+        result = KnowledgeExtractionResult.model_validate(payload)
+    except ValidationError as exc:
+        raise RuntimeError(f"召回校验结构校验失败：{format_schema_validation_error(exc)}") from exc
+    return _make_step_result(
+        "recall_missed_knowledge",
+        success=True,
+        status="completed",
+        data={
+            "knowledge_extraction": result.model_dump(),
+            "recalled_item_count": len(result.items),
+        },
+        validation=_make_validation_status(
+            status="passed",
+            schema_name="KnowledgeExtractionResult",
+            message="召回校验结果已通过结构校验。",
+        ),
+    ).model_dump()
+
+
 def consolidate_extracted_knowledge(
     project_name: str,
     source_title: str,
@@ -1275,6 +1464,7 @@ def consolidate_extracted_knowledge(
             "name": item.get("name", ""),
             "summary": item.get("summary", ""),
             "details": item.get("details", {}),
+            "typed_data": item.get("typed_data", {}),
             "evidence": item.get("evidence", []),
             "confidence": item.get("confidence", 0.7),
             "importance": item.get("importance", 0.5),
@@ -1285,6 +1475,7 @@ def consolidate_extracted_knowledge(
             "source_segment_id": item.get("source_segment_id", ""),
             "source_segment_index": item.get("source_segment_index"),
             "source_segment_title": item.get("source_segment_title", ""),
+            "schema_version": item.get("schema_version", 2),
         })
 
     prompt = consolidate_extracted_knowledge_prompt(

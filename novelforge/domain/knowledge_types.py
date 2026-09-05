@@ -102,6 +102,30 @@ KNOWLEDGE_TYPE_FIELDS: dict[str, tuple[KnowledgeField, ...]] = {
 }
 
 
+def build_category_field_specs(categories: list[str] | None = None) -> str:
+    """Build a per-category field-spec fragment for extraction-prompt injection.
+
+    Emits one line per enabled category listing its typed fields (key + label),
+    with a ``*`` marker on required fields. Mirrors ``KNOWLEDGE_TYPE_FIELDS`` so
+    the model is guided field-by-field instead of filling a free-form details dict.
+    """
+    if categories:
+        target = [c for c in categories if c in KNOWLEDGE_TYPE_FIELDS]
+    else:
+        target = list(KNOWLEDGE_TYPE_FIELDS)
+    lines: list[str] = []
+    for category in target:
+        fields = KNOWLEDGE_TYPE_FIELDS.get(category, ())
+        if not fields:
+            continue
+        field_texts: list[str] = []
+        for field in fields:
+            marker = "*" if field.required else ""
+            field_texts.append(f"{field.key}{marker}({field.label})")
+        lines.append(f"- {category}：{'、'.join(field_texts)}")
+    return "\n".join(lines)
+
+
 def _as_list(value: Any) -> list[str]:
     if isinstance(value, list):
         values = value

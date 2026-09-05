@@ -183,3 +183,68 @@ def load_timeline(
         e.get("canonical_name", ""),
     ))
     return events
+
+
+_FACT_PRECEDENCE = {"au": 3, "project_main": 2, "canon": 1}
+
+
+def _fact_slot(fact: dict) -> str:
+    return str(fact.get("fact_key") or "_slotless")
+
+
+def merge_worldline_baseline(
+    conn: sqlite3.Connection,
+    *,
+    story_id: str | None,
+    worldline_id: str | None = None,
+    worldline_mode: str = "prefer",
+) -> list[dict]:
+    """合并「项目库 canon 基线」与「故事作用域当前事实」为有效知识（B 期/D1/D12）。
+
+    对同名实体（entity_type + canonical_name）跨 setting_scope（project vs story）与
+    version_scope（canon vs project_main/au）双维度叠加：优先级 au > project_main > canon；
+    replace 槽位取最高优先级、append 槽位各层 union（按 summary 去重）。
+    纯读取函数；接入生成上下文装配属 refactor 2。
+    """
+    del worldline_mode  # 保留参数位，prefer/strict 语义由消费层（setting/retrieval）处理
+    canon_entities = [
+        e for e in load_entities(conn, worldline_id=worldline_id)
+        if e["setting_scope"] == "project" and e["version_scope"] == "canon"
+    ]
+    current_entities = [
+        e for e in load_entities(conn, story_id=story_id, worldline_id=worldline_id)
+        if e["setting_scope"] == "story" and e["version_scope"] in ("project_main", "au")
+    ]
+    groups: dict[tuple[str, str], dict] = {}
+    for e in canon_entities:
+        key = (e["entity_type"], e["canonical_name"])
+        slot_map = groups.setdefault(key, {"entity_type": e["entity_type"], "canonical_name": e["canonical_name"], "slots": {}})["slots"]
+        for fact in load_entity_facts(conn, e["entity_id"]):
+            slot_map.setdefault(_fact_slot(fact), []).append((_FACT_PRECEDENCE["canon"], fact))
+    for e in current_entities:
+        key = (e["entity_type"], e["canonical_name"])
+        rank = _FACT_PRECEDENCE.get(e["version_scope"], _FACT_PRECEDENCE["project_main"])
+        slot_map = groups.setdefault(key, {"entity_type": e["entity_type"], "canonical_name": e["canonical_name"], "slots": {}})["slots"]
+        for fact in load_entity_facts(conn, e["entity_id"]):
+            slot_map.setdefault(_fact_slot(fact), []).append((rank, fact))
+    merged: list[dict] = []
+    for key, group in groups.items():
+        effective: list[dict] = []
+        for slot, ranked in group["slots"].items():
+            is_replace = slot != "_slotless" and bool(ranked) and ranked[0][1].get("merge_policy") == "replace"
+            if is_replace:
+                ranked.sort(key=lambda x: x[0], reverse=True)
+                effective.append(ranked[0][1])
+            else:
+                seen: set[str] = set()
+                for _, fact in ranked:
+                    summary = str(fact.get("summary") or "")
+                    if summary not in seen:
+                        seen.add(summary)
+                        effective.append(fact)
+        merged.append({
+            "entity_type": group["entity_type"],
+            "canonical_name": group["canonical_name"],
+            "facts": effective,
+        })
+    return merged

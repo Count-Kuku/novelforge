@@ -1,3 +1,6 @@
+from enum import Enum
+
+
 KNOWLEDGE_EXTRACTION_MODE_LABELS = {
     "general": "通用提取",
     "deep": "深度提取",
@@ -26,42 +29,42 @@ KNOWLEDGE_EXTRACTION_EXPERT_PRESETS = {
     "balanced": {
         "label": "平衡总管",
         "mode": "deep",
-        "categories": ["characters", "items", "abilities", "world_rules", "locations", "organizations", "timeline_events", "relationships", "writing_style", "dialogue_style", "constraints"],
+        "categories": ["characters", "items", "abilities", "world_rules", "locations", "organizations", "timeline_events", "relationships", "writing_style", "dialogue_style"],
     },
     "character_expert": {
         "label": "角色专家",
         "mode": "characters",
-        "categories": ["characters", "dialogue_style", "relationships", "constraints", "timeline_events"],
+        "categories": ["characters", "dialogue_style", "relationships", "timeline_events"],
     },
     "relationship_expert": {
         "label": "关系专家",
         "mode": "relationships",
-        "categories": ["relationships", "characters", "timeline_events", "dialogue_style", "constraints"],
+        "categories": ["relationships", "characters", "timeline_events", "dialogue_style"],
     },
     "timeline_expert": {
         "label": "时间线专家",
         "mode": "timeline",
-        "categories": ["timeline_events", "relationships", "characters", "world_rules", "constraints"],
+        "categories": ["timeline_events", "relationships", "characters", "world_rules"],
     },
     "world_expert": {
         "label": "设定专家",
         "mode": "world",
-        "categories": ["world_rules", "locations", "organizations", "abilities", "items", "constraints"],
+        "categories": ["world_rules", "locations", "organizations", "abilities", "items"],
     },
     "style_expert": {
         "label": "文风专家",
         "mode": "style",
-        "categories": ["writing_style", "dialogue_style", "narrative_techniques", "constraints"],
+        "categories": ["writing_style", "dialogue_style", "narrative_techniques"],
     },
     "canon_auditor": {
         "label": "原作审计",
         "mode": "strict_canon",
-        "categories": ["characters", "relationships", "timeline_events", "world_rules", "abilities", "items", "constraints"],
+        "categories": ["characters", "relationships", "timeline_events", "world_rules", "abilities", "items"],
     },
     "fanfic_researcher": {
         "label": "同人参考研究",
         "mode": "fanfic_reference",
-        "categories": ["characters", "relationships", "writing_style", "dialogue_style", "narrative_techniques", "constraints"],
+        "categories": ["characters", "relationships", "writing_style", "dialogue_style", "narrative_techniques"],
     },
 }
 
@@ -73,6 +76,10 @@ KNOWLEDGE_EXTRACTION_PLAN_PRESETS = {
     "character_relationship": {
         "label": "角色关系优先",
         "steps": ["character_expert", "relationship_expert", "style_expert"],
+    },
+    "character_world": {
+        "label": "图鉴（角色+世界设定）",
+        "steps": ["character_expert", "world_expert"],
     },
     "world_timeline": {
         "label": "设定时间线优先",
@@ -99,6 +106,52 @@ KNOWLEDGE_CONSOLIDATION_MODE_LABELS = {
     "strict_canon": "严格原作",
     "style": "文风优先",
 }
+
+
+class MaterialType(str, Enum):
+    """外部资料的资料类型，驱动「资料类型 → 提取预设」路由（D6/A'期）。"""
+    CANON = "canon"            # 原著：出时间线 + 严格原作审计
+    REFERENCE = "reference"    # 图鉴/设定参考：出独立条目（角色+世界）
+    BALANCED = "balanced"      # 类型不明确：均衡提取
+
+
+# material_type → preset 名（计划预设为多 pass，专家预设为单 pass）。
+# 消费方先查 KNOWLEDGE_EXTRACTION_PLAN_PRESETS，再回退 KNOWLEDGE_EXTRACTION_EXPERT_PRESETS。
+MATERIAL_TYPE_PRESET_MAP: dict[str, str] = {
+    MaterialType.CANON.value: "world_timeline",       # world→timeline→canon_auditor
+    MaterialType.REFERENCE.value: "character_world",  # character_expert→world_expert
+    MaterialType.BALANCED.value: "balanced",          # 专家预设（单 pass）
+}
+
+
+def resolve_preset_for_material(material_type: str | None) -> tuple[list[str], str]:
+    """解析 material_type → (categories, mode)，用于单 pass 提取（D6/A'期）。
+
+    计划预设（多 pass）在当前单 pass 任务模型下取第一步专家预设；
+    完整多 pass 串行/并行子抽取属后续增强（D2）。
+    """
+    name = MATERIAL_TYPE_PRESET_MAP.get(material_type or MaterialType.BALANCED.value, "balanced")
+    if name in KNOWLEDGE_EXTRACTION_EXPERT_PRESETS:
+        preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS[name]
+        return list(preset.get("categories", [])), str(preset.get("mode", "general"))
+    plan = KNOWLEDGE_EXTRACTION_PLAN_PRESETS.get(name)
+    if plan and plan.get("steps"):
+        # 计划预设（多 pass）：单 pass 模型下合并各步的 categories（取并集），
+        # mode 取第一步专家预设的 mode。
+        categories: list[str] = []
+        mode = "general"
+        for idx, step in enumerate(plan["steps"]):
+            preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS.get(step)
+            if not preset:
+                continue
+            if idx == 0:
+                mode = str(preset.get("mode", "general"))
+            for category in preset.get("categories", []):
+                if category not in categories:
+                    categories.append(category)
+        return categories, mode
+    preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS["balanced"]
+    return list(preset.get("categories", [])), str(preset.get("mode", "general"))
 
 
 def default_extraction_categories(strategy: str, preset: dict, category_options: list[str]) -> list[str]:

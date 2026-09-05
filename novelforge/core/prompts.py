@@ -1600,6 +1600,7 @@ def extract_reference_knowledge_prompt(
     extraction_mode: str = "general",
     alias_context: str = "",
     custom_instructions: str = "",
+    field_specs_text: str = "",
 ) -> str:
     categories_text = ", ".join(enabled_categories) if enabled_categories else "全部分类"
     mode_key = extraction_mode if extraction_mode in EXTRACTION_MODE_INSTRUCTIONS else "general"
@@ -1642,7 +1643,9 @@ def extract_reference_knowledge_prompt(
 - writing_style：写作风格，包含叙事视角、节奏、氛围、描写习惯
 - dialogue_style：对白风格，包含口癖、语气、句式、称呼习惯
 - narrative_techniques：写作手法，包含铺垫、反转、悬念、情绪推进、场景切换
-- constraints：硬性约束，包含不能违背的原作规则、设定边界、禁用写法
+
+各分类字段规格（带 * 为必填，请尽量按字段填写，不要只堆进 details 自由字典）：
+{field_specs_text}
 
 原始资料：
 {raw_text}
@@ -1653,7 +1656,7 @@ def extract_reference_knowledge_prompt(
   "source_summary": "",
   "items": [
     {{
-      "category": "characters|items|abilities|world_rules|locations|organizations|timeline_events|relationships|writing_style|dialogue_style|narrative_techniques|constraints",
+      "category": "characters|items|abilities|world_rules|locations|organizations|timeline_events|relationships|writing_style|dialogue_style|narrative_techniques",
       "name": "",
       "summary": "",
       "details": {{
@@ -1733,7 +1736,7 @@ def consolidate_extracted_knowledge_prompt(
   "source_summary": "",
   "items": [
     {{
-      "category": "characters|items|abilities|world_rules|locations|organizations|timeline_events|relationships|writing_style|dialogue_style|narrative_techniques|constraints",
+      "category": "characters|items|abilities|world_rules|locations|organizations|timeline_events|relationships|writing_style|dialogue_style|narrative_techniques",
       "name": "",
       "summary": "",
       "details": {{
@@ -1769,6 +1772,65 @@ def consolidate_extracted_knowledge_prompt(
 6. 对互相矛盾的信息不要强行合并，拆成多条或写入 notes
 7. 只输出启用分类中的内容；如果启用分类为空，则可按全部分类整理
 8. 不要发明输入条目中没有的信息
+"""
+
+
+def recall_missed_knowledge_prompt(
+    source_title: str,
+    raw_text: str,
+    extracted_items_json: str,
+    enabled_categories: list[str],
+    rules_text: str = "当前无额外规则。",
+) -> str:
+    categories_text = ", ".join(enabled_categories) if enabled_categories else "全部分类"
+    return f"""
+你是同人小说资料提取的复核员。
+
+下面已经完成了一轮资料提取。请你对照原文，找出**被遗漏**的重要实体、事件、关系、设定或硬性约束，尤其注意：
+- 只在原文中短暂出现、但影响后续剧情走向的角色或物品；
+- 跨段落前后呼应、单独一段看不出重要性的设定；
+- 容易和已有条目混为一谈、但其实应当独立的实体。
+
+资料标题：
+{source_title}
+
+启用的知识分类：
+{categories_text}
+
+规则约束：
+{rules_text}
+
+已提取条目（JSON）：
+{extracted_items_json}
+
+原始资料：
+{raw_text}
+
+请输出 JSON，格式与已提取条目一致：
+{{
+  "items": [
+    {{
+      "category": "characters|items|abilities|world_rules|locations|organizations|timeline_events|relationships|writing_style|dialogue_style|narrative_techniques",
+      "name": "",
+      "summary": "",
+      "details": {{
+        "字段名": "字段内容"
+      }},
+      "evidence": [
+        {{
+          "quote": "",
+          "note": ""
+        }}
+      ],
+      "confidence": 0.7,
+      "importance": 0.5,
+      "evidence_strength": 0.5
+    }}
+  ],
+  "notes": []
+}}
+
+只列出确实被遗漏的条目；如果没有遗漏，items 返回空数组。不要重复已提取条目中的内容。
 """
 
 

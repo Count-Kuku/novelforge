@@ -19,7 +19,7 @@ from novelforge.services.memory import (
     save_creative_attachment,
     update_creative_attachment,
 )
-from novelforge.domain.extraction_presets import KNOWLEDGE_EXTRACTION_EXPERT_PRESETS
+from novelforge.domain.extraction_presets import resolve_preset_for_material
 from novelforge.services.model_readiness import get_model_readiness
 from novelforge.services.retrieval import (
     build_structured_external_source_payload,
@@ -251,12 +251,13 @@ def schedule_creative_attachment_knowledge(
         batch = save_long_reference_batch(project_name, batch)
 
     segment_indices = list(range(len(batch.get("segments") or [])))
-    preset = KNOWLEDGE_EXTRACTION_EXPERT_PRESETS["balanced"]
+    material_type = str(metadata.get("material_type") or "").strip() or None
+    enabled_categories, extraction_mode = resolve_preset_for_material(material_type)
     estimate = build_long_reference_ingestion_estimate(
         batch,
         segment_indices,
-        enabled_categories=list(preset["categories"]),
-        extraction_mode=str(preset["mode"]),
+        enabled_categories=enabled_categories,
+        extraction_mode=extraction_mode,
         import_to_index=False,
         consolidate_after_extract=True,
     )
@@ -279,8 +280,8 @@ def schedule_creative_attachment_knowledge(
         project_name,
         batch,
         segment_indices,
-        enabled_categories=list(preset["categories"]),
-        extraction_mode=str(preset["mode"]),
+        enabled_categories=enabled_categories,
+        extraction_mode=extraction_mode,
         extract_limit=len(segment_indices),
         import_to_index=False,
         consolidate_after_extract=True,

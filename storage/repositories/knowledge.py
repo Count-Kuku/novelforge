@@ -29,6 +29,15 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _chapter_no_from_item(item: dict) -> int | None:
     """Extract the source chapter number from an item, tolerant of its absence.
 
@@ -347,7 +356,8 @@ def _apply_supersession(
     conn.execute(
         """
         UPDATE knowledge_items
-        SET valid_to_chapter = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        SET valid_to_chapter = ?, superseded_by = ?,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
         WHERE entity_id = ? AND fact_key = ?
           AND knowledge_id != ?
           AND deleted_at IS NULL
@@ -355,7 +365,7 @@ def _apply_supersession(
           AND valid_from_chapter IS NOT NULL
           AND valid_from_chapter < ?
         """,
-        (valid_from_chapter, entity_id, fact_key, knowledge_id, valid_from_chapter),
+        (valid_from_chapter, knowledge_id, entity_id, fact_key, knowledge_id, valid_from_chapter),
     )
 
 
@@ -401,12 +411,12 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 evidence_strength, source_id, segment_id, extraction_mode, setting_scope,
                 setting_role, injection_policy, status, schema_version, structured_json,
                 entity_id, fact_key, chapter_no, valid_from_chapter, valid_to_chapter,
-                merge_policy,
+                merge_policy, sequence_order,
                 created_at, updated_at, deleted_at
             )
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, NULL, ?,
+                ?, ?, ?, ?, NULL, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
@@ -438,6 +448,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 chapter_no = excluded.chapter_no,
                 valid_from_chapter = excluded.valid_from_chapter,
                 merge_policy = excluded.merge_policy,
+                sequence_order = excluded.sequence_order,
                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 deleted_at = NULL
             """,
@@ -469,6 +480,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 chapter_no,
                 valid_from_chapter,
                 merge_policy,
+                _int_or_none(item.get("sequence_order")),
             ),
         )
         if entity_id:
@@ -926,6 +938,7 @@ def _resolve_entity_id(
     story_id: str | None,
     worldline_id: str | None = None,
     setting_scope: str = "story",
+    version_scope: str = "project_main",
 ) -> str | None:
     """Resolve an entity name to an entity_id, creating the master row if absent.
 
@@ -936,7 +949,7 @@ def _resolve_entity_id(
     clean_name = str(name or "").strip()
     if not clean_name:
         return None
-    domain = (setting_scope, story_id or "", worldline_id or "", "project_main")
+    domain = (setting_scope, story_id or "", worldline_id or "", version_scope or "project_main")
     # Look for an existing entity with the same normalized name + type + domain.
     normalized = normalize_name(clean_name)
     if normalized:
@@ -952,7 +965,7 @@ def _resolve_entity_id(
                     (entity_id,),
                 ).fetchone()
                 if edom:
-                    existing_domain = (edom[0] or "project", edom[1] or "", edom[2] or "", "project_main")
+                    existing_domain = (edom[0] or "project", edom[1] or "", edom[2] or "", version_scope or "project_main")
                     if existing_domain == domain:
                         return entity_id
     eid = entity_id_for(entity_type, clean_name, domain)
@@ -961,12 +974,12 @@ def _resolve_entity_id(
         INSERT INTO entities (
             entity_id, entity_type, canonical_name, display_name, story_id, worldline_id,
             setting_scope, version_scope, summary, importance, created_at, updated_at, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'project_main', '', 0,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0,
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)
         ON CONFLICT(entity_id) DO UPDATE SET deleted_at = NULL
         """,
-        (eid, entity_type, clean_name, clean_name, story_id or None, worldline_id or None, setting_scope),
+        (eid, entity_type, clean_name, clean_name, story_id or None, worldline_id or None, setting_scope, version_scope or "project_main"),
     )
     return eid
 
@@ -1128,15 +1141,18 @@ def _upsert_graph_relationship_edges(
         return
     worldline_id = str(item.get("worldline_id") or "").strip() or None
     setting_scope = str(item.get("setting_scope") or "story").strip() or "story"
+    version_scope = str(item.get("version_scope") or "project_main").strip() or "project_main"
     # Relationship endpoints are bare names; resolve them to entities (character
     # is the default; organization relationships resolve by existing entity).
     source_node_id = _resolve_entity_id(
         conn, name=source_name, entity_type="character",
         story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
+        version_scope=version_scope,
     )
     target_node_id = _resolve_entity_id(
         conn, name=target_name, entity_type="character",
         story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
+        version_scope=version_scope,
     )
     if not source_node_id or not target_node_id:
         return
@@ -1217,6 +1233,7 @@ def _upsert_entity_reference_edges(
         return
     worldline_id = str(item.get("worldline_id") or "").strip() or None
     setting_scope = str(item.get("setting_scope") or "story").strip() or "story"
+    version_scope = str(item.get("version_scope") or "project_main").strip() or "project_main"
     details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
     typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
     for field, (relation_type, target_type) in _REFERENCE_FIELD_SPECS.items():
@@ -1234,6 +1251,7 @@ def _upsert_entity_reference_edges(
             target_entity_id = _resolve_entity_id(
                 conn, name=target_name, entity_type=target_type,
                 story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
+                version_scope=version_scope,
             )
             if not target_entity_id or target_entity_id == source_entity_id:
                 continue

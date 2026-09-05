@@ -345,12 +345,14 @@ class ExtractedKnowledgeItem(NovelForgeSchema):
         "writing_style",
         "dialogue_style",
         "narrative_techniques",
-        "constraints",
     ]
     name: str
     summary: str = ""
     details: dict[str, str] = Field(default_factory=dict)
     typed_data: dict[str, Any] = Field(default_factory=dict)
+    setting_field: str = ""
+    fact_key: str = ""
+    aliases: list[str] = Field(default_factory=list)
     schema_version: int = Field(default=2, ge=1)
     evidence: list[KnowledgeEvidence] = Field(default_factory=list)
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
@@ -861,7 +863,6 @@ class WebResearchClaim(NovelForgeSchema):
         "writing_style",
         "dialogue_style",
         "narrative_techniques",
-        "constraints",
     ]
     name: str
     statement: str
@@ -923,7 +924,6 @@ class WebResearchVerificationDecision(NovelForgeSchema):
         "writing_style",
         "dialogue_style",
         "narrative_techniques",
-        "constraints",
     ]
     name: str
     summary: str
@@ -1398,7 +1398,6 @@ KNOWLEDGE_CATEGORY_LABELS = {
     "writing_style": "写作风格",
     "dialogue_style": "对白风格",
     "narrative_techniques": "写作手法",
-    "constraints": "硬性约束",
 }
 
 
