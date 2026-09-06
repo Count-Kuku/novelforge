@@ -304,6 +304,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fragment_id: fragmentId }),
     }),
+  selectFrontier: (projectId: string, storyId: string, sessionId: string, fragmentId: string) =>
+    request<{ session: CreativeSession }>(`/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/sessions/${encodeURIComponent(sessionId)}/frontier`, {
+      method: 'POST',
+      body: JSON.stringify({ fragment_id: fragmentId }),
+    }),
   streamFragmentExtraction: async (
     projectId: string,
     storyId: string,

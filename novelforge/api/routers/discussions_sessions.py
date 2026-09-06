@@ -308,6 +308,12 @@ async def select_fragment(project_id: str, story_id: str, session_id: str, paylo
     saved = await run_in_threadpool(memory.select_creative_fragment_variant, name, session_id, payload.fragment_id, story_id=story_id)
     return _envelope({"fragment": saved}, request)
 
+@router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/frontier")
+async def select_frontier(project_id: str, story_id: str, session_id: str, payload: FragmentActionRequest, request: Request) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    saved = await run_in_threadpool(memory.select_creative_frontier, name, session_id, payload.fragment_id, story_id=story_id)
+    return _envelope({"session": saved}, request)
+
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/turns/stream")
 async def generate_turn_stream(project_id: str, story_id: str, session_id: str, payload: GenerateTurnRequest, request: Request):
     name = _resolve_project_name(project_id)

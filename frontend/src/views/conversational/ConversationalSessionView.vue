@@ -22,6 +22,7 @@ const operationId = ref('')
 const cancelledByUser = ref(false)
 const streamingText = ref('')
 const activeFragmentId = ref('')
+const startFromId = ref('')
 const extractBlocked = ref<{ ids: string[]; count: number; sample: string }>({ ids: [], count: 0, sample: '' })
 const composing = ref(false)
 const attachmentOpen = ref(false)
@@ -48,11 +49,36 @@ const activeDraft = computed(() => {
   return item && item.status === 'proposed' ? item : null
 })
 const hasConfirmedText = computed(() => fragments.value.some((fragment) => fragment.status === 'accepted' || fragment.status === 'finalized'))
+const confirmedStarts = computed(() =>
+  fragments.value
+    .map((fragment, index) => ({
+      fragment_id: fragment.fragment_id,
+      vNo: index + 1,
+      short: fragment.content.replace(/\s+/g, ' ').slice(0, 14),
+    }))
+    .filter((_item, index) => {
+      const status = fragments.value[index].status
+      return status === 'accepted' || status === 'finalized'
+    }),
+)
 const composerModeHint = computed(() => {
   if (activeDraft.value) return '修订当前草稿：发送消息会替换这段候选'
   if (!fragments.value.length || !hasConfirmedText.value) return '起草新片段：将从故事开头生成'
-  return '继续创作：将从最近确认的片段往后生成'
+  return ''
 })
+
+function syncStartFrom() {
+  if (!hasConfirmedText.value) {
+    startFromId.value = ''
+    return
+  }
+  const confirmed = fragments.value.filter((fragment) => fragment.status === 'accepted' || fragment.status === 'finalized')
+  if (activeFragmentId.value && confirmed.some((fragment) => fragment.fragment_id === activeFragmentId.value)) {
+    startFromId.value = activeFragmentId.value
+  } else {
+    startFromId.value = confirmed[confirmed.length - 1]?.fragment_id || ''
+  }
+}
 
 async function reloadBundle() {
   if (!workspace.activeProjectId || !workspace.activeStory || !route.params.sessionId) return
@@ -62,6 +88,7 @@ async function reloadBundle() {
   attachments.value = data.attachments || []
   sessionTitle.value = data.session?.title || ''
   activeFragmentId.value = String(data.session?.active_fragment_id || '')
+  syncStartFrom()
   try { actions.value = (await api.actions(workspace.activeProjectId, workspace.activeStory.story_id, String(route.params.sessionId))).actions } catch (reason) { actions.value = []; console.warn('Action list unavailable', reason) }
 }
 
@@ -87,7 +114,18 @@ async function send() {
   streamingText.value = ''
   error.value = ''
   try {
-    const actionType = activeDraft.value ? 'rewrite' : hasConfirmedText.value ? 'continue' : 'generate'
+    const draftActive = Boolean(activeDraft.value)
+    let actionType: string
+    if (draftActive) actionType = 'rewrite'
+    else if (!hasConfirmedText.value) actionType = 'generate'
+    else {
+      actionType = 'continue'
+      const fromId = startFromId.value || activeFragmentId.value
+      if (fromId && fromId !== activeFragmentId.value) {
+        const frontierData = await api.selectFrontier(workspace.activeProjectId, workspace.activeStory.story_id, String(route.params.sessionId), fromId)
+        activeFragmentId.value = String(frontierData.session?.active_fragment_id || fromId)
+      }
+    }
     await api.streamTurn(
       workspace.activeProjectId,
       workspace.activeStory.story_id,
@@ -309,7 +347,7 @@ async function undoAction(action: CreativeAction) {
     <div v-if="attachments.length" class="attachment-progress-panel"><span v-for="attachment in attachments" :key="`progress-${attachment.attachment_id}`" class="attachment-progress-item"><strong>{{ attachment.title || attachment.filename }}</strong><small>{{ attachment.task_status || attachment.status || '已索引' }}<template v-if="attachment.task_progress?.total"> · {{ attachment.task_progress.completed || 0 }}/{{ attachment.task_progress.total }}</template></small><button v-if="attachment.task_status === 'failed' || attachment.status === 'failed'" class="retry-chip" @click="retryAttachment(attachment)">重试</button></span></div>
     <aside v-if="fragments.length" class="fragment-timeline"><strong>版本记录</strong><span v-for="(fragment, index) in fragments" :key="`timeline-${fragment.fragment_id}`"><i :class="{ active: fragment.status === 'accepted' }"></i>V{{ index + 1 }} · {{ fragmentStatusLabel(fragment.status) }} · {{ fragment.created_at }}</span></aside>
   </div>
-  <section class="session-page"><div class="session-title"><p class="eyebrow">当前会话</p><h1>{{ sessionTitle || workspace.activeStory?.name }}</h1><span class="pill">会话 {{ String(route.params.sessionId).slice(-8) }}</span><button class="session-rename" @click="renameSession">重命名</button></div><div v-if="loading" class="session-state">正在读取会话…</div><div v-else-if="error && !turns.length" class="session-state error">{{ error }}</div><div v-else class="session-content"><div v-if="actions.length" class="action-list"><p class="eyebrow">待确认操作</p><article v-for="action in actions" :key="action.action_id" class="action-card"><div><strong>{{ actionTypeLabel(action.action_type) }}</strong><span class="action-status">{{ actionStatusLabel(action.status) }}</span><p>{{ action.plan?.message || action.error_text || '等待处理' }}</p></div><div class="action-buttons"><button v-if="action.status === 'awaiting_confirmation' || action.status === 'planned'" class="button secondary" @click="executeAction(action)">确认执行</button><button v-if="action.status === 'awaiting_confirmation'" class="button ghost" @click="cancelAction(action)">取消</button><button v-if="action.status === 'completed' && action.result" class="button ghost" @click="undoAction(action)">撤销</button></div></article></div><div v-if="!turns.length && !fragments.length" class="session-state">会话尚无内容。可在下方输入写作要求或待讨论的问题。</div><template v-for="entry in timelineItems" :key="`${entry.kind}-${entry.id}`"><div v-if="entry.kind === 'turn'" class="turn-row"><span class="turn-dot"></span><div><small>你 · {{ entry.item.created_at }}</small><p>{{ entry.item.user_message }}</p></div></div><div v-else class="fragment-card"><small>NovelForge · {{ fragmentStatusLabel(entry.item.status) }}</small><p>{{ entry.item.content }}</p><div v-if="entry.item.status === 'proposed'" class="fragment-actions"><button class="button secondary" :disabled="extractingId === entry.item.fragment_id" @click="confirmAndExtract(entry.item.fragment_id)">{{ extractingId === entry.item.fragment_id ? '确认并提炼中…' : '确认并提炼' }}</button><span class="muted">草稿 · 直接发消息可继续修订</span></div><div v-else-if="entry.item.status === 'accepted' || entry.item.status === 'finalized'" class="fragment-actions"><template v-if="entry.item.extraction_status === 'completed'"><span class="extracted-state">已提炼进知识库</span></template><template v-else-if="extractingId === entry.item.fragment_id"><span class="extracting-state">正在提炼…</span></template><template v-else><button class="button ghost" @click="extractFragment(entry.item.fragment_id)">{{ entry.item.extraction_status === 'failed' ? '重试提炼' : '提炼设定' }}</button><span class="muted">认可这段文字后可提炼为长期设定</span></template></div></div></template><div v-if="streamingText" class="fragment-card streaming"><small>NovelForge · 正在生成</small><p>{{ streamingText }}<span class="cursor">▌</span></p></div><div v-if="attachments.length" class="attachment-list"><span v-for="attachment in attachments" :key="attachment.attachment_id">📎 {{ attachment.title || attachment.filename }}</span></div></div><p v-if="error" class="inline-error">{{ error }}</p><p v-if="extractNotice" class="extract-notice" role="status">{{ extractNotice }}</p><div v-if="extractBlocked.count" class="extract-conflict" role="alert"><p>{{ extractBlocked.count }} 条候选与现有设定冲突或存疑（{{ extractBlocked.sample }}），仍在待审核、未进入正式知识。</p><div class="extract-conflict-actions"><button class="button ghost" @click="adoptBlockedExtractions">采纳这些设定</button><button class="button ghost" @click="goReviewPending">去待审核处理</button></div></div><div v-if="attachmentOpen" class="attachment-tray"><input v-model="attachmentTitle" placeholder="资料标题" /><textarea v-model="attachmentText" rows="4" placeholder="粘贴资料；默认仅用于当前会话"></textarea><input v-model="attachmentUrl" type="url" placeholder="或输入公开网页 URL" /><input ref="attachmentFile" type="file" accept=".txt,.md,.pdf,.docx,.epub" multiple @change="addFileAttachment" /><small v-if="batchUploadMessage" class="batch-upload-message">{{ batchUploadMessage }}</small><div><button class="button secondary" :disabled="attachmentSaving || !attachmentText.trim()" @click="addAttachment">{{ attachmentSaving ? '保存中…' : '添加文本资料' }}</button><button class="button secondary" :disabled="attachmentSaving || !attachmentUrl.trim()" @click="addUrlAttachment">{{ attachmentSaving ? '抓取中…' : '添加网页' }}</button><button class="button ghost" @click="attachmentOpen = false">关闭</button></div></div><div class="session-composer"><span class="composer-mode-hint">{{ composerModeHint }}</span><textarea v-model="draft" rows="2" aria-label="写作要求" placeholder="输入写作要求、修改意见或下一段内容" :disabled="sending" @compositionstart="composing = true" @compositionend="composing = false" @keydown.meta.enter.prevent="!composing && send()" @keydown.ctrl.enter.prevent="!composing && send()"></textarea><button class="attach-button" title="添加会话资料" @click="attachmentOpen = !attachmentOpen">＋资料</button><button class="attach-button" title="将当前输入识别为需要确认的操作" :disabled="!draft.trim()" @click="planActionFromDraft">识别操作</button><button v-if="sending" class="attach-button" :disabled="cancelling || !operationId" @click="cancelGeneration">{{ cancelling ? '停止中…' : '停止生成' }}</button><button class="button accent" :disabled="sending || !draft.trim()" @click="send">{{ sending ? '生成中…' : '发送' }}</button></div></section>
+  <section class="session-page"><div class="session-title"><p class="eyebrow">当前会话</p><h1>{{ sessionTitle || workspace.activeStory?.name }}</h1><span class="pill">会话 {{ String(route.params.sessionId).slice(-8) }}</span><button class="session-rename" @click="renameSession">重命名</button></div><div v-if="loading" class="session-state">正在读取会话…</div><div v-else-if="error && !turns.length" class="session-state error">{{ error }}</div><div v-else class="session-content"><div v-if="actions.length" class="action-list"><p class="eyebrow">待确认操作</p><article v-for="action in actions" :key="action.action_id" class="action-card"><div><strong>{{ actionTypeLabel(action.action_type) }}</strong><span class="action-status">{{ actionStatusLabel(action.status) }}</span><p>{{ action.plan?.message || action.error_text || '等待处理' }}</p></div><div class="action-buttons"><button v-if="action.status === 'awaiting_confirmation' || action.status === 'planned'" class="button secondary" @click="executeAction(action)">确认执行</button><button v-if="action.status === 'awaiting_confirmation'" class="button ghost" @click="cancelAction(action)">取消</button><button v-if="action.status === 'completed' && action.result" class="button ghost" @click="undoAction(action)">撤销</button></div></article></div><div v-if="!turns.length && !fragments.length" class="session-state">会话尚无内容。可在下方输入写作要求或待讨论的问题。</div><template v-for="entry in timelineItems" :key="`${entry.kind}-${entry.id}`"><div v-if="entry.kind === 'turn'" class="turn-row"><span class="turn-dot"></span><div><small>你 · {{ entry.item.created_at }}</small><p>{{ entry.item.user_message }}</p></div></div><div v-else class="fragment-card"><small>NovelForge · {{ fragmentStatusLabel(entry.item.status) }}</small><p>{{ entry.item.content }}</p><div v-if="entry.item.status === 'proposed'" class="fragment-actions"><button class="button secondary" :disabled="extractingId === entry.item.fragment_id" @click="confirmAndExtract(entry.item.fragment_id)">{{ extractingId === entry.item.fragment_id ? '确认并提炼中…' : '确认并提炼' }}</button><span class="muted">草稿 · 直接发消息可继续修订</span></div><div v-else-if="entry.item.status === 'accepted' || entry.item.status === 'finalized'" class="fragment-actions"><template v-if="entry.item.extraction_status === 'completed'"><span class="extracted-state">已提炼进知识库</span></template><template v-else-if="extractingId === entry.item.fragment_id"><span class="extracting-state">正在提炼…</span></template><template v-else><button class="button ghost" @click="extractFragment(entry.item.fragment_id)">{{ entry.item.extraction_status === 'failed' ? '重试提炼' : '提炼设定' }}</button><span class="muted">认可这段文字后可提炼为长期设定</span></template></div></div></template><div v-if="streamingText" class="fragment-card streaming"><small>NovelForge · 正在生成</small><p>{{ streamingText }}<span class="cursor">▌</span></p></div><div v-if="attachments.length" class="attachment-list"><span v-for="attachment in attachments" :key="attachment.attachment_id">📎 {{ attachment.title || attachment.filename }}</span></div></div><p v-if="error" class="inline-error">{{ error }}</p><p v-if="extractNotice" class="extract-notice" role="status">{{ extractNotice }}</p><div v-if="extractBlocked.count" class="extract-conflict" role="alert"><p>{{ extractBlocked.count }} 条候选与现有设定冲突或存疑（{{ extractBlocked.sample }}），仍在待审核、未进入正式知识。</p><div class="extract-conflict-actions"><button class="button ghost" @click="adoptBlockedExtractions">采纳这些设定</button><button class="button ghost" @click="goReviewPending">去待审核处理</button></div></div><div v-if="attachmentOpen" class="attachment-tray"><input v-model="attachmentTitle" placeholder="资料标题" /><textarea v-model="attachmentText" rows="4" placeholder="粘贴资料；默认仅用于当前会话"></textarea><input v-model="attachmentUrl" type="url" placeholder="或输入公开网页 URL" /><input ref="attachmentFile" type="file" accept=".txt,.md,.pdf,.docx,.epub" multiple @change="addFileAttachment" /><small v-if="batchUploadMessage" class="batch-upload-message">{{ batchUploadMessage }}</small><div><button class="button secondary" :disabled="attachmentSaving || !attachmentText.trim()" @click="addAttachment">{{ attachmentSaving ? '保存中…' : '添加文本资料' }}</button><button class="button secondary" :disabled="attachmentSaving || !attachmentUrl.trim()" @click="addUrlAttachment">{{ attachmentSaving ? '抓取中…' : '添加网页' }}</button><button class="button ghost" @click="attachmentOpen = false">关闭</button></div></div><div class="session-composer"><span class="composer-mode-hint"><template v-if="!activeDraft && hasConfirmedText">从 <select v-model="startFromId" class="start-select" aria-label="生成起点" :disabled="sending"><option v-for="option in confirmedStarts" :key="option.fragment_id" :value="option.fragment_id">V{{ option.vNo }} · {{ option.short }}</option></select> 之后继续生成</template><template v-else>{{ composerModeHint }}</template></span><textarea v-model="draft" rows="2" aria-label="写作要求" placeholder="输入写作要求、修改意见或下一段内容" :disabled="sending" @compositionstart="composing = true" @compositionend="composing = false" @keydown.meta.enter.prevent="!composing && send()" @keydown.ctrl.enter.prevent="!composing && send()"></textarea><button class="attach-button" title="添加会话资料" @click="attachmentOpen = !attachmentOpen">＋资料</button><button class="attach-button" title="将当前输入识别为需要确认的操作" :disabled="!draft.trim()" @click="planActionFromDraft">识别操作</button><button v-if="sending" class="attach-button" :disabled="cancelling || !operationId" @click="cancelGeneration">{{ cancelling ? '停止中…' : '停止生成' }}</button><button class="button accent" :disabled="sending || !draft.trim()" @click="send">{{ sending ? '生成中…' : '发送' }}</button></div></section>
 </template>
 
 <style scoped>
@@ -324,7 +362,8 @@ async function undoAction(action: CreativeAction) {
 .fragment-actions .ghost:disabled { cursor: not-allowed; opacity: .5; }
 .extracted-state { color: #7da477; font-size: 11px; }
 .extracting-state { color: #e0a17d; font-size: 11px; }
-.extract-notice { margin: 12px 0; padding: 9px 12px; border: 1px solid rgba(222,172,139,.3); border-radius: 9px; color: #d8c2ae; background: rgba(190,111,78,.1); font-size: 11px; }.composer-mode-hint { flex: 0 0 100%; padding: 2px 2px 10px; margin-bottom: 9px; border-bottom: 1px solid rgba(255,255,255,.08); color: #979c93; font-size: 11px; letter-spacing: .03em; }
+.extract-notice { margin: 12px 0; padding: 9px 12px; border: 1px solid rgba(222,172,139,.3); border-radius: 9px; color: #d8c2ae; background: rgba(190,111,78,.1); font-size: 11px; }.composer-mode-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 0 0 100%; padding: 2px 2px 10px; margin-bottom: 9px; border-bottom: 1px solid rgba(255,255,255,.08); color: #979c93; font-size: 11px; letter-spacing: .03em; }
+.start-select { max-width: 300px; padding: 4px 6px; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; outline: 0; color: #d8c2ae; background: #292b2a; font-family: inherit; font-size: 11px; }
 .session-composer { flex-wrap: wrap; }
 .extract-conflict { margin: 10px 0 0; padding: 10px 12px; border: 1px solid rgba(231,146,120,.4); border-radius: 9px; background: rgba(160,60,50,.12); }
 .extract-conflict p { margin: 0 0 8px; color: #e5b3a2; font-size: 11px; line-height: 1.6; }

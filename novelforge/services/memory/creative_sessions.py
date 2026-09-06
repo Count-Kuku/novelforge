@@ -542,6 +542,47 @@ def select_creative_fragment_variant(
     return _memory_api.CreativeSession.model_validate(saved).model_dump()
 
 
+
+def select_creative_frontier(
+    project_name: str,
+    session_id: str,
+    fragment_id: str,
+    *,
+    story_id: str,
+) -> dict:
+    """把创作前沿切到本会话任意已确认/已定稿片段（真正“分支”起点）。
+
+    与 select_creative_fragment_variant 不同：后者仅允许在同级 proposed 之间切换；
+    这里允许从已转正（accepted/finalized）的节点重设前沿，
+    之后 continue 即从该节点往后生成，旧分支内容原样保留。
+    """
+    if _memory_api._project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        session = _creative_session_owner(conn, session_id, story_id)
+        if session.get("status") == "archived":
+            conn.rollback()
+            raise ValueError("已归档的创作会话不能切换创作前沿。")
+        if _creative_session_has_running_turn(conn, session_id):
+            conn.rollback()
+            raise ValueError("当前会话仍有生成任务运行，暂时不能切换创作前沿。")
+        target = _memory_api.load_creative_fragment_row(conn, fragment_id)
+        if target is None or str(target.get("session_id") or "") != session_id:
+            conn.rollback()
+            raise ValueError("创作片段不属于当前会话。")
+        if str(target.get("status") or "") not in {"accepted", "finalized"}:
+            conn.rollback()
+            raise ValueError("只能把创作前沿切到已确认（accepted/finalized）的片段。")
+        saved = _memory_api.update_creative_session_row(
+            conn,
+            session_id,
+            {"active_fragment_id": fragment_id},
+        )
+        conn.commit()
+    return _memory_api.CreativeSession.model_validate(saved).model_dump()
+
+
 def finalize_creative_session(
     project_name: str,
     session_id: str,
