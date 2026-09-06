@@ -150,6 +150,12 @@ class ModelProfileRequest(ApiModel):
     cost_tracking_mode: str = Field(default="auto", max_length=40)
 
 
+class DiscoverModelsRequest(ApiModel):
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: str = Field(default="", max_length=1000)
+    provider_type: str = Field(default="auto", max_length=80)
+
+
 class ActiveModelProfileRequest(ApiModel):
     profile_id: str = Field(min_length=1, max_length=120)
 

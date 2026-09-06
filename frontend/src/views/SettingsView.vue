@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api } from '../api/client'
 
@@ -18,6 +18,38 @@ const embeddingMode = ref('disabled')
 const embeddingModelName = ref('')
 const savingProfile = ref(false)
 const profileMessage = ref('')
+const discoveredModels = ref<Array<{ id: string; context_window: number; multimodal: boolean; native_web_search: boolean }>>([])
+const discovering = ref(false)
+const discoverMessage = ref('')
+const onlyNonMultimodal = ref(true)
+const shownModels = computed(() =>
+  onlyNonMultimodal.value ? discoveredModels.value.filter((model) => !model.multimodal) : discoveredModels.value,
+)
+
+function ctxLabel(tokens: number) {
+  const n = Number(tokens) || 0
+  return n >= 1000000 ? `${(n / 1000000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n)
+}
+
+async function fetchModels() {
+  if (!baseUrl.value.trim() || discovering.value) return
+  discovering.value = true
+  discoverMessage.value = ''
+  try {
+    const data = await api.discoverModels(baseUrl.value.trim(), apiKey.value, providerType.value)
+    discoveredModels.value = (data.models || []).sort((a, b) => a.id.localeCompare(b.id))
+    if (!discoveredModels.value.length) discoverMessage.value = '该服务没有返回可用模型。'
+  } catch (reason) {
+    discoveredModels.value = []
+    discoverMessage.value = reason instanceof Error ? reason.message : '获取模型失败'
+  } finally { discovering.value = false }
+}
+
+function pickDiscoveredModel(model: { id: string }) {
+  modelName.value = model.id
+  discoveredModels.value = []
+  discoverMessage.value = '已填入模型名称，保存后生效。'
+}
 const usage = ref<{ today: Record<string, any>; month: Record<string, any> } | null>(null)
 const breakdownDimension = ref<'project' | 'story' | 'model' | 'operation' | 'agent'>('operation')
 const breakdownRows = ref<Record<string, any>[]>([])
@@ -68,7 +100,7 @@ onMounted(async () => {
 <template>
   <article v-if="usage" class="usage-panel"><div><p class="eyebrow">模型用量</p><strong>今日 {{ usage.today.request_count || 0 }} 次请求 · {{ usage.today.total_tokens || 0 }} tokens</strong><small>本月 {{ usage.month.request_count || 0 }} 次 · 约 ${{ Number(usage.month.cost_usd || 0).toFixed(4) }}；{{ usage.month.cost_complete ? '价格完整' : '含估算或未计价调用' }}</small></div><span class="usage-cost">今日约 ${{ Number(usage.today.cost_usd || 0).toFixed(4) }}</span></article>
   <article v-if="usage" class="usage-breakdown"><div class="usage-breakdown-heading"><div><p class="eyebrow">用量明细</p><h2>按维度查看</h2></div><select v-model="breakdownDimension" aria-label="用量维度" @change="loadBreakdown"><option value="operation">操作</option><option value="model">模型</option><option value="story">故事</option><option value="project">项目</option><option value="agent">Agent</option></select></div><div v-if="breakdownLoading" class="breakdown-state">正在读取明细…</div><div v-else-if="!breakdownRows.length" class="breakdown-state">当前维度暂无记录。</div><div v-else class="breakdown-table" role="table" aria-label="用量明细"><div class="breakdown-row header" role="row"><span>维度</span><span>请求 / tokens</span><span>费用</span></div><div v-for="row in breakdownRows" :key="String(row.bucket)" class="breakdown-row" role="row"><strong>{{ row.bucket || '未标记' }}</strong><span>{{ row.request_count || 0 }} 次 · {{ row.total_tokens || 0 }} tokens</span><span>${{ Number(row.cost_usd || 0).toFixed(4) }}</span></div></div></article>
-  <section class="settings-page"><p class="eyebrow">模型与能力</p><h1>配置模型、检索与<em>本地能力</em></h1><p class="intro">查看聊天、Embedding、搜索和 OCR 的可用状态，并管理模型连接。已保存的密钥不会在页面中回显。</p><div v-if="loading" class="settings-state">正在检查本地能力…</div><template v-else><div class="capability-grid"><article v-for="(item, key) in capabilities" :key="key" class="capability-card"><div class="status-dot" :class="{ ready: item.available }"></div><div><strong>{{ key }}</strong><small>{{ item.provider || '本地服务' }}</small><p>{{ item.available ? '当前可用' : (item.message || item.status) }}</p></div></article></div><article v-if="profiles.length" class="model-panel"><div class="model-panel-heading"><div><p class="eyebrow">模型方案</p><h2>模型与凭据</h2></div><span v-if="profileMessage" class="saved-state">{{ profileMessage }}</span></div><div class="profile-tabs"><button v-for="profile in profiles" :key="profile.id" :class="{ active: selectedProfileId === profile.id }" @click="selectProfile(profile)">{{ profile.name || profile.id }}<small>{{ activeProfileId === profile.id ? '当前使用' : '可切换' }}</small></button></div><div class="model-form"><label>Provider 类型<input v-model="providerType" /></label><label>Base URL<input v-model="baseUrl" placeholder="https://…" /></label><label>模型名称<input v-model="modelName" /></label><label>Embedding 模式<select v-model="embeddingMode"><option value="disabled">关闭</option><option value="openai_compatible">兼容 API</option></select></label><label>Embedding 模型<input v-model="embeddingModelName" /></label><label>API Key（留空保持不变）<input v-model="apiKey" type="password" autocomplete="new-password" placeholder="不会回显已存密钥" /></label></div><div class="model-actions"><button class="button secondary" :disabled="savingProfile" @click="saveProfile">{{ savingProfile ? '保存中…' : '保存模型配置' }}</button><button class="button accent" :disabled="selectedProfileId === activeProfileId" @click="activateProfile">设为当前模型</button></div></article></template><div class="settings-note"><strong>当前故事</strong><span>{{ workspace.activeStory?.name || '未选择故事' }} · {{ workspace.mode === 'conversational' ? '对话模式' : '规划模式' }}</span></div><p v-if="error" class="settings-error">{{ error }}</p></section>
+  <section class="settings-page"><p class="eyebrow">模型与能力</p><h1>配置模型、检索与<em>本地能力</em></h1><p class="intro">查看聊天、Embedding、搜索和 OCR 的可用状态，并管理模型连接。已保存的密钥不会在页面中回显。</p><div v-if="loading" class="settings-state">正在检查本地能力…</div><template v-else><div class="capability-grid"><article v-for="(item, key) in capabilities" :key="key" class="capability-card"><div class="status-dot" :class="{ ready: item.available }"></div><div><strong>{{ key }}</strong><small>{{ item.provider || '本地服务' }}</small><p>{{ item.available ? '当前可用' : (item.message || item.status) }}</p></div></article></div><article v-if="profiles.length" class="model-panel"><div class="model-panel-heading"><div><p class="eyebrow">模型方案</p><h2>模型与凭据</h2></div><span v-if="profileMessage" class="saved-state">{{ profileMessage }}</span></div><div class="profile-tabs"><button v-for="profile in profiles" :key="profile.id" :class="{ active: selectedProfileId === profile.id }" @click="selectProfile(profile)">{{ profile.name || profile.id }}<small>{{ activeProfileId === profile.id ? '当前使用' : '可切换' }}</small></button></div><div class="model-form"><label>Provider 类型<input v-model="providerType" /></label><label>Base URL<input v-model="baseUrl" placeholder="https://…" /></label><label>模型名称<input v-model="modelName" /></label><label>Embedding 模式<select v-model="embeddingMode"><option value="disabled">关闭</option><option value="openai_compatible">兼容 API</option></select></label><label>Embedding 模型<input v-model="embeddingModelName" /></label><label>API Key（留空保持不变）<input v-model="apiKey" type="password" autocomplete="new-password" placeholder="不会回显已存密钥" /></label></div><div class="discover-actions"><button class="button secondary" :disabled="discovering || !baseUrl.trim()" @click="fetchModels">{{ discovering ? '获取中…' : '获取可用模型' }}</button><span v-if="discoveredModels.length" class="discover-hint">共 {{ discoveredModels.length }} 个模型，选一个即填入模型名（能力为尽力标注，可点选后手动修改）。</span><span v-if="discoverMessage" class="discover-msg">{{ discoverMessage }}</span></div><div v-if="discoveredModels.length" class="discover-panel"><div class="discover-head"><strong>可用模型</strong><label><input v-model="onlyNonMultimodal" type="checkbox" /> 只显示非多模态</label></div><div class="discover-list"><button v-for="model in shownModels" :key="model.id" type="button" @click="pickDiscoveredModel(model)">{{ model.id }}<small>{{ ctxLabel(model.context_window) }} 上下文 · {{ model.multimodal ? '多模态' : '文本' }} · {{ model.native_web_search ? '原生联网' : '联网走通用通道' }}</small></button></div></div><div class="model-actions"><button class="button secondary" :disabled="savingProfile" @click="saveProfile">{{ savingProfile ? '保存中…' : '保存模型配置' }}</button><button class="button accent" :disabled="selectedProfileId === activeProfileId" @click="activateProfile">设为当前模型</button></div></article></template><div class="settings-note"><strong>当前故事</strong><span>{{ workspace.activeStory?.name || '未选择故事' }} · {{ workspace.mode === 'conversational' ? '对话模式' : '规划模式' }}</span></div><p v-if="error" class="settings-error">{{ error }}</p></section>
 </template>
 
 <style scoped>
@@ -76,5 +108,15 @@ onMounted(async () => {
 .usage-panel { max-width: 940px; margin: 0 auto 18px; padding: 17px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--line, rgba(255,255,255,.13)); border-radius: 12px; color: var(--muted, #8b8175); background: rgba(255,255,255,.04); }.usage-panel strong { display: block; margin-top: 5px; color: var(--ink, #eee6dc); font-size: 13px; font-weight: 500; }.usage-panel small { display: block; margin-top: 5px; font-size: 10px; }.usage-cost { color: var(--accent, #b86c4d); font-size: 12px; }
 .usage-breakdown { max-width: 940px; margin: 0 auto 22px; padding: 18px 20px; border: 1px solid var(--line, rgba(255,255,255,.13)); border-radius: 12px; background: rgba(255,255,255,.035); }.usage-breakdown-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }.usage-breakdown h2 { margin: 4px 0 0; font-family: Georgia, serif; font-size: 22px; font-weight: 400; }.usage-breakdown select { min-width: 110px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: transparent; font-size: 11px; }.breakdown-table { margin-top: 14px; border-top: 1px solid var(--line); }.breakdown-row { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 110px; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11px; }.breakdown-row strong { color: var(--ink); font-size: 12px; font-weight: 500; }.breakdown-row.header { color: var(--muted); font-size: 10px; text-transform: uppercase; }.breakdown-state { min-height: 60px; display: grid; place-items: center; color: var(--muted); font-size: 11px; }
 .model-panel { margin-top: 22px; padding: 24px; border: 1px solid var(--line, rgba(255,255,255,.13)); border-radius: 16px; background: rgba(255,255,255,.05); }.model-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; }.model-panel h2 { margin: 5px 0 0; font-family: Georgia, serif; font-size: 25px; font-weight: 400; }.saved-state { color: #7da477; font-size: 11px; }.profile-tabs { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 20px; }.profile-tabs button { display: grid; gap: 3px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; color: var(--muted); background: transparent; cursor: pointer; font-size: 12px; text-align: left; }.profile-tabs button.active { border-color: #c88468; color: var(--ink); background: rgba(200,132,104,.12); }.profile-tabs small { color: var(--muted); font-size: 10px; }.model-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }.model-form label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }.model-form input, .model-form select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; outline: 0; color: inherit; background: transparent; font-size: 12px; }.model-actions { display: flex; gap: 8px; margin-top: 16px; }
+.discover-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+.discover-hint { color: var(--muted, #8b8175); font-size: 10px; }
+.discover-msg { color: #c67862; font-size: 11px; }
+.discover-panel { margin-top: 14px; padding: 14px; border: 1px solid var(--line, rgba(255,255,255,.13)); border-radius: 12px; background: rgba(255,255,255,.04); }
+.discover-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted, #8b8175); font-size: 11px; }
+.discover-head label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.discover-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 10px; max-height: 260px; overflow-y: auto; }
+.discover-list button { display: grid; gap: 3px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink, #eee6dc); background: transparent; cursor: pointer; font-size: 12px; text-align: left; }
+.discover-list button:hover { border-color: #c88468; background: rgba(200,132,104,.1); }
+.discover-list small { color: var(--muted, #8b8175); font-size: 10px; }
 @media (max-width: 680px) { .capability-grid, .model-form { grid-template-columns: 1fr; }.settings-note { align-items: flex-start; flex-direction: column; } }
 </style>

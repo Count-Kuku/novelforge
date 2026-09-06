@@ -19,6 +19,7 @@ from ..schemas import (
     ActiveModelProfileRequest,
     AutoConfigurationRequest,
     CreateProjectRequest,
+    DiscoverModelsRequest,
     ModelProfileRequest,
     PromptOptionsUpdateRequest,
     RulesUpdateRequest,
@@ -108,6 +109,22 @@ async def model_profiles(request: Request) -> dict[str, Any]:
             if key not in {"api_key", "embedding_api_key", "secret", "embedding_secret"}
         })
     return _envelope({"active_profile_id": profiles_payload.get("active_profile_id", ""), "profiles": safe_profiles}, request)
+
+
+@router.post(f"{API_PREFIX}/settings/models/discover")
+async def discover_models(payload: DiscoverModelsRequest, request: Request) -> dict[str, Any]:
+    from novelforge.services.model_catalog import discover_openai_compatible_models
+
+    try:
+        catalog = await run_in_threadpool(
+            discover_openai_compatible_models,
+            payload.base_url,
+            payload.api_key,
+            provider_type=payload.provider_type,
+        )
+    except RuntimeError as exc:
+        return _error_payload(str(exc), request=request)
+    return _envelope(catalog, request)
 
 
 @router.put(f"{API_PREFIX}/settings/models")
