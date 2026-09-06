@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
 import type { CreationMode } from '../types'
+import { suggestSequelName } from '../ui/naming'
 
 const props = defineProps<{ defaultMode: CreationMode; heading?: string }>()
 const emit = defineEmits<{ created: [story: Record<string, any>] }>()
@@ -10,6 +11,22 @@ const workspace = useWorkspaceStore()
 const name = ref('')
 const creating = ref(false)
 const error = ref('')
+
+function prefillSuggestion() {
+  if (name.value) return
+  const existingNames = workspace.stories.map((story) => story.name)
+  name.value = suggestSequelName('故事', existingNames)
+}
+
+watch(
+  () => [workspace.activeProjectId, workspace.ready],
+  () => {
+    // 切换项目后旧输入不再适用：清空并重新建议「故事N」。
+    name.value = ''
+    if (workspace.ready) prefillSuggestion()
+  },
+  { immediate: true },
+)
 
 async function submit() {
   if (!workspace.activeProjectId || !name.value.trim() || creating.value) return

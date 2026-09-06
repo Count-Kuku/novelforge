@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
+import { suggestSequelName } from '../ui/naming'
 
 const workspace = useWorkspaceStore()
 const router = useRouter()
@@ -14,6 +15,20 @@ const creating = ref(false)
 const enteringMode = ref<'planned' | 'conversational' | ''>('')
 const error = ref('')
 const projectInput = ref<HTMLInputElement | null>(null)
+let prefilled = false
+
+watch(
+  () => workspace.ready,
+  (ready) => {
+    // 轻量开始：名字留空也能一键创建，默认用编号建议名，之后可随时改。
+    if (ready && !prefilled && !projectName.value && !storyName.value) {
+      projectName.value = suggestSequelName('项目', workspace.projects.map((item) => item.title || item.name))
+      storyName.value = suggestSequelName('故事', [])
+      prefilled = true
+    }
+  },
+  { immediate: true },
+)
 
 async function enterMode(mode: 'planned' | 'conversational') {
   if (enteringMode.value) return
