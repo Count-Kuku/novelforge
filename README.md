@@ -72,7 +72,7 @@ NovelForge 是一个面向长篇小说和同人创作的本地 LLM 写作工作�
 - 每次调用保存当时的价格快照，并按项目、故事、任务、操作和 Agent 角色归因。历史费用不会因后续修改单价而变化。
 - 人民币是默认主显示币种，侧边栏显示当前故事今日/本月摘要，每次界面操作结束显示本次用量；工作台和设置 → 模型与费用提供 CNY/USD 双币种按日趋势、拆分明细和 CSV 导出。美元账本保留为跨供应商兼容基准。
 - 用量事件默认长期保存在 `data/global.db`，只保存计量与归因元数据，不保存提示词或模型回复正文。缺少供应商 usage 时 Token 标记为估算；缺少价格时显示“未计价”，不会伪装成零费用。
-- 长资料导入、自动网络研究和自由创作会在执行前显示输入、输出、Embedding、总 Token 与费用的低/预期/高区间。网络研究按 Planner、Extractor 和 Verifier 阶段拆分，并单独提示搜索 API 等外部费用没有计入 Token 金额；抓取原文在人工激活前保持隔离，激活阶段的向量费用不计入研究任务创建预估。
+- 自动网络研究会在执行前显示输入、输出、Embedding、总 Token 与费用的低/预期/高区间；长资料导入与自由创作当前提供执行前的上下文/用量预览，逐项 Token-费用预检的界面入口在 Vue 端接入中。网络研究按 Planner、Extractor 和 Verifier 阶段拆分，并单独提示搜索 API 等外部费用没有计入 Token 金额；抓取原文在人工激活前保持隔离，激活阶段的向量费用不计入研究任务创建预估。
 - 同一模型方案、操作和 Agent 角色积累至少 5 条精确调用后，执行前估算会参考历史 P50/P90 自动校准；样本不足时使用可解释的操作模板。设置 → 模型与费用中可以设置 Token/费用提醒阈值，并可要求超出确认阈值后显式确认。
 
 ## 界面导航
@@ -201,7 +201,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 
 - [project.md](./project.md)：当前架构、模块职责、开发边界、技术债和优先级。
 - [storage_architecture.md](./storage_architecture.md)：DB-first 权威边界、schema（当前 v20）、迁移、任务租约和恢复。
-- [docs/vue_frontend_migration_plan.md](./docs/vue_frontend_migration_plan.md)：Vue 双工作台迁移规划与执行状态。
+- [docs/worldline-branch-isolation-plan.md](./docs/worldline-branch-isolation-plan.md)：创作分支的提炼矛盾防护评估与多世界线演进路线（roadmap）。
 - [docs/releases](./docs/releases)：已发布版本历史。
 
 已完成的一次性计划不会长期保留；完成结果应合并进上述事实文档，避免出现多个相互矛盾的“当前状态”。

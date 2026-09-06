@@ -29,6 +29,7 @@ from novelforge.services.memory import (
     load_context_directives,
     fail_creative_turn,
     save_context_directive,
+    select_creative_frontier,
     update_creative_session,
 )
 from novelforge.domain.setting_knowledge import upsert_setting_item
@@ -640,6 +641,53 @@ def verify(_capability_patch) -> None:
         "superseded" in sibling_statuses.values(),
         "接受候选后同父节点的其它未接受版本自动标记为已替代",
     )
+
+    frontier_session = interactive_writing.create_writing_session(
+        project_name,
+        story_id,
+        session_goal="测试前沿切换",
+        auto_extract_mode="manual",
+    )
+    frontier_session_id = str(frontier_session["session_id"])
+    with patch.object(interactive_writing, "call_llm", return_value="起点甲：城郊站台。"):
+        fa = interactive_writing.generate_writing_fragment(
+            project_name,
+            story_id,
+            frontier_session_id,
+            "写开头",
+            action_type="generate",
+        )
+    fa_id = str(fa["fragment"]["fragment_id"])
+    interactive_writing.accept_writing_fragment(project_name, story_id, frontier_session_id, fa_id)
+    with patch.object(interactive_writing, "call_llm", return_value="线一：他登上早班车。"):
+        fb = interactive_writing.generate_writing_fragment(
+            project_name,
+            story_id,
+            frontier_session_id,
+            "接续写",
+            action_type="continue",
+        )
+    fb_id = str(fb["fragment"]["fragment_id"])
+    interactive_writing.accept_writing_fragment(project_name, story_id, frontier_session_id, fb_id)
+    frontier_result = select_creative_frontier(project_name, frontier_session_id, fa_id, story_id=story_id)
+    check(frontier_result["active_fragment_id"] == fa_id, "前沿可以回切到早期已确认片段")
+    with patch.object(interactive_writing, "call_llm", return_value="线二：他改乘了反方向的夜车。"):
+        fc = interactive_writing.generate_writing_fragment(
+            project_name,
+            story_id,
+            frontier_session_id,
+            "从另一条线继续",
+            action_type="continue",
+        )
+    fc_id = str(fc["fragment"]["fragment_id"])
+    check(fc["fragment"]["parent_fragment_id"] == fa_id, "回切前沿后生成的片段挂在该起点下")
+    frontier_bundle = load_creative_session_bundle(project_name, frontier_session_id, story_id=story_id)
+    frontier_statuses = {
+        fragment["fragment_id"]: fragment["status"]
+        for fragment in (frontier_bundle or {})["fragments"]
+    }
+    check(frontier_statuses.get(fb_id) == "accepted", "被回切跳过的旧分支片段保持已接受状态")
+    check(frontier_statuses.get(fc_id) == "proposed", "回切后生成的新片段为待接受草稿")
 
 
 def main() -> int:
