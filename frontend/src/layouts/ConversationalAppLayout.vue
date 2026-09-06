@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api } from '../api/client'
 import type { CreativeSession } from '../types'
@@ -12,9 +12,11 @@ import NewStoryInline from '../components/NewStoryInline.vue'
 
 const workspace = useWorkspaceStore()
 const route = useRoute()
+const router = useRouter()
 const viewKey = computed(() => `${workspace.activeProjectId}:${workspace.activeStoryId}:${route.fullPath}`)
 const sessions = ref<CreativeSession[]>([])
 const sessionError = ref('')
+const landedStoryKey = ref('')
 
 async function loadSessions() {
   sessionError.value = ''
@@ -30,8 +32,59 @@ async function loadSessions() {
   }
 }
 
-onMounted(loadSessions)
-watch(() => [workspace.activeProjectId, workspace.activeStoryId], loadSessions)
+function currentStoryKey() {
+  return workspace.activeProjectId && workspace.activeStory ? `${workspace.activeProjectId}:${workspace.activeStory.story_id}` : ''
+}
+
+async function createBlankSession() {
+  if (!workspace.activeProjectId || !workspace.activeStory) return ''
+  const data = await api.createSession(workspace.activeProjectId, workspace.activeStory.story_id, { session_goal: '' })
+  await loadSessions()
+  return data.session.session_id
+}
+
+/** 落在「对话/会话」上下文时：自动进入最近会话；若无任何会话则建空白会话直达（输入框立即可发）。 */
+async function landOnRecentOrNew() {
+  if (!workspace.activeProjectId || !workspace.activeStory) return
+  const inChatContext = route.name === 'conversational-home' || route.name === 'conversational-session'
+  const key = currentStoryKey()
+  if (!inChatContext) {
+    landedStoryKey.value = key
+    return
+  }
+  if (key === landedStoryKey.value) return
+  landedStoryKey.value = key
+  try {
+    const active = sessions.value.filter((session) => session.status === 'active')
+    const recent = active.length ? active[active.length - 1] : undefined
+    if (recent) {
+      await router.push({ name: 'conversational-session', params: { sessionId: recent.session_id } })
+    } else {
+      const sessionId = await createBlankSession()
+      if (sessionId) await router.push({ name: 'conversational-session', params: { sessionId } })
+    }
+  } catch (reason) {
+    sessionError.value = reason instanceof Error ? reason.message : '无法进入最近会话'
+  }
+}
+
+async function syncSessionsAndLand() {
+  await loadSessions()
+  await landOnRecentOrNew()
+}
+
+async function startNewChat() {
+  if (!workspace.activeProjectId || !workspace.activeStory) return
+  try {
+    const sessionId = await createBlankSession()
+    if (sessionId) await router.push({ name: 'conversational-session', params: { sessionId } })
+  } catch (reason) {
+    notify(reason instanceof Error ? reason.message : '会话创建失败', 'error')
+  }
+}
+
+onMounted(syncSessionsAndLand)
+watch(() => [workspace.activeProjectId, workspace.activeStoryId], syncSessionsAndLand)
 
 async function changeProject(event: Event) {
   if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '切换项目会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续切换', tone: 'danger' })) return
@@ -113,7 +166,7 @@ function sessionStatusLabel(status: string) {
     <aside class="chat-sidebar">
       <div class="chat-brand"><div class="orb"></div><div><strong>NovelForge</strong><small>对话工作台</small></div></div>
       <div class="chat-context"><div class="context-project"><span class="context-label">项目</span><div class="project-actions"><label class="chat-project-select"><span class="project-dot"></span><select :value="workspace.activeProjectId" aria-label="选择项目" @change="changeProject"><option v-if="!workspace.projects.length" value="">暂无项目</option><option v-for="project in workspace.projects" :key="project.project_id" :value="project.project_id">{{ project.title || project.name }}</option></select></label><button class="project-action" title="新建项目" aria-label="新建项目" @click="createProject">＋</button><button class="project-action" title="重命名当前项目" aria-label="重命名当前项目" :disabled="!workspace.activeProjectId" @click="renameProject">✎</button></div></div><div v-if="workspace.activeStories.length" class="context-story"><span class="context-label">当前故事</span><div class="story-actions"><label class="chat-story-cap"><select class="chat-story-select" :value="workspace.activeStoryId" aria-label="选择故事" @change="changeStory"><option v-for="story in workspace.activeStories" :key="story.story_id" :value="story.story_id">{{ story.name }}</option></select></label><button class="project-action" title="新建故事" aria-label="新建故事" @click="createStoryInSidebar">＋</button><button class="project-action" title="重命名当前故事" aria-label="重命名当前故事" @click="renameCurrentStory">✎</button></div></div><NewStoryInline v-else :default-mode="'conversational'" /></div>
-      <RouterLink class="new-chat" to="/conversational"><span>＋</span>新建创作会话</RouterLink>
+      <button class="new-chat" type="button" @click="startNewChat"><span>＋</span>新建创作会话</button>
       <div class="session-list"><p class="eyebrow">最近会话</p><div v-if="sessionError" class="session-empty error">{{ sessionError }}</div><template v-else><div v-for="session in sessions" :key="session.session_id" class="session-row"><RouterLink class="session-link" :to="{ name: 'conversational-session', params: { sessionId: session.session_id } }">{{ session.title || session.session_goal }}<small>{{ sessionStatusLabel(session.status) }}</small></RouterLink><button v-if="session.status !== 'archived'" class="session-archive" aria-label="归档会话" title="归档会话" @click="archiveSession(session)">···</button></div><div v-if="!sessions.length" class="session-empty">暂无会话。<br />点击上方按钮开始一次写作或讨论。</div></template></div>
       <nav class="chat-sidebar-footer" aria-label="对话工作台主导航"><RouterLink to="/conversational" :class="{ active: route.name === 'conversational-home' || route.name === 'conversational-session' }"><span>✦</span>对话</RouterLink><RouterLink to="/conversational/works" active-class="active"><span>▤</span>作品</RouterLink><RouterLink to="/conversational/library" active-class="active"><span>▦</span>资料库</RouterLink><RouterLink to="/conversational/settings" active-class="active"><span>⚙</span>设置</RouterLink></nav>
     </aside>
@@ -137,7 +190,7 @@ function sessionStatusLabel(status: string) {
 .chat-context .context-story { padding-top: 12px; border-top: 1px solid rgba(255,255,255,.07); }.context-label { color: #969992; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }.chat-story-select, .chat-project-select select { width: 100%; overflow: hidden; border: 0; outline: 0; color: #f2eee7; background: transparent; font-family: Georgia, serif; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }.chat-story-select option, .chat-project-select option { color: #ece7df; background: #292b2a; }.chat-story-select option:checked, .chat-project-select option:checked { color: #fff4ea; background: #6a493c; font-weight: 600; }.chat-project-select { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 9px; border: 1px solid rgba(255,255,255,.1); border-radius: 9px; color: #a6aaa3; }
 .chat-project-select select { flex: 1; min-width: 0; color: #a6aaa3; background: transparent; font-family: inherit; font-size: 12px; }
 .project-dot { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--sage); }
-.chat-story-select { min-width: 0; font-size: 18px; }.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 12px; border: 1px solid rgba(222,172,139,.45); border-radius: 11px; color: #e8c5ae; background: rgba(190,111,78,.12); font-size: 13px; }.new-chat span { font-size: 18px; }.session-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; scrollbar-gutter: stable; }.session-list .eyebrow { color: #a6aaa3; }.session-link { display: flex; flex-direction: column; gap: 4px; padding: 9px 8px; border-radius: 9px; color: #c9c6bc; font-size: 12px; }.session-link:hover { background: rgba(255,255,255,.06); }.session-link small { color: #959b93; font-size: 10px; }.session-empty { padding: 12px 4px; color: #a2a69f; font-size: 12px; line-height: 1.8; }.chat-sidebar-footer { display: grid; flex: 0 0 auto; gap: 5px; padding-top: 13px; border-top: 1px solid rgba(255,255,255,.08); }.chat-sidebar-footer a { display: grid; grid-template-columns: 24px minmax(0,1fr); align-items: center; gap: 8px; padding: 8px 9px; border-radius: 8px; color: #a2a69f; font-size: 12px; }.chat-sidebar-footer a:hover { color: #d9d3ca; background: rgba(255,255,255,.045); }.chat-sidebar-footer a.active { color: #e7bea6; background: rgba(211,131,97,.1); }.chat-sidebar-footer a span { color: #d08b6e; text-align: center; }.chat-main { min-width: 0; background: radial-gradient(circle at 62% 0, rgba(148,119,94,.13), transparent 36%), #292b2a; }.chat-topbar { display: flex; align-items: center; justify-content: space-between; padding: 22px clamp(22px, 5vw, 70px); border-bottom: 1px solid rgba(255,255,255,.07); }.mode-badge { display: flex; align-items: center; gap: 8px; color: #d8c8b7; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }.mode-badge i, .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #d38361; box-shadow: 0 0 0 4px rgba(211,131,97,.12); }.chat-top-actions { display: flex; align-items: center; gap: 12px; color: #a2a69f; font-size: 12px; }.live-dot { width: 5px; height: 5px; background: #8baa74; box-shadow: none; }.chat-avatar { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; color: #d9d2c9; background: #363936; font-size: 10px; }
+.chat-story-select { min-width: 0; font-size: 18px; }.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 12px; border: 1px solid rgba(222,172,139,.45); border-radius: 11px; color: #e8c5ae; background: rgba(190,111,78,.12); font-family: inherit; font-size: 13px; cursor: pointer; }.new-chat span { font-size: 18px; }.session-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; scrollbar-gutter: stable; }.session-list .eyebrow { color: #a6aaa3; }.session-link { display: flex; flex-direction: column; gap: 4px; padding: 9px 8px; border-radius: 9px; color: #c9c6bc; font-size: 12px; }.session-link:hover { background: rgba(255,255,255,.06); }.session-link small { color: #959b93; font-size: 10px; }.session-empty { padding: 12px 4px; color: #a2a69f; font-size: 12px; line-height: 1.8; }.chat-sidebar-footer { display: grid; flex: 0 0 auto; gap: 5px; padding-top: 13px; border-top: 1px solid rgba(255,255,255,.08); }.chat-sidebar-footer a { display: grid; grid-template-columns: 24px minmax(0,1fr); align-items: center; gap: 8px; padding: 8px 9px; border-radius: 8px; color: #a2a69f; font-size: 12px; }.chat-sidebar-footer a:hover { color: #d9d3ca; background: rgba(255,255,255,.045); }.chat-sidebar-footer a.active { color: #e7bea6; background: rgba(211,131,97,.1); }.chat-sidebar-footer a span { color: #d08b6e; text-align: center; }.chat-main { min-width: 0; background: radial-gradient(circle at 62% 0, rgba(148,119,94,.13), transparent 36%), #292b2a; }.chat-topbar { display: flex; align-items: center; justify-content: space-between; padding: 22px clamp(22px, 5vw, 70px); border-bottom: 1px solid rgba(255,255,255,.07); }.mode-badge { display: flex; align-items: center; gap: 8px; color: #d8c8b7; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }.mode-badge i, .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #d38361; box-shadow: 0 0 0 4px rgba(211,131,97,.12); }.chat-top-actions { display: flex; align-items: center; gap: 12px; color: #a2a69f; font-size: 12px; }.live-dot { width: 5px; height: 5px; background: #8baa74; box-shadow: none; }.chat-avatar { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid rgba(255,255,255,.14); border-radius: 50%; color: #d9d2c9; background: #363936; font-size: 10px; }
 .chat-main :deep(.button) { color: #f8f3ed; background: #4a4d49; }.chat-main :deep(.button:hover) { background: #595d58; }.chat-main :deep(.button.secondary) { color: #e8e3dc; background: #3a3d3a; box-shadow: inset 0 0 0 1px rgba(255,255,255,.11); }.chat-main :deep(.button.secondary:hover) { background: #454945; }.chat-main :deep(.button.accent) { color: #fffaf4; background: #a94b2f; }.chat-main :deep(.button.accent:hover) { background: #8f3f2a; }
 .chat-main :deep(select) { border-color: rgba(255,255,255,.14); color: #ece7df; color-scheme: dark; background-color: #343735; }.chat-main :deep(select:focus-visible) { border-color: rgba(224,161,125,.6); outline: 3px solid rgba(224,161,125,.16); outline-offset: 1px; }.chat-main :deep(select option) { color: #ece7df; background: #292b2a; }.chat-main :deep(select option:checked) { color: #fff4ea; background: #6a493c; font-weight: 600; }
 @media (max-height: 720px) and (min-width: 761px) { .chat-sidebar { gap: 16px; padding-top: 20px; padding-bottom: 14px; }.chat-context { padding: 14px; }.chat-sidebar-footer { gap: 7px; padding-top: 12px; }.session-link { padding-block: 6px; } }

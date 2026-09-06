@@ -95,7 +95,7 @@ class CopyStoryRequest(ApiModel):
 
 
 class CreateSessionRequest(ApiModel):
-    session_goal: str = Field(min_length=1, max_length=4000)
+    session_goal: str = Field(default="", max_length=4000)
     title: str = Field(default="", max_length=200)
     auto_extract_mode: Literal["manual", "on_accept"] | None = None
 
