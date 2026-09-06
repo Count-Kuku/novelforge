@@ -6,6 +6,7 @@ import { api } from '../api/client'
 import { dialog } from '../ui/dialog'
 import { notify } from '../ui/notifications'
 import { clearAllEditorDirty, hasDirtyEditors } from '../ui/dirty'
+import { suggestSequelName } from '../ui/naming'
 
 const workspace = useWorkspaceStore()
 const router = useRouter()
@@ -62,6 +63,18 @@ async function renameCurrentProject() {
   } catch (reason) { notify(reason instanceof Error ? reason.message : '项目重命名失败', 'error') }
 }
 
+async function createProject() {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '新建项目会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续', tone: 'danger' })) return
+  clearAllEditorDirty()
+  const suggestion = suggestSequelName('项目', workspace.projects.map((item) => item.title || item.name))
+  const name = await dialog.prompt({ title: '新建项目', confirmLabel: '创建', input: { label: '项目名称', initialValue: suggestion } })
+  if (!name?.trim()) return
+  try {
+    await workspace.createProjectAndSelect(name.trim())
+    notify('项目已创建，可在创作方向页创建第一个故事', 'success')
+  } catch (reason) { notify(reason instanceof Error ? reason.message : '项目创建失败', 'error') }
+}
+
 async function archiveCurrentStory() {
   if (!workspace.activeProjectId || !workspace.activeStory) return
   if (!await dialog.confirm({ title: '归档当前故事？', message: `“${workspace.activeStory.name}”将从当前故事列表中移除，数据仍保留在本地数据库中。`, confirmLabel: '归档故事', tone: 'danger' })) return
@@ -94,7 +107,8 @@ watch(() => [workspace.activeProjectId, workspace.activeStoryId], loadStructure)
   <div class="planned-shell">
     <aside class="planned-rail">
       <div class="brand-mark"><span>N</span><div><strong>NovelForge</strong><small>规划工作台</small></div></div>
-      <label class="rail-project"><span class="dot"></span><select :value="workspace.activeProjectId" aria-label="选择项目" @change="changeProject"><option v-for="project in workspace.projects" :key="project.project_id" :value="project.project_id">{{ project.title || project.name }}</option></select><span class="chevron">⌄</span></label>
+      <label class="rail-project"><span class="dot"></span><select :value="workspace.activeProjectId" aria-label="选择项目" @change="changeProject"><option v-if="!workspace.projects.length" value="">暂无项目</option><option v-for="project in workspace.projects" :key="project.project_id" :value="project.project_id">{{ project.title || project.name }}</option></select><span class="chevron">⌄</span></label>
+      <div class="rail-actions"><button class="rail-new" title="新建项目" aria-label="新建项目" @click="createProject">＋ 新建项目</button></div>
       <nav class="planned-nav" aria-label="规划导航">
         <p class="eyebrow">规划流程</p>
         <RouterLink to="/planned/direction" active-class="active"><span>✦</span>创作方向</RouterLink>
@@ -118,12 +132,12 @@ watch(() => [workspace.activeProjectId, workspace.activeStoryId], loadStructure)
 .planned-shell { display: grid; grid-template-columns: 266px 1fr; min-height: 100vh; background: radial-gradient(circle at 80% -20%, #fff8ee 0, transparent 42%), #f4f0e8; }
 .planned-rail { display: flex; flex-direction: column; gap: 24px; padding: 30px 22px 22px; border-right: 1px solid var(--line); background: rgba(247,243,235,.82); }
 .brand-mark { display: flex; align-items: center; gap: 10px; }.brand-mark > span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 11px; color: #fff8ef; background: var(--accent); font-family: Georgia, serif; font-size: 20px; }.brand-mark strong { display: block; font-family: Georgia, serif; font-size: 17px; }.brand-mark small { display: block; margin-top: 2px; color: var(--muted); font-size: 11px; }
-.rail-project { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 13px; color: #5f574e; background: rgba(255,255,255,.5); font-size: 13px; }.rail-project select, .story-switcher { min-width: 0; overflow: hidden; border: 0; outline: 0; color: inherit; background: transparent; text-overflow: ellipsis; white-space: nowrap; }.rail-project select { flex: 1; font-size: 13px; }.rail-project select option, .story-switcher option { color: var(--ink); }.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sage); }.chevron { margin-left: auto; color: var(--muted); }.title-line { display: flex; align-items: center; }.story-switcher { max-width: 500px; font-family: Georgia, serif; font-size: clamp(28px, 3vw, 42px); font-weight: 500; letter-spacing: -.03em; }
+.rail-project { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 13px; color: #5f574e; background: rgba(255,255,255,.5); font-size: 13px; }.rail-actions { display: grid; gap: 3px; }.rail-new { padding: 7px 10px; border: 1px dashed #d8c4b4; border-radius: 11px; color: #8a6b5a; background: transparent; cursor: pointer; font-size: 12px; text-align: left; }.rail-new:hover { color: var(--accent); border-color: var(--accent); background: rgba(169,75,47,.05); }.rail-project select, .story-switcher { min-width: 0; overflow: hidden; border: 0; outline: 0; color: inherit; background: transparent; text-overflow: ellipsis; white-space: nowrap; }.rail-project select { flex: 1; font-size: 13px; }.rail-project select option, .story-switcher option { color: var(--ink); }.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sage); }.chevron { margin-left: auto; color: var(--muted); }.title-line { display: flex; align-items: center; }.story-switcher { max-width: 500px; font-family: Georgia, serif; font-size: clamp(28px, 3vw, 42px); font-weight: 500; letter-spacing: -.03em; }
 .planned-nav { display: grid; gap: 7px; }.planned-nav a, .rail-footer a { display: flex; align-items: center; gap: 12px; padding: 12px 13px; border-radius: 12px; color: #756c62; font-size: 14px; }.planned-nav a span, .rail-footer a span { width: 17px; color: #aa9d8e; text-align: center; }.planned-nav a:hover, .planned-nav a.active { color: var(--ink); background: #e9e1d6; }.planned-nav a.active span { color: var(--accent); }
 .structure-tree { margin-top: 5px; padding-top: 16px; border-top: 1px solid var(--line); }.tree-heading { display: grid; grid-template-columns: 1fr auto auto; align-items: center; width: 100%; gap: 8px; padding: 0 7px 8px; border: 0; color: #756c62; background: transparent; cursor: pointer; font: inherit; font-size: 11px; text-align: left; }.tree-heading small { color: #aa9d8e; font-size: 10px; }.tree-heading b { color: #aa9d8e; font-weight: 400; }.tree-body { display: grid; gap: 3px; max-height: 185px; overflow: auto; padding: 2px 4px; }.tree-node, .tree-empty, .tree-more { padding: 5px 6px; color: #95897d; font-size: 10px; }.tree-node a { color: inherit; }.tree-node a:hover { color: var(--accent); }.tree-node.volume { color: #6f6256; font-weight: 600; }.tree-more { color: #b0a298; }
 .tree-empty.error { color: #a44f47; }
 .rail-footer { display: grid; gap: 3px; margin-top: auto; border-top: 1px solid var(--line); padding-top: 16px; }.rail-footer a { font-size: 12px; }
 .rail-action { display: flex; align-items: center; gap: 12px; padding: 10px 13px; border: 0; border-radius: 12px; color: #756c62; background: transparent; cursor: pointer; font: inherit; font-size: 12px; text-align: left; }.rail-action span { width: 17px; color: #aa9d8e; text-align: center; }.rail-action:hover { color: var(--ink); background: #e9e1d6; }.rail-action.danger:hover { color: #a44f47; background: #faece8; }
 .planned-main { min-width: 0; padding: 30px clamp(26px, 5vw, 72px) 72px; }.planned-topbar { display: flex; align-items: flex-start; justify-content: space-between; margin: 0 auto 38px; max-width: 1180px; }.planned-topbar h1 { margin: 0; font-family: Georgia, serif; font-size: clamp(28px, 3vw, 42px); font-weight: 500; letter-spacing: -.03em; }.top-actions { display: flex; align-items: center; gap: 12px; }.mode-toggle { border: 0; color: #9d6149; background: transparent; font-size: 12px; }.mode-toggle:hover { text-decoration: underline; }.avatar { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 50%; color: var(--ink); background: #e9e0d4; font-size: 11px; font-weight: 700; }.crumb-project { color: #8a7c6f; font-weight: 600; }.crumb-sep { margin: 0 5px; color: #b3a79c; font-weight: 400; }.story-empty { display: inline-block; margin-top: 10px; color: var(--muted); font-family: Georgia, serif; font-size: 18px; }.planned-new-story { display: grid; justify-items: start; max-width: 1180px; margin: -16px auto 26px; padding: 13px 16px; border: 1px dashed #d8c4b4; border-radius: 14px; background: #fffaf4; }.connection-banner { max-width: 1180px; margin: -14px auto 24px; padding: 12px 16px; border: 1px solid #e9cbbd; border-radius: 12px; color: #7a4938; background: #fff1eb; font-size: 13px; }.connection-banner span { margin-left: 10px; opacity: .75; }
-@media (max-width: 760px) { .planned-shell { grid-template-columns: 1fr; }.planned-rail { position: sticky; top: 0; z-index: 2; flex-direction: row; align-items: center; overflow-x: auto; padding: 12px 16px; }.rail-project, .rail-footer, .planned-nav .eyebrow { display: none; }.planned-nav { display: flex; }.planned-nav a { white-space: nowrap; }.planned-main { padding: 24px 18px 48px; } }
+@media (max-width: 760px) { .planned-shell { grid-template-columns: 1fr; }.planned-rail { position: sticky; top: 0; z-index: 2; flex-direction: row; align-items: center; overflow-x: auto; padding: 12px 16px; }.rail-project, .rail-actions, .rail-footer, .planned-nav .eyebrow { display: none; }.planned-nav { display: flex; }.planned-nav a { white-space: nowrap; }.planned-main { padding: 24px 18px 48px; } }
 </style>

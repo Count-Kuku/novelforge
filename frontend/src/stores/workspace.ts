@@ -92,6 +92,21 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (index >= 0) stories.value[index] = data.story
   }
 
+  async function createProjectAndSelect(name: string) {
+    const data = await api.createProject({ name, title: name })
+    const projectId = data.project.project_id
+    await load()
+    await selectProject(projectId)
+    return data.project
+  }
+
+  async function renameActiveProject(nextName: string) {
+    if (!activeProjectId.value) return
+    const data = await api.renameProject(activeProjectId.value, nextName)
+    await load()
+    return data.project
+  }
+
   return {
     projects,
     activeProjectId,
@@ -110,5 +125,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     selectProject,
     selectStory,
     setMode,
+    createProjectAndSelect,
+    renameActiveProject,
   }
 })

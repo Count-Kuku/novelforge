@@ -7,6 +7,7 @@ import type { CreativeSession } from '../types'
 import { dialog } from '../ui/dialog'
 import { notify } from '../ui/notifications'
 import { clearAllEditorDirty, hasDirtyEditors } from '../ui/dirty'
+import { suggestSequelName } from '../ui/naming'
 import NewStoryInline from '../components/NewStoryInline.vue'
 
 const workspace = useWorkspaceStore()
@@ -44,6 +45,28 @@ async function changeStory(event: Event) {
   await workspace.selectStory((event.target as HTMLSelectElement).value)
 }
 
+async function createProject() {
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '新建项目会重新加载当前页面，尚未保存的修改将丢失。', confirmLabel: '继续', tone: 'danger' })) return
+  clearAllEditorDirty()
+  const suggestion = suggestSequelName('项目', workspace.projects.map((item) => item.title || item.name))
+  const name = await dialog.prompt({ title: '新建项目', confirmLabel: '创建', input: { label: '项目名称', initialValue: suggestion } })
+  if (!name?.trim()) return
+  try {
+    await workspace.createProjectAndSelect(name.trim())
+    notify('项目已创建，可在此创建第一个故事', 'success')
+  } catch (reason) { notify(reason instanceof Error ? reason.message : '项目创建失败', 'error') }
+}
+
+async function renameProject() {
+  if (!workspace.activeProjectId || !workspace.activeProject) return
+  const name = await dialog.prompt({ title: '重命名项目', confirmLabel: '保存', input: { label: '项目名称', initialValue: workspace.activeProject.title || workspace.activeProject.name } })
+  if (!name?.trim() || name.trim() === (workspace.activeProject.title || workspace.activeProject.name)) return
+  try {
+    await workspace.renameActiveProject(name.trim())
+    notify('项目名称已更新', 'success')
+  } catch (reason) { notify(reason instanceof Error ? reason.message : '项目重命名失败', 'error') }
+}
+
 async function archiveSession(session: CreativeSession) {
   if (!workspace.activeProjectId || !workspace.activeStory || session.status === 'archived') return
   if (!await dialog.confirm({ title: '归档会话？', message: `“${session.title || session.session_goal}”将从最近会话中移除，历史内容仍会保留。`, confirmLabel: '归档会话' })) return
@@ -63,7 +86,7 @@ function sessionStatusLabel(status: string) {
   <div class="chat-shell">
     <aside class="chat-sidebar">
       <div class="chat-brand"><div class="orb"></div><div><strong>NovelForge</strong><small>对话工作台</small></div></div>
-      <div class="chat-context"><div class="context-project"><span class="context-label">项目</span><label class="chat-project-select"><span class="project-dot"></span><select :value="workspace.activeProjectId" aria-label="选择项目" @change="changeProject"><option v-for="project in workspace.projects" :key="project.project_id" :value="project.project_id">{{ project.title || project.name }}</option></select></label></div><div v-if="workspace.activeStories.length" class="context-story"><span class="context-label">当前故事</span><select class="chat-story-select" :value="workspace.activeStoryId" aria-label="选择故事" @change="changeStory"><option v-for="story in workspace.activeStories" :key="story.story_id" :value="story.story_id">{{ story.name }}</option></select></div><NewStoryInline v-else :default-mode="'conversational'" /></div>
+      <div class="chat-context"><div class="context-project"><span class="context-label">项目</span><div class="project-actions"><label class="chat-project-select"><span class="project-dot"></span><select :value="workspace.activeProjectId" aria-label="选择项目" @change="changeProject"><option v-if="!workspace.projects.length" value="">暂无项目</option><option v-for="project in workspace.projects" :key="project.project_id" :value="project.project_id">{{ project.title || project.name }}</option></select></label><button class="project-action" title="新建项目" aria-label="新建项目" @click="createProject">＋</button><button class="project-action" title="重命名当前项目" aria-label="重命名当前项目" :disabled="!workspace.activeProjectId" @click="renameProject">✎</button></div></div><div v-if="workspace.activeStories.length" class="context-story"><span class="context-label">当前故事</span><select class="chat-story-select" :value="workspace.activeStoryId" aria-label="选择故事" @change="changeStory"><option v-for="story in workspace.activeStories" :key="story.story_id" :value="story.story_id">{{ story.name }}</option></select></div><NewStoryInline v-else :default-mode="'conversational'" /></div>
       <RouterLink class="new-chat" to="/conversational"><span>＋</span>新建创作会话</RouterLink>
       <div class="session-list"><p class="eyebrow">最近会话</p><div v-if="sessionError" class="session-empty error">{{ sessionError }}</div><template v-else><div v-for="session in sessions" :key="session.session_id" class="session-row"><RouterLink class="session-link" :to="{ name: 'conversational-session', params: { sessionId: session.session_id } }">{{ session.title || session.session_goal }}<small>{{ sessionStatusLabel(session.status) }}</small></RouterLink><button v-if="session.status !== 'archived'" class="session-archive" aria-label="归档会话" title="归档会话" @click="archiveSession(session)">···</button></div><div v-if="!sessions.length" class="session-empty">暂无会话。<br />点击上方按钮开始一次写作或讨论。</div></template></div>
       <nav class="chat-sidebar-footer" aria-label="对话工作台主导航"><RouterLink to="/conversational" :class="{ active: route.name === 'conversational-home' || route.name === 'conversational-session' }"><span>✦</span>对话</RouterLink><RouterLink to="/conversational/works" active-class="active"><span>▤</span>作品</RouterLink><RouterLink to="/conversational/library" active-class="active"><span>▦</span>资料库</RouterLink><RouterLink to="/conversational/settings" active-class="active"><span>⚙</span>设置</RouterLink></nav>
@@ -75,6 +98,11 @@ function sessionStatusLabel(status: string) {
 <style scoped>
 .chat-shell { --ink: #e8e3dc; --muted: #b3aea6; --line: rgba(255,255,255,.13); --paper: #2f312f; --paper-strong: #363936; --accent: #e0a17d; --accent-soft: rgba(224,161,125,.15); --sage: #8eaa82; display: grid; grid-template-columns: 302px 1fr; min-height: 100vh; color: #e8e3dc; color-scheme: dark; background: #252625; }.chat-sidebar { position: sticky; top: 0; display: flex; flex-direction: column; align-self: start; gap: 24px; height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; padding: 28px 22px 20px; border-right: 1px solid rgba(255,255,255,.08); background: #202120; }.chat-brand, .chat-context, .new-chat { flex: 0 0 auto; }.chat-brand { display: flex; align-items: center; gap: 11px; }.chat-brand strong { display: block; color: #f0ece5; font-family: Georgia, serif; font-size: 17px; }.chat-brand small { display: block; margin-top: 3px; color: #a2a69f; font-size: 11px; }.orb { width: 33px; height: 33px; border: 6px solid #bd7659; border-right-color: #dfb795; border-radius: 50%; transform: rotate(-32deg); }.chat-context { display: grid; gap: 12px; padding: 18px; border: 1px solid rgba(255,255,255,.08); border-radius: 16px; background: #292b29; }
 .chat-context .context-project, .chat-context .context-story { display: grid; gap: 5px; min-width: 0; }
+.chat-context .project-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; align-items: center; }
+.chat-context .project-actions .chat-project-select { min-width: 0; }
+.project-action { width: 24px; height: 24px; padding: 0; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; color: #a6aaa3; background: transparent; font-size: 13px; line-height: 1; }
+.project-action:hover { color: #f0d8c4; border-color: rgba(222,172,139,.45); }
+.project-action:disabled { cursor: not-allowed; opacity: .4; }
 .chat-context .context-story { padding-top: 12px; border-top: 1px solid rgba(255,255,255,.07); }.context-label { color: #969992; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }.chat-story-select, .chat-project-select select { width: 100%; overflow: hidden; border: 0; outline: 0; color: #f2eee7; background: transparent; font-family: Georgia, serif; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }.chat-story-select option, .chat-project-select option { color: #ece7df; background: #292b2a; }.chat-story-select option:checked, .chat-project-select option:checked { color: #fff4ea; background: #6a493c; font-weight: 600; }.chat-project-select { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 9px; border: 1px solid rgba(255,255,255,.1); border-radius: 9px; color: #a6aaa3; }
 .chat-project-select select { flex: 1; min-width: 0; color: #a6aaa3; background: transparent; font-family: inherit; font-size: 12px; }
 .project-dot { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--sage); }
