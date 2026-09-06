@@ -67,6 +67,32 @@ async function renameProject() {
   } catch (reason) { notify(reason instanceof Error ? reason.message : '项目重命名失败', 'error') }
 }
 
+async function createStoryInSidebar() {
+  if (!workspace.activeProjectId) return
+  if (hasDirtyEditors.value && !await dialog.confirm({ title: '放弃未保存修改？', message: '新建故事会切换当前页面，尚未保存的修改将丢失。', confirmLabel: '继续', tone: 'danger' })) return
+  clearAllEditorDirty()
+  const suggestion = suggestSequelName('故事', workspace.stories.map((item) => item.name))
+  const name = await dialog.prompt({ title: '新建故事', confirmLabel: '创建', input: { label: '故事名称', initialValue: suggestion } })
+  if (!name?.trim()) return
+  try {
+    const data = await api.createStory(workspace.activeProjectId, { name: name.trim(), creation_mode: 'conversational' })
+    await workspace.loadStories()
+    await workspace.selectStory(data.story.story_id)
+    notify('故事已创建', 'success')
+  } catch (reason) { notify(reason instanceof Error ? reason.message : '故事创建失败', 'error') }
+}
+
+async function renameCurrentStory() {
+  if (!workspace.activeProjectId || !workspace.activeStory) return
+  const name = await dialog.prompt({ title: '重命名故事', confirmLabel: '保存', input: { label: '故事名称', initialValue: workspace.activeStory.name } })
+  if (!name?.trim() || name.trim() === workspace.activeStory.name) return
+  try {
+    await api.renameStory(workspace.activeProjectId, workspace.activeStory.story_id, name.trim())
+    await workspace.loadStories()
+    notify('故事名称已更新', 'success')
+  } catch (reason) { notify(reason instanceof Error ? reason.message : '故事重命名失败', 'error') }
+}
+
 async function archiveSession(session: CreativeSession) {
   if (!workspace.activeProjectId || !workspace.activeStory || session.status === 'archived') return
   if (!await dialog.confirm({ title: '归档会话？', message: `“${session.title || session.session_goal}”将从最近会话中移除，历史内容仍会保留。`, confirmLabel: '归档会话' })) return
@@ -86,7 +112,7 @@ function sessionStatusLabel(status: string) {
   <div class="chat-shell">
     <aside class="chat-sidebar">
       <div class="chat-brand"><div class="orb"></div><div><strong>NovelForge</strong><small>对话工作台</small></div></div>
-      <div class="chat-context"><div class="context-project"><span class="context-label">项目</span><div class="project-actions"><label class="chat-project-select"><span class="project-dot"></span><select :value="workspace.activeProjectId" aria-label="选择项目" @change="changeProject"><option v-if="!workspace.projects.length" value="">暂无项目</option><option v-for="project in workspace.projects" :key="project.project_id" :value="project.project_id">{{ project.title || project.name }}</option></select></label><button class="project-action" title="新建项目" aria-label="新建项目" @click="createProject">＋</button><button class="project-action" title="重命名当前项目" aria-label="重命名当前项目" :disabled="!workspace.activeProjectId" @click="renameProject">✎</button></div></div><div v-if="workspace.activeStories.length" class="context-story"><span class="context-label">当前故事</span><select class="chat-story-select" :value="workspace.activeStoryId" aria-label="选择故事" @change="changeStory"><option v-for="story in workspace.activeStories" :key="story.story_id" :value="story.story_id">{{ story.name }}</option></select></div><NewStoryInline v-else :default-mode="'conversational'" /></div>
+      <div class="chat-context"><div class="context-project"><span class="context-label">项目</span><div class="project-actions"><label class="chat-project-select"><span class="project-dot"></span><select :value="workspace.activeProjectId" aria-label="选择项目" @change="changeProject"><option v-if="!workspace.projects.length" value="">暂无项目</option><option v-for="project in workspace.projects" :key="project.project_id" :value="project.project_id">{{ project.title || project.name }}</option></select></label><button class="project-action" title="新建项目" aria-label="新建项目" @click="createProject">＋</button><button class="project-action" title="重命名当前项目" aria-label="重命名当前项目" :disabled="!workspace.activeProjectId" @click="renameProject">✎</button></div></div><div v-if="workspace.activeStories.length" class="context-story"><span class="context-label">当前故事</span><div class="story-actions"><label class="chat-story-cap"><select class="chat-story-select" :value="workspace.activeStoryId" aria-label="选择故事" @change="changeStory"><option v-for="story in workspace.activeStories" :key="story.story_id" :value="story.story_id">{{ story.name }}</option></select></label><button class="project-action" title="新建故事" aria-label="新建故事" @click="createStoryInSidebar">＋</button><button class="project-action" title="重命名当前故事" aria-label="重命名当前故事" @click="renameCurrentStory">✎</button></div></div><NewStoryInline v-else :default-mode="'conversational'" /></div>
       <RouterLink class="new-chat" to="/conversational"><span>＋</span>新建创作会话</RouterLink>
       <div class="session-list"><p class="eyebrow">最近会话</p><div v-if="sessionError" class="session-empty error">{{ sessionError }}</div><template v-else><div v-for="session in sessions" :key="session.session_id" class="session-row"><RouterLink class="session-link" :to="{ name: 'conversational-session', params: { sessionId: session.session_id } }">{{ session.title || session.session_goal }}<small>{{ sessionStatusLabel(session.status) }}</small></RouterLink><button v-if="session.status !== 'archived'" class="session-archive" aria-label="归档会话" title="归档会话" @click="archiveSession(session)">···</button></div><div v-if="!sessions.length" class="session-empty">暂无会话。<br />点击上方按钮开始一次写作或讨论。</div></template></div>
       <nav class="chat-sidebar-footer" aria-label="对话工作台主导航"><RouterLink to="/conversational" :class="{ active: route.name === 'conversational-home' || route.name === 'conversational-session' }"><span>✦</span>对话</RouterLink><RouterLink to="/conversational/works" active-class="active"><span>▤</span>作品</RouterLink><RouterLink to="/conversational/library" active-class="active"><span>▦</span>资料库</RouterLink><RouterLink to="/conversational/settings" active-class="active"><span>⚙</span>设置</RouterLink></nav>
@@ -100,6 +126,11 @@ function sessionStatusLabel(status: string) {
 .chat-context .context-project, .chat-context .context-story { display: grid; gap: 5px; min-width: 0; }
 .chat-context .project-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; align-items: center; }
 .chat-context .project-actions .chat-project-select { min-width: 0; }
+.chat-context .story-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px; align-items: center; }
+.chat-story-cap { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 7px 10px; border: 1px solid rgba(255,255,255,.14); border-radius: 10px; color: #c9c2b6; }
+.chat-story-cap:focus-within { border-color: rgba(222,172,139,.5); }
+.chat-story-cap select { flex: 1; min-width: 0; border: 0; outline: 0; color: #f2eee7; background: transparent; font-family: Georgia, serif; font-size: 14px; text-overflow: ellipsis; }
+.chat-story-cap select option { color: #ece7df; background: #292b2a; }
 .project-action { width: 24px; height: 24px; padding: 0; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; color: #a6aaa3; background: transparent; font-size: 13px; line-height: 1; }
 .project-action:hover { color: #f0d8c4; border-color: rgba(222,172,139,.45); }
 .project-action:disabled { cursor: not-allowed; opacity: .4; }
