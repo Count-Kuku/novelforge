@@ -320,6 +320,34 @@ async def generate_turn_stream(project_id: str, story_id: str, session_id: str, 
     _story(name, story_id)
 
     def worker(emit: Callable[[str, Any], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
+        web_evidence, web_sources = "", []
+        if payload.enable_web_search:
+            try:
+                from novelforge.services.web_research.search import search_web
+
+                search_result = search_web(
+                    str(payload.user_message or "").strip()[:200],
+                    count=6,
+                )
+                hits = list(search_result.results or [])
+                if hits:
+                    lines: list[str] = []
+                    for hit in hits[:6]:
+                        snippet = str(hit.description or "").strip() or (
+                            " ".join(str(item) for item in (hit.extra_snippets or [])).strip()
+                        )
+                        lines.append(
+                            f"- 《{str(hit.title or '未命名').strip()}》"
+                            f"{f'：{snippet[:220]}' if snippet else ''}"
+                            f" [{str(hit.url or '')}]"
+                        )
+                        web_sources.append({
+                            "title": str(hit.title or "未命名").strip(),
+                            "url": str(hit.url or "").strip(),
+                        })
+                    web_evidence = "\n".join(lines)[:4000]
+            except Exception as exc:  # 联网失败不阻断创作
+                LOGGER.warning("Conversational web search failed: %s", exc)
         result = generate_writing_fragment(
             name,
             story_id,
@@ -330,6 +358,8 @@ async def generate_turn_stream(project_id: str, story_id: str, session_id: str, 
             branch_from_fragment_id=payload.branch_from_fragment_id,
             stream_callback=lambda text: emit("delta", {"text": str(text or "")}),
             cancel_check=cancel_check,
+            web_evidence=web_evidence,
+            web_sources=web_sources,
         )
         return result
 

@@ -64,6 +64,7 @@ def creative_fragment_prompt(
     user_message: str,
     action_type: str,
     word_count: str,
+    web_evidence: str = "",
 ) -> str:
     action_instruction = {
         "generate": "这是会话的首个片段，请建立清晰可继续的场景。",
@@ -78,7 +79,7 @@ def creative_fragment_prompt(
 本次已装配上下文：
 {assembled_context or "当前没有额外上下文。"}
 
-会话目标：
+{f"本轮联网检索资料（仅作外部参考；与故事内已接受事实冲突时以正文为准，不要盲目照搬）：\n{web_evidence}" if web_evidence else ""}会话目标：
 {session_goal or "未单独指定，以本轮要求为准。"}
 
 本轮用户要求：

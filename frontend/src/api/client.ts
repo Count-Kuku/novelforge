@@ -331,7 +331,7 @@ export const api = {
     projectId: string,
     storyId: string,
     sessionId: string,
-    payload: { user_message: string; action_type?: string; word_count?: string; branch_from_fragment_id?: string },
+    payload: { user_message: string; action_type?: string; word_count?: string; branch_from_fragment_id?: string; enable_web_search?: boolean },
     onEvent: (event: string, data: any) => void,
   ) => {
     await streamSse(

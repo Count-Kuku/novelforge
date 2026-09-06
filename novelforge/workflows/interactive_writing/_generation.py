@@ -328,6 +328,8 @@ def generate_writing_fragment(
     branch_from_fragment_id: str | None = None,
     stream_callback=None,
     cancel_check=None,
+    web_evidence: str = "",
+    web_sources: list[dict] | None = None,
 ) -> dict:
     raise_if_cancelled(cancel_check)
     require_operation_capabilities("creative_writing", action="对话式创作")
@@ -387,6 +389,7 @@ def generate_writing_fragment(
             str(user_message or "").strip(),
             branch["action_type"],
             word_count,
+            web_evidence=str(web_evidence or ""),
         )
         with llm_usage_scope(
             project_name=project_name,
@@ -569,6 +572,7 @@ def generate_writing_fragment(
         "context_assembly": assembly.model_dump(),
         "retrieval_hits": list(assembly.retrieval_hits),
         "auto_extraction": auto_extraction,
+        "web_sources": list(web_sources or []),
         "warnings": warnings,
     }
     try:

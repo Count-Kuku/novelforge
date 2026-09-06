@@ -209,6 +209,7 @@ class GenerateTurnRequest(ApiModel):
     action_type: Literal["generate", "continue", "rewrite", "branch"] = "generate"
     word_count: str = Field(default="800-1200", max_length=40)
     branch_from_fragment_id: str | None = Field(default=None, max_length=120)
+    enable_web_search: bool = Field(default=False)
 
 
 class ApiError(BaseModel):
