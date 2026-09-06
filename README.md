@@ -123,7 +123,7 @@ Windows PowerShell：
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m streamlit run app.py
+.\.venv\Scripts\python.exe -m uvicorn novelforge.api.app:app --host 127.0.0.1 --port 8501
 ```
 
 也可以不编辑 `.env`，启动后在 `设置 → 模型与费用` 页面填写并测试连接。
@@ -173,7 +173,7 @@ LLM_EMBEDDING_PRICE_PER_MILLION=0
 
 ## Windows 便携版构建
 
-便携版包含轻量 `NovelForge.exe` 启动器、自包含 `.runtime` Python、Vue 构建产物、项目源码和本地 `data/` 目录。运行时默认在 `127.0.0.1` 启动 FastAPI/Vue，优先使用端口 `8501` 并自动打开浏览器；缺少 `frontend/dist` 时自动回退 Streamlit。代码或前端构建更新后再次运行启动器，会自动结束同一目录中的旧服务并启动新版本；没有更新时只会打开现有页面。开发时可用 `NOVELFORGE_FRONTEND=streamlit` 显式回退。
+便携版包含轻量 `NovelForge.exe` 启动器、自包含 `.runtime` Python、Vue 构建产物、项目源码和本地 `data/` 目录。运行时默认在 `127.0.0.1` 启动 FastAPI/Vue，优先使用端口 `8501` 并自动打开浏览器。代码或前端构建更新后再次运行启动器，会自动结束同一目录中的旧服务并启动新版本；没有更新时只会打开现有页面。
 
 ## 两套创作工作台
 

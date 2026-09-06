@@ -340,12 +340,9 @@ JSON 镜像写入层已整体移除（原 `NOVELFORGE_WRITE_JSON_MIRRORS` 兼容
 
 # LLM usage 标准化、费用、归因、聚合与调用接入
 .\.venv\Scripts\python.exe tools\verify_llm_usage.py
-.\.venv\Scripts\python.exe tools\verify_llm_usage_ui.py
 
-# 执行前 Token/费用区间、历史校准、预算判断和 Streamlit 展示
+# 执行前 Token/费用区间、历史校准与预算判断
 .\.venv\Scripts\python.exe tools\verify_llm_preflight.py
-.\.venv\Scripts\python.exe tools\verify_llm_preflight_ui.py
-.\.venv\Scripts\python.exe tools\verify_llm_currency_ui.py
 ```
 
 验证脚本创建的项目使用专用 `_verify_*` 前缀。脚本和人工清理都必须校验目标在工作区和允许前缀内。

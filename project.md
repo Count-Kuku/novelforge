@@ -72,7 +72,6 @@ novelforge/domain/*      storage/repositories/*
 
 ```text
 frontend -> api -> workflows / services
-ui -> workflows / services (兼容期)
 workflows -> domain / services / core
 services -> domain / core / storage
 domain -> core（仅在需要共享模型时）
@@ -80,16 +79,14 @@ storage -> Python 标准库
 ```
 
 - `core` 不导入 UI、业务工作流或存储实现。
-- `domain` 不依赖 Streamlit、SQLite 连接或后台线程。
+- `domain` 不依赖 UI 框架、SQLite 连接或后台线程。
 - `storage/repositories` 只封装 SQL、事务内原子操作和行映射，不编排业务流程。
-- `ui` 只调用公开门面或工作流，不直接导入 `memory.*`、`retrieval.*` 等实现切片。
-- `app.py` 只负责应用初始化、路由和依赖装配，不承载复杂业务逻辑。
+- `novelforge/api` 只负责应用初始化、路由和依赖装配，不承载复杂业务逻辑。
 
 ## 目录与模块职责
 
 ```text
 novelforge/
-├── app.py                         # Streamlit 入口与路由
 ├── launcher.py                    # Windows 便携版启动器
 ├── frontend/                       # Vue 3 + TypeScript + Vite
 │   ├── src/api/                    # 唯一 typed API client
@@ -107,7 +104,6 @@ novelforge/
 │   ├── schema.py                  # schema 版本与迁移入口
 │   ├── migrations/                # 连续、不可变的 SQL 迁移
 │   └── repositories/              # 按数据域拆分的 SQL 仓储
-├── ui/                            # 兼容期 Streamlit 页面和可复用展示组件
 ├── tools/                         # 检查、迁移和回归验证脚本
 ├── docs/releases/                 # 不可变的发布历史
 ├── README.md
@@ -138,7 +134,7 @@ novelforge/
 - `novelforge/core/llm.py` 是聊天、流式响应和 Embedding 的唯一采集边界。流式请求申请末尾 usage 分片；不支持该参数的兼容接口会安全重试。
 - `novelforge/services/llm_usage.py` 与 `storage/repositories/llm_usage.py` 负责全局账本、日期聚合、模型/操作/Agent 拆分和显式范围清理。
 - `llm_usage_scope` 通过 `ContextVar` 传递项目、故事、任务、操作和 Agent 角色。子 Agent 可以细化角色与操作，但继承同一任务和界面操作 ID。
-- `ui/llm_usage.py` 提供侧边栏今日/月度摘要、单次操作汇总、项目级与全局明细。UI 不使用悬浮窗，避免长期写作时遮挡正文。
+- 前端在设置页提供今日/月度摘要、单次操作汇总、项目级与全局明细；不使用悬浮窗，避免长期写作时遮挡正文。
 
 费用可信度按三档展示：供应商直接返回费用、按用户价格快照估算、仅 Token/未计价。任何缺少价格的调用都不能显示为零费用。人民币默认主显示、美元作为核对值；价格币种、换算系数、核对日期和来源随事件快照保存。账本默认长期保留，只记录计量和归因元数据，不记录 prompt 或响应正文。
 
@@ -147,7 +143,7 @@ novelforge/
 - `novelforge/core/token_estimation.py` 提供无供应商依赖的中英文混合文本估算，供上下文装配、缺失 usage 回退和执行前预估共用。
 - `novelforge/domain/llm_preflight.py` 是纯领域层，统一调用阶段、低/预期/高 Token 区间、费用区间、置信度、价格缺失说明和预算状态。
 - `novelforge/services/llm_estimation.py` 从全局账本读取同方案、同模型、同操作和同 Agent 的精确样本；至少 5 条后使用 P50/P90 校准模板，但历史查询失败不得阻断业务 UI。
-- `ui/llm_preflight.py` 是统一展示与确认组件。阈值按主显示币种和预估上界判断；缺少必要价格时只显示 Token；缓存命中在执行前未知，因此费用按普通输入价格保守估算。
+- 前端统一展示与确认执行前预估。阈值按主显示币种和预估上界判断；缺少必要价格时只显示 Token；缓存命中在执行前未知，因此费用按普通输入价格保守估算。
 - 长资料导入、自动网络研究和自由创作已经接入。网络研究按 Planner、Extractor、Verifier 分阶段汇总，并把搜索 API、网页抓取等非 Token 调用列为未计入金额的外部项；抓取原文先留在隔离区，人工激活时才生成向量，因此激活阶段的 Embedding 不计入研究任务创建预估。
 
 预估不是账单，也不承诺模型一定生成到某个长度。输入在提示词已组装时通常更稳定；输出和未知网页正文必须保留较宽区间。持久任务在创建时保存完整估算与价格快照，后续价格修改不能重写该任务的历史判断依据。
@@ -180,7 +176,7 @@ novelforge/
 plan -> search -> fetch -> extract -> verify -> evaluate
 ```
 
-`novelforge/domain/web_research_tasks.py` 定义纯状态转换和阶段失效规则；`storage/repositories/durable_tasks.py` 提供通用租约、心跳、控制和归档；`novelforge/services/memory/web_research_tasks.py` 是 DB 门面；`novelforge/workflows/web_research_tasks.py` 编排恢复与阶段检查点；`web_research_agents.py` 实现 Planner、来源评估、Extractor 和 Verifier；`web_research_evaluation.py` 计算研究指标并转换待审核知识；`ui/web_research_tasks.py` 提供任务控制、证据预览和逐条送审。
+`novelforge/domain/web_research_tasks.py` 定义纯状态转换和阶段失效规则；`storage/repositories/durable_tasks.py` 提供通用租约、心跳、控制和归档；`novelforge/services/memory/web_research_tasks.py` 是 DB 门面；`novelforge/workflows/web_research_tasks.py` 编排恢复与阶段检查点；`web_research_agents.py` 实现 Planner、来源评估、Extractor 和 Verifier；`web_research_evaluation.py` 计算研究指标并转换待审核知识。
 
 网页正文始终作为不可信数据传给 Extractor/Verifier，系统提示明确拒绝执行正文中的指令。模型提取的主张正文和引文都必须在持久网页正文中定位，否则候选被剔除；名称不在原文时会回退为已定位的主张文本。Verifier 只能引用已有 `claim_id`，其模型输出的摘要和详情不会直接成为结论；确定性校验层只在相同来源角色、分类和原文主张内合并支持证据，并限制冲突证据的来源角色与主体。只有重定向后的最终 HTTPS URL 命中用户显式提供的官方域名白名单才会评为 `official`。激活后的网页进入 RAG 时仍包裹 `UNTRUSTED_WEB_SOURCE` 边界。结论默认只进入待审核知识，不能由研究任务直接写入正式知识。
 
@@ -206,11 +202,6 @@ plan -> search -> fetch -> extract -> verify -> evaluate
 | `storage/repositories/ingestion_task_leases.py` | 原子领取、租约接管和心跳续期 SQL |
 | `storage/repositories/ingestion_task_controls.py` | 暂停/继续/取消、归档和历史清理 SQL |
 | `storage/repositories/ingestion_batch_mutations.py` | 批次保存/删除的原子占用、版本和 worker 权限围栏 |
-| `ui/ingestion_batch_guard.py` | 导入向导与批次管理共用的冲突预检和任务中心入口 |
-| `ui/ingestion_tasks.py` | 任务筛选、进度、控制和历史管理 |
-| `ui/ingestion_task_estimate.py` | 导入入口共用的执行前估算展示 |
-| `ui/llm_preflight.py` | 写作、资料和研究入口共用的执行前区间展示与预算确认 |
-| `ui/knowledge_type_editor.py` | 按知识分类编辑角色、关系、时间线、规则、文风等专属字段 |
 
 资料导入的稳定入口支持一次选择多份 `txt/md/markdown/docx/epub/pdf`。压缩容器格式在解析前检查成员数量、单成员大小、解压总大小和路径穿越；DOCX 读取 OpenXML 标题样式与表格，EPUB 按 OPF spine 顺序解析 XHTML，PDF 按页提取文本。解析产物统一转换为带标题层级的文本，再按结构标题、中文/英文章节、场景分隔、段落和句子边界切分。每个片段保存 `heading_path/content_kind/start_offset/end_offset/content_hash/previous_index/next_index`，硬字符上限始终生效。
 
@@ -322,7 +313,7 @@ queued -> running -> completed
 
 ### 运行边界
 
-调度器是 Streamlit 应用进程中的 daemon thread。关闭页面、刷新页面或切换页面不会停止任务；关闭启动器、结束 Python 进程或系统休眠可能中断当前调用。应用重启后，任务会在旧租约过期并完成批次对账后继续。
+调度器是 FastAPI 应用进程中的 daemon thread。关闭页面、刷新页面或切换页面不会停止任务；关闭启动器、结束 Python 进程或系统休眠可能中断当前调用。应用重启后，任务会在旧租约过期并完成批次对账后继续。
 
 ## 存储与一致性
 
@@ -345,34 +336,22 @@ queued -> running -> completed
 
 Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料库`、`设置`。对话记录作为过程数据自动保存在会话侧栏；只有用户采用/定稿的片段和正式章节进入“作品”。知识、待审核条目、导入来源、实体、关系图和网络研究归入“资料库”；模型、费用、规则、提示词、工作台切换以及项目/故事维护归入“设置”。旧 `/conversational/workspace/*` 与独立规则路由保留兼容跳转，不再作为侧栏入口。
 
-兼容期 Streamlit 侧边栏仍按使用场景组织：
-
-- `工作台`：项目概览、内容管理和项目/故事管理。
-- `创作`：创作方向、小说规划、章节写作和自由模式；章节写作内统一提供快速门禁与综合体检。
-- `资料库`：统一搜索编辑、优先设定、待审核和资料导入/来源管理；设定提炼仍是独立知识更新操作。
-- `设置`：模型与费用和高级创作；开发者模式下在内部提供资料检索诊断。
-
-普通侧栏固定为四个入口，隐藏内容管理、检索诊断、独立章节审阅、生成规则和提示词选项等重复页面；这些能力仍由对应 Hub 内的视图承载。开发者设置 `NOVELFORGE_DEVELOPER_MODE=1` 后只会在“设置”内部显示开发工具，不改变四入口结构。
-
-四入口合并与旧路由迁移已经完成并合并进当前实现，不再保留独立计划文档。
-
 资料库的“导入与来源”内部工作区为：概览、导入、处理和管理；“查找与编辑”默认打开统一搜索，支持查看、编辑和修订恢复；“优先设定”是正式知识的高优先级子集，“待审核”确认后进入正式知识。复杂面板只渲染当前选中的工作区，状态键必须按项目/故事作用域隔离。
 
 ## 开发规则
 
 1. Windows 下运行项目 Python 命令时使用 `.\.venv\Scripts\python.exe`，不要假设裸 `python` 指向项目环境。
-2. 根目录只保留 `app.py` 和 `launcher.py` 两个 Python 运行入口；业务模块进入 `novelforge/`、`storage/` 或 `ui/`。
+2. 根目录只保留 `launcher.py` 一个 Python 运行入口；业务模块进入 `novelforge/` 或 `storage/`。
 3. 新共享模型和 prompt 原语放入 `novelforge/core/`。
 4. 无 IO 的业务规则和状态转换放入 `novelforge/domain/`。
 5. 持久化与检索能力放入 `novelforge/services/`，SQL 放入 `storage/repositories/`。
 6. 多步骤生成、恢复或任务编排放入 `novelforge/workflows/`。
-7. Streamlit 页面只做输入、展示和调用编排，不保存领域规则。
+7. 前端页面只做输入、展示和调用编排，不保存领域规则。
 8. 新结构化 LLM 输出先在 `novelforge/core/schemas.py` 定义并校验；空响应必须显式报错。
 9. 不静默吞掉异常；至少记录警告，并向上层返回可判断的失败状态。
 10. 所有用户输入参与路径构造前必须做路径穿越检查。
 11. 新字段必须有兼容默认值；数据库变更必须新增连续 migration，不修改已发布迁移。
-12. 项目或故事相关的 Streamlit state 必须使用 scoped key，防止切换上下文后串数据。
-13. 生成产物应可持久化；预览模式不得写入正式章节、讨论、索引或运行记录。
+12. 生成产物应可持久化；预览模式不得写入正式章节、讨论、索引或运行记录。
 14. 新增顶层包或发布必需文件时同步更新 `build_release.ps1` 和包结构验证。
 
 ### 文件体量与耦合控制
@@ -466,8 +445,8 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 
 | 领域 | 当前问题 | 处理方向 |
 |---|---|---|
-| 模块体量 | 部分 UI/source workflow 模块仍超过 1000 行（`memory/core.py`、`core/prompts.py` 已拆分完毕） | 按展示、提示词和资料职责继续拆分 |
-| UI 复用 | 多类讨论页仍有相似布局、表单解析和保存操作 | 抽取共享讨论 renderer 和动作 helper |
+| 模块体量 | 部分 source workflow 模块仍超过 1000 行（`memory/core.py`、`core/prompts.py` 已拆分完毕） | 按提示词和资料职责继续拆分 |
+| 前端复用 | Vue 多类讨论页仍有相似布局、表单解析和保存操作 | 抽取共享讨论组件和动作 helper |
 | 多查询路由 | ~~只有单次语义查询~~ → 已实现实体路由分检（角色/世界/时间线）与实体聚焦注入（refactor 2） | 增强方向收敛为：跨路由 RRF 融合、检索反查实体并集、受配额子查询防 Embedding 调用膨胀 |
 | OCR | 自由创作附件与 Vue 项目批量导入支持本地 OCR；真实引擎/provider 评测仍待发布环境 | 继续执行真实评测，不对数字 PDF 重复 OCR |
 | 修订操作 | 知识可恢复为新修订，来源修订仍只有历史列表 | 为来源补充差异与“旧快照复制为新修订”的可审计恢复 |
@@ -479,7 +458,7 @@ Vue 对话工作台的主导航固定为四项：`对话`、`作品`、`资料�
 ## 修改前检查顺序
 
 1. 阅读本文件和 [storage_architecture.md](./storage_architecture.md)。
-2. 阅读与需求直接相关的 `ui/` 页面。
+2. 阅读与需求直接相关的 Vue 前端页面。
 3. 沿调用方向检查对应 workflow、domain、service 和 repository。
 4. 搜索公开门面的导出与现有 `tools/verify_*.py` 覆盖。
 5. 实现后同步更新用户行为、架构或 schema 对应的永久文档。

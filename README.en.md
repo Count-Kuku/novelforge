@@ -123,7 +123,7 @@ Windows PowerShell:
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m streamlit run app.py
+.\.venv\Scripts\python.exe -m uvicorn novelforge.api.app:app --host 127.0.0.1 --port 8501
 ```
 
 Editing `.env` is optional; model profiles can also be configured and tested in the application.
@@ -167,7 +167,7 @@ Back up the entire `data/` directory regularly. Stop NovelForge before copying i
 
 ## Windows Portable Build
 
-The portable package contains a lightweight `NovelForge.exe` launcher, a self-contained `.runtime` Python distribution, the compiled Vue frontend, project source, and a local `data/` directory. It starts FastAPI/Vue on `127.0.0.1` by default, prefers port `8501`, and opens the browser; it falls back to Streamlit when the Vue bundle is missing. Running the launcher again after source or frontend build updates automatically replaces the tracked service with the new version; without updates it only reopens the existing page.
+The portable package contains a lightweight `NovelForge.exe` launcher, a self-contained `.runtime` Python distribution, the compiled Vue frontend, project source, and a local `data/` directory. It starts FastAPI/Vue on `127.0.0.1` by default, prefers port `8501`, and opens the browser. Running the launcher again after source or frontend build updates automatically replaces the tracked service with the new version; without updates it only reopens the existing page.
 
 ## Two Creative Workspaces
 
