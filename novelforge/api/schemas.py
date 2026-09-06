@@ -206,7 +206,7 @@ class UpdateSessionRequest(ApiModel):
 
 class GenerateTurnRequest(ApiModel):
     user_message: str = Field(min_length=1, max_length=20000)
-    action_type: Literal["continue", "rewrite", "branch"] = "continue"
+    action_type: Literal["generate", "continue", "rewrite", "branch"] = "generate"
     word_count: str = Field(default="800-1200", max_length=40)
     branch_from_fragment_id: str | None = Field(default=None, max_length=120)
 

@@ -32,6 +32,7 @@ export interface CreativeSession {
   status: string
   session_goal: string
   auto_extract_mode: 'manual' | 'on_accept'
+  active_fragment_id?: string
   updated_at: string
 }
 
