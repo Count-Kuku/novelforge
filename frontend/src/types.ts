@@ -46,6 +46,7 @@ export interface CreativeFragment {
   fragment_id: string
   content: string
   status: string
+  extraction_status?: 'not_started' | 'running' | 'completed' | 'failed'
   created_at: string
 }
 

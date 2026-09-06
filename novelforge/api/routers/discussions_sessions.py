@@ -15,6 +15,7 @@ from novelforge.services import memory
 from novelforge.services import project_manager
 from novelforge.workflows.interactive_writing import (
     create_writing_session,
+    extract_fragment_knowledge,
     generate_writing_fragment,
 )
 from storage.repositories.projects import upsert_project_meta
@@ -278,6 +279,28 @@ async def accept_fragment(project_id: str, story_id: str, session_id: str, paylo
     name = _resolve_project_name(project_id)
     saved = await run_in_threadpool(memory.accept_creative_fragment, name, session_id, payload.fragment_id, story_id=story_id)
     return _envelope({"fragment": saved}, request)
+
+@router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/fragments/{{fragment_id}}/extract/stream")
+async def extract_fragment_stream(project_id: str, story_id: str, session_id: str, fragment_id: str, request: Request):
+    """显式提炼已采用片段：无风险候选自动确认进正式知识，有风险留待审核。"""
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+
+    def worker(emit: Callable[[str, Any], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
+        result = extract_fragment_knowledge(
+            name,
+            story_id,
+            session_id,
+            fragment_id,
+            stream_callback=lambda text: emit("delta", {"text": str(text or "")}),
+        )
+        return result
+
+    return StreamingResponse(
+        _threaded_stream(worker),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/fragments/select")
 async def select_fragment(project_id: str, story_id: str, session_id: str, payload: FragmentActionRequest, request: Request) -> dict[str, Any]:

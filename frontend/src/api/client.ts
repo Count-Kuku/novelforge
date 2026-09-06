@@ -304,6 +304,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ fragment_id: fragmentId }),
     }),
+  streamFragmentExtraction: async (
+    projectId: string,
+    storyId: string,
+    sessionId: string,
+    fragmentId: string,
+    onEvent: (event: string, data: any) => void,
+  ) => {
+    await streamSse(
+      `/projects/${encodeURIComponent(projectId)}/stories/${encodeURIComponent(storyId)}/sessions/${encodeURIComponent(sessionId)}/fragments/${encodeURIComponent(fragmentId)}/extract/stream`,
+      {
+        method: 'POST',
+        headers: { Accept: 'text/event-stream', 'Content-Type': 'application/json', 'X-Request-Id': requestId(), 'X-NovelForge-Client': 'vue', 'Idempotency-Key': requestId() },
+        body: '{}',
+      },
+      onEvent,
+      '设定提炼',
+    )
+  },
   streamTurn: async (
     projectId: string,
     storyId: string,
