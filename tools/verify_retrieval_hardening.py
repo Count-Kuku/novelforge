@@ -14,9 +14,8 @@ if str(ROOT) not in sys.path:
 from novelforge.core.schemas import RetrievalChunk, RetrievalHit, RetrievalIndexManifest, RetrievalVectorStore
 from novelforge.domain.ingestion_task_estimates import estimate_ingestion_task
 from novelforge.services import retrieval_eval
-from novelforge.services.memory.references import normalize_retrieval_eval_case
+from novelforge.services.memory import normalize_retrieval_eval_case
 from novelforge.services.retrieval import index as retrieval_index
-from ui.retrieval_eval_panel import _eval_result_rows
 
 
 CHECKS: list[str] = []
@@ -199,19 +198,6 @@ def verify_eval_errors_do_not_pollute_quality_means() -> None:
 
 
 def verify_legacy_run_and_nonfinite_rates() -> None:
-    rows = _eval_result_rows({
-        "results": [{
-            "name": "legacy",
-            "passed": True,
-            "matched_count": 1,
-            "expectation_count": 1,
-            "top_hit": {},
-        }],
-    })
-    check(rows[0]["Recall@K"] == "未记录", "legacy rows do not invent zero recall")
-    check(rows[0]["MRR"] == "未记录", "legacy rows do not invent zero MRR")
-    check(rows[0]["nDCG@K"] == "未记录", "legacy rows do not invent zero nDCG")
-
     estimate = estimate_ingestion_task(
         {"segments": [{"content": "资料内容" * 100}]},
         [0],

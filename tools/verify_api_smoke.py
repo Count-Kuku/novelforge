@@ -26,7 +26,7 @@ def main() -> None:
         client = TestClient(create_app(), headers={"x-novelforge-client": "vue"})
         response = client.get("/api/v1/health/ready")
         assert response.status_code == 200, response.text
-        assert response.json()["data"]["schema_version"] == 17
+        assert response.json()["data"]["schema_version"] == 20
         response = client.get("/api/v1/capabilities")
         assert response.status_code == 200 and "chat" in response.json()["data"]["capabilities"], response.text
         response = client.get("/api/v1/settings/developer")

@@ -25,11 +25,8 @@ SERVER_STATE_FILE_NAME = ".novelforge-server.json"
 LAUNCH_LOCK_FILE_NAME = ".novelforge-launch.lock"
 LAUNCH_LOCK_TIMEOUT_SECONDS = 15
 LAUNCH_LOCK_POLL_INTERVAL_SECONDS = 0.1
-STREAMLIT_MARKERS = ("streamlit", "stapp")
-FRONTEND_ENV_NAME = "NOVELFORGE_FRONTEND"
 RUNTIME_UPDATE_PATHS = (
     "launcher.py",
-    "app.py",
     "VERSION",
     "novelforge",
     "storage",
@@ -43,22 +40,15 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _app_entrypoint(root: Path) -> Path:
-    return root / "app.py"
-
-
 def _frontend_dist(root: Path) -> Path:
     return root / "frontend" / "dist"
 
 
-def _frontend_mode(root: Path) -> str:
-    requested = str(os.environ.get(FRONTEND_ENV_NAME, "vue") or "vue").strip().lower()
-    if requested not in {"vue", "streamlit"}:
-        requested = "vue"
-    if requested == "vue" and not (_frontend_dist(root) / "index.html").exists():
-        _write_log(root, "Vue bundle is missing; falling back to Streamlit compatibility mode", append=True)
-        return "streamlit"
-    return requested
+def _ensure_frontend_bundle(root: Path) -> None:
+    if not (_frontend_dist(root) / "index.html").exists():
+        raise RuntimeError(
+            "Vue frontend bundle is missing. Run `npm run build` in frontend/ first."
+        )
 
 
 def _log_path(root: Path) -> Path:
@@ -352,11 +342,6 @@ def _is_novelforge_instance(url: str) -> bool:
         return False
 
 
-def _looks_like_streamlit_shell(page: str) -> bool:
-    lowered = str(page or "").lower()
-    return any(marker in lowered for marker in STREAMLIT_MARKERS)
-
-
 def _clean_subprocess_env() -> dict[str, str]:
     env: dict[str, str] = {}
     seen_keys: set[str] = set()
@@ -418,7 +403,7 @@ def _find_available_port(root: Path) -> tuple[int | None, int | None]:
                 trusted_page = _fetch_page(url)
             except Exception:
                 trusted_page = ""
-            if APP_MARKER in trusted_page or _looks_like_streamlit_shell(trusted_page):
+            if APP_MARKER in trusted_page:
                 _write_log(root, f"Detected tracked NovelForge process pid={state_pid} on port {state_port}", append=True)
                 webbrowser.open(url)
                 return None, None
@@ -452,7 +437,7 @@ def _wait_for_http_ready(url: str, timeout_seconds: int) -> bool:
             request = Request(url, headers={"User-Agent": "NovelForge-Launcher/1.0"})
             with urlopen(request, timeout=2) as response:
                 page = response.read().decode("utf-8", errors="ignore")
-                if response.status < 500 and (APP_MARKER in page or _looks_like_streamlit_shell(page)):
+                if response.status < 500 and APP_MARKER in page:
                     return True
         except Exception:
             time.sleep(READY_POLL_INTERVAL_SECONDS)
@@ -482,8 +467,7 @@ def _spawn_server_process(
         # The portable distribution uses Python's embeddable runtime, whose
         # ``python314._pth`` intentionally disables the implicit current
         # working-directory import path.  Explicitly prepend the extracted
-        # application root so ``novelforge`` and sibling packages resolve in
-        # both FastAPI/Vue and Streamlit compatibility launches.
+        # application root so ``novelforge`` and sibling packages resolve.
         project_path = str(root.resolve())
         existing_python_path = child_env.get("PYTHONPATH", "")
         child_env["PYTHONPATH"] = (
@@ -516,42 +500,6 @@ def _spawn_server_process(
         return process
     finally:
         log_file.close()
-
-
-def _launch_streamlit(root: Path, python_executable: Path, port: int):
-    app_path = _app_entrypoint(root)
-    if not app_path.exists():
-        raise RuntimeError(f"Missing application entrypoint: {app_path}")
-
-    streamlit_command = [
-        str(python_executable),
-        "-m",
-        "streamlit",
-        "run",
-        str(app_path),
-        "--server.headless",
-        "true",
-        "--browser.gatherUsageStats",
-        "false",
-        "--client.toolbarMode",
-        "minimal",
-        "--theme.base",
-        "light",
-        "--theme.primaryColor",
-        "#0f766e",
-        "--theme.backgroundColor",
-        "#f7f8fb",
-        "--theme.secondaryBackgroundColor",
-        "#ffffff",
-        "--theme.textColor",
-        "#17202a",
-        "--server.port",
-        str(port),
-        "--server.address",
-        HOST,
-    ]
-
-    return _spawn_server_process(root, python_executable, port, streamlit_command, "Streamlit")
 
 
 def _launch_fastapi(root: Path, python_executable: Path, port: int):
@@ -621,13 +569,8 @@ def main() -> int:
                 )
 
             python_executable = _resolve_python(root)
-            frontend_mode = _frontend_mode(root)
-            _write_log(root, f"Selected frontend mode: {frontend_mode}", append=True)
-            process = (
-                _launch_fastapi(root, python_executable, selected_port)
-                if frontend_mode == "vue"
-                else _launch_streamlit(root, python_executable, selected_port)
-            )
+            _ensure_frontend_bundle(root)
+            process = _launch_fastapi(root, python_executable, selected_port)
     except Exception as exc:
         return _fail(root, f"Failed to prepare or launch NovelForge: {exc}")
 

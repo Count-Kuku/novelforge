@@ -23,7 +23,6 @@ from novelforge.services.memory import (
     upsert_knowledge_category_item_record,
 )
 from tools.verify_utils import isolated_workspace
-from ui.common import developer_mode_enabled
 
 
 CHECKS: list[str] = []
@@ -148,16 +147,6 @@ def verify_timeline_and_modes() -> None:
         {"id": "b", "name": "二", "typed_data": {"time": "第3日", "order_hint": "3"}},
     ]
     check([item["id"] for item in sorted(events, key=timeline_item_sort_key)] == ["a", "b", "c"], "时间轴使用自然顺序排序")
-    previous = os.environ.pop("NOVELFORGE_DEVELOPER_MODE", None)
-    try:
-        check(not developer_mode_enabled(), "普通模式默认隐藏技术数据")
-        os.environ["NOVELFORGE_DEVELOPER_MODE"] = "true"
-        check(developer_mode_enabled(), "开发者模式可显式开启")
-    finally:
-        if previous is None:
-            os.environ.pop("NOVELFORGE_DEVELOPER_MODE", None)
-        else:
-            os.environ["NOVELFORGE_DEVELOPER_MODE"] = previous
 
 
 def main() -> int:

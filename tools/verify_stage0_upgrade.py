@@ -153,38 +153,6 @@ def verify_preflight_before_persistence() -> None:
             raise AssertionError("缺少聊天能力时不应创建资料提取任务")
         check(not save_task.called, "资料任务在能力校验通过前不会持久化")
 
-    from ui import app_shell
-    from ui.free_writing import composer
-
-    with (
-        patch.object(composer, "require_chat_ready", side_effect=RuntimeError("missing")),
-        patch.object(composer, "create_writing_session") as create_session,
-        patch.object(composer.st, "error"),
-    ):
-        composer._run_generation(
-            "project",
-            "default",
-            "",
-            {},
-            "generate",
-            None,
-            "开始创作",
-            {
-                "word_count": "800-1200",
-                "writing_guidance": {},
-                "prompt_option_ids": [],
-                "manual_knowledge_ids": [],
-            },
-            {"target_chapter_no": None, "auto_extract_mode": "on_accept"},
-        )
-        check(not create_session.called, "自由创作在能力校验通过前不会创建空会话")
-
-    with patch.object(app_shell, "load_creative_profile", return_value={"is_configured": True}):
-        check(
-            app_shell.is_story_creative_profile_configured("project", "default"),
-            "DB-only 创作配置不再依赖 JSON 镜像存在",
-        )
-
 
 def _active_edges(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(

@@ -64,7 +64,6 @@ $ResolvedRuntimeRoot = if ([System.IO.Path]::IsPathRooted($RuntimeRoot)) {
     ConvertTo-NormalizedFullPath -LiteralPath (Join-Path $ProjectRoot $RuntimeRoot)
 }
 $PortablePython = Join-Path $ResolvedRuntimeRoot "python.exe"
-$StreamlitConfigRoot = Join-Path $ProjectRoot ".streamlit"
 $FrontendRoot = Join-Path $ProjectRoot "frontend"
 $FrontendDist = Join-Path $FrontendRoot "dist"
 
@@ -116,7 +115,7 @@ if (Test-Path -LiteralPath (Join-Path $ResolvedRuntimeRoot "pyvenv.cfg")) {
     throw "RuntimeRoot points to a virtual environment. A copied venv is tied to its build machine; provide a self-contained Python distribution instead."
 }
 
-& $PortablePython -c "import streamlit, openai, dotenv, pydantic, httpx, ddgs, fastapi, uvicorn, multipart"
+& $PortablePython -c "import openai, dotenv, pydantic, httpx, ddgs, fastapi, uvicorn, multipart"
 if (-not $?) {
     throw "The self-contained runtime is missing one or more NovelForge dependencies."
 }
@@ -163,7 +162,6 @@ if (Test-Path -LiteralPath $ZipPath) {
 New-Item -ItemType Directory -Path $PortableRoot | Out-Null
 
 $filesToCopy = @(
-    "app.py",
     "launcher.py",
     "NovelForge.spec",
     "requirements.txt",
@@ -185,8 +183,7 @@ $directoriesToCopy = @(
     "docs",
     "novelforge",
     "storage",
-    "tools",
-    "ui"
+    "tools"
 )
 
 foreach ($relativePath in $directoriesToCopy) {
@@ -200,10 +197,6 @@ Copy-Item -LiteralPath $FrontendDist -Destination (Join-Path $PortableRoot "fron
 
 Copy-Item -LiteralPath (Join-Path $LauncherSpecRoot "NovelForge.exe") -Destination (Join-Path $PortableRoot "NovelForge.exe")
 Copy-Item -LiteralPath $ResolvedRuntimeRoot -Destination (Join-Path $PortableRoot ".runtime") -Recurse
-
-if (Test-Path -LiteralPath $StreamlitConfigRoot) {
-    Copy-Item -LiteralPath $StreamlitConfigRoot -Destination (Join-Path $PortableRoot ".streamlit") -Recurse
-}
 
 Get-ChildItem -LiteralPath $PortableRoot -Recurse -Force -File |
     Where-Object {

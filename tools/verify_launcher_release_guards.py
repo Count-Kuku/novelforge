@@ -51,7 +51,8 @@ def _check_early_exit_state_cleanup(root: Path) -> None:
             return_value=(launcher.DEFAULT_PORT, None),
         ),
         patch.object(launcher, "_resolve_python", return_value=Path(sys.executable)),
-        patch.object(launcher, "_launch_streamlit", return_value=process),
+        patch.object(launcher, "_ensure_frontend_bundle", return_value=None),
+        patch.object(launcher, "_launch_fastapi", return_value=process),
         patch.object(launcher, "_wait_for_http_ready", return_value=False),
         patch.object(launcher, "_show_error", return_value=None),
     ):
@@ -142,6 +143,8 @@ def _run_rejected_build(runtime_root: Path, *, version: str | None = None) -> st
         cwd=PROJECT_ROOT,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=30,
         check=False,
     )
@@ -169,16 +172,19 @@ def _check_build_version_guard() -> None:
     assert "does not match VERSION" in output
 
 
-def _check_frontend_mode_selection() -> None:
-    with tempfile.TemporaryDirectory(prefix="novelforge-frontend-mode-") as temp_dir:
+def _check_frontend_bundle_guard() -> None:
+    with tempfile.TemporaryDirectory(prefix="novelforge-frontend-bundle-") as temp_dir:
         root = Path(temp_dir)
         (root / "frontend" / "dist").mkdir(parents=True)
         (root / "frontend" / "dist" / "index.html").write_text("NovelForge", encoding="utf-8")
-        with patch.dict("os.environ", {}, clear=False):
-            os.environ.pop(launcher.FRONTEND_ENV_NAME, None)
-            assert launcher._frontend_mode(root) == "vue"
-        with patch.dict("os.environ", {launcher.FRONTEND_ENV_NAME: "streamlit"}):
-            assert launcher._frontend_mode(root) == "streamlit"
+        launcher._ensure_frontend_bundle(root)
+        (root / "frontend" / "dist" / "index.html").unlink()
+        try:
+            launcher._ensure_frontend_bundle(root)
+        except RuntimeError as exc:
+            assert "frontend bundle is missing" in str(exc)
+        else:
+            raise AssertionError("缺少 Vue 构建产物时应拒绝启动")
 
 
 def _check_runtime_update_detection() -> None:
@@ -211,7 +217,7 @@ def main() -> int:
     checks += 1
     _check_build_version_guard()
     checks += 1
-    _check_frontend_mode_selection()
+    _check_frontend_bundle_guard()
     checks += 1
     _check_runtime_update_detection()
     checks += 1

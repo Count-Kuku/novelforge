@@ -173,29 +173,6 @@ def _verify_atomic_replacement(project_name: str, failures: list[str]) -> None:
         failures,
     )
 
-    import ui.knowledge_management as knowledge_management_ui
-
-    selected_items = [
-        {"pending_id": "ui-a", "category": "items", "name": "UI A"},
-        {"pending_id": "ui-b", "category": "items", "name": "UI B"},
-    ]
-    with (
-        patch.object(
-            knowledge_management_ui,
-            "build_merged_knowledge_item",
-            return_value={"pending_id": "ui-merged", "category": "items", "name": "UI Merged"},
-        ),
-        patch.object(knowledge_management_ui, "queue_pending_knowledge_items", return_value=1),
-        patch.object(knowledge_management_ui.st, "success") as success,
-        patch.object(knowledge_management_ui.st, "rerun", return_value=None),
-    ):
-        knowledge_management_ui._merge_pending_quality_issue(project_name, selected_items)
-    _expect(
-        success.call_count == 1 and "已合并 2 条" in str(success.call_args.args[0]),
-        "pending_merge_ui_reports_atomic_replacement",
-        failures,
-    )
-
 
 def _queue_with_replacement(project_name: str, replacement: dict) -> int:
     return queue_pending_knowledge_items(

@@ -22,7 +22,7 @@ def check(condition: bool, label: str) -> None:
 
 def verify() -> None:
     root_python_files = sorted(path.name for path in ROOT.glob("*.py"))
-    check(root_python_files == ["app.py", "launcher.py"], "根目录只保留两个运行入口")
+    check(root_python_files == ["launcher.py"], "根目录只保留 launcher 运行入口")
 
     expected_packages = [
         ROOT / "novelforge" / "core",
@@ -40,8 +40,6 @@ def verify() -> None:
         *sorted((ROOT / "novelforge" / "workflows").glob("web_research*.py")),
         ROOT / "novelforge" / "domain" / "web_research_tasks.py",
         ROOT / "storage" / "repositories" / "durable_tasks.py",
-        ROOT / "ui" / "web_research.py",
-        ROOT / "ui" / "web_research_tasks.py",
     ]
     oversized = {
         str(path.relative_to(ROOT)): len(path.read_text(encoding="utf-8").splitlines())
@@ -79,7 +77,7 @@ def verify() -> None:
         "prompt_options",
     }
     stale_imports: list[str] = []
-    source_roots = [ROOT / "app.py", ROOT / "novelforge", ROOT / "storage", ROOT / "ui", ROOT / "tools"]
+    source_roots = [ROOT / "novelforge", ROOT / "storage", ROOT / "tools"]
     source_files: list[Path] = []
     for source_root in source_roots:
         source_files.extend([source_root] if source_root.is_file() else source_root.rglob("*.py"))
