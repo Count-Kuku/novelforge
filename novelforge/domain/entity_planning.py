@@ -100,7 +100,7 @@ def _extract_entities_from_response(raw: str, parsed: dict) -> list[dict]:
 def _known_entities_text(project_name: str) -> str:
     """给 LLM 的已确认实体名单（供名称对齐，不照单全收）。"""
     try:
-        from novelforge.services.memory.knowledge import load_entity_master_rows
+        from novelforge.services.memory import load_entity_master_rows
 
         rows = load_entity_master_rows(project_name)
     except Exception:
@@ -129,7 +129,7 @@ def plan_entity_context(
     text = str(query_text or "").strip()
     # 冷启动降级（D9）：无实体库时不做无谓的 LLM 识别
     try:
-        from novelforge.services.memory.knowledge import load_entity_master_rows
+        from novelforge.services.memory import load_entity_master_rows
 
         if not load_entity_master_rows(project_name, story_id=story_id, worldline_id=worldline_id):
             plan.skipped = True
@@ -239,7 +239,7 @@ def enrich_plan_via_retrieval(
         str(item.get("canonical_name") or "") for item in plan.entities
     } | {name for route_names in plan.route_names.values() for name in route_names}
     try:
-        from novelforge.services.memory.knowledge import fetch_knowledge_entity_map
+        from novelforge.services.memory import fetch_knowledge_entity_map
         from novelforge.services.retrieval import retrieve_context
         from novelforge.services.retrieval.common import KNOWLEDGE_SOURCE_TYPES
 

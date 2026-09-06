@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from tools.verify_utils import isolated_workspace
 
 
@@ -250,7 +252,7 @@ def main() -> None:
         response = client.post(f"/api/v1/operations/{operation_id}/cancel")
         assert response.status_code == 200 and response.json()["data"]["status"] == "cancel_requested", response.text
 
-    print("api smoke verification: ok")
+    print(json.dumps({"ok": True}))
 
 
 if __name__ == "__main__":

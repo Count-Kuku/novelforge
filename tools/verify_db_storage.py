@@ -54,7 +54,7 @@ def main() -> int:
         _run("verify_review_regressions.py"),
         _run("verify_confirmed_knowledge_atomicity.py"),
         _run("verify_pending_transactions.py"),
-        _run("verify_app_smoke.py"),
+        _run("verify_api_smoke.py"),
     ]
     result = {
         "ok": all(item.get("ok") for item in checks),
