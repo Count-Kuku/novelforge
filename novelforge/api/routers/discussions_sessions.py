@@ -320,7 +320,7 @@ async def generate_turn_stream(project_id: str, story_id: str, session_id: str, 
     _story(name, story_id)
 
     def worker(emit: Callable[[str, Any], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
-        web_evidence, web_sources = "", []
+        web_evidence, web_sources, web_search_notice = "", [], ""
         if payload.enable_web_search:
             try:
                 from novelforge.services.web_research.search import search_web
@@ -346,8 +346,11 @@ async def generate_turn_stream(project_id: str, story_id: str, session_id: str, 
                             "url": str(hit.url or "").strip(),
                         })
                     web_evidence = "\n".join(lines)[:4000]
-            except Exception as exc:  # 联网失败不阻断创作
+                else:
+                    web_search_notice = "本次联网搜索未检索到网页结果。"
+            except Exception as exc:  # 联网失败不阻断创作，但把原因告诉前端
                 LOGGER.warning("Conversational web search failed: %s", exc)
+                web_search_notice = f"联网搜索暂不可用：{str(exc)[:200]}"
         result = generate_writing_fragment(
             name,
             story_id,
@@ -361,6 +364,9 @@ async def generate_turn_stream(project_id: str, story_id: str, session_id: str, 
             web_evidence=web_evidence,
             web_sources=web_sources,
         )
+        if payload.enable_web_search and web_search_notice:
+            result = dict(result or {})
+            result["web_search_notice"] = web_search_notice
         return result
 
     return StreamingResponse(
