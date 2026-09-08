@@ -16,6 +16,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const loading = ref(false)
   const error = ref('')
   let loadTask: Promise<void> | null = null
+  let defaultWorkspaceTask: Promise<void> | null = null
   let storiesRequest = 0
   let branchesRequest = 0
 
@@ -28,13 +29,26 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const activeBranch = computed(() => activeBranches.value.find((branch) => branch.branch_id === activeBranchId.value) || activeBranches.value.find((branch) => branch.is_default || !branch.parent_branch_id) || activeBranches.value[0] || null)
   const mode = computed<CreationMode>(() => activeStory.value?.creation_mode || 'planned')
 
+  async function provisionDefaultWorkspace(preferredMode: CreationMode) {
+    const created = await api.createProject({ name: '项目1', title: '项目1' })
+    const projectId = created.project.project_id
+    const initialStories = (await api.stories(projectId)).stories
+    const initialStory = initialStories.find((story) => story.status !== 'archived') || initialStories[0]
+    if (!initialStory) {
+      await api.createStory(projectId, { name: '故事1', creation_mode: preferredMode })
+      return
+    }
+    if (initialStory.name !== '故事1') await api.renameStory(projectId, initialStory.story_id, '故事1')
+    if (initialStory.creation_mode !== preferredMode) await api.setStoryMode(projectId, initialStory.story_id, preferredMode)
+  }
+
   async function load() {
     if (loadTask) return loadTask
     loadTask = (async () => {
     loading.value = true
     error.value = ''
     try {
-      const data = await api.bootstrap()
+      let data = await api.bootstrap()
       projects.value = data.projects
       if (!activeProjectId.value || !projects.value.some((project) => project.project_id === activeProjectId.value)) {
         activeProjectId.value = projects.value[0]?.project_id || ''
@@ -52,6 +66,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       await loadTask
     } finally {
       loadTask = null
+    }
+  }
+
+  async function ensureDefaultWorkspace(preferredMode: CreationMode) {
+    if (projects.value.length) return
+    if (defaultWorkspaceTask) return defaultWorkspaceTask
+    defaultWorkspaceTask = (async () => {
+      await provisionDefaultWorkspace(preferredMode)
+      await load()
+    })()
+    try {
+      await defaultWorkspaceTask
+    } finally {
+      defaultWorkspaceTask = null
     }
   }
 
@@ -207,6 +235,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     branchesError,
     mode,
     load,
+    ensureDefaultWorkspace,
     loadStories,
     selectProject,
     selectStory,

@@ -86,8 +86,9 @@ router.beforeEach(async (to) => {
   }
   if (to.name === 'mode-picker') return true
   const workspace = useWorkspaceStore()
-  if (!workspace.ready) await workspace.load()
   const requestedMode = to.path.startsWith('/conversational') ? 'conversational' : 'planned'
+  if (!workspace.ready) await workspace.load()
+  if (!workspace.projects.length) await workspace.ensureDefaultWorkspace(requestedMode)
   if (workspace.activeStory && workspace.mode !== requestedMode) {
     return workspace.mode === 'conversational' ? '/conversational' : '/planned'
   }

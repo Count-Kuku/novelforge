@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useWorkspaceStore } from '../stores/workspace'
-import { api } from '../api/client'
+import { api, ApiClientError } from '../api/client'
 import type { CreativeSession } from '../types'
 import { dialog } from '../ui/dialog'
 import { notify } from '../ui/notifications'
@@ -102,6 +102,11 @@ async function resolveDirectSessionBranch(expectedLandingRequest = landingReques
     await workspace.selectBranch(ownerBranchId)
     return false
   } catch (reason) {
+    if (isTargetStillCurrent() && reason instanceof ApiClientError && reason.status === 404) {
+      sessionError.value = ''
+      await router.replace({ name: 'conversational-home' })
+      return true
+    }
     if (isTargetStillCurrent()) sessionError.value = reason instanceof Error ? reason.message : '无法读取目标会话'
     return false
   }
