@@ -44,7 +44,17 @@ def _rule_conflict_resolution_path(project_name: str, layer: str, story_id: str 
     return _memory_api._project_rule_conflict_resolutions_path(project_name)
 
 
-def load_rule_conflict_resolutions(project_name: str, layer: str = "story", story_id: str = "default") -> list[dict]:
+def load_rule_conflict_resolutions(
+    project_name: str,
+    layer: str = "story",
+    story_id: str = "default",
+    branch_id: str | None = None,
+) -> list[dict]:
+    if branch_id and layer == "story" and str(branch_id) != _memory_api.default_branch_id(story_id):
+        configuration = _memory_api.load_effective_story_branch_configuration(project_name, story_id, branch_id)
+        return normalize_rule_conflict_resolutions(
+            (configuration.get("rule_conflict_resolutions") or {}).get("story") or []
+        )
     if layer == "global":
         db_items = _memory_api._load_global_from_db_best_effort(
             lambda conn: _memory_api.load_global_setting(conn, "rule_conflict_resolutions"),
@@ -77,7 +87,22 @@ def load_rule_conflict_resolutions(project_name: str, layer: str = "story", stor
     return normalized
 
 
-def save_rule_conflict_resolutions(project_name: str, layer: str, resolutions: list[dict], story_id: str = "default") -> list[dict]:
+def save_rule_conflict_resolutions(
+    project_name: str,
+    layer: str,
+    resolutions: list[dict],
+    story_id: str = "default",
+    branch_id: str | None = None,
+) -> list[dict]:
+    if branch_id and layer == "story" and str(branch_id) != _memory_api.default_branch_id(story_id):
+        normalized = normalize_rule_conflict_resolutions(resolutions)
+        _memory_api.save_story_branch_configuration(
+            project_name,
+            story_id,
+            branch_id,
+            {"rule_conflict_resolutions": {"story": normalized}},
+        )
+        return normalized
     path = _rule_conflict_resolution_path(project_name, layer, story_id)
     normalized = normalize_rule_conflict_resolutions(resolutions)
     logical_key = f"{layer}:{story_id if layer == 'story' else 'project'}"
@@ -120,8 +145,9 @@ def add_rule_conflict_resolution(
     title: str,
     decision: str,
     story_id: str = "default",
+    branch_id: str | None = None,
 ) -> dict:
-    existing = load_rule_conflict_resolutions(project_name, layer, story_id)
+    existing = load_rule_conflict_resolutions(project_name, layer, story_id, branch_id)
     normalized_items = normalize_rule_conflict_resolutions([{
         "id": str(_memory_api.uuid4()),
         "scope": scope,
@@ -133,22 +159,31 @@ def add_rule_conflict_resolution(
         raise ValueError("Conflict resolution decision cannot be empty.")
     item = normalized_items[0]
     existing.append(item)
-    save_rule_conflict_resolutions(project_name, layer, existing, story_id)
+    save_rule_conflict_resolutions(project_name, layer, existing, story_id, branch_id)
     return item
 
 
-def delete_rule_conflict_resolution(project_name: str, layer: str, resolution_id: str, story_id: str = "default") -> bool:
-    existing = load_rule_conflict_resolutions(project_name, layer, story_id)
+def delete_rule_conflict_resolution(
+    project_name: str,
+    layer: str,
+    resolution_id: str,
+    story_id: str = "default",
+    branch_id: str | None = None,
+) -> bool:
+    existing = load_rule_conflict_resolutions(project_name, layer, story_id, branch_id)
     kept = [item for item in existing if item.get("id") != resolution_id]
     if len(kept) == len(existing):
         return False
-    save_rule_conflict_resolutions(project_name, layer, kept, story_id)
+    save_rule_conflict_resolutions(project_name, layer, kept, story_id, branch_id)
     return True
 
 
 def load_effective_rule_conflict_resolutions(project_name: str, story_id: str, scope: str) -> list[dict]:
     effective: list[dict] = []
-    for layer, source_label in [("global", "全局"), ("project", "项目"), ("story", "故事")]:
+    layers = [("global", "全局"), ("project", "项目")]
+    if str(story_id or "").strip():
+        layers.append(("story", "故事"))
+    for layer, source_label in layers:
         for item in load_rule_conflict_resolutions(project_name, layer, story_id):
             item_scope = item.get("scope", "all")
             if item_scope in {"all", scope}:

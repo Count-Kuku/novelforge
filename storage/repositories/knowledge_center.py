@@ -64,6 +64,7 @@ def search_knowledge_center_rows(
     archived_only: bool = False,
     cursor: str = "",
     page_size: int = 40,
+    record_ids: list[str] | None = None,
 ) -> dict:
     offset = _cursor_offset(cursor)
     bounded_size = max(1, min(int(page_size or 40), 100))
@@ -93,6 +94,13 @@ def search_knowledge_center_rows(
     if worldline_id is not None:
         clauses.append("worldline_id IN ('', 'global', 'main', ?)")
         params.append(str(worldline_id))
+    if record_ids is not None:
+        clean_ids = list(dict.fromkeys(str(value or '').strip() for value in record_ids if str(value or '').strip()))
+        if not clean_ids:
+            clauses.append("1 = 0")
+        else:
+            clauses.append(f"record_id IN ({','.join('?' for _ in clean_ids)})")
+            params.extend(clean_ids)
     if archived_only:
         clauses.append("record_status = 'archived'")
     elif not include_archived:
@@ -201,6 +209,7 @@ def load_knowledge_graph_rows(
     *,
     story_id: str | None = None,
     worldline_id: str | None = None,
+    entity_ids: list[str] | None = None,
 ) -> dict:
     """Load the active relationship projection used by creator-facing views.
 
@@ -218,6 +227,14 @@ def load_knowledge_graph_rows(
             "COALESCE(source.worldline_id, target.worldline_id, '') IN ('', 'global', 'main', ?)"
         )
         params.append(str(worldline_id))
+    if entity_ids is not None:
+        clean_ids = list(dict.fromkeys(str(value or '').strip() for value in entity_ids if str(value or '').strip()))
+        if not clean_ids:
+            clauses.append("1 = 0")
+        else:
+            placeholders = ','.join('?' for _ in clean_ids)
+            clauses.append(f"source.entity_id IN ({placeholders}) AND target.entity_id IN ({placeholders})")
+            params.extend([*clean_ids, *clean_ids])
     rows = conn.execute(
         f"""
         SELECT edge.edge_id, edge.story_id, edge.relation_type, edge.direction,

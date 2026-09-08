@@ -281,7 +281,8 @@ def plan_entity_context_query_prompt(
       "name": "实体的规范名（与知识库一致的规范名；别名请归一到规范名）",
       "type": "character|organization|location|item|ability|event|rule",
       "mention": "direct|alias|implicit",
-      "purpose": "一句话说明为什么本次需要它"
+      "purpose": "一句话说明为什么本次需要它",
+      "target_origin_entity_id": "若同名实体有多个来源，填明确的来源实体 ID；唯一时留空"
     }}
   ]
 }}

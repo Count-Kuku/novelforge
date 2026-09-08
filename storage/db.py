@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from uuid import uuid4
 
 from .schema import CURRENT_SCHEMA_VERSION, ensure_schema, get_schema_version
 from .repositories.projects import upsert_project_meta
@@ -102,11 +103,48 @@ def _connect(db_path: Path, *, create: bool = True) -> sqlite3.Connection:
     return conn
 
 
+def _backup_before_schema_upgrade(conn: sqlite3.Connection, db_path: Path) -> Path | None:
+    """Keep a consistent pre-upgrade SQLite snapshot, including committed WAL.
+
+    Migrations only change database rows/schema; existing file assets are left
+    in place. An incomplete backup never authorizes a schema upgrade.
+    """
+    version = get_schema_version(conn)
+    if version == 0 or version >= CURRENT_SCHEMA_VERSION:
+        return None
+    destination: Path | None = None
+    conn.execute("BEGIN")
+    try:
+        # Pin the version and backup to the same read snapshot even when
+        # another process is also opening the project during an upgrade.
+        version = get_schema_version(conn)
+        if version == 0 or version >= CURRENT_SCHEMA_VERSION:
+            return None
+        backup_dir = db_path.parent / ".schema_backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        destination = backup_dir / f"{db_path.stem}.v{version}-before-v{CURRENT_SCHEMA_VERSION}.{stamp}.{uuid4().hex[:8]}.sqlite3"
+        partial = destination.with_suffix(".partial")
+        backup = sqlite3.connect(partial)
+        try:
+            conn.backup(backup)
+            if backup.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                raise RuntimeError("迁移前数据库备份校验失败，已停止升级。")
+        finally:
+            backup.close()
+        partial.replace(destination)
+    finally:
+        conn.rollback()
+    logger.info("Saved pre-upgrade database snapshot: %s", destination)
+    return destination
+
+
 def open_project_db(project_path: Path) -> sqlite3.Connection:
     db_path = get_project_db_path(project_path)
     conn: sqlite3.Connection | None = None
     try:
         conn = _connect(db_path)
+        _backup_before_schema_upgrade(conn, db_path)
         ensure_schema(conn)
         return conn
     except Exception as exc:
@@ -124,11 +162,12 @@ def open_project_db(project_path: Path) -> sqlite3.Connection:
 
 
 def open_existing_project_db(project_path: Path) -> sqlite3.Connection:
-    """Open an existing project database without creating paths or files."""
+    """Require an existing database; back it up before applying an upgrade."""
     db_path = get_project_db_path(project_path)
     conn: sqlite3.Connection | None = None
     try:
         conn = _connect(db_path, create=False)
+        _backup_before_schema_upgrade(conn, db_path)
         ensure_schema(conn)
         return conn
     except Exception:
@@ -142,6 +181,7 @@ def open_global_db(data_path: Path = Path("data")) -> sqlite3.Connection:
     conn: sqlite3.Connection | None = None
     try:
         conn = _connect(db_path)
+        _backup_before_schema_upgrade(conn, db_path)
         ensure_schema(conn)
         return conn
     except Exception as exc:
@@ -226,6 +266,18 @@ def inspect_project_db(project_path: Path) -> dict:
         "creative_config_revisions",
         "knowledge_index_jobs",
         "knowledge_index_state",
+        "story_branches",
+        "branch_checkpoints",
+        "branch_checkpoint_items",
+        "branch_fragment_states",
+        "reference_libraries",
+        "reference_library_releases",
+        "reference_library_release_items",
+        "reference_library_release_sources",
+        "story_library_bindings",
+        "story_library_item_links",
+        "story_library_entity_links",
+        "story_reference_states",
     ]
     result = {
         "ok": False,

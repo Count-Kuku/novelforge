@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import re
+
 from novelforge.services import memory as _memory_api
 
 from novelforge.domain.creation_modes import (
@@ -100,6 +103,23 @@ def _story_copy_file_is_included(
     return True
 
 
+def _copy_branch_folder(branch_id: str) -> str:
+    clean = str(branch_id or "").strip()
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", clean)
+    return f"{slug[:48]}_{hashlib.sha256(clean.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _target_story_file_path(relative_path: _memory_api.Path, branch_id_map: dict[str, str] | None) -> _memory_api.Path:
+    parts = list(relative_path.parts)
+    if len(parts) >= 2 and parts[0] == "branches":
+        source_folder = parts[1]
+        for source_branch_id, target_branch_id in (branch_id_map or {}).items():
+            if _copy_branch_folder(source_branch_id) == source_folder:
+                parts[1] = _copy_branch_folder(target_branch_id)
+                break
+    return _memory_api.Path(*parts)
+
+
 def _copy_story_files(
     source_dir: _memory_api.Path,
     target_dir: _memory_api.Path,
@@ -108,6 +128,7 @@ def _copy_story_files(
     include_summaries: bool,
     include_chapters: bool,
     db_json_mirror_paths: set[str] | None = None,
+    branch_id_map: dict[str, str] | None = None,
 ) -> None:
     import shutil
 
@@ -132,7 +153,7 @@ def _copy_story_files(
             db_json_mirror_paths=db_json_mirror_paths,
         ):
             continue
-        target_file = (target_dir / relative_path).resolve()
+        target_file = (target_dir / _target_story_file_path(relative_path, branch_id_map)).resolve()
         if target_root not in target_file.parents:
             raise ValueError(f"Story copy target escaped its directory: {relative_path}")
         target_file.parent.mkdir(parents=True, exist_ok=True)
@@ -273,10 +294,11 @@ def copy_story(project_name: str, source_story_id: str, new_name: str,
         dst_dir = _memory_api.story_path(project_name, target_id)
         dst_dir.mkdir(parents=True, exist_ok=True)
 
+        clone_result: dict = {}
         with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
             conn.execute("BEGIN IMMEDIATE")
             source_json_mirror_paths = _story_db_json_mirror_paths(conn, source_story_id)
-            _memory_api.clone_story_storage_rows(
+            clone_result = _memory_api.clone_story_storage_rows(
                 conn,
                 source_story_id,
                 target_id,
@@ -293,6 +315,7 @@ def copy_story(project_name: str, source_story_id: str, new_name: str,
             include_summaries=include_summaries,
             include_chapters=include_chapters,
             db_json_mirror_paths=source_json_mirror_paths,
+            branch_id_map=clone_result.get("branch_id_map"),
         )
 
         _memory_api.copy_story_settings(
@@ -300,6 +323,9 @@ def copy_story(project_name: str, source_story_id: str, new_name: str,
             source_story_id,
             target_id,
             include_discussions=include_discussions,
+            # clone_story_storage_rows already copied every branch's knowledge
+            # with remapped identity; legacy core copying would duplicate it.
+            include_core_knowledge=False,
         )
         from novelforge.services.automatic_configuration import copy_story_automatic_configurations
 

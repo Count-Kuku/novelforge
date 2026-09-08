@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -73,20 +73,42 @@ from ..schemas import (
 router = APIRouter()
 
 
+def _validate_structure_branch(
+    project_name: str,
+    story_id: str,
+    branch_id: str | None,
+    *,
+    allow_non_main: bool = False,
+) -> str | None:
+    """Validate branch ownership and reject unsupported planning mutations."""
+    if not branch_id:
+        return None
+    clean_branch_id = str(branch_id).strip()
+    branch = memory.load_story_branch(project_name, story_id, clean_branch_id)
+    if str(branch.get("story_id") or "") != str(story_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="世界线不属于当前故事。")
+    if not allow_non_main and clean_branch_id != memory.default_branch_id(story_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="规划台结构资料暂不支持非主线世界线。")
+    return clean_branch_id
+
+
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/structure")
-async def story_structure(project_id: str, story_id: str, request: Request) -> dict[str, Any]:
+async def story_structure(project_id: str, story_id: str, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     return _envelope({
         "volumes": memory.list_volumes(name, story_id=story_id),
         "arcs": memory.list_arcs(name, story_id=story_id),
         "chapters": await run_in_threadpool(project_manager.list_chapter_inventory, name, story_id),
+        "branch_id": branch_id,
     }, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/context/preview")
-async def context_preview(project_id: str, story_id: str, request: Request, query: str = "", chapter_no: int | None = None, budget: int = 24_000) -> dict[str, Any]:
+async def context_preview(project_id: str, story_id: str, request: Request, query: str = "", chapter_no: int | None = None, budget: int = 24_000, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id, allow_non_main=True)
     from novelforge.workflows.context_assembly import assemble_generation_context
 
     context = await run_in_threadpool(
@@ -97,76 +119,99 @@ async def context_preview(project_id: str, story_id: str, request: Request, quer
         query=query or "当前故事上下文",
         chapter_no=chapter_no,
         context_budget=max(1_000, min(int(budget), 200_000)),
+        branch_id=branch_id,
     )
     return _envelope(context.model_dump(), request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/rules")
-async def story_rules(project_id: str, story_id: str, request: Request) -> dict[str, Any]:
+async def story_rules(project_id: str, story_id: str, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    return _envelope({"project": memory.load_project_rules(name), "story": memory.load_story_rules(name, story_id)}, request)
+    _validate_structure_branch(name, story_id, branch_id, allow_non_main=True)
+    if branch_id and str(branch_id) != memory.default_branch_id(story_id):
+        configuration = await run_in_threadpool(memory.load_effective_story_branch_configuration, name, story_id, branch_id)
+        story = configuration.get("story_rules") or {}
+    else:
+        story = memory.load_story_rules(name, story_id)
+    return _envelope({"project": memory.load_project_rules(name), "story": story, "branch_id": branch_id}, request)
 
 @router.put(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/rules")
-async def update_story_rules(project_id: str, story_id: str, payload: RulesUpdateRequest, request: Request) -> dict[str, Any]:
+async def update_story_rules(project_id: str, story_id: str, payload: RulesUpdateRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    saved = await run_in_threadpool(memory.save_story_rules, name, story_id, payload.rules)
-    return _envelope({"story": saved, "saved": True}, request)
+    _validate_structure_branch(name, story_id, branch_id, allow_non_main=True)
+    if branch_id and str(branch_id) != memory.default_branch_id(story_id):
+        configuration = await run_in_threadpool(
+            memory.save_story_branch_configuration, name, story_id, branch_id, {"story_rules": payload.rules}
+        )
+        saved = configuration.get("story_rules") or {}
+    else:
+        saved = await run_in_threadpool(memory.save_story_rules, name, story_id, payload.rules)
+    return _envelope({"story": saved, "saved": True, "branch_id": branch_id}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/volumes/{{volume_no}}")
-async def volume_detail(project_id: str, story_id: str, volume_no: int, request: Request) -> dict[str, Any]:
+async def volume_detail(project_id: str, story_id: str, volume_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     return _envelope({"metadata": memory.load_volume_metadata(name, volume_no, story_id), "outline": memory.load_volume_outline(name, volume_no, story_id), "discussion": memory.load_volume_discussion_artifact(name, volume_no, story_id)}, request)
 
 @router.put(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/volumes/{{volume_no}}")
-async def update_volume(project_id: str, story_id: str, volume_no: int, payload: UpdateStructureAssetRequest, request: Request) -> dict[str, Any]:
+async def update_volume(project_id: str, story_id: str, volume_no: int, payload: UpdateStructureAssetRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     if payload.outline is not None:
         await run_in_threadpool(memory.save_volume_outline, name, volume_no, payload.outline, story_id)
     if payload.metadata:
         await run_in_threadpool(memory.save_volume_metadata, name, volume_no, payload.metadata, story_id)
-    return _envelope({"metadata": memory.load_volume_metadata(name, volume_no, story_id), "outline": memory.load_volume_outline(name, volume_no, story_id), "saved": True}, request)
+    return _envelope({"metadata": memory.load_volume_metadata(name, volume_no, story_id), "outline": memory.load_volume_outline(name, volume_no, story_id), "saved": True, "branch_id": branch_id}, request)
 
 @router.delete(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/volumes/{{volume_no}}")
-async def delete_volume(project_id: str, story_id: str, volume_no: int, request: Request) -> dict[str, Any]:
+async def delete_volume(project_id: str, story_id: str, volume_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     deleted = await run_in_threadpool(memory.delete_volume, name, volume_no, story_id)
     return _envelope({"deleted": bool(deleted), "volume_no": volume_no}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/arcs/{{arc_no}}")
-async def arc_detail(project_id: str, story_id: str, arc_no: int, request: Request) -> dict[str, Any]:
+async def arc_detail(project_id: str, story_id: str, arc_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     return _envelope({"metadata": memory.load_arc_metadata(name, arc_no, story_id), "outline": memory.load_arc_outline(name, arc_no, story_id), "discussion": memory.load_arc_discussion_artifact(name, arc_no, story_id)}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/arcs/{{arc_no}}/chapter-plan")
-async def arc_chapter_plan(project_id: str, story_id: str, arc_no: int, request: Request) -> dict[str, Any]:
+async def arc_chapter_plan(project_id: str, story_id: str, arc_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     return _envelope(await run_in_threadpool(memory.load_arc_chapter_plan, name, arc_no, story_id), request)
 
 @router.put(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/arcs/{{arc_no}}/chapter-plan")
-async def update_arc_chapter_plan(project_id: str, story_id: str, arc_no: int, payload: UpdateChapterPlanRequest, request: Request) -> dict[str, Any]:
+async def update_arc_chapter_plan(project_id: str, story_id: str, arc_no: int, payload: UpdateChapterPlanRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     await run_in_threadpool(memory.save_arc_chapter_plan, name, arc_no, payload.plan, payload.report_markdown, story_id)
     saved = await run_in_threadpool(memory.load_arc_chapter_plan, name, arc_no, story_id)
     return _envelope({"plan": saved, "saved": True}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/arcs/{{arc_no}}/chapter-plan/validate")
-async def validate_arc_chapter_plan(project_id: str, story_id: str, arc_no: int, payload: ChapterPlanValidationRequest, request: Request) -> dict[str, Any]:
+async def validate_arc_chapter_plan(project_id: str, story_id: str, arc_no: int, payload: ChapterPlanValidationRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     from novelforge.domain.structure_validation import validate_arc_chapter_plan
     result = await run_in_threadpool(validate_arc_chapter_plan, name, story_id, arc_no, payload.plan)
     return _envelope(result, request)
 
 @router.put(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/arcs/{{arc_no}}")
-async def update_arc(project_id: str, story_id: str, arc_no: int, payload: UpdateStructureAssetRequest, request: Request) -> dict[str, Any]:
+async def update_arc(project_id: str, story_id: str, arc_no: int, payload: UpdateStructureAssetRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     if payload.outline is not None:
         await run_in_threadpool(memory.save_arc_outline, name, arc_no, payload.outline, story_id)
     if payload.metadata:
@@ -174,38 +219,42 @@ async def update_arc(project_id: str, story_id: str, arc_no: int, payload: Updat
     return _envelope({"metadata": memory.load_arc_metadata(name, arc_no, story_id), "outline": memory.load_arc_outline(name, arc_no, story_id), "saved": True}, request)
 
 @router.delete(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/arcs/{{arc_no}}")
-async def delete_arc(project_id: str, story_id: str, arc_no: int, request: Request) -> dict[str, Any]:
+async def delete_arc(project_id: str, story_id: str, arc_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     deleted = await run_in_threadpool(memory.delete_arc, name, arc_no, story_id)
     return _envelope({"deleted": bool(deleted), "arc_no": arc_no}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/outline")
-async def story_outline(project_id: str, story_id: str, request: Request) -> dict[str, Any]:
+async def story_outline(project_id: str, story_id: str, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     return _envelope({"content": memory.load_outline(name, story_id=story_id)}, request)
 
 @router.put(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/outline")
-async def update_story_outline(project_id: str, story_id: str, payload: UpdateOutlineRequest, request: Request) -> dict[str, Any]:
+async def update_story_outline(project_id: str, story_id: str, payload: UpdateOutlineRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _validate_structure_branch(name, story_id, branch_id)
     await run_in_threadpool(memory.save_outline, name, payload.content, story_id)
-    return _envelope({"content": payload.content, "saved": True}, request)
+    return _envelope({"content": payload.content, "saved": True, "branch_id": branch_id}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/chapters/{{chapter_no}}")
-async def chapter_detail(project_id: str, story_id: str, chapter_no: int, request: Request) -> dict[str, Any]:
+async def chapter_detail(project_id: str, story_id: str, chapter_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    inventory = await run_in_threadpool(project_manager.list_chapter_inventory, name, story_id)
+    inventory_loader = memory.list_branch_chapter_inventory if branch_id else project_manager.list_chapter_inventory
+    inventory = await run_in_threadpool(inventory_loader, name, story_id, branch_id) if branch_id else await run_in_threadpool(inventory_loader, name, story_id)
     item = next((row for row in inventory if int(row.get("chapter_no", -1)) == chapter_no), {"chapter_no": chapter_no})
-    return _envelope({"chapter": item, "outline": memory.load_chapter_outline(name, chapter_no, story_id), "content": memory.load_chapter(name, chapter_no, story_id), "review": memory.load_review(name, chapter_no, story_id)}, request)
+    return _envelope({"chapter": item, "outline": memory.load_chapter_outline(name, chapter_no, story_id, branch_id), "content": memory.load_chapter(name, chapter_no, story_id, branch_id), "review": memory.load_review(name, chapter_no, story_id, branch_id), "branch_id": branch_id}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/chapters/{{chapter_no}}/versions")
-async def chapter_versions(project_id: str, story_id: str, chapter_no: int, request: Request) -> dict[str, Any]:
+async def chapter_versions(project_id: str, story_id: str, chapter_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     runs = await run_in_threadpool(memory.list_pipeline_run_summaries, name, chapter_no, story_id)
-    current = await run_in_threadpool(memory.load_chapter, name, chapter_no, story_id)
+    current = await run_in_threadpool(memory.load_chapter, name, chapter_no, story_id, branch_id)
     versions: list[dict[str, Any]] = [{"version_id": "current", "label": "当前正文", "content": current, "updated_at": "", "source": "current"}]
     for run in runs:
         payload = run.get("payload") if isinstance(run.get("payload"), dict) else {}
@@ -216,24 +265,35 @@ async def chapter_versions(project_id: str, story_id: str, chapter_no: int, requ
     return _envelope({"versions": versions}, request)
 
 @router.put(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/chapters/{{chapter_no}}")
-async def update_chapter(project_id: str, story_id: str, chapter_no: int, payload: UpdateChapterRequest, request: Request) -> dict[str, Any]:
+async def update_chapter(project_id: str, story_id: str, chapter_no: int, payload: UpdateChapterRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
     if payload.kind == "outline":
-        await run_in_threadpool(memory.save_chapter_outline, name, chapter_no, payload.content, story_id)
+        await run_in_threadpool(memory.save_chapter_outline, name, chapter_no, payload.content, story_id, branch_id)
     else:
-        await run_in_threadpool(memory.save_chapter, name, chapter_no, payload.content, story_id)
-    return _envelope({"chapter_no": chapter_no, "kind": payload.kind, "content": payload.content, "saved": True}, request)
+        await run_in_threadpool(memory.save_chapter, name, chapter_no, payload.content, story_id, branch_id)
+    return _envelope({"chapter_no": chapter_no, "kind": payload.kind, "content": payload.content, "saved": True, "branch_id": branch_id}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/profile")
-async def story_profile(project_id: str, story_id: str, request: Request) -> dict[str, Any]:
+async def story_profile(project_id: str, story_id: str, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    return _envelope({"profile": memory.load_creative_profile(name, story_id)}, request)
+    if branch_id and str(branch_id) != memory.default_branch_id(story_id):
+        configuration = await run_in_threadpool(memory.load_effective_story_branch_configuration, name, story_id, branch_id)
+        profile = configuration.get("profile") or {}
+    else:
+        profile = memory.load_creative_profile(name, story_id)
+    return _envelope({"profile": profile, "branch_id": branch_id}, request)
 
 @router.put(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/profile")
-async def update_story_profile(project_id: str, story_id: str, payload: UpdateProfileRequest, request: Request) -> dict[str, Any]:
+async def update_story_profile(project_id: str, story_id: str, payload: UpdateProfileRequest, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    profile = await run_in_threadpool(memory.save_creative_profile, name, payload.profile, story_id, True)
-    return _envelope({"profile": profile, "saved": True}, request)
+    if branch_id and str(branch_id) != memory.default_branch_id(story_id):
+        configuration = await run_in_threadpool(
+            memory.save_story_branch_configuration, name, story_id, branch_id, {"profile": payload.profile}
+        )
+        profile = configuration.get("profile") or {}
+    else:
+        profile = await run_in_threadpool(memory.save_creative_profile, name, payload.profile, story_id, True)
+    return _envelope({"profile": profile, "saved": True, "branch_id": branch_id}, request)

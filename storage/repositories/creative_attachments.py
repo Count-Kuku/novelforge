@@ -35,6 +35,11 @@ def _attachment_row(row: sqlite3.Row | dict | None) -> dict | None:
         payload["task_progress"] = dict(task_payload.get("progress") or {})
         execution = task_payload.get("execution")
         payload["task_stages"] = dict(execution.get("stages") or {}) if isinstance(execution, dict) else {}
+        task_result = task_payload.get("result") if isinstance(task_payload.get("result"), dict) else {}
+        payload["task_result"] = task_result
+        payload["auto_confirmed_count"] = int(task_result.get("auto_confirmed_count") or 0)
+        payload["blocked_count"] = int(task_result.get("blocked_count") or 0)
+        payload["retryable"] = task_status in {"failed", "completed_with_errors"}
         payload["status"] = {
             "queued": "processing",
             "running": "processing",
@@ -47,14 +52,82 @@ def _attachment_row(row: sqlite3.Row | dict | None) -> dict | None:
     return payload
 
 
+def _attachment_promotion_state(conn: sqlite3.Connection, attachment: dict) -> dict:
+    """Return confirmed story knowledge eligible for explicit promotion."""
+
+    story_id = str(attachment.get("story_id") or "").strip()
+    attachment_id = str(attachment.get("attachment_id") or "").strip()
+    source_id = str(attachment.get("source_id") or "").strip()
+    if not story_id or not attachment_id:
+        return {"can_promote": False, "promotable_knowledge_count": 0}
+    rows = conn.execute(
+        """
+        SELECT ki.*, source.source_type, source.metadata_json AS source_metadata_json,
+               segment.segment_id AS live_segment_id,
+               segment.source_id AS segment_source_id,
+               segment.import_status AS segment_import_status
+        FROM knowledge_items AS ki
+        LEFT JOIN source_documents AS source ON source.source_id = ki.source_id
+        LEFT JOIN source_segments AS segment
+          ON segment.segment_id = ki.segment_id
+         AND segment.source_id = ki.source_id
+         AND segment.deleted_at IS NULL
+        WHERE ki.deleted_at IS NULL AND ki.setting_scope = 'story'
+          AND ki.story_id = ? AND ki.status IN ('confirmed', 'active')
+          AND segment.segment_id IS NOT NULL
+          AND COALESCE(segment.import_status, '') NOT IN ('failed', 'error', 'deleted', 'archived')
+          AND (
+              ki.source_id = ?
+              OR json_extract(ki.content_json, '$.creative_attachment_id') = ?
+              OR json_extract(source.metadata_json, '$.creative_attachment_id') = ?
+          )
+        ORDER BY ki.knowledge_id
+        """,
+        (story_id, source_id, attachment_id, attachment_id),
+    ).fetchall()
+    try:
+        from novelforge.domain.knowledge_promotion import check_knowledge_promotion_eligibility
+    except Exception:
+        return {"can_promote": False, "promotable_knowledge_count": 0}
+    eligible_count = 0
+    for row in rows:
+        item = _json_object(row["content_json"])
+        item.update({
+            "id": str(row["knowledge_id"] or ""),
+            "knowledge_id": str(row["knowledge_id"] or ""),
+            "category": str(row["category"] or ""),
+            "setting_scope": str(row["setting_scope"] or ""),
+            "story_id": str(row["story_id"] or ""),
+            "status": str(row["status"] or ""),
+            "source_id": str(row["source_id"] or ""),
+            "source_segment_id": str(row["segment_id"] or ""),
+            "source_type": str(row["source_type"] or ""),
+        })
+        source = {
+            "source_type": row["source_type"],
+            "metadata_json": row["source_metadata_json"],
+            "source_id": row["source_id"],
+            "segment_id": row["live_segment_id"],
+            "segment_source_id": row["segment_source_id"],
+            "import_status": row["segment_import_status"],
+        }
+        if check_knowledge_promotion_eligibility(item, source=source).get("eligible"):
+            eligible_count += 1
+    return {
+        "can_promote": eligible_count > 0,
+        "promotable_knowledge_count": eligible_count,
+    }
+
+
 def upsert_creative_attachment_row(conn: sqlite3.Connection, attachment: dict) -> dict:
     payload = dict(attachment or {})
     attachment_id = str(payload.get("attachment_id") or "").strip()
     content_hash = str(payload.get("content_hash") or "").strip()
     source_id = str(payload.get("source_id") or "").strip()
     relative_path = str(payload.get("relative_path") or "").replace("\\", "/").strip()
-    scope = str(payload.get("scope") or "session").strip()
+    scope = str(payload.get("scope") or "story").strip()
     story_id = str(payload.get("story_id") or "").strip() or None
+    branch_id = str(payload.get("branch_id") or "").strip() or None
     session_id = str(payload.get("session_id") or "").strip() or None
     turn_id = str(payload.get("turn_id") or "").strip() or None
     if not attachment_id or not content_hash or not source_id or not relative_path:
@@ -65,10 +138,27 @@ def upsert_creative_attachment_row(conn: sqlite3.Connection, attachment: dict) -
         raise ValueError("Session-scoped attachments require a session.")
     if scope == "story" and not story_id:
         raise ValueError("Story-scoped attachments require a story.")
+    from storage.repositories.branches import default_branch_id, load_branch_for_story
     if scope == "project":
         story_id = None
+        branch_id = None
         session_id = None
         turn_id = None
+    elif story_id:
+        branch_id = branch_id or default_branch_id(story_id)
+        branch = load_branch_for_story(conn, story_id, branch_id)
+        if branch.get("status") != "active":
+            raise ValueError("已归档世界线不能修改资料。")
+    identity = conn.execute(
+        "SELECT scope, story_id, branch_id, session_id FROM creative_attachments WHERE attachment_id = ?",
+        (attachment_id,),
+    ).fetchone()
+    if identity:
+        old_branch = identity["branch_id"] or (
+            default_branch_id(identity["story_id"]) if identity["story_id"] else None
+        )
+        if (identity["scope"], identity["story_id"], old_branch, identity["session_id"]) != (scope, story_id, branch_id, session_id):
+            raise ValueError("已有资料不能改变故事或世界线归属。")
     now = _now()
     existing = conn.execute(
         """
@@ -76,10 +166,11 @@ def upsert_creative_attachment_row(conn: sqlite3.Connection, attachment: dict) -
         FROM creative_attachments
         WHERE content_hash = ? AND scope = ?
           AND COALESCE(story_id, '') = COALESCE(?, '')
+          AND COALESCE(branch_id, '') = COALESCE(?, '')
           AND COALESCE(session_id, '') = COALESCE(?, '')
           AND COALESCE(turn_id, '') = COALESCE(?, '')
         """,
-        (content_hash, scope, story_id, session_id, turn_id),
+        (content_hash, scope, story_id, branch_id, session_id, turn_id),
     ).fetchone()
     stable_attachment_id = str(existing["attachment_id"]) if existing else attachment_id
     existing_payload = _attachment_row(existing) if existing else {}
@@ -102,9 +193,9 @@ def upsert_creative_attachment_row(conn: sqlite3.Connection, attachment: dict) -
             attachment_id, content_hash, source_id, source_revision_id,
             relative_path, title, filename, media_type, attachment_kind,
             scope, story_id, session_id, turn_id, status, ingestion_task_id,
-            remaining_uses, metadata_json, created_at, updated_at
+            branch_id, remaining_uses, metadata_json, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(attachment_id) DO UPDATE SET
             source_id = excluded.source_id,
             source_revision_id = excluded.source_revision_id,
@@ -135,6 +226,7 @@ def upsert_creative_attachment_row(conn: sqlite3.Connection, attachment: dict) -
             turn_id,
             status,
             ingestion_task_id,
+            branch_id,
             remaining_uses,
             json.dumps(merged_metadata, ensure_ascii=False, sort_keys=True),
             str(payload.get("created_at") or now),
@@ -155,7 +247,10 @@ def load_creative_attachment_row(conn: sqlite3.Connection, attachment_id: str) -
         """,
         (str(attachment_id or "").strip(),),
     ).fetchone()
-    return _attachment_row(row)
+    payload = _attachment_row(row)
+    if payload is not None:
+        payload.update(_attachment_promotion_state(conn, payload))
+    return payload
 
 
 def list_creative_attachment_rows(
@@ -163,22 +258,28 @@ def list_creative_attachment_rows(
     *,
     story_id: str = "",
     session_id: str = "",
+    branch_id: str = "",
     include_project: bool = True,
     include_story: bool = True,
     include_session: bool = True,
 ) -> list[dict]:
     clean_story_id = str(story_id or "").strip()
     clean_session_id = str(session_id or "").strip()
+    clean_branch_id = str(branch_id or "").strip()
     clauses: list[str] = []
     params: list[str] = []
     if include_project:
         clauses.append("attachment.scope = 'project'")
     if include_story and clean_story_id:
-        clauses.append("(attachment.scope = 'story' AND attachment.story_id = ?)")
+        clauses.append("(attachment.scope = 'story' AND attachment.story_id = ?" + (" AND attachment.branch_id = ?)" if clean_branch_id else ")"))
         params.append(clean_story_id)
+        if clean_branch_id:
+            params.append(clean_branch_id)
     if include_session and clean_session_id:
-        clauses.append("(attachment.scope IN ('session', 'turn') AND attachment.session_id = ?)")
+        clauses.append("(attachment.scope IN ('session', 'turn') AND attachment.session_id = ?" + (" AND attachment.branch_id = ?)" if clean_branch_id else ")"))
         params.append(clean_session_id)
+        if clean_branch_id:
+            params.append(clean_branch_id)
     if not clauses:
         return []
     rows = conn.execute(
@@ -192,7 +293,13 @@ def list_creative_attachment_rows(
         """,
         tuple(params),
     ).fetchall()
-    return [item for row in rows if (item := _attachment_row(row)) is not None]
+    result = []
+    for row in rows:
+        item = _attachment_row(row)
+        if item is not None:
+            item.update(_attachment_promotion_state(conn, item))
+            result.append(item)
+    return result
 
 
 def list_all_creative_attachment_rows(conn: sqlite3.Connection) -> list[dict]:
@@ -205,7 +312,13 @@ def list_all_creative_attachment_rows(conn: sqlite3.Connection) -> list[dict]:
         ORDER BY attachment.updated_at DESC, attachment.attachment_id
         """
     ).fetchall()
-    return [item for row in rows if (item := _attachment_row(row)) is not None]
+    result = []
+    for row in rows:
+        item = _attachment_row(row)
+        if item is not None:
+            item.update(_attachment_promotion_state(conn, item))
+            result.append(item)
+    return result
 
 
 def update_creative_attachment_row(
@@ -282,7 +395,13 @@ def claim_turn_creative_attachment_rows(
         """,
         tuple(attachment_ids),
     ).fetchall()
-    return [item for row in claimed if (item := _attachment_row(row)) is not None]
+    result = []
+    for row in claimed:
+        item = _attachment_row(row)
+        if item is not None:
+            item.update(_attachment_promotion_state(conn, item))
+            result.append(item)
+    return result
 
 
 def release_turn_creative_attachment_rows(

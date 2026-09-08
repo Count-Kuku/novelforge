@@ -237,7 +237,9 @@ def _verify_destructive_compensation(project_name: str, failures: list[str]) -> 
                 raise TimeoutError("delete concurrency gate timed out")
         return rows
 
-    with patch.object(memory, "list_story_rows", side_effect=gated_list_story_rows):
+    # The deadline measures the serialized story transaction, not the
+    # independent retrieval rebuild that runs after it has committed.
+    with patch.object(memory, "list_story_rows", side_effect=gated_list_story_rows), patch.object(memory, "sync_project_retrieval_assets", return_value=None):
         with ThreadPoolExecutor(max_workers=2) as executor:
             delete_future = executor.submit(memory.delete_story, project_name, race_target["story_id"])
             _expect(delete_holds_lock.wait(timeout=10), "story_delete_acquires_lock_before_read", failures)

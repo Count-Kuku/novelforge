@@ -47,6 +47,25 @@ ATTACHMENT_SCOPE_LABELS = {
 }
 
 
+def _resolve_import_branch(project_name: str, story_id: str, session_id: str, scope: str, branch_id: str | None) -> str:
+    """Freeze the import owner before creating files or scheduling extraction."""
+    from novelforge.services import memory
+
+    if scope not in ATTACHMENT_SCOPE_LABELS:
+        raise ValueError("不支持的资料保存范围。")
+    if session_id:
+        resolved = memory.resolve_creative_session_branch(project_name, story_id, session_id, branch_id)
+        return "" if scope == "project" else resolved
+    if scope == "project":
+        return ""
+    if scope in {"turn", "session"}:
+        raise ValueError("会话资料必须指定创作会话。")
+    branch = memory.ensure_story_branch(project_name, story_id, branch_id)
+    if branch.get("status") != "active":
+        raise ValueError("已归档世界线不能导入资料。")
+    return str(branch["branch_id"])
+
+
 def _source_name(content_hash: str, title: str) -> str:
     safe_title = re.sub(
         r"[^A-Za-z0-9_\-\u4e00-\u9fff]+",
@@ -63,6 +82,7 @@ def _attachment_source_name(
     scope: str,
     story_id: str,
     session_id: str,
+    branch_id: str = "",
 ) -> str:
     owner = (
         session_id
@@ -72,7 +92,7 @@ def _attachment_source_name(
         else "project"
     )
     owner_hash = hashlib.sha256(
-        f"{scope}:{owner}".encode("utf-8")
+        f"{scope}:{owner}:{branch_id}".encode("utf-8")
     ).hexdigest()[:12]
     return f"{_source_name(content_hash, title)}_{owner_hash}"
 
@@ -83,6 +103,7 @@ def _scope_ownership(
     story_id: str,
     session_id: str,
     turn_id: str = "",
+    branch_id: str = "",
 ) -> dict:
     if scope not in ATTACHMENT_SCOPE_LABELS:
         raise ValueError(f"不支持的附件作用域：{scope}")
@@ -92,6 +113,7 @@ def _scope_ownership(
         "story_id": story_id if scope != "project" else None,
         "session_id": session_id if scope in {"turn", "session"} else None,
         "turn_id": turn_id if scope == "turn" else None,
+        "branch_id": branch_id if scope != "project" else None,
     }
 
 
@@ -107,11 +129,13 @@ def _attachment_payload(
     story_id: str,
     session_id: str,
     metadata: dict,
+    branch_id: str = "",
 ) -> dict:
     ownership = _scope_ownership(
         scope,
         story_id=story_id,
         session_id=session_id,
+        branch_id=branch_id,
     )
     return {
         "attachment_id": f"attachment_{uuid4().hex}",
@@ -141,17 +165,20 @@ def _source_metadata(
     scope: str,
     story_id: str,
     session_id: str,
+    branch_id: str = "",
 ) -> dict:
     ownership = _scope_ownership(
         scope,
         story_id=story_id,
         session_id=session_id,
+        branch_id=branch_id,
     )
     return {
         **metadata,
         "story_id": ownership.get("story_id") or "",
         "session_id": ownership.get("session_id") or "",
         "turn_id": ownership.get("turn_id") or "",
+        "branch_id": ownership.get("branch_id") or "",
     }
 
 
@@ -238,7 +265,14 @@ def schedule_creative_attachment_knowledge(
             source_content_hash=str(attachment.get("content_hash") or ""),
             content_char_count=len(content),
             segments=segments,
-            story_id=str(attachment.get("story_id") or "default"),
+            # ``story_id`` is an ownership target.  Project attachments must
+            # remain story-less all the way through extraction and recovery;
+            # ``reference`` is the source nature and must not invent a default
+            # story.
+            story_id=str(attachment.get("story_id") or ""),
+            branch_id=str(attachment.get("branch_id") or ""),
+            target_scope="story" if str(attachment.get("story_id") or "").strip() else "project",
+            creative_attachment_id=attachment_id,
             parser_metadata=dict(metadata.get("parser_metadata") or {}),
             source_files=[{
                 "name": str(attachment.get("filename") or attachment.get("title") or "资料"),
@@ -286,7 +320,9 @@ def schedule_creative_attachment_knowledge(
         import_to_index=False,
         consolidate_after_extract=True,
         auto_confirm_safe_items=True,
-        story_id=str(attachment.get("story_id") or "default"),
+        story_id=str(attachment.get("story_id") or ""),
+        branch_id=str(attachment.get("branch_id") or ""),
+        target_scope="story" if str(attachment.get("story_id") or "").strip() else "project",
         priority=10,
     )
     updated = update_creative_attachment(
@@ -336,15 +372,53 @@ def _schedule_imported_attachments(project_name: str, attachments: list[dict]) -
     return result
 
 
+def retry_creative_attachment_knowledge(
+    project_name: str,
+    attachment_id: str,
+    *,
+    confirm_over_budget: bool = False,
+) -> dict:
+    """Retry a failed attachment through its durable task, or resume scheduling.
+
+    Existing tasks keep their batch/stage audit trail; attachments without a
+    task use the deterministic batch lookup and honor explicit budget consent.
+    """
+    attachment = load_creative_attachment(project_name, attachment_id)
+    if not attachment:
+        raise ValueError("创作附件不存在。")
+    task_status = str(attachment.get("task_status") or "")
+    metadata = dict(attachment.get("metadata") or {})
+    background_status = str(metadata.get("background_status") or "")
+    task_id = str(attachment.get("ingestion_task_id") or "").strip()
+    if task_id:
+        # A durable task owns its batch and stage checkpoints.  Reuse the
+        # existing retry path so downstream stages are invalidated correctly
+        # and the audit trail remains tied to the original run.
+        if task_status in {"failed", "completed_with_errors", "cancelled"}:
+            from novelforge.workflows.ingestion_tasks import retry_failed_long_reference_ingestion_task
+
+            retry_failed_long_reference_ingestion_task(project_name, task_id)
+            wake_ingestion_task_dispatcher()
+            return load_creative_attachment(project_name, attachment_id)
+        return attachment
+    return schedule_creative_attachment_knowledge(
+        project_name,
+        attachment_id,
+        confirm_over_budget=confirm_over_budget,
+    )
+
+
 def import_creative_documents(
     project_name: str,
     story_id: str,
     session_id: str,
     documents: list[ParsedDocument],
     *,
-    scope: str = "session",
+    scope: str = "story",
+    branch_id: str | None = None,
     schedule_knowledge: bool = True,
 ) -> list[dict]:
+    branch_id = _resolve_import_branch(project_name, story_id, session_id, scope, branch_id)
     imported: list[dict] = []
     for document in documents:
         content = str(document.text or "").strip()
@@ -363,6 +437,7 @@ def import_creative_documents(
             scope=scope,
             story_id=story_id,
             session_id=session_id,
+            branch_id=str(branch_id or ""),
         )
         payload = build_structured_external_source_payload(
             source_type="creative_attachment",
@@ -381,6 +456,7 @@ def import_creative_documents(
                 scope=scope,
                 story_id=story_id,
                 session_id=session_id,
+                branch_id=str(branch_id or ""),
             ),
             json.dumps(payload, ensure_ascii=False, indent=2),
             overwrite=True,
@@ -399,6 +475,7 @@ def import_creative_documents(
                 story_id=story_id,
                 session_id=session_id,
                 metadata=metadata,
+                branch_id=str(branch_id or ""),
             ),
         )
         imported.append(attachment)
@@ -414,9 +491,11 @@ def import_creative_pasted_text(
     text: str,
     *,
     title: str = "粘贴资料",
-    scope: str = "session",
+    scope: str = "story",
+    branch_id: str | None = None,
     schedule_knowledge: bool = True,
 ) -> dict:
+    branch_id = _resolve_import_branch(project_name, story_id, session_id, scope, branch_id)
     content = str(text or "").strip()
     if not content:
         raise ValueError("粘贴资料不能为空。")
@@ -432,6 +511,7 @@ def import_creative_pasted_text(
         scope=scope,
         story_id=story_id,
         session_id=session_id,
+        branch_id=str(branch_id or ""),
     )
     payload = build_structured_external_source_payload(
         source_type="creative_attachment",
@@ -450,6 +530,7 @@ def import_creative_pasted_text(
             scope=scope,
             story_id=story_id,
             session_id=session_id,
+            branch_id=str(branch_id or ""),
         ),
         json.dumps(payload, ensure_ascii=False, indent=2),
         overwrite=True,
@@ -468,6 +549,7 @@ def import_creative_pasted_text(
             story_id=story_id,
             session_id=session_id,
             metadata=metadata,
+            branch_id=str(branch_id or ""),
         ),
     )
     rebuild_retrieval_assets(project_name, build_vectors=False)
@@ -482,9 +564,11 @@ def import_creative_url(
     session_id: str,
     url: str,
     *,
-    scope: str = "session",
+    scope: str = "story",
+    branch_id: str | None = None,
     schedule_knowledge: bool = True,
 ) -> dict:
+    branch_id = _resolve_import_branch(project_name, story_id, session_id, scope, branch_id)
     page = fetch_web_page(url)
     content_hash = hashlib.sha256(page.text.encode("utf-8")).hexdigest()
     metadata = {
@@ -501,6 +585,7 @@ def import_creative_url(
         scope=scope,
         story_id=story_id,
         session_id=session_id,
+        branch_id=str(branch_id or ""),
     )
     payload = build_structured_external_source_payload(
         source_type="creative_attachment",
@@ -519,6 +604,7 @@ def import_creative_url(
             scope=scope,
             story_id=story_id,
             session_id=session_id,
+            branch_id=str(branch_id or ""),
         ),
         json.dumps(payload, ensure_ascii=False, indent=2),
         overwrite=True,
@@ -537,6 +623,7 @@ def import_creative_url(
             story_id=story_id,
             session_id=session_id,
             metadata=metadata,
+            branch_id=str(branch_id or ""),
         ),
     )
     rebuild_retrieval_assets(project_name, build_vectors=False)
@@ -563,7 +650,7 @@ def attach_existing_creative_source(
     session_id: str,
     relative_path: str,
     *,
-    scope: str = "session",
+    scope: str = "story",
     schedule_knowledge: bool = False,
 ) -> dict:
     record = next(

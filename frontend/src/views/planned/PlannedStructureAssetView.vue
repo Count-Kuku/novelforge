@@ -87,13 +87,13 @@ async function discuss() {
   if (!workspace.activeProjectId || !workspace.activeStory || !discussionIdea.value.trim() || discussing.value) return
   discussing.value = true
   discussionText.value = ''
-  try { await api.streamDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, assetType.value, discussionIdea.value.trim(), (event, data) => { if (event === 'delta') discussionText.value += String(data?.text || ''); if (event === 'done') discussionStep.value = data?.result || null }, assetNo.value) } catch (reason) { discussionText.value = reason instanceof ApiClientError ? reason.message : '讨论失败' } finally { discussing.value = false }
+  try { await api.streamDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, assetType.value, discussionIdea.value.trim(), (event, data) => { if (event === 'delta') discussionText.value += String(data?.text || ''); if (event === 'done') discussionStep.value = data?.result || null }, assetNo.value, workspace.activeBranchId || undefined) } catch (reason) { discussionText.value = reason instanceof ApiClientError ? reason.message : '讨论失败' } finally { discussing.value = false }
 }
 
 async function approveDiscussion() {
   if (!workspace.activeProjectId || !workspace.activeStory || !discussionStep.value || approving.value) return
   approving.value = true
-  try { await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, assetType.value, discussionStep.value, assetNo.value); discussionText.value = '已采用讨论结论并更新当前结构。' } catch (reason) { discussionText.value = reason instanceof ApiClientError ? reason.message : '应用结论失败' } finally { approving.value = false }
+  try { await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, assetType.value, discussionStep.value, assetNo.value, workspace.activeBranchId || undefined); discussionText.value = '已采用讨论结论并更新当前结构。' } catch (reason) { discussionText.value = reason instanceof ApiClientError ? reason.message : '应用结论失败' } finally { approving.value = false }
 }
 
 async function deleteAsset() {

@@ -11,7 +11,7 @@ import { suggestSequelName } from '../ui/naming'
 const workspace = useWorkspaceStore()
 const router = useRouter()
 const route = useRoute()
-const viewKey = computed(() => `${workspace.activeProjectId}:${workspace.activeStoryId}:${route.fullPath}`)
+const viewKey = computed(() => `${workspace.activeProjectId}:${workspace.activeStoryId}:${workspace.activeBranchId}:${route.fullPath}`)
 const structure = ref<{ volumes: any[]; arcs: any[]; chapters: any[] }>({ volumes: [], arcs: [], chapters: [] })
 const structureOpen = ref(true)
 const structureError = ref('')
@@ -114,7 +114,7 @@ watch(() => [workspace.activeProjectId, workspace.activeStoryId], loadStructure)
         <RouterLink to="/planned/direction" active-class="active"><span>✦</span>创作方向</RouterLink>
         <RouterLink to="/planned/outline" active-class="active"><span>⌁</span>结构与大纲</RouterLink>
         <RouterLink to="/planned/chapters" active-class="active"><span>▤</span>章节推进</RouterLink>
-        <RouterLink to="/planned/workspace" active-class="active"><span>⌂</span>共享工作区</RouterLink><RouterLink to="/planned/workspace/content" active-class="active"><span>▦</span>内容浏览</RouterLink><RouterLink to="/planned/workspace/entities" active-class="active"><span>◎</span>实体与时间线</RouterLink><RouterLink to="/planned/workspace/graph" active-class="active"><span>◇</span>关系图</RouterLink><RouterLink to="/planned/workspace/research" active-class="active"><span>⌁</span>网络研究</RouterLink>
+        <RouterLink to="/planned/workspace" active-class="active"><span>⌂</span>共享工作区</RouterLink><RouterLink to="/planned/workspace/content" active-class="active"><span>▦</span>内容浏览</RouterLink><RouterLink to="/planned/workspace/entities" active-class="active"><span>◎</span>实体与时间线</RouterLink><RouterLink to="/planned/workspace/graph" active-class="active"><span>◇</span>关系图</RouterLink><RouterLink to="/planned/workspace/research" active-class="active"><span>⌁</span>导入资料</RouterLink>
       </nav>
       <div class="structure-tree"><button class="tree-heading" @click="structureOpen = !structureOpen"><span>作品结构</span><small>{{ structure.chapters.length }} 章</small><b>{{ structureOpen ? '⌃' : '⌄' }}</b></button><div v-if="structureOpen" class="tree-body"><div v-if="structureError" class="tree-empty error">{{ structureError }}</div><div v-else-if="!structure.volumes.length && !structure.chapters.length" class="tree-empty">结构会在保存后出现</div><RouterLink v-for="volume in structure.volumes" :key="volume.volume_no" :to="`/planned/volumes/${volume.volume_no}`" class="tree-node volume">卷 {{ volume.volume_no }} · {{ volume.title || '未命名' }}</RouterLink><div v-for="chapter in structure.chapters.slice(0, 8)" :key="chapter.chapter_no" class="tree-node"><RouterLink to="/planned/chapters">{{ String(chapter.chapter_no).padStart(2, '0') }} {{ chapter.title || '未命名章节' }}</RouterLink></div><div v-if="structure.chapters.length > 8" class="tree-more">还有 {{ structure.chapters.length - 8 }} 章…</div></div></div>
       <div class="rail-footer"><RouterLink to="/"><span>⇄</span>切换工作台</RouterLink><RouterLink to="/planned/settings"><span>⚙</span>能力与设置</RouterLink><RouterLink to="/planned/rules"><span>≡</span>规则与偏好</RouterLink><button class="rail-action" @click="renameCurrentStory"><span>✎</span>重命名故事</button><button class="rail-action" @click="renameCurrentProject"><span>⌘</span>重命名项目</button><button class="rail-action danger" @click="archiveCurrentStory"><span>□</span>归档当前故事</button><button class="rail-action danger" @click="deleteCurrentProject"><span>×</span>删除项目</button></div>

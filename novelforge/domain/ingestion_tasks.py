@@ -169,6 +169,11 @@ def normalize_ingestion_task(task: dict | None) -> dict:
     if status not in INGESTION_TASK_STATUSES:
         status = "queued"
     configuration = dict(raw.get("configuration") or {})
+    target_scope = str(configuration.get("target_scope") or ("story" if str(raw.get("story_id") or "").strip() else "project")).strip().lower()
+    if target_scope not in {"project", "story"}:
+        target_scope = "project" if not str(raw.get("story_id") or "").strip() else "story"
+    configuration["target_scope"] = target_scope
+    configuration["target_story_id"] = str(configuration.get("target_story_id") or raw.get("story_id") or "")
     normalized = {
         **raw,
         "task_id": task_id,

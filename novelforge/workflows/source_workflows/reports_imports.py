@@ -271,7 +271,7 @@ def import_long_reference_segments(
                 "source_id": batch.get("source_id", f"long_batch_{batch.get('batch_id', '')}"),
                 "source_revision_id": batch.get("source_revision_id", ""),
                 "segment_id": segment.get("segment_id", ""),
-                "story_id": batch.get("story_id", "default"),
+                "story_id": batch.get("story_id", ""),
                 "heading_path": segment.get("heading_path", []),
                 "content_kind": segment.get("content_kind", "section"),
                 "start_offset": segment.get("start_offset"),
@@ -415,7 +415,7 @@ def extract_pasted_reference_to_pending(
     origin: str = "",
     auto_confirm_safe_items: bool = False,
     stream_callback=None,
-    story_id: str = "default",
+    story_id: str = "",
 ) -> dict:
     before_pending_ids = {str(item.get("pending_id") or "") for item in load_pending_knowledge_items(project_name)}
     result = extract_reference_knowledge(
@@ -431,11 +431,14 @@ def extract_pasted_reference_to_pending(
     payload = result.get("data", {}).get("knowledge_extraction", {})
     items = payload.get("items", []) if isinstance(payload, dict) else []
     items = [
-        {**item, "story_id": str(story_id or "default")}
+        {**item, "story_id": str(story_id or "")}
         for item in items
         if isinstance(item, dict)
     ]
-    items = build_pending_knowledge_from_reference_extraction(items, scope=scope)
+    target_scope = "story" if str(story_id or "").strip() else "project"
+    items = build_pending_knowledge_from_reference_extraction(
+        items, scope=scope, setting_scope=target_scope, story_id=str(story_id or "")
+    )
     queued_count = queue_pending_knowledge_items(
         project_name,
         items,

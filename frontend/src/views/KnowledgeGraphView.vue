@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
 
@@ -11,10 +11,11 @@ const error = ref('')
 async function loadGraph() {
   if (!workspace.activeProjectId) { loading.value = false; return }
   loading.value = true
-  try { graph.value = await api.knowledgeGraph(workspace.activeProjectId, workspace.activeStory?.story_id) as typeof graph.value } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '无法读取关系图' } finally { loading.value = false }
+  try { graph.value = await api.knowledgeGraph(workspace.activeProjectId, workspace.activeStory?.story_id, workspace.activeBranchId || undefined) as typeof graph.value } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '无法读取关系图' } finally { loading.value = false }
 }
 
 onMounted(loadGraph)
+watch(() => [workspace.activeStoryId, workspace.activeBranchId], loadGraph)
 </script>
 
 <template>

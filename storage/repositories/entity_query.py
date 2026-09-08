@@ -33,6 +33,7 @@ def load_entities(
     entity_type: str | None = None,
     story_id: str | None = None,
     worldline_id: str | None = None,
+    branch_id: str | None = None,
 ) -> list[dict]:
     """Load active entity master rows, optionally filtered."""
     clauses = ["deleted_at IS NULL"]
@@ -43,14 +44,17 @@ def load_entities(
     if story_id is not None:
         clauses.append("COALESCE(story_id, '') IN ('', ?)")
         params.append(str(story_id))
+    if branch_id is not None:
+        clauses.append("COALESCE(branch_id, '') IN ('', ?)")
+        params.append(str(branch_id))
     if worldline_id is not None:
         clauses.append("COALESCE(worldline_id, '') IN ('', 'main', ?)")
         params.append(str(worldline_id))
     rows = conn.execute(
         f"""
-        SELECT entity_id, entity_type, canonical_name, display_name, story_id, worldline_id,
-               setting_scope, version_scope, summary, importance, world_t, world_time_label,
-               meta_json
+        SELECT entity_id, entity_type, canonical_name, display_name, story_id, branch_id,
+               worldline_id, setting_scope, version_scope, summary, importance, world_t,
+               world_time_label, meta_json
         FROM entities
         WHERE {' AND '.join(clauses)}
         ORDER BY importance DESC, canonical_name
@@ -65,14 +69,15 @@ def load_entities(
             "canonical_name": row[2],
             "display_name": row[3] or row[2],
             "story_id": row[4],
-            "worldline_id": row[5],
-            "setting_scope": row[6],
-            "version_scope": row[7],
-            "summary": row[8],
-            "importance": row[9],
-            "world_t": row[10],
-            "world_time_label": row[11],
-            "meta": _json_loads_dict(row[12]),
+            "branch_id": row[5],
+            "worldline_id": row[6],
+            "setting_scope": row[7],
+            "version_scope": row[8],
+            "summary": row[9],
+            "importance": row[10],
+            "world_t": row[11],
+            "world_time_label": row[12],
+            "meta": _json_loads_dict(row[13]),
         })
     return result
 
@@ -287,6 +292,7 @@ def resolve_entity_ids_by_names(
     *,
     story_id: str | None = None,
     worldline_id: str | None = None,
+    branch_id: str | None = None,
 ) -> dict[str, dict]:
     """把 LLM/检索识别出的「实体名」解析为库内 entity_id（D2）。
 
@@ -309,7 +315,9 @@ def resolve_entity_ids_by_names(
     if not clean_names:
         return {}
     # 隔离域内实体主档一次取回，Python 端做规范化匹配（实体量级小，避免逐名 SQL）。
-    entities = load_entities(conn, story_id=story_id, worldline_id=worldline_id)
+    entities = load_entities(
+        conn, story_id=story_id, worldline_id=worldline_id, branch_id=branch_id
+    )
     # canonical normalized -> 主档行（同 story 同 canonical 应唯一；保留首条）
     by_normalized: dict[str, dict] = {}
     for entity in entities:

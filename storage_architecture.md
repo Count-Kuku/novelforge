@@ -2,7 +2,7 @@
 
 本文档描述当前已经生效的存储契约，不再记录早期迁移计划。项目工程边界和路线见 [project.md](./project.md)。
 
-当前代码期望的 SQLite schema version：`20`
+当前代码期望的 SQLite schema version：`23`
 
 ## 权威存储边界
 
@@ -74,6 +74,7 @@ DB-only 失败语义。
 - 已发布 migration 不修改；任何 schema 变化新增下一编号文件。
 - 数据库版本高于当前代码时拒绝打开，避免旧程序损坏新数据。
 - 只对零字节、无法初始化的 SQLite 文件执行隔离恢复：原文件及 `-wal/-shm/-journal` 会改名为带 UTC 时间戳的 `.corrupt-*` 文件；非空损坏库不会被自动覆盖。
+- 已有数据库升级前，通过 SQLite 备份接口把包含已提交 WAL 的一致性快照保存到同目录 `.schema_backups/`，文件名记录升级前后版本与时间；校验通过后才执行迁移。新库和已是当前版本的库不重复备份。此次 schema 迁移不改动原有文件资产。恢复旧程序时须先停止应用，以对应备份恢复数据库并处理旧连接遗留的 WAL，不能直接用旧程序继续写新版 schema。
 
 ### 迁移历史
 
@@ -99,6 +100,9 @@ DB-only 失败语义。
 | `018_sequence_order` | `knowledge_items` 增加 `sequence_order`：资料事件落 `world_t` 的排序键，取值 `source_segment_index × 1000 + order_hint`（refactor 1 D 期新增） |
 | `019_graph_edges_endpoint_index` | 补建 `graph_edges` 端点索引 `idx_graph_edges_source`/`idx_graph_edges_target`：017 迁移以「建新表 → 搬运 → DROP → RENAME」重建 `graph_edges` 时，连带删除 001 建立的两个端点索引且重建后未补，导致端点+关系类型查询退化为全表扫描（refactor 2 审查修复） |
 | `020_drop_graph_nodes` | 删除废弃的 `graph_nodes` 表及其索引：节点自 schema 17 起统一由 `entities` 承载，`graph_edges` 端点已改指向 `entities.entity_id`，`graph_nodes` 无历史数据、无需兼容，正式删除 |
+| `021_branch_isolation` | 故事世界线、不可变检查点与片段状态；会话、正文、知识、附件及检索记录增加独立 `branch_id`，旧数据回填所属故事默认主线 |
+| `022_story_reference_libraries` | 项目资料库、不可变版本及来源修订快照；故事私有绑定、知识/实体来源映射与存量资料显式迁移状态 |
+| `023_branch_entity_identity` | 实体主档增加 `branch_id` 并扩展唯一身份索引；默认主线保留旧实体 ID 的兼容规则 |
 
 ## 表分组
 
@@ -151,12 +155,23 @@ DB-only 失败语义。
 - `source_revisions`：以 `(source_id, content_hash)` 唯一确定的不可变来源版本，保存解析器、文件哈希、字符数和上一修订；批次去重指纹不替代精确原文哈希，重复保存任务状态不会覆盖既有修订元数据。
 - `source_segments`：长篇分段、导入/提取状态、来源修订、标题路径、内容类型和起止字符。
 - `knowledge_items`：已确认结构化知识；`schema_version/structured_json` 保存分类专属稳定字段。自 schema 17 起，还承载实体关联与时序字段：`entity_id`（归属实体）、`fact_key`（槽位键，如 `location`/`status`）、`chapter_no`（来源章）、`valid_from_chapter`/`valid_to_chapter`（生效区间，用于同槽位取代）、`superseded_by`（被取代指向）、`merge_policy`（追加或取代）。
-- `entities`：实体主档表（schema 17 新增）。每个角色/势力/地点/道具/能力/事件是一条实体，`entity_id` 由 `(entity_type, 归一化名, setting_scope, story_id, worldline_id, version_scope)` 确定；`event` 类型额外保存 `world_t`（世界时间排序键）与 `world_time_label`（人类可读时间标签）。
+- `entities`：实体主档表（schema 17 新增）。实体身份包括类型、归一化名、资料作用域、故事、创作世界线 `branch_id`、来源世界 `worldline_id` 与来源版本范围。默认主线沿用旧哈希身份，保证旧事实继续连接同一实体；旁支使用包含 `branch_id` 的独立身份。`event` 类型额外保存 `world_t` 与 `world_time_label`。
 - `pending_knowledge_items`：待审核知识、质量状态、类型化字段和来源修订。
 - `knowledge_revisions`：正式知识每次创建/内容更新的追加快照；恢复旧版也必须追加新快照。
 - `knowledge_evidence`：知识到来源、修订、片段和检索 chunk 的证据关系，保存引文 hash、字符锚点、前后文和验证状态；网络研究结论还会在 `location_json` 中保存 URL 与来源信息。
 - `entity_alias_groups`：主名称、别名和实体类型。
 - `auto_review_policy`、`auto_review_runs`：自动审核策略、批处理记录和回退快照。
+
+### 故事资料副本与世界线
+
+- `reference_libraries` / `reference_library_releases` / `reference_library_release_items`：公共资料入口与固定知识版本。已发布版本保持不可变，后续整理生成新版本。
+- `reference_library_release_sources`：按资料版本、来源和来源修订保存可查证快照，区分完整、部分和缺失；原文仅用于查证，不参与普通写作检索。
+- `story_library_bindings` / `story_library_item_links` / `story_library_entity_links`：记录某故事世界线使用的固定版本及其私有知识/实体身份。解除使用不删除公共来源或其他故事副本。
+- `story_reference_states`：旧故事的兼容读取与显式确认状态；新故事使用严格绑定，迁移可明确选择不使用公共资料。
+- `story_branches`：故事内部的创作世界线；`branch_id` 不替代来源世界 `worldline_id`。默认主线 ID 为 `branch_main_` 加原故事 ID。
+- `branch_checkpoints` / `branch_checkpoint_items`：指定正文前沿的历史状态与内容摘要。历史状态不可变，本线当前编辑不能通过修改历史检查点实现。
+- `branch_fragment_states`：继承正文的本线状态。子线会话拥有独立正文记录，采纳、定稿或删除不修改父线记录。
+- 同章号资产按世界线隔离：主线保留原故事目录；旁支使用 `stories/{story}/branches/{安全分支目录}/`，资产逻辑键和元数据同步携带分支身份。
 
 ### 全局能力与自动配置
 

@@ -25,6 +25,7 @@ class CreativeSession(NovelForgeSchema):
     summary_fragment_id: str | None = None
     active_fragment_id: str | None = None
     worldline_id: str = "main"
+    branch_id: str = ""
     auto_extract_mode: Literal["manual", "on_accept"] = "manual"
     created_at: str = ""
     updated_at: str = ""
@@ -33,6 +34,7 @@ class CreativeSession(NovelForgeSchema):
 class CreativeTurn(NovelForgeSchema):
     turn_id: str
     session_id: str
+    branch_id: str = ""
     turn_index: int = Field(ge=1)
     user_message: str
     action_type: Literal["generate", "continue", "rewrite", "branch", "revise"] = "generate"
@@ -46,6 +48,7 @@ class CreativeTurn(NovelForgeSchema):
 class CreativeFragment(NovelForgeSchema):
     fragment_id: str
     session_id: str
+    branch_id: str = ""
     turn_id: str
     parent_fragment_id: str | None = None
     content: str
@@ -68,7 +71,8 @@ class CreativeAttachment(NovelForgeSchema):
     filename: str = ""
     media_type: str = ""
     attachment_kind: Literal["file", "pasted_text", "url", "existing_source"] = "file"
-    scope: Literal["turn", "session", "story", "project"] = "session"
+    scope: Literal["turn", "session", "story", "project"] = "story"
+    branch_id: str | None = None
     story_id: str | None = None
     session_id: str | None = None
     turn_id: str | None = None
@@ -80,6 +84,12 @@ class CreativeAttachment(NovelForgeSchema):
     task_message: str = ""
     task_progress: dict[str, Any] = Field(default_factory=dict)
     task_stages: dict[str, Any] = Field(default_factory=dict)
+    task_result: dict[str, Any] = Field(default_factory=dict)
+    auto_confirmed_count: int = Field(default=0, ge=0)
+    blocked_count: int = Field(default=0, ge=0)
+    retryable: bool = False
+    can_promote: bool = False
+    promotable_knowledge_count: int = Field(default=0, ge=0)
     created_at: str = ""
     updated_at: str = ""
 

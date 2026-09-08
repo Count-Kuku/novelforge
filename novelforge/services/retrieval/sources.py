@@ -53,6 +53,12 @@ def ingest_external_source_file(
                 "scope": str(parsed_payload.get("scope") or "reference"),
                 "char_count": len(str(parsed_payload.get("content") or content)),
                 "content": str(parsed_payload.get("content") or content),
+                # The source ledger's content_hash is the immutable container
+                # file hash. Keep a separate body hash so release freezing can
+                # verify the readable source text without confusing the two.
+                "source_body_hash": _retrieval_api.sha256(
+                    str(parsed_payload.get("content") or content).encode("utf-8")
+                ).hexdigest(),
             },
         )
     except Exception:

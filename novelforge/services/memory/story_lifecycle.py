@@ -85,6 +85,17 @@ def create_story(
                 "active_story_id": active_story_id,
             })
             _memory_api.sync_stories_index(conn, normalized_index)
+            # New stories start with the strict reference resolver. Existing
+            # stories are backfilled as legacy by migration 022 and require
+            # an explicit user confirmation before switching modes.
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO story_reference_states
+                    (story_id, read_mode, migration_status)
+                VALUES (?, 'strict', 'not_required')
+                """,
+                (story_id,),
+            )
             conn.commit()
     except Exception:
         if sp is not None:
@@ -141,6 +152,7 @@ def copy_story_settings(
     target_story_id: str,
     *,
     include_discussions: bool = True,
+    include_core_knowledge: bool = True,
 ):
     """复制故事级创作配置、讨论工件、Prompt 选项、规则、旧 memory 覆盖层和正式优先设定。"""
     profile = _memory_api.load_creative_profile(project_name, source_story_id)
@@ -181,7 +193,10 @@ def copy_story_settings(
 
     from novelforge.domain.setting_knowledge import copy_story_core_settings_to_story
 
-    core_result = copy_story_core_settings_to_story(project_name, source_story_id, target_story_id)
+    core_result = (
+        copy_story_core_settings_to_story(project_name, source_story_id, target_story_id)
+        if include_core_knowledge else {"copied": 0, "updated": 0, "skipped": 0}
+    )
 
     _memory_api.sync_project_retrieval_assets(project_name)
     return core_result

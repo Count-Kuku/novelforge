@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -20,6 +20,8 @@ from novelforge.workflows.interactive_writing import (
 )
 from storage.repositories.projects import upsert_project_meta
 from storage.schema import CURRENT_SCHEMA_VERSION
+
+from ..uploads import read_material_upload
 
 from .._helpers import (
     API_PREFIX,
@@ -41,6 +43,10 @@ from ..schemas import (
     CreateSessionRequest,
     CreateStoryRequest,
     CopyStoryRequest,
+    CreateBranchRequest,
+    UpdateBranchRequest,
+    BranchCheckpointRequest,
+    BranchContextRequest,
     DiscussionApprovalRequest,
     DiscussionRequest,
     ExecuteActionRequest,
@@ -74,10 +80,106 @@ from ..schemas import (
 router = APIRouter()
 
 
-@router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/discussions/{{asset_type}}")
-async def discussion_artifact(project_id: str, story_id: str, asset_type: str, request: Request, asset_no: int | None = None) -> dict[str, Any]:
+def _assert_session_branch(project_name: str, story_id: str, session_id: str, branch_id: str | None = None) -> dict:
+    bundle = memory.load_creative_session_bundle(project_name, session_id, story_id=story_id)
+    if not bundle:
+        raise ValueError(f"创作会话不存在：{session_id}")
+    session = bundle.get("session") or {}
+    expected = str(session.get("branch_id") or memory.default_branch_id(story_id))
+    if branch_id and str(branch_id) != expected:
+        raise ValueError("会话已固定到另一条世界线，拒绝跨线写入。")
+    return session
+
+
+@router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/branches")
+async def list_story_branches_endpoint(project_id: str, story_id: str, request: Request, include_archived: bool = False) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    branches = await run_in_threadpool(memory.list_story_branches, name, story_id, include_archived=include_archived)
+    return _envelope({"branches": branches}, request)
+
+
+@router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/branches/{{branch_id}}")
+async def story_branch_detail_endpoint(project_id: str, story_id: str, branch_id: str, request: Request) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    branch = await run_in_threadpool(memory.load_story_branch, name, story_id, branch_id)
+    context = await run_in_threadpool(memory.resolve_branch_context, name, story_id, branch_id)
+    return _envelope({"branch": branch, "context": context}, request)
+
+
+@router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/branches", status_code=status.HTTP_201_CREATED)
+async def create_story_branch_endpoint(project_id: str, story_id: str, payload: CreateBranchRequest, request: Request) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    result = await run_in_threadpool(
+        memory.fork_story_branch,
+        name,
+        story_id,
+        parent_branch_id=payload.parent_branch_id or memory.default_branch_id(story_id),
+        name=payload.name,
+        description=payload.description,
+        fork_fragment_id=payload.fork_fragment_id,
+        fork_checkpoint_id=payload.fork_checkpoint_id,
+        allow_current_state=payload.allow_current_state,
+    )
+    if isinstance(result, dict) and "branch" in result:
+        return _envelope(result, request)
+    return _envelope({"branch": result}, request)
+
+
+@router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/branches/{{branch_id}}/fork", status_code=status.HTTP_201_CREATED)
+async def fork_story_branch_endpoint(project_id: str, story_id: str, branch_id: str, payload: CreateBranchRequest, request: Request) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    result = await run_in_threadpool(
+        memory.fork_story_branch,
+        name,
+        story_id,
+        parent_branch_id=branch_id,
+        name=payload.name,
+        description=payload.description,
+        fork_fragment_id=payload.fork_fragment_id,
+        fork_checkpoint_id=payload.fork_checkpoint_id,
+        allow_current_state=payload.allow_current_state,
+    )
+    if isinstance(result, dict) and "branch" in result:
+        return _envelope(result, request)
+    return _envelope({"branch": result}, request)
+
+
+@router.patch(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/branches/{{branch_id}}")
+async def update_story_branch_endpoint(project_id: str, story_id: str, branch_id: str, payload: UpdateBranchRequest, request: Request) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    updates = {key: value for key, value in payload.model_dump().items() if value is not None}
+    branch = await run_in_threadpool(memory.update_story_branch, name, story_id, branch_id, updates)
+    return _envelope({"branch": branch}, request)
+
+
+@router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/branches/{{branch_id}}/checkpoints")
+async def create_story_checkpoint_endpoint(project_id: str, story_id: str, branch_id: str, payload: BranchCheckpointRequest, request: Request) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    checkpoint = await run_in_threadpool(
+        memory.create_story_checkpoint,
+        name,
+        story_id,
+        branch_id,
+        frontier_fragment_id=payload.frontier_fragment_id,
+        extraction_status=payload.extraction_status,
+        reason=payload.reason,
+        allow_current_state=payload.allow_current_state,
+    )
+    return _envelope({"checkpoint": checkpoint}, request)
+
+
+@router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/discussions/{{asset_type}}")
+async def discussion_artifact(project_id: str, story_id: str, asset_type: str, request: Request, asset_no: int | None = None, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    if branch_id and str(branch_id) != memory.default_branch_id(story_id):
+        raise HTTPException(status_code=409, detail="规划台讨论资产暂不支持非主线世界线，已拒绝读取主线讨论内容。")
     if asset_type == "profile":
         artifact = memory.load_creative_profile_discussion_artifact(name, story_id)
     elif asset_type == "outline":
@@ -93,9 +195,11 @@ async def discussion_artifact(project_id: str, story_id: str, asset_type: str, r
     return _envelope({"asset_type": asset_type, "artifact": artifact}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/discussions/{{asset_type}}/stream")
-async def discussion_stream(project_id: str, story_id: str, asset_type: str, payload: DiscussionRequest, request: Request, asset_no: int | None = None):
+async def discussion_stream(project_id: str, story_id: str, asset_type: str, payload: DiscussionRequest, request: Request, asset_no: int | None = None, branch_id: str | None = Query(default=None)):
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    if branch_id and str(branch_id) != memory.default_branch_id(story_id):
+        raise HTTPException(status_code=409, detail="规划台讨论资产暂不支持非主线世界线，已拒绝写入主线讨论资产。")
     if asset_type not in {"profile", "outline", "volume", "arc", "chapter"}:
         raise ValueError("不支持的讨论资产类型。")
     if asset_type in {"volume", "arc", "chapter"} and not asset_no:
@@ -122,9 +226,11 @@ async def discussion_stream(project_id: str, story_id: str, asset_type: str, pay
     return StreamingResponse(_threaded_stream(worker), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/discussions/{{asset_type}}/approve")
-async def approve_discussion(project_id: str, story_id: str, asset_type: str, payload: DiscussionApprovalRequest, request: Request, asset_no: int | None = None) -> dict[str, Any]:
+async def approve_discussion(project_id: str, story_id: str, asset_type: str, payload: DiscussionApprovalRequest, request: Request, asset_no: int | None = None, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    if branch_id and str(branch_id) != memory.default_branch_id(story_id):
+        raise HTTPException(status_code=409, detail="规划台讨论资产暂不支持非主线世界线，已拒绝写入主线讨论资产。")
     from novelforge.workflows.skills import discussions
 
     if asset_type == "profile":
@@ -153,69 +259,74 @@ async def create_session(project_id: str, story_id: str, payload: CreateSessionR
         session_goal=payload.session_goal,
         title=payload.title,
         auto_extract_mode=auto_extract,
+        branch_id=payload.branch_id,
     )
     return _envelope({"session": session}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions")
-async def list_sessions(project_id: str, story_id: str, request: Request) -> dict[str, Any]:
+async def list_sessions(project_id: str, story_id: str, request: Request, branch_id: str | None = None) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    sessions = await run_in_threadpool(memory.list_creative_sessions, name, story_id, include_archived=True)
+    sessions = await run_in_threadpool(memory.list_creative_sessions, name, story_id, include_archived=True, branch_id=branch_id)
     return _envelope({"sessions": sessions}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}")
-async def session_detail(project_id: str, story_id: str, session_id: str, request: Request) -> dict[str, Any]:
+async def session_detail(project_id: str, story_id: str, session_id: str, request: Request, branch_id: str | None = None) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
     bundle = await run_in_threadpool(memory.load_creative_session_bundle, name, session_id, story_id=story_id)
     if not bundle:
         raise FileNotFoundError(f"创作会话不存在：{session_id}")
+    _assert_session_branch(name, story_id, session_id, branch_id)
     return _envelope(bundle, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/attachments")
-async def list_session_attachments(project_id: str, story_id: str, session_id: str, request: Request) -> dict[str, Any]:
+async def list_session_attachments(project_id: str, story_id: str, session_id: str, request: Request, branch_id: str | None = None) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    return _envelope({"attachments": await run_in_threadpool(memory.list_creative_attachments, name, story_id=story_id, session_id=session_id)}, request)
+    _assert_session_branch(name, story_id, session_id, branch_id)
+    return _envelope({"attachments": await run_in_threadpool(memory.list_creative_attachments, name, story_id=story_id, session_id=session_id, branch_id=branch_id or "")}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/attachments", status_code=status.HTTP_201_CREATED)
 async def create_session_attachment(project_id: str, story_id: str, session_id: str, payload: CreateAttachmentRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
     from novelforge.workflows.creative_attachments import import_creative_pasted_text
 
-    attachment = await run_in_threadpool(import_creative_pasted_text, name, story_id, session_id, payload.text, title=payload.title, scope=payload.scope)
+    attachment = await run_in_threadpool(import_creative_pasted_text, name, story_id, session_id, payload.text, title=payload.title, scope=payload.scope, branch_id=payload.branch_id)
     return _envelope({"attachment": attachment}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/attachments/url", status_code=status.HTTP_201_CREATED)
 async def create_session_url_attachment(project_id: str, story_id: str, session_id: str, payload: CreateUrlAttachmentRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
     from novelforge.workflows.creative_attachments import import_creative_url
 
-    attachment = await run_in_threadpool(import_creative_url, name, story_id, session_id, payload.url, scope=payload.scope)
+    attachment = await run_in_threadpool(import_creative_url, name, story_id, session_id, payload.url, scope=payload.scope, branch_id=payload.branch_id)
     return _envelope({"attachment": attachment}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/attachments/file", status_code=status.HTTP_201_CREATED)
-async def create_session_file_attachment(project_id: str, story_id: str, session_id: str, request: Request, file: UploadFile = File(...), scope: str = Form("session")) -> dict[str, Any]:
+async def create_session_file_attachment(project_id: str, story_id: str, session_id: str, request: Request, file: UploadFile = File(...), scope: str = Form("story"), branch_id: str = Form("")) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    if scope not in {"turn", "session", "story", "project"}:
-        raise ValueError("附件作用域无效。")
-    content = await file.read()
-    if len(content) > 8 * 1024 * 1024:
-        raise ValueError("附件超过 8MB 限制。")
+    _assert_session_branch(name, story_id, session_id, branch_id)
+    if scope not in {"story", "project"}:
+        raise ValueError("会话资料只支持 story 或 project 作用域。")
+    content = await read_material_upload(file)
     from novelforge.services.document_parsing import parse_document_bytes
     from novelforge.workflows.creative_attachments import import_creative_documents
 
     document = await run_in_threadpool(parse_document_bytes, file.filename or "attachment.txt", content)
-    attachments = await run_in_threadpool(import_creative_documents, name, story_id, session_id, [document], scope=scope)
+    attachments = await run_in_threadpool(import_creative_documents, name, story_id, session_id, [document], scope=scope, branch_id=branch_id)
     return _envelope({"attachment": attachments[0] if attachments else None, "warnings": document.warnings}, request)
 
 @router.patch(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}")
 async def update_session(project_id: str, story_id: str, session_id: str, payload: UpdateSessionRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
-    updates = {key: value for key, value in payload.model_dump().items() if value is not None}
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
+    updates = {key: value for key, value in payload.model_dump().items() if value is not None and key != "branch_id"}
     session = await run_in_threadpool(memory.update_creative_session, name, session_id, updates, story_id=story_id)
     return _envelope({"session": session}, request)
 
@@ -226,50 +337,62 @@ async def archive_session(project_id: str, story_id: str, session_id: str, reque
     return _envelope({"session": session, "archived": True}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/actions")
-async def list_session_actions(project_id: str, story_id: str, session_id: str, request: Request) -> dict[str, Any]:
+async def list_session_actions(project_id: str, story_id: str, session_id: str, request: Request, branch_id: str | None = None) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    return _envelope({"actions": await run_in_threadpool(memory.list_creative_actions, name, story_id, session_id)}, request)
+    _assert_session_branch(name, story_id, session_id, branch_id)
+    return _envelope({"actions": await run_in_threadpool(memory.list_creative_actions, name, story_id, session_id, branch_id)}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/actions/plan", status_code=status.HTTP_201_CREATED)
 async def plan_session_action(project_id: str, story_id: str, session_id: str, payload: PlanActionRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
     from novelforge.workflows.creative_actions import plan_creative_action
 
-    action = await run_in_threadpool(plan_creative_action, name, story_id, session_id, payload.request, idempotency_key=payload.idempotency_key or request.headers.get("idempotency-key", ""))
+    action = await run_in_threadpool(
+        plan_creative_action, name, story_id, session_id, payload.request,
+        idempotency_key=payload.idempotency_key or request.headers.get("idempotency-key", ""),
+        branch_id=payload.branch_id,
+    )
     return _envelope({"action": action}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/actions/{{action_id}}/execute")
 async def execute_session_action(project_id: str, story_id: str, session_id: str, action_id: str, payload: ExecuteActionRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
     from novelforge.workflows.creative_actions import execute_creative_action
 
     action = await run_in_threadpool(
         execute_creative_action, name, action_id,
-        story_id=story_id, session_id=session_id, confirmed=payload.confirmed,
+        story_id=story_id, session_id=session_id, confirmed=payload.confirmed, branch_id=payload.branch_id,
     )
     return _envelope({"action": action}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/actions/{{action_id}}/cancel")
-async def cancel_session_action(project_id: str, story_id: str, session_id: str, action_id: str, request: Request) -> dict[str, Any]:
+async def cancel_session_action(project_id: str, story_id: str, session_id: str, action_id: str, request: Request, branch_id: str | None = None) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, branch_id)
     from novelforge.workflows.creative_actions import cancel_creative_action
 
-    action = await run_in_threadpool(cancel_creative_action, name, action_id, story_id, session_id)
+    action = await run_in_threadpool(
+        cancel_creative_action, name, action_id, story_id, session_id, branch_id,
+    )
     return _envelope({"action": action}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/actions/{{action_id}}/undo")
-async def undo_session_action(project_id: str, story_id: str, session_id: str, action_id: str, request: Request) -> dict[str, Any]:
+async def undo_session_action(project_id: str, story_id: str, session_id: str, action_id: str, request: Request, branch_id: str | None = None) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, branch_id)
     from novelforge.workflows.creative_actions import undo_creative_action
 
     action = await run_in_threadpool(
         undo_creative_action, name, action_id,
         story_id=story_id, session_id=session_id,
+        branch_id=branch_id,
         idempotency_key=request.headers.get("idempotency-key", ""),
     )
     return _envelope({"action": action}, request)
@@ -277,14 +400,16 @@ async def undo_session_action(project_id: str, story_id: str, session_id: str, a
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/fragments/accept")
 async def accept_fragment(project_id: str, story_id: str, session_id: str, payload: FragmentActionRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
     saved = await run_in_threadpool(memory.accept_creative_fragment, name, session_id, payload.fragment_id, story_id=story_id)
     return _envelope({"fragment": saved}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/fragments/{{fragment_id}}/extract/stream")
-async def extract_fragment_stream(project_id: str, story_id: str, session_id: str, fragment_id: str, request: Request):
+async def extract_fragment_stream(project_id: str, story_id: str, session_id: str, fragment_id: str, request: Request, payload: BranchContextRequest | None = Body(default=None)):
     """显式提炼已采用片段：无风险候选自动确认进正式知识，有风险留待审核。"""
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id if payload else None)
 
     def worker(emit: Callable[[str, Any], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
         result = extract_fragment_knowledge(
@@ -292,6 +417,7 @@ async def extract_fragment_stream(project_id: str, story_id: str, session_id: st
             story_id,
             session_id,
             fragment_id,
+            branch_id=(payload.branch_id if payload else None),
             stream_callback=lambda text: emit("delta", {"text": str(text or "")}),
         )
         return result
@@ -305,12 +431,14 @@ async def extract_fragment_stream(project_id: str, story_id: str, session_id: st
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/fragments/select")
 async def select_fragment(project_id: str, story_id: str, session_id: str, payload: FragmentActionRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
     saved = await run_in_threadpool(memory.select_creative_fragment_variant, name, session_id, payload.fragment_id, story_id=story_id)
     return _envelope({"fragment": saved}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/sessions/{{session_id}}/frontier")
 async def select_frontier(project_id: str, story_id: str, session_id: str, payload: FragmentActionRequest, request: Request) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
     saved = await run_in_threadpool(memory.select_creative_frontier, name, session_id, payload.fragment_id, story_id=story_id)
     return _envelope({"session": saved}, request)
 
@@ -318,6 +446,7 @@ async def select_frontier(project_id: str, story_id: str, session_id: str, paylo
 async def generate_turn_stream(project_id: str, story_id: str, session_id: str, payload: GenerateTurnRequest, request: Request):
     name = _resolve_project_name(project_id)
     _story(name, story_id)
+    _assert_session_branch(name, story_id, session_id, payload.branch_id)
 
     def worker(emit: Callable[[str, Any], None], cancel_check: Callable[[], bool]) -> dict[str, Any]:
         web_evidence, web_sources, web_search_notice = "", [], ""
@@ -359,6 +488,7 @@ async def generate_turn_stream(project_id: str, story_id: str, session_id: str, 
             action_type=payload.action_type,
             word_count=payload.word_count,
             branch_from_fragment_id=payload.branch_from_fragment_id,
+            branch_id=payload.branch_id,
             stream_callback=lambda text: emit("delta", {"text": str(text or "")}),
             cancel_check=cancel_check,
             web_evidence=web_evidence,

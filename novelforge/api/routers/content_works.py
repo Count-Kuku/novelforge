@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -80,27 +80,27 @@ async def project_content(project_id: str, request: Request, story_id: str = "de
     return _envelope(await run_in_threadpool(list_resource_browser_items, name, story_id, cursor=cursor, page_size=page_size), request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/works")
-async def story_works(project_id: str, story_id: str, request: Request, cursor: int = 0, page_size: int = 40) -> dict[str, Any]:
+async def story_works(project_id: str, story_id: str, request: Request, cursor: int = 0, page_size: int = 40, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
     from novelforge.services.creative_works import list_story_works
-    return _envelope(await run_in_threadpool(list_story_works, name, story_id, cursor=cursor, page_size=page_size), request)
+    return _envelope(await run_in_threadpool(list_story_works, name, story_id, cursor=cursor, page_size=page_size, branch_id=branch_id), request)
 
 @router.delete(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/works/chapters/{{chapter_no}}")
-async def delete_chapter_work_endpoint(project_id: str, story_id: str, chapter_no: int, request: Request) -> dict[str, Any]:
+async def delete_chapter_work_endpoint(project_id: str, story_id: str, chapter_no: int, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
     from novelforge.services.creative_works import delete_chapter_work
-    deleted = await run_in_threadpool(delete_chapter_work, name, story_id, chapter_no)
-    return _envelope({"deleted": bool(deleted), "chapter_no": chapter_no}, request)
+    deleted = await run_in_threadpool(delete_chapter_work, name, story_id, chapter_no, branch_id)
+    return _envelope({"deleted": bool(deleted), "chapter_no": chapter_no, "branch_id": branch_id}, request)
 
 @router.delete(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/works/fragments/{{fragment_id}}")
-async def remove_fragment_work_endpoint(project_id: str, story_id: str, fragment_id: str, request: Request) -> dict[str, Any]:
+async def remove_fragment_work_endpoint(project_id: str, story_id: str, fragment_id: str, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     _story(name, story_id)
     from novelforge.services.creative_works import remove_fragment_work
-    removed = await run_in_threadpool(remove_fragment_work, name, story_id, fragment_id)
-    return _envelope({"removed": bool(removed), "fragment_id": fragment_id}, request)
+    removed = await run_in_threadpool(remove_fragment_work, name, story_id, fragment_id, branch_id)
+    return _envelope({"removed": bool(removed), "fragment_id": fragment_id, "branch_id": branch_id}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/content/delete")
 async def delete_project_content(project_id: str, payload: ContentDeleteRequest, request: Request, story_id: str = "default") -> dict[str, Any]:

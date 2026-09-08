@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import patch
 
 from tools.verify_utils import isolated_workspace
 
 
+@patch.dict("os.environ", {"NOVELFORGE_DISABLE_BACKGROUND_TASKS": "1"})
 def main() -> None:
     from fastapi.testclient import TestClient
+    from storage.schema import CURRENT_SCHEMA_VERSION
 
     with isolated_workspace("novelforge_api_"):
         from novelforge.api.app import create_app
@@ -28,7 +31,7 @@ def main() -> None:
         client = TestClient(create_app(), headers={"x-novelforge-client": "vue"})
         response = client.get("/api/v1/health/ready")
         assert response.status_code == 200, response.text
-        assert response.json()["data"]["schema_version"] == 20
+        assert response.json()["data"]["schema_version"] == CURRENT_SCHEMA_VERSION
         response = client.get("/api/v1/capabilities")
         assert response.status_code == 200 and "chat" in response.json()["data"]["capabilities"], response.text
         response = client.get("/api/v1/settings/developer")
@@ -225,7 +228,7 @@ def main() -> None:
         response = client.post(
             f"/api/v1/projects/{project_id}/stories/{story['story_id']}/sessions/{session_id}/attachments/file",
             files={"file": ("notes.txt", b"file attachment smoke", "text/plain")},
-            data={"scope": "session"},
+            data={"scope": "story"},
         )
         assert response.status_code == 201 and response.json()["data"]["attachment"], response.text
         response = client.post(

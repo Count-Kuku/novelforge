@@ -83,13 +83,18 @@
       },
       "Body_create_session_file_attachment_api_v1_projects__project_id__stories__story_id__sessions__session_id__attachments_file_post": {
         "properties": {
+          "branch_id": {
+            "default": "",
+            "title": "Branch Id",
+            "type": "string"
+          },
           "file": {
             "contentMediaType": "application/octet-stream",
             "title": "File",
             "type": "string"
           },
           "scope": {
-            "default": "session",
+            "default": "story",
             "title": "Scope",
             "type": "string"
           }
@@ -122,6 +127,66 @@
           "file"
         ],
         "title": "Body_preview_ocr_api_v1_projects__project_id__stories__story_id__ingestion_ocr_preview_post",
+        "type": "object"
+      },
+      "BranchCheckpointRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_current_state": {
+            "default": false,
+            "title": "Allow Current State",
+            "type": "boolean"
+          },
+          "extraction_status": {
+            "default": "ready",
+            "enum": [
+              "ready",
+              "completed",
+              "skipped",
+              "pending"
+            ],
+            "title": "Extraction Status",
+            "type": "string"
+          },
+          "frontier_fragment_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frontier Fragment Id"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "BranchCheckpointRequest",
+        "type": "object"
+      },
+      "BranchContextRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          }
+        },
+        "title": "BranchContextRequest",
         "type": "object"
       },
       "ChapterPlanValidationRequest": {
@@ -187,11 +252,21 @@
       "CreateAttachmentRequest": {
         "additionalProperties": false,
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "scope": {
-            "default": "session",
+            "default": "story",
             "enum": [
-              "turn",
-              "session",
               "story",
               "project"
             ],
@@ -215,6 +290,69 @@
           "text"
         ],
         "title": "CreateAttachmentRequest",
+        "type": "object"
+      },
+      "CreateBranchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "allow_current_state": {
+            "default": false,
+            "title": "Allow Current State",
+            "type": "boolean"
+          },
+          "description": {
+            "default": "",
+            "maxLength": 4000,
+            "title": "Description",
+            "type": "string"
+          },
+          "fork_checkpoint_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fork Checkpoint Id"
+          },
+          "fork_fragment_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fork Fragment Id"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Branch Id"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "CreateBranchRequest",
         "type": "object"
       },
       "CreateProjectRequest": {
@@ -269,9 +407,21 @@
             ],
             "title": "Auto Extract Mode"
           },
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "session_goal": {
+            "default": "",
             "maxLength": 4000,
-            "minLength": 1,
             "title": "Session Goal",
             "type": "string"
           },
@@ -282,9 +432,6 @@
             "type": "string"
           }
         },
-        "required": [
-          "session_goal"
-        ],
         "title": "CreateSessionRequest",
         "type": "object"
       },
@@ -322,11 +469,21 @@
       "CreateUrlAttachmentRequest": {
         "additionalProperties": false,
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "scope": {
-            "default": "session",
+            "default": "story",
             "enum": [
-              "turn",
-              "session",
               "story",
               "project"
             ],
@@ -344,6 +501,34 @@
           "url"
         ],
         "title": "CreateUrlAttachmentRequest",
+        "type": "object"
+      },
+      "DiscoverModelsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "api_key": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Api Key",
+            "type": "string"
+          },
+          "base_url": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "provider_type": {
+            "default": "auto",
+            "maxLength": 80,
+            "title": "Provider Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "base_url"
+        ],
+        "title": "DiscoverModelsRequest",
         "type": "object"
       },
       "DiscussionApprovalRequest": {
@@ -377,6 +562,18 @@
       "ExecuteActionRequest": {
         "additionalProperties": false,
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "confirmed": {
             "default": false,
             "title": "Confirmed",
@@ -389,6 +586,18 @@
       "FragmentActionRequest": {
         "additionalProperties": false,
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "fragment_id": {
             "maxLength": 160,
             "minLength": 1,
@@ -406,8 +615,9 @@
         "additionalProperties": false,
         "properties": {
           "action_type": {
-            "default": "continue",
+            "default": "generate",
             "enum": [
+              "generate",
               "continue",
               "rewrite",
               "branch"
@@ -426,6 +636,23 @@
               }
             ],
             "title": "Branch From Fragment Id"
+          },
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "enable_web_search": {
+            "default": false,
+            "title": "Enable Web Search",
+            "type": "boolean"
           },
           "user_message": {
             "maxLength": 20000,
@@ -457,6 +684,62 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IngestionTextRequest": {
+        "additionalProperties": false,
+        "description": "资料库文本导入。\n\n资料库条目恒为项目作用域，保留 ``scope`` 仅用于兼容旧客户端的请求\n形状，服务端会拒绝任何非 project 值，避免调用方把资料库内容误落到故事。",
+        "properties": {
+          "scope": {
+            "const": "project",
+            "default": "project",
+            "title": "Scope",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 2000000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "title": {
+            "default": "粘贴资料",
+            "maxLength": 200,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "IngestionTextRequest",
+        "type": "object"
+      },
+      "KnowledgePromotionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attachment_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attachment Id"
+          },
+          "knowledge_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Knowledge Ids",
+            "type": "array"
+          }
+        },
+        "title": "KnowledgePromotionRequest",
         "type": "object"
       },
       "KnowledgeUpdateRequest": {
@@ -499,6 +782,62 @@
           }
         },
         "title": "KnowledgeUpdateRequest",
+        "type": "object"
+      },
+      "LegacyStoryLibraryMigrationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "confirmed": {
+            "default": false,
+            "title": "Confirmed",
+            "type": "boolean"
+          },
+          "library_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Library Id"
+          },
+          "release_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Id"
+          },
+          "selections": {
+            "items": {
+              "$ref": "#/components/schemas/Selection"
+            },
+            "maxItems": 100,
+            "title": "Selections",
+            "type": "array"
+          }
+        },
+        "title": "LegacyStoryLibraryMigrationRequest",
         "type": "object"
       },
       "ModelProfileRequest": {
@@ -595,6 +934,18 @@
       "PlanActionRequest": {
         "additionalProperties": false,
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "idempotency_key": {
             "default": "",
             "maxLength": 200,
@@ -628,6 +979,84 @@
           }
         },
         "title": "PromptOptionsUpdateRequest",
+        "type": "object"
+      },
+      "ReferenceLibraryCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Id"
+          },
+          "source_kind": {
+            "default": "reference",
+            "maxLength": 80,
+            "title": "Source Kind",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "ReferenceLibraryCreateRequest",
+        "type": "object"
+      },
+      "ReferenceLibraryReleaseRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "knowledge_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5000,
+            "title": "Knowledge Ids",
+            "type": "array"
+          },
+          "manifest": {
+            "additionalProperties": true,
+            "title": "Manifest",
+            "type": "object"
+          },
+          "release_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Id"
+          }
+        },
+        "title": "ReferenceLibraryReleaseRequest",
         "type": "object"
       },
       "RenameProjectRequest": {
@@ -770,6 +1199,22 @@
         "title": "ResearchTaskRequest",
         "type": "object"
       },
+      "ResolvePendingEntityRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "target_entity_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Target Entity Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_entity_id"
+        ],
+        "title": "ResolvePendingEntityRequest",
+        "type": "object"
+      },
       "RestoreRevisionRequest": {
         "additionalProperties": false,
         "properties": {
@@ -792,6 +1237,18 @@
         "title": "RestoreRevisionRequest",
         "type": "object"
       },
+      "RetryAttachmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "confirm_over_budget": {
+            "default": false,
+            "title": "Confirm Over Budget",
+            "type": "boolean"
+          }
+        },
+        "title": "RetryAttachmentRequest",
+        "type": "object"
+      },
       "RulesUpdateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -802,6 +1259,41 @@
           }
         },
         "title": "RulesUpdateRequest",
+        "type": "object"
+      },
+      "Selection": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "library_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Library Id",
+            "type": "string"
+          },
+          "release_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Release Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "library_id",
+          "release_id"
+        ],
+        "title": "Selection",
         "type": "object"
       },
       "SetStoryModeRequest": {
@@ -822,6 +1314,40 @@
         "title": "SetStoryModeRequest",
         "type": "object"
       },
+      "StoryLibraryBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
+          "idempotency_key": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "release_id": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Release Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "release_id"
+        ],
+        "title": "StoryLibraryBindingRequest",
+        "type": "object"
+      },
       "TaskControlRequest": {
         "additionalProperties": false,
         "properties": {
@@ -840,6 +1366,53 @@
           "action"
         ],
         "title": "TaskControlRequest",
+        "type": "object"
+      },
+      "UpdateBranchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "active",
+                  "archived"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "title": "UpdateBranchRequest",
         "type": "object"
       },
       "UpdateChapterPlanRequest": {
@@ -915,6 +1488,18 @@
       "UpdateSessionRequest": {
         "additionalProperties": false,
         "properties": {
+          "branch_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Branch Id"
+          },
           "status": {
             "anyOf": [
               {
@@ -1608,6 +2193,130 @@
         "summary": "Delete Project Content"
       }
     },
+    "/api/v1/projects/{project_id}/ingestion/attachments": {
+      "get": {
+        "operationId": "ingestion_attachments_api_v1_projects__project_id__ingestion_attachments_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ingestion Attachments Api V1 Projects  Project Id  Ingestion Attachments Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingestion Attachments"
+      }
+    },
+    "/api/v1/projects/{project_id}/ingestion/attachments/{attachment_id}/retry": {
+      "post": {
+        "operationId": "retry_ingestion_attachment_api_v1_projects__project_id__ingestion_attachments__attachment_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "attachment_id",
+            "required": true,
+            "schema": {
+              "title": "Attachment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RetryAttachmentRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Retry Ingestion Attachment Api V1 Projects  Project Id  Ingestion Attachments  Attachment Id  Retry Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Ingestion Attachment"
+      }
+    },
     "/api/v1/projects/{project_id}/ingestion/workbench": {
       "get": {
         "operationId": "ingestion_workbench_before_detail_api_v1_projects__project_id__ingestion_workbench_get",
@@ -1781,6 +2490,38 @@
               "title": "Entity Type",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -1838,6 +2579,22 @@
               ],
               "title": "Story Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -1879,6 +2636,38 @@
               "title": "Project Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -1919,6 +2708,38 @@
             "schema": {
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -1971,6 +2792,38 @@
               "title": "Project Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "requestBody": {
@@ -2010,6 +2863,174 @@
         "summary": "Discard Pending Knowledge"
       }
     },
+    "/api/v1/projects/{project_id}/knowledge/pending/{pending_id}/resolve-entity": {
+      "post": {
+        "operationId": "resolve_pending_entity_api_v1_projects__project_id__knowledge_pending__pending_id__resolve_entity_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pending_id",
+            "required": true,
+            "schema": {
+              "title": "Pending Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolvePendingEntityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resolve Pending Entity Api V1 Projects  Project Id  Knowledge Pending  Pending Id  Resolve Entity Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve Pending Entity"
+      }
+    },
+    "/api/v1/projects/{project_id}/knowledge/promote": {
+      "post": {
+        "operationId": "promote_knowledge_api_v1_projects__project_id__knowledge_promote_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnowledgePromotionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Promote Knowledge Api V1 Projects  Project Id  Knowledge Promote Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Promote Knowledge"
+      }
+    },
     "/api/v1/projects/{project_id}/knowledge/search": {
       "get": {
         "operationId": "search_knowledge_api_v1_projects__project_id__knowledge_search_get",
@@ -2047,6 +3068,22 @@
                 }
               ],
               "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           },
           {
@@ -2137,6 +3174,38 @@
               "title": "Record Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -2193,6 +3262,38 @@
             "schema": {
               "title": "Record Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -2263,6 +3364,38 @@
               "title": "Record Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -2321,6 +3454,38 @@
             "schema": {
               "title": "Record Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -2391,6 +3556,38 @@
               "title": "Record Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "story_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -2418,6 +3615,339 @@
           }
         },
         "summary": "Knowledge Revisions"
+      }
+    },
+    "/api/v1/projects/{project_id}/reference-libraries": {
+      "get": {
+        "operationId": "list_libraries_api_v1_projects__project_id__reference_libraries_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Libraries Api V1 Projects  Project Id  Reference Libraries Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Libraries"
+      },
+      "post": {
+        "operationId": "create_library_api_v1_projects__project_id__reference_libraries_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferenceLibraryCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Library Api V1 Projects  Project Id  Reference Libraries Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Library"
+      }
+    },
+    "/api/v1/projects/{project_id}/reference-libraries/{library_id}/archive": {
+      "post": {
+        "operationId": "archive_library_api_v1_projects__project_id__reference_libraries__library_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "library_id",
+            "required": true,
+            "schema": {
+              "title": "Library Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Archive Library Api V1 Projects  Project Id  Reference Libraries  Library Id  Archive Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Library"
+      }
+    },
+    "/api/v1/projects/{project_id}/reference-libraries/{library_id}/releases": {
+      "get": {
+        "operationId": "list_releases_api_v1_projects__project_id__reference_libraries__library_id__releases_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "library_id",
+            "required": true,
+            "schema": {
+              "title": "Library Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Releases Api V1 Projects  Project Id  Reference Libraries  Library Id  Releases Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Releases"
+      },
+      "post": {
+        "operationId": "create_release_api_v1_projects__project_id__reference_libraries__library_id__releases_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "library_id",
+            "required": true,
+            "schema": {
+              "title": "Library Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReferenceLibraryReleaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Release Api V1 Projects  Project Id  Reference Libraries  Library Id  Releases Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Release"
+      }
+    },
+    "/api/v1/projects/{project_id}/reference-libraries/{library_id}/releases/{release_id}/sources": {
+      "get": {
+        "operationId": "release_sources_api_v1_projects__project_id__reference_libraries__library_id__releases__release_id__sources_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "library_id",
+            "required": true,
+            "schema": {
+              "title": "Library Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "release_id",
+            "required": true,
+            "schema": {
+              "title": "Release Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Release Sources Api V1 Projects  Project Id  Reference Libraries  Library Id  Releases  Release Id  Sources Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Sources"
       }
     },
     "/api/v1/projects/{project_id}/research": {
@@ -3108,6 +4638,22 @@
               "title": "Arc No",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -3165,6 +4711,22 @@
               "title": "Arc No",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -3221,6 +4783,22 @@
             "schema": {
               "title": "Arc No",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -3291,6 +4869,22 @@
               "title": "Arc No",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -3347,6 +4941,22 @@
             "schema": {
               "title": "Arc No",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -3417,6 +5027,22 @@
               "title": "Arc No",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "requestBody": {
@@ -3456,6 +5082,388 @@
         "summary": "Validate Arc Chapter Plan"
       }
     },
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches": {
+      "get": {
+        "operationId": "list_story_branches_endpoint_api_v1_projects__project_id__stories__story_id__branches_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Story Branches Endpoint Api V1 Projects  Project Id  Stories  Story Id  Branches Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Story Branches Endpoint"
+      },
+      "post": {
+        "operationId": "create_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBranchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Story Branch Endpoint Api V1 Projects  Project Id  Stories  Story Id  Branches Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Story Branch Endpoint"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches/{branch_id}": {
+      "get": {
+        "operationId": "story_branch_detail_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Story Branch Detail Endpoint Api V1 Projects  Project Id  Stories  Story Id  Branches  Branch Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Story Branch Detail Endpoint"
+      },
+      "patch": {
+        "operationId": "update_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBranchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Story Branch Endpoint Api V1 Projects  Project Id  Stories  Story Id  Branches  Branch Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Story Branch Endpoint"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches/{branch_id}/checkpoints": {
+      "post": {
+        "operationId": "create_story_checkpoint_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__checkpoints_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BranchCheckpointRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Story Checkpoint Endpoint Api V1 Projects  Project Id  Stories  Story Id  Branches  Branch Id  Checkpoints Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Story Checkpoint Endpoint"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches/{branch_id}/fork": {
+      "post": {
+        "operationId": "fork_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__fork_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "branch_id",
+            "required": true,
+            "schema": {
+              "title": "Branch Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBranchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Fork Story Branch Endpoint Api V1 Projects  Project Id  Stories  Story Id  Branches  Branch Id  Fork Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fork Story Branch Endpoint"
+      }
+    },
     "/api/v1/projects/{project_id}/stories/{story_id}/chapters/{chapter_no}": {
       "get": {
         "operationId": "chapter_detail_api_v1_projects__project_id__stories__story_id__chapters__chapter_no__get",
@@ -3485,6 +5493,22 @@
             "schema": {
               "title": "Chapter No",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -3542,6 +5566,22 @@
             "schema": {
               "title": "Chapter No",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -3611,6 +5651,22 @@
             "schema": {
               "title": "Chapter No",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -3697,6 +5753,22 @@
               "default": 24000,
               "title": "Budget",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -3833,6 +5905,22 @@
               ],
               "title": "Asset No"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -3907,6 +5995,22 @@
                 }
               ],
               "title": "Asset No"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -3992,6 +6096,22 @@
                 }
               ],
               "title": "Asset No"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -4196,6 +6316,177 @@
         "summary": "Preview Ocr"
       }
     },
+    "/api/v1/projects/{project_id}/stories/{story_id}/ingestion/text": {
+      "post": {
+        "description": "Add one text source to the project资料库 and queue extraction.\n\nThe route keeps a story in its URL for frontend navigation, but project\nownership is fixed by contract and the story is never written to the\nattachment/batch/task domain.",
+        "operationId": "create_text_ingestion_api_v1_projects__project_id__stories__story_id__ingestion_text_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestionTextRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Text Ingestion Api V1 Projects  Project Id  Stories  Story Id  Ingestion Text Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Text Ingestion"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/legacy-reference-migration": {
+      "post": {
+        "operationId": "migrate_legacy_reference_api_v1_projects__project_id__stories__story_id__legacy_reference_migration_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegacyStoryLibraryMigrationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Migrate Legacy Reference Api V1 Projects  Project Id  Stories  Story Id  Legacy Reference Migration Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Migrate Legacy Reference"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/legacy-reference-status": {
+      "get": {
+        "operationId": "legacy_reference_status_api_v1_projects__project_id__stories__story_id__legacy_reference_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Legacy Reference Status Api V1 Projects  Project Id  Stories  Story Id  Legacy Reference Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Legacy Reference Status"
+      }
+    },
     "/api/v1/projects/{project_id}/stories/{story_id}/mode": {
       "patch": {
         "operationId": "set_story_mode_api_v1_projects__project_id__stories__story_id__mode_patch",
@@ -4277,6 +6568,22 @@
               "title": "Story Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -4324,6 +6631,22 @@
             "schema": {
               "title": "Story Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -4385,6 +6708,22 @@
               "title": "Story Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -4433,6 +6772,22 @@
               "title": "Story Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "requestBody": {
@@ -4470,6 +6825,292 @@
           }
         },
         "summary": "Update Story Profile"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-context": {
+      "get": {
+        "operationId": "story_reference_context_api_v1_projects__project_id__stories__story_id__reference_context_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Story Reference Context Api V1 Projects  Project Id  Stories  Story Id  Reference Context Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Story Reference Context"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-libraries": {
+      "get": {
+        "operationId": "list_story_bindings_api_v1_projects__project_id__stories__story_id__reference_libraries_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Story Bindings Api V1 Projects  Project Id  Stories  Story Id  Reference Libraries Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Story Bindings"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-libraries/bindings/{binding_id}": {
+      "delete": {
+        "operationId": "unbind_story_library_api_v1_projects__project_id__stories__story_id__reference_libraries_bindings__binding_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "binding_id",
+            "required": true,
+            "schema": {
+              "title": "Binding Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Unbind Story Library Api V1 Projects  Project Id  Stories  Story Id  Reference Libraries Bindings  Binding Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unbind Story Library"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-libraries/{library_id}/bindings": {
+      "post": {
+        "operationId": "bind_story_library_api_v1_projects__project_id__stories__story_id__reference_libraries__library_id__bindings_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "library_id",
+            "required": true,
+            "schema": {
+              "title": "Library Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoryLibraryBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Bind Story Library Api V1 Projects  Project Id  Stories  Story Id  Reference Libraries  Library Id  Bindings Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bind Story Library"
       }
     },
     "/api/v1/projects/{project_id}/stories/{story_id}/restore": {
@@ -4543,6 +7184,22 @@
               "title": "Story Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -4590,6 +7247,22 @@
             "schema": {
               "title": "Story Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -4650,6 +7323,22 @@
             "schema": {
               "title": "Story Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -4825,6 +7514,22 @@
               "title": "Session Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -4950,6 +7655,22 @@
             "schema": {
               "title": "Session Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -5087,6 +7808,22 @@
             "schema": {
               "title": "Action Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -5234,6 +7971,22 @@
               "title": "Action Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -5292,6 +8045,22 @@
             "schema": {
               "title": "Session Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -5665,6 +8434,157 @@
         "summary": "Select Fragment"
       }
     },
+    "/api/v1/projects/{project_id}/stories/{story_id}/sessions/{session_id}/fragments/{fragment_id}/extract/stream": {
+      "post": {
+        "description": "显式提炼已采用片段：无风险候选自动确认进正式知识，有风险留待审核。",
+        "operationId": "extract_fragment_stream_api_v1_projects__project_id__stories__story_id__sessions__session_id__fragments__fragment_id__extract_stream_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "fragment_id",
+            "required": true,
+            "schema": {
+              "title": "Fragment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BranchContextRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Extract Fragment Stream"
+      }
+    },
+    "/api/v1/projects/{project_id}/stories/{story_id}/sessions/{session_id}/frontier": {
+      "post": {
+        "operationId": "select_frontier_api_v1_projects__project_id__stories__story_id__sessions__session_id__frontier_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "story_id",
+            "required": true,
+            "schema": {
+              "title": "Story Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FragmentActionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Select Frontier Api V1 Projects  Project Id  Stories  Story Id  Sessions  Session Id  Frontier Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Select Frontier"
+      }
+    },
     "/api/v1/projects/{project_id}/stories/{story_id}/sessions/{session_id}/turns/stream": {
       "post": {
         "operationId": "generate_turn_stream_api_v1_projects__project_id__stories__story_id__sessions__session_id__turns_stream_post",
@@ -5751,6 +8671,22 @@
               "title": "Story Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -5810,6 +8746,22 @@
               "title": "Volume No",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -5867,6 +8819,22 @@
               "title": "Volume No",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -5923,6 +8891,22 @@
             "schema": {
               "title": "Volume No",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -6004,6 +8988,22 @@
               "title": "Page Size",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -6062,6 +9062,22 @@
             "schema": {
               "title": "Chapter No",
               "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -6122,6 +9138,22 @@
               "title": "Fragment Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -6171,6 +9203,22 @@
             "schema": {
               "title": "Story Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -6562,6 +9610,46 @@
         "summary": "Activate Model Profile"
       }
     },
+    "/api/v1/settings/models/discover": {
+      "post": {
+        "operationId": "discover_models_api_v1_settings_models_discover_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverModelsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Discover Models Api V1 Settings Models Discover Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discover Models"
+      }
+    },
     "/api/v1/settings/prompt-options": {
       "get": {
         "operationId": "prompt_options_api_v1_settings_prompt_options_get",
@@ -6606,6 +9694,22 @@
                 }
               ],
               "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -6679,6 +9783,22 @@
                 }
               ],
               "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],
@@ -6755,6 +9875,22 @@
               ],
               "title": "Story Id"
             }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
+            }
           }
         ],
         "responses": {
@@ -6827,6 +9963,22 @@
                 }
               ],
               "title": "Story Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "branch_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Branch Id"
             }
           }
         ],

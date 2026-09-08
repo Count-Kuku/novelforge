@@ -50,6 +50,7 @@ def save_context_directive(
     directive: dict,
     *,
     story_id: str | None = None,
+    branch_id: str | None = None,
 ) -> dict:
     raw = dict(directive or {})
     directive_id = _validate_context_asset_key(
@@ -67,6 +68,30 @@ def save_context_directive(
         raise ValueError("导演注内容不能为空。")
     if not normalized["name"]:
         normalized["name"] = str(normalized["content"]).splitlines()[0][:48] or "未命名导演注"
+
+    if branch_id:
+        if str(normalized.get("scope") or "story") == "project":
+            raise ValueError("分支不能修改项目级导演注。")
+        target_story_id = _memory_api.normalize_story_id(str(story_id or normalized.get("story_id") or "default"))
+        # The default branch is the existing story scope. Persisting its
+        # one-shot consumption in a branch overlay would make the ordinary
+        # story asset stale and leave the directive apparently unconsumed.
+        if str(branch_id) == _memory_api.default_branch_id(target_story_id):
+            branch_id = None
+        if branch_id:
+            normalized["story_id"] = target_story_id
+            configuration = _memory_api.load_effective_story_branch_configuration(
+                project_name, target_story_id, branch_id
+            )
+            directives = [
+                dict(item) for item in (configuration.get("context_directives") or [])
+                if isinstance(item, dict) and str(item.get("directive_id") or "") != directive_id
+            ]
+            directives.append(normalized)
+            _memory_api.save_story_branch_configuration(
+                project_name, target_story_id, branch_id, {"context_directives": directives}
+            )
+            return normalized
 
     record_story_id = _context_directive_record_story_id(normalized["scope"], story_id or normalized.get("story_id"))
     normalized["story_id"] = record_story_id
@@ -154,11 +179,19 @@ def load_effective_context_directives(
     *,
     capability: str = "",
     chapter_no: int | None = None,
+    branch_id: str | None = None,
 ) -> list[dict]:
     now = datetime.now(timezone.utc)
     normalized_capability = str(capability or "").strip()
     effective: list[dict] = []
-    for directive in load_context_directives(project_name, story_id):
+    if branch_id and str(branch_id) == _memory_api.default_branch_id(story_id):
+        branch_id = None
+    if branch_id:
+        configuration = _memory_api.load_effective_story_branch_configuration(project_name, story_id, branch_id)
+        source_directives = configuration.get("context_directives") or []
+    else:
+        source_directives = load_context_directives(project_name, story_id)
+    for directive in source_directives:
         if not directive.get("enabled", True):
             continue
         remaining_uses = directive.get("remaining_uses")
@@ -188,13 +221,27 @@ def delete_context_directive(
     directive_id: str,
     *,
     story_id: str = "default",
+    branch_id: str | None = None,
 ) -> bool:
     target_id = str(directive_id or "").strip()
     if not target_id:
         return False
-    for directive in load_context_directives(project_name, story_id):
+    if branch_id and str(branch_id) == _memory_api.default_branch_id(story_id):
+        branch_id = None
+    if branch_id:
+        configuration = _memory_api.load_effective_story_branch_configuration(project_name, story_id, branch_id)
+        directives = [dict(item) for item in (configuration.get("context_directives") or []) if isinstance(item, dict)]
+    else:
+        directives = load_context_directives(project_name, story_id)
+    for directive in directives:
         if str(directive.get("directive_id") or "") != target_id:
             continue
+        if branch_id:
+            remaining = [item for item in directives if str(item.get("directive_id") or "") != target_id]
+            _memory_api.save_story_branch_configuration(
+                project_name, story_id, branch_id, {"context_directives": remaining}
+            )
+            return True
         record_story_id = directive.get("story_id")
         _mark_asset_deleted_best_effort(
             project_name,
@@ -210,12 +257,20 @@ def consume_context_directives(
     project_name: str,
     story_id: str,
     directive_ids: list[str],
+    branch_id: str | None = None,
 ) -> list[dict]:
     target_ids = {str(value or "").strip() for value in directive_ids if str(value or "").strip()}
     if not target_ids:
         return []
     consumed: list[dict] = []
-    for directive in load_context_directives(project_name, story_id):
+    if branch_id and str(branch_id) == _memory_api.default_branch_id(story_id):
+        branch_id = None
+    if branch_id:
+        configuration = _memory_api.load_effective_story_branch_configuration(project_name, story_id, branch_id)
+        source_directives = [dict(item) for item in (configuration.get("context_directives") or []) if isinstance(item, dict)]
+    else:
+        source_directives = load_context_directives(project_name, story_id)
+    for directive in source_directives:
         if str(directive.get("directive_id") or "") not in target_ids:
             continue
         remaining_uses = directive.get("remaining_uses")
@@ -229,6 +284,7 @@ def consume_context_directives(
             project_name,
             updated,
             story_id=directive.get("story_id"),
+            branch_id=branch_id,
         ))
     return consumed
 

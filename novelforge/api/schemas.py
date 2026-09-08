@@ -35,6 +35,40 @@ class CreateStoryRequest(ApiModel):
     creation_mode: CreationMode = "planned"
 
 
+class ReferenceLibraryCreateRequest(ApiModel):
+    title: str = Field(min_length=1, max_length=300)
+    source_kind: str = Field(default="reference", max_length=80)
+    source_id: str | None = Field(default=None, max_length=160)
+
+
+class ReferenceLibraryReleaseRequest(ApiModel):
+    knowledge_ids: list[str] = Field(default_factory=list, max_length=5000)
+    release_id: str | None = Field(default=None, max_length=160)
+    content_hash: str | None = Field(default=None, max_length=160)
+    manifest: dict[str, Any] = Field(default_factory=dict)
+
+
+class StoryLibraryBindingRequest(ApiModel):
+    release_id: str = Field(min_length=1, max_length=160)
+    branch_id: str | None = Field(default=None, max_length=160)
+    idempotency_key: str = Field(default="", max_length=200)
+
+
+class LegacyStoryLibraryMigrationRequest(ApiModel):
+    class Selection(ApiModel):
+        library_id: str = Field(min_length=1, max_length=160)
+        release_id: str = Field(min_length=1, max_length=160)
+        branch_id: str | None = Field(default=None, max_length=160)
+
+    selections: list[Selection] = Field(default_factory=list, max_length=100)
+    # Backward-compatible single selection; the service normalizes it into the
+    # same atomic multi-library transaction.
+    library_id: str | None = Field(default=None, max_length=160)
+    release_id: str | None = Field(default=None, max_length=160)
+    branch_id: str | None = Field(default=None, max_length=160)
+    confirmed: bool = False
+
+
 class SetStoryModeRequest(ApiModel):
     creation_mode: CreationMode
 
@@ -80,6 +114,11 @@ class DiscussionApprovalRequest(ApiModel):
 
 class FragmentActionRequest(ApiModel):
     fragment_id: str = Field(min_length=1, max_length=160)
+    branch_id: str | None = Field(default=None, max_length=200)
+
+
+class BranchContextRequest(ApiModel):
+    branch_id: str | None = Field(default=None, max_length=200)
 
 
 class RenameStoryRequest(ApiModel):
@@ -94,34 +133,88 @@ class CopyStoryRequest(ApiModel):
     include_chapters: bool = True
 
 
+class CreateBranchRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4000)
+    parent_branch_id: str | None = Field(default=None, max_length=200)
+    fork_fragment_id: str | None = Field(default=None, max_length=200)
+    fork_checkpoint_id: str | None = Field(default=None, max_length=200)
+    allow_current_state: bool = False
+
+
+class UpdateBranchRequest(ApiModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=4000)
+    status: Literal["active", "archived"] | None = None
+
+
+class BranchCheckpointRequest(ApiModel):
+    frontier_fragment_id: str | None = Field(default=None, max_length=200)
+    extraction_status: Literal["ready", "completed", "skipped", "pending"] = "ready"
+    reason: str = Field(default="", max_length=500)
+    allow_current_state: bool = False
+
+
 class CreateSessionRequest(ApiModel):
     session_goal: str = Field(default="", max_length=4000)
     title: str = Field(default="", max_length=200)
     auto_extract_mode: Literal["manual", "on_accept"] | None = None
+    branch_id: str | None = Field(default=None, max_length=200)
 
 
 class CreateAttachmentRequest(ApiModel):
     text: str = Field(min_length=1, max_length=500_000)
     title: str = Field(default="粘贴资料", max_length=200)
-    scope: Literal["turn", "session", "story", "project"] = "session"
+    # 会话资料默认跟随当前故事；需要跨故事共享时由调用方明确选择 project。
+    scope: Literal["story", "project"] = "story"
+    branch_id: str | None = Field(default=None, max_length=200)
 
 
 class CreateUrlAttachmentRequest(ApiModel):
     url: str = Field(min_length=8, max_length=2000)
-    scope: Literal["turn", "session", "story", "project"] = "session"
+    scope: Literal["story", "project"] = "story"
+    branch_id: str | None = Field(default=None, max_length=200)
+
+
+class IngestionTextRequest(ApiModel):
+    """资料库文本导入。
+
+    资料库条目恒为项目作用域，保留 ``scope`` 仅用于兼容旧客户端的请求
+    形状，服务端会拒绝任何非 project 值，避免调用方把资料库内容误落到故事。
+    """
+
+    text: str = Field(min_length=1, max_length=2_000_000)
+    title: str = Field(default="粘贴资料", max_length=200)
+    scope: Literal["project"] = "project"
 
 
 class PlanActionRequest(ApiModel):
     request: str = Field(min_length=1, max_length=20_000)
     idempotency_key: str = Field(default="", max_length=200)
+    branch_id: str | None = Field(default=None, max_length=200)
 
 
 class ExecuteActionRequest(ApiModel):
     confirmed: bool = False
+    branch_id: str | None = Field(default=None, max_length=200)
 
 
 class PendingKnowledgeRequest(ApiModel):
     pending_ids: list[str] = Field(default_factory=list, max_length=500)
+
+
+class ResolvePendingEntityRequest(ApiModel):
+    target_entity_id: str = Field(min_length=1, max_length=200)
+
+
+class KnowledgePromotionRequest(ApiModel):
+    knowledge_ids: list[str] = Field(default_factory=list, max_length=500)
+    attachment_id: str | None = Field(default=None, max_length=160)
+
+
+class RetryAttachmentRequest(ApiModel):
+    # awaiting_confirmation 任务只有用户明确确认预算后才会继续。
+    confirm_over_budget: bool = False
 
 
 class KnowledgeUpdateRequest(ApiModel):
@@ -208,6 +301,7 @@ class TaskControlRequest(ApiModel):
 class UpdateSessionRequest(ApiModel):
     title: str | None = Field(default=None, max_length=200)
     status: Literal["active", "archived"] | None = None
+    branch_id: str | None = Field(default=None, max_length=200)
 
 
 class GenerateTurnRequest(ApiModel):
@@ -216,6 +310,7 @@ class GenerateTurnRequest(ApiModel):
     word_count: str = Field(default="800-1200", max_length=40)
     branch_from_fragment_id: str | None = Field(default=None, max_length=120)
     enable_web_search: bool = Field(default=False)
+    branch_id: str | None = Field(default=None, max_length=200)
 
 
 class ApiError(BaseModel):

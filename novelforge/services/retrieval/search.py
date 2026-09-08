@@ -165,6 +165,40 @@ def _story_scope_allowed(
     return True
 
 
+def _branch_scope_allowed(
+    chunk: _retrieval_api.RetrievalChunk,
+    branch_id: str | None,
+    *,
+    visible_knowledge_ids: set[str] | None = None,
+) -> bool:
+    """Apply mandatory branch filtering after story/session filtering.
+
+    ``worldline_id`` remains a source-world label. A strict branch request
+    rejects story scoped chunks without an explicit branch owner and rejects
+    branch-owned chunks from another line. Project/canon source material is
+    allowed only when it is explicitly represented in the frozen visible set
+    when a set was supplied.
+    """
+    target = str(branch_id or "").strip()
+    if not target:
+        return True
+    metadata = chunk.metadata if isinstance(chunk.metadata, dict) else {}
+    chunk_branch = str(metadata.get("branch_id") or "").strip()
+    if chunk_branch and chunk_branch != target:
+        return False
+    knowledge_id = str(metadata.get("knowledge_id") or "").strip()
+    if visible_knowledge_ids is not None:
+        # The checkpoint manifest is authoritative for every knowledge-backed
+        # record, including project/canon records. Missing IDs and unowned
+        # legacy memory/summary chunks must not become an implicit shared set.
+        if not knowledge_id or knowledge_id not in visible_knowledge_ids:
+            return False
+    story_id = str(metadata.get("story_id") or "").strip()
+    if story_id and not chunk_branch and str(metadata.get("setting_scope") or "").strip().lower() == "story":
+        return False
+    return True
+
+
 def _expand_query_terms(query: str) -> list[str]:
     return _dedupe_terms(_retrieval_api._tokenize(query))
 
@@ -523,17 +557,6 @@ def resolve_retrieval_params(
             else:
                 params["allowed_source_types"] = focus_types
 
-    # A source explicitly attached from free writing remains eligible even
-    # when the creative profile narrows ordinary knowledge to one focus area.
-    if (
-        "creative_attachment" in profile_source_types
-        and normalized_strategy == "union"
-    ):
-        current_types = list(params.get("allowed_source_types") or [])
-        if "creative_attachment" not in current_types:
-            current_types.append("creative_attachment")
-        params["allowed_source_types"] = current_types
-
     return params
 
 
@@ -555,6 +578,8 @@ def _run_retrieval(
     explicit_knowledge_ids: list[str] | None = None,
     session_id: str = "",
     turn_id: str = "",
+    branch_id: str | None = None,
+    visible_knowledge_ids: set[str] | None = None,
 ) -> dict:
     resolved = resolve_retrieval_params(
         reference_focus,
@@ -600,6 +625,8 @@ def _run_retrieval(
             session_id=session_id,
             turn_id=turn_id,
         ):
+            continue
+        if not _branch_scope_allowed(chunk, branch_id, visible_knowledge_ids=visible_knowledge_ids):
             continue
         if not _worldline_allowed(chunk, normalized_worldline, normalized_worldline_mode):
             continue
@@ -728,6 +755,7 @@ def _run_retrieval(
         "story_id": str(story_id or "default"),
         "worldline_id": normalized_worldline,
         "worldline_mode": normalized_worldline_mode,
+        "branch_id": str(branch_id or ""),
         "initial_hits": initial_hits,
         "reranked_hits": diversified_hits,
     }
@@ -751,6 +779,8 @@ def retrieve_context(
     explicit_knowledge_ids: list[str] | None = None,
     session_id: str = "",
     turn_id: str = "",
+    branch_id: str | None = None,
+    visible_knowledge_ids: set[str] | None = None,
 ) -> list[_retrieval_api.RetrievalHit]:
     result = _run_retrieval(
         project_name,
@@ -769,6 +799,8 @@ def retrieve_context(
         explicit_knowledge_ids=explicit_knowledge_ids,
         session_id=session_id,
         turn_id=turn_id,
+        branch_id=branch_id,
+        visible_knowledge_ids=visible_knowledge_ids,
     )
     return result["reranked_hits"]
 
@@ -791,6 +823,8 @@ def debug_retrieve_context(
     explicit_knowledge_ids: list[str] | None = None,
     session_id: str = "",
     turn_id: str = "",
+    branch_id: str | None = None,
+    visible_knowledge_ids: set[str] | None = None,
 ) -> dict:
     result = _run_retrieval(
         project_name,
@@ -809,6 +843,8 @@ def debug_retrieve_context(
         explicit_knowledge_ids=explicit_knowledge_ids,
         session_id=session_id,
         turn_id=turn_id,
+        branch_id=branch_id,
+        visible_knowledge_ids=visible_knowledge_ids,
     )
     return {
         **{key: value for key, value in result.items() if key not in {"initial_hits", "reranked_hits"}},

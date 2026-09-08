@@ -8,6 +8,11 @@ from novelforge.domain.creation_modes import (
     DEFAULT_CREATION_MODE,
     normalize_creation_mode,
 )
+from storage.repositories.branches import (
+    default_branch_id,
+    ensure_default_branch,
+    load_branch_for_story,
+)
 
 def _story_id_slug(name: str) -> str:
     text = str(name or "").strip()
@@ -83,6 +88,7 @@ def create_creative_session(project_name: str, payload: dict) -> dict:
     raw = dict(payload or {})
     raw["session_id"] = str(raw.get("session_id") or f"session_{_memory_api.uuid4().hex}")
     raw["story_id"] = normalize_story_id(str(raw.get("story_id") or "default"))
+    raw["branch_id"] = str(raw.get("branch_id") or default_branch_id(raw["story_id"]))
     now = _memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds")
     raw["created_at"] = str(raw.get("created_at") or now)
     raw["updated_at"] = now
@@ -98,6 +104,8 @@ def create_creative_session(project_name: str, payload: dict) -> dict:
         if story_exists is None:
             conn.rollback()
             raise ValueError("当前故事不存在。")
+        ensure_default_branch(conn, normalized["story_id"])
+        load_branch_for_story(conn, normalized["story_id"], normalized["branch_id"])
         saved = _memory_api.create_creative_session_row(conn, normalized)
         conn.commit()
     return _memory_api.CreativeSession.model_validate(saved).model_dump()
@@ -108,6 +116,7 @@ def list_creative_sessions(
     story_id: str = "default",
     *,
     include_archived: bool = False,
+    branch_id: str | None = None,
 ) -> list[dict]:
     clean_story_id = normalize_story_id(story_id)
     if _memory_api._project_db_marked_unavailable(project_name):
@@ -118,6 +127,8 @@ def list_creative_sessions(
             clean_story_id,
             include_archived=include_archived,
         )
+        if branch_id:
+            rows = [row for row in rows if str(row.get("branch_id") or "") == str(branch_id)]
     return [_memory_api.CreativeSession.model_validate(row).model_dump() for row in rows]
 
 
@@ -129,7 +140,7 @@ def list_creative_works(project_name: str, story_id: str = "default") -> list[di
         return _memory_api.list_creative_work_rows(conn, clean_story_id)
 
 
-def remove_creative_work(project_name: str, fragment_id: str, *, story_id: str) -> bool:
+def remove_creative_work(project_name: str, fragment_id: str, *, story_id: str, branch_id: str | None = None) -> bool:
     """Hide an accepted fragment from Works without erasing its source conversation."""
     clean_fragment_id = str(fragment_id or "").strip()
     if not clean_fragment_id:
@@ -143,6 +154,9 @@ def remove_creative_work(project_name: str, fragment_id: str, *, story_id: str) 
             conn.rollback()
             return False
         _creative_session_owner(conn, str(fragment["session_id"]), story_id)
+        if branch_id and str(fragment.get("branch_id") or _memory_api.default_branch_id(story_id)) != str(branch_id):
+            conn.rollback()
+            raise ValueError("创作片段不属于当前世界线。")
         if str(fragment.get("status") or "") not in {"accepted", "finalized"}:
             conn.rollback()
             return False
@@ -275,6 +289,9 @@ def begin_creative_turn(
     with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         session = _creative_session_owner(conn, session_id, story_id)
+        if not str(session.get("branch_id") or ""):
+            ensure_default_branch(conn, story_id)
+            session["branch_id"] = default_branch_id(story_id)
         if session.get("status") == "archived":
             conn.rollback()
             raise ValueError("已归档的创作会话不能继续生成。")
@@ -310,11 +327,23 @@ def complete_creative_turn(
     normalized = _memory_api.CreativeFragment.model_validate(raw).model_dump()
     if _memory_api._project_db_marked_unavailable(project_name):
         raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    configuration_snapshot = None
+    if accept_fragment_id:
+        from novelforge.services.memory.branches import _load_configuration_snapshot
+
+        branch_for_config = None
+        with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as read_conn:
+            row = read_conn.execute(
+                "SELECT branch_id FROM creative_turns WHERE turn_id = ?",
+                (str(turn_id or "").strip(),),
+            ).fetchone()
+            branch_for_config = str(row[0] or "") if row else None
+        configuration_snapshot = _load_configuration_snapshot(project_name, story_id, branch_for_config)
     with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         turn = conn.execute(
             """
-            SELECT session_id, parent_fragment_id
+            SELECT session_id, branch_id, parent_fragment_id
             FROM creative_turns
             WHERE turn_id = ?
             """,
@@ -324,6 +353,9 @@ def complete_creative_turn(
             conn.rollback()
             raise ValueError("创作轮次不存在。")
         session = _creative_session_owner(conn, str(turn["session_id"]), story_id)
+        if str(turn["branch_id"] or "") != str(session.get("branch_id") or ""):
+            conn.rollback()
+            raise ValueError("创作轮次分支归属不一致，拒绝写入。")
         if str(normalized.get("session_id") or "") != str(session["session_id"]):
             conn.rollback()
             raise ValueError("生成片段不属于当前创作会话。")
@@ -356,8 +388,22 @@ def complete_creative_turn(
             accept_fragment_id=accept_fragment_id,
             supersede_fragment_id=supersede_fragment_id,
         )
+        if accept_fragment_id:
+            from storage.repositories.branches import create_checkpoint_row
+
+            branch_id = str(session.get("branch_id") or default_branch_id(story_id))
+            load_branch_for_story(conn, story_id, branch_id)
+            create_checkpoint_row(
+                conn,
+                branch_id=branch_id,
+                frontier_fragment_id=accept_fragment_id,
+                extraction_status="pending",
+                reason="生成提交时捕获接受片段提炼基线",
+                configuration_snapshot=configuration_snapshot or {},
+            )
         conn.commit()
-    return _memory_api.CreativeFragment.model_validate(saved).model_dump()
+    result = _memory_api.CreativeFragment.model_validate(saved).model_dump()
+    return result
 
 
 def fail_creative_turn(
@@ -372,13 +418,16 @@ def fail_creative_turn(
     with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         turn = conn.execute(
-            "SELECT session_id FROM creative_turns WHERE turn_id = ?",
+            "SELECT session_id, branch_id FROM creative_turns WHERE turn_id = ?",
             (str(turn_id or "").strip(),),
         ).fetchone()
         if turn is None:
             conn.rollback()
             raise ValueError("创作轮次不存在。")
-        _creative_session_owner(conn, str(turn["session_id"]), story_id)
+        session = _creative_session_owner(conn, str(turn["session_id"]), story_id)
+        if str(turn["branch_id"] or "") != str(session.get("branch_id") or ""):
+            conn.rollback()
+            raise ValueError("创作轮次分支归属不一致，拒绝写入。")
         saved = _memory_api.fail_creative_turn_row(conn, turn_id, error_text)
         conn.commit()
     return _memory_api.CreativeTurn.model_validate(saved).model_dump()
@@ -444,6 +493,19 @@ def accept_creative_fragment(
     now = _memory_api.datetime.now(_memory_api.timezone.utc).isoformat(timespec="seconds")
     if _memory_api._project_db_marked_unavailable(project_name):
         raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    # 配置快照在事务外准备，正文接受与 pending checkpoint 则在同一个
+    # BEGIN IMMEDIATE 中完成，避免 F2 在两次提交之间抢先进入 F1 基线。
+    from novelforge.services.memory.branches import _load_configuration_snapshot
+    from storage.repositories.branches import create_checkpoint_row
+
+    branch_for_config = None
+    with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as read_conn:
+        row = read_conn.execute(
+            "SELECT branch_id FROM creative_sessions WHERE session_id = ?",
+            (str(session_id or "").strip(),),
+        ).fetchone()
+        branch_for_config = str(row[0] or "") if row else None
+    configuration_snapshot = _load_configuration_snapshot(project_name, story_id, branch_for_config)
     with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
         conn.execute("BEGIN IMMEDIATE")
         session = _creative_session_owner(conn, session_id, story_id)
@@ -487,8 +549,19 @@ def accept_creative_fragment(
             session_id,
             {"active_fragment_id": fragment_id},
         )
+        branch_id = str(session.get("branch_id") or default_branch_id(story_id))
+        load_branch_for_story(conn, story_id, branch_id)
+        create_checkpoint_row(
+            conn,
+            branch_id=branch_id,
+            frontier_fragment_id=fragment_id,
+            extraction_status="pending",
+            reason="接受片段时捕获提炼基线",
+            configuration_snapshot=configuration_snapshot,
+        )
         conn.commit()
-    return _memory_api.CreativeFragment.model_validate(saved).model_dump()
+    result = _memory_api.CreativeFragment.model_validate(saved).model_dump()
+    return result
 
 
 def select_creative_fragment_variant(

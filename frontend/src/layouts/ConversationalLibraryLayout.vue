@@ -8,7 +8,7 @@ import { RouterLink, RouterView } from 'vue-router'
       <RouterLink :to="{ name: 'conversational-library' }" exact-active-class="active"><span>⌂</span><strong>知识与资料</strong><small>搜索、审核与任务</small></RouterLink>
       <RouterLink :to="{ name: 'conversational-knowledge-entities' }" active-class="active"><span>◎</span><strong>实体与时间线</strong><small>角色、地点和事件</small></RouterLink>
       <RouterLink :to="{ name: 'conversational-knowledge-graph' }" active-class="active"><span>◇</span><strong>关系图</strong><small>查看知识关系</small></RouterLink>
-      <RouterLink :to="{ name: 'conversational-research' }" active-class="active"><span>⌁</span><strong>导入与研究</strong><small>文件、网页和研究任务</small></RouterLink>
+      <RouterLink :to="{ name: 'conversational-research' }" active-class="active"><span>⌁</span><strong>导入资料</strong><small>粘贴资料、文件与处理状态</small></RouterLink>
     </nav>
     <RouterView />
   </div>

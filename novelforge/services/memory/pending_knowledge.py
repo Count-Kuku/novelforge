@@ -12,6 +12,55 @@ from storage.repositories.knowledge import (
     summarize_knowledge_storage_health,
 )
 
+
+def list_pending_knowledge_for_scope(
+    project_name: str,
+    *,
+    story_id: str | None = None,
+    branch_id: str | None = None,
+) -> list[dict]:
+    """List pending items for one story branch, or the project queue."""
+    items = _memory_api.load_pending_knowledge_items(project_name)
+    if story_id is None:
+        if branch_id:
+            raise ValueError("branch_id 必须与 story_id 一起提供。")
+        return items
+    clean_story_id = _memory_api.normalize_story_id(story_id)
+    effective_branch_id = str(branch_id or _memory_api.default_branch_id(clean_story_id))
+    _memory_api.load_story_branch(project_name, clean_story_id, effective_branch_id)
+    return [
+        item for item in items
+        if str(item.get("story_id") or "") == clean_story_id
+        and str(item.get("branch_id") or _memory_api.default_branch_id(clean_story_id)) == effective_branch_id
+    ]
+
+
+def assert_pending_scope(
+    project_name: str,
+    pending_ids: list[str],
+    *,
+    story_id: str | None = None,
+    branch_id: str | None = None,
+    writing: bool = False,
+) -> None:
+    if story_id is None:
+        if branch_id:
+            raise ValueError("branch_id 必须与 story_id 一起提供。")
+        return
+    clean_story_id = _memory_api.normalize_story_id(story_id)
+    effective_branch_id = str(branch_id or _memory_api.default_branch_id(clean_story_id))
+    branch = _memory_api.load_story_branch(project_name, clean_story_id, effective_branch_id)
+    if writing and str(branch.get("status") or "active") == "archived":
+        raise ValueError("已归档的世界线只读，不能处理待审核知识。")
+    items = {str(item.get("pending_id") or ""): item for item in _memory_api.load_pending_knowledge_items(project_name)}
+    for pending_id in pending_ids:
+        item = items.get(str(pending_id or ""))
+        if item is None:
+            raise ValueError("待审核知识不存在。")
+        owner_branch_id = str(item.get("branch_id") or _memory_api.default_branch_id(clean_story_id))
+        if str(item.get("story_id") or "") != clean_story_id or owner_branch_id != effective_branch_id:
+            raise ValueError("待审核知识不属于当前故事世界线。")
+
 def queue_pending_knowledge_items(
     project_name: str,
     items: list[dict],
@@ -20,6 +69,7 @@ def queue_pending_knowledge_items(
     authority: str,
     source_title: str = "",
     source_origin: str = "",
+    branch_id: str = "",
     replace_pending_ids: list[str] | None = None,
 ) -> int:
     queued_at = _memory_api.datetime.now(_memory_api.timezone.utc).isoformat()
@@ -40,6 +90,7 @@ def queue_pending_knowledge_items(
         normalized["authority"] = authority
         normalized["source_title"] = source_title or normalized.get("source_title", "")
         normalized["source_origin"] = source_origin
+        normalized["branch_id"] = str(branch_id or normalized.get("branch_id") or "")
         normalized["version_scope"] = normalized.get("version_scope") or ("canon" if scope == "canon" else "project_main")
         if not str(normalized.get("worldline_id") or "").strip():
             # 遗留 #2 收口：缺世界线时兜底 main 并显式告警（避免无感知落入错误世界线）。
@@ -110,6 +161,8 @@ def _append_knowledge_items_in_transaction(
     for item in items:
         if not isinstance(item, dict):
             continue
+        if status == "confirmed" and item.get("entity_resolution_status") == "pending_confirmation":
+            raise ValueError("该资料存在同名来源歧义，请先选择来源实体，再确认入库。")
         category = str(item.get("category") or "").strip()
         if category not in _memory_api.KNOWLEDGE_CATEGORIES:
             continue
@@ -166,7 +219,10 @@ def _append_knowledge_items_in_transaction(
                 })
             if source_pending_id:
                 normalized["source_pending_id"] = source_pending_id
-            existing.append(normalized)
+            # Confirm only the selected rows. Rewriting the whole category
+            # also touches unrelated archived branches and may mutate their
+            # entity/fact history as a side effect of this confirmation.
+            _memory_api.upsert_knowledge_category_item(conn, category, normalized)
             saved_records.append({
                 "pending_id": source_pending_id,
                 "category": category,
@@ -176,8 +232,7 @@ def _append_knowledge_items_in_transaction(
                 "source_origin": normalized.get("source_origin", ""),
             })
             saved_count += 1
-        _memory_api.sync_knowledge_category(conn, category, existing)
-        category_snapshots[category] = existing
+        category_snapshots[category] = _memory_api.load_knowledge_category_rows(conn, category)
     return saved_count, saved_records, category_snapshots
 
 

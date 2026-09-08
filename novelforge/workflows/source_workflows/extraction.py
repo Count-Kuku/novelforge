@@ -69,7 +69,8 @@ def extract_long_reference_segments_to_queue(
     stream_callback=None,
     task_id: str = "",
     worker_id: str = "",
-    story_id: str = "default",
+    story_id: str = "",
+    branch_id: str = "",
     recall_enabled: bool = False,
 ) -> tuple[dict, int, int, list[str]]:
     queued_total = 0
@@ -153,7 +154,9 @@ def extract_long_reference_segments_to_queue(
                 enriched["source_segment_title"] = str(segment.get("title") or "")
                 enriched["source_id"] = str(batch.get("source_id") or f"long_batch_{batch.get('batch_id', '')}")
                 enriched["source_revision_id"] = str(batch.get("source_revision_id") or "")
-                enriched["story_id"] = str(story_id or "default")
+                enriched["creative_attachment_id"] = str(batch.get("creative_attachment_id") or "")
+                enriched["story_id"] = str(story_id or "")
+                enriched["branch_id"] = str(branch_id or "")
                 enriched["source_start_offset"] = segment.get("start_offset")
                 enriched["source_end_offset"] = segment.get("end_offset")
                 enriched["version_scope"] = str(enriched.get("version_scope") or ("canon" if batch.get("scope") == "canon" else "project_main"))
@@ -173,8 +176,13 @@ def extract_long_reference_segments_to_queue(
                     enriched["evidence_contexts"] = evidence_contexts
                 enriched_items.append(enriched)
             comparison = compare_extracted_items(existing_related, enriched_items)
+            target_scope = str(batch.get("target_scope") or ("story" if str(story_id or "").strip() else "project"))
             pending_items = build_pending_knowledge_from_reference_extraction(
-                enriched_items, scope=batch.get("scope", "reference")
+                enriched_items,
+                scope=batch.get("scope", "reference"),
+                setting_scope=target_scope,
+                story_id=str(story_id or ""),
+                branch_id=str(branch_id or ""),
             )
             queued_count = queue_pending_knowledge_items(
                 project_name,
@@ -183,6 +191,7 @@ def extract_long_reference_segments_to_queue(
                 authority=batch.get("authority", "curated"),
                 source_title=payload.get("source_title", "") or segment.get("title", ""),
                 source_origin=batch.get("source_origin", ""),
+                branch_id=str(branch_id or ""),
             )
             segment["extract_status"] = "queued"
             segment["queued_knowledge_count"] = int(segment.get("queued_knowledge_count") or 0) + queued_count
@@ -454,7 +463,7 @@ def run_long_reference_extraction_plan(
             extraction_mode=str(preset.get("mode") or "general"),
             progress_callback=step_progress,
             stream_callback=stream_callback,
-            story_id=str(current_batch.get("story_id") or "default"),
+            story_id=str(current_batch.get("story_id") or ""),
         )
         completed_work += len(target_indices)
         step_summary = {

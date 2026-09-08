@@ -28,7 +28,7 @@ watch([chapterContent, chapterOutline, editorKind], () => {
 
 onMounted(async () => {
   if (workspace.activeProjectId && workspace.activeStory) {
-    try { chapters.value = (await api.workspace(workspace.activeProjectId, workspace.activeStory.story_id)).chapters as any[] } catch (reason) { chapters.value = []; console.warn('Chapter workspace unavailable', reason) }
+    try { chapters.value = (await api.workspace(workspace.activeProjectId, workspace.activeStory.story_id, workspace.activeBranchId || undefined)).chapters as any[] } catch (reason) { chapters.value = []; console.warn('Chapter workspace unavailable', reason) }
   }
   loading.value = false
 })
@@ -39,11 +39,11 @@ async function openChapter(chapterNo: number) {
   editorError.value = ''
   editorMessage.value = ''
   try {
-    const data = await api.chapter(workspace.activeProjectId, workspace.activeStory.story_id, chapterNo)
+    const data = await api.chapter(workspace.activeProjectId, workspace.activeStory.story_id, chapterNo, workspace.activeBranchId || undefined)
     chapterContent.value = data.content || ''
     chapterOutline.value = data.outline || ''
     chapterReview.value = data.review || ''
-    versions.value = (await api.chapterVersions(workspace.activeProjectId, workspace.activeStory.story_id, chapterNo)).versions || []
+    versions.value = (await api.chapterVersions(workspace.activeProjectId, workspace.activeStory.story_id, chapterNo, workspace.activeBranchId || undefined)).versions || []
   } catch (reason) { editorError.value = reason instanceof Error ? reason.message : '无法读取章节' }
 }
 
@@ -51,13 +51,13 @@ async function discussChapter() {
   if (!selectedNo.value || !workspace.activeProjectId || !workspace.activeStory || !discussionIdea.value.trim() || discussing.value) return
   discussing.value = true
   discussionText.value = ''
-  try { await api.streamDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'chapter', discussionIdea.value.trim(), (event, data) => { if (event === 'delta') discussionText.value += String(data?.text || ''); if (event === 'done') discussionStep.value = data?.result || null }, selectedNo.value) } catch (reason) { discussionText.value = reason instanceof Error ? reason.message : '章节讨论失败' } finally { discussing.value = false }
+  try { await api.streamDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'chapter', discussionIdea.value.trim(), (event, data) => { if (event === 'delta') discussionText.value += String(data?.text || ''); if (event === 'done') discussionStep.value = data?.result || null }, selectedNo.value, workspace.activeBranchId || undefined) } catch (reason) { discussionText.value = reason instanceof Error ? reason.message : '章节讨论失败' } finally { discussing.value = false }
 }
 
 async function approveChapterDiscussion() {
   if (!selectedNo.value || !workspace.activeProjectId || !workspace.activeStory || !discussionStep.value || approving.value) return
   approving.value = true
-  try { await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'chapter', discussionStep.value, selectedNo.value); discussionText.value = '已采用章节讨论结论。' } catch (reason) { discussionText.value = reason instanceof Error ? reason.message : '应用结论失败' } finally { approving.value = false }
+  try { await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'chapter', discussionStep.value, selectedNo.value, workspace.activeBranchId || undefined); discussionText.value = '已采用章节讨论结论。' } catch (reason) { discussionText.value = reason instanceof Error ? reason.message : '应用结论失败' } finally { approving.value = false }
 }
 
 function showVersion(version: any) {
@@ -71,7 +71,7 @@ async function saveChapter() {
   editorMessage.value = ''
   try {
     const content = editorKind.value === 'content' ? chapterContent.value : chapterOutline.value
-    await api.updateChapter(workspace.activeProjectId, workspace.activeStory.story_id, selectedNo.value, content, editorKind.value)
+    await api.updateChapter(workspace.activeProjectId, workspace.activeStory.story_id, selectedNo.value, content, editorKind.value, workspace.activeBranchId || undefined)
     editorMessage.value = editorKind.value === 'content' ? '正文已保存' : '章节细纲已保存'
   } catch (reason) { editorError.value = reason instanceof Error ? reason.message : '保存失败' } finally { saving.value = false }
 }

@@ -25,12 +25,17 @@ def _session_row(row: sqlite3.Row | dict | None) -> dict | None:
     if row is None:
         return None
     payload = dict(row)
+    payload["branch_id"] = str(payload.get("branch_id") or "")
     payload["writing_guidance"] = _json_object(payload.pop("writing_guidance_json", "{}"))
     return payload
 
 
 def _fragment_row(row: sqlite3.Row | dict | None) -> dict | None:
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    payload = dict(row)
+    payload["branch_id"] = str(payload.get("branch_id") or "")
+    return payload
 
 
 def create_creative_session_row(conn: sqlite3.Connection, session: dict) -> dict:
@@ -46,9 +51,9 @@ def create_creative_session_row(conn: sqlite3.Connection, session: dict) -> dict
             session_id, story_id, title, status, session_goal,
             writing_guidance_json, target_chapter_no, rolling_summary,
             summary_fragment_id, active_fragment_id, worldline_id,
-            auto_extract_mode, created_at, updated_at
+            branch_id, auto_extract_mode, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             session_id,
@@ -62,6 +67,7 @@ def create_creative_session_row(conn: sqlite3.Connection, session: dict) -> dict
             payload.get("summary_fragment_id"),
             payload.get("active_fragment_id"),
             str(payload.get("worldline_id") or "main"),
+            str(payload.get("branch_id") or ""),
             str(payload.get("auto_extract_mode") or "manual"),
             str(payload.get("created_at") or now),
             str(payload.get("updated_at") or now),
@@ -76,7 +82,7 @@ def load_creative_session_row(conn: sqlite3.Connection, session_id: str) -> dict
         SELECT session_id, story_id, title, status, session_goal,
                writing_guidance_json, target_chapter_no, rolling_summary,
                summary_fragment_id, active_fragment_id, worldline_id,
-               auto_extract_mode, created_at, updated_at
+               branch_id, auto_extract_mode, created_at, updated_at
         FROM creative_sessions
         WHERE session_id = ?
         """,
@@ -97,7 +103,7 @@ def list_creative_session_rows(
             SELECT session_id, story_id, title, status, session_goal,
                    writing_guidance_json, target_chapter_no, rolling_summary,
                    summary_fragment_id, active_fragment_id, worldline_id,
-                   auto_extract_mode, created_at, updated_at
+                   branch_id, auto_extract_mode, created_at, updated_at
             FROM creative_sessions
             WHERE story_id = ?
             ORDER BY updated_at DESC, created_at DESC, session_id
@@ -129,6 +135,7 @@ _SESSION_UPDATE_COLUMNS = {
     "summary_fragment_id",
     "active_fragment_id",
     "worldline_id",
+    "branch_id",
     "auto_extract_mode",
 }
 
@@ -187,13 +194,14 @@ def begin_creative_turn_row(conn: sqlite3.Connection, turn: dict) -> dict:
     conn.execute(
         """
         INSERT INTO creative_turns (
-            turn_id, session_id, turn_index, user_message, action_type,
+            turn_id, session_id, branch_id, turn_index, user_message, action_type,
             parent_fragment_id, status, error_text, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 'running', '', ?, ?)
+        VALUES (?, ?, (SELECT branch_id FROM creative_sessions WHERE session_id = ?), ?, ?, ?, ?, 'running', '', ?, ?)
         """,
         (
             turn_id,
+            session_id,
             session_id,
             next_index,
             user_message,
@@ -207,12 +215,14 @@ def begin_creative_turn_row(conn: sqlite3.Connection, turn: dict) -> dict:
         "UPDATE creative_sessions SET updated_at = ? WHERE session_id = ?",
         (now, session_id),
     )
-    return dict(
+    saved = dict(
         conn.execute(
             "SELECT * FROM creative_turns WHERE turn_id = ?",
             (turn_id,),
         ).fetchone()
     )
+    saved["branch_id"] = str(saved.get("branch_id") or "")
+    return saved
 
 
 def fail_creative_turn_row(conn: sqlite3.Connection, turn_id: str, error_text: str) -> dict:
@@ -237,7 +247,9 @@ def fail_creative_turn_row(conn: sqlite3.Connection, turn_id: str, error_text: s
         "UPDATE creative_sessions SET updated_at = ? WHERE session_id = ?",
         (now, str(turn["session_id"])),
     )
-    return dict(conn.execute("SELECT * FROM creative_turns WHERE turn_id = ?", (turn_id,)).fetchone())
+    saved = dict(conn.execute("SELECT * FROM creative_turns WHERE turn_id = ?", (turn_id,)).fetchone())
+    saved["branch_id"] = str(saved.get("branch_id") or "")
+    return saved
 
 
 def complete_creative_turn_row(
@@ -311,15 +323,16 @@ def complete_creative_turn_row(
     conn.execute(
         """
         INSERT INTO creative_fragments (
-            fragment_id, session_id, turn_id, parent_fragment_id, content,
+            fragment_id, session_id, branch_id, turn_id, parent_fragment_id, content,
             status, content_hash, word_count, context_snapshot_id,
             extraction_status, created_at, accepted_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             fragment_id,
             session_id,
+            str(turn["branch_id"] or ""),
             str(turn["turn_id"]),
             payload.get("parent_fragment_id"),
             content,
@@ -359,7 +372,7 @@ def complete_creative_turn_row(
 def list_creative_turn_rows(conn: sqlite3.Connection, session_id: str) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT turn_id, session_id, turn_index, user_message, action_type,
+        SELECT turn_id, session_id, branch_id, turn_index, user_message, action_type,
                parent_fragment_id, status, error_text, created_at, updated_at
         FROM creative_turns
         WHERE session_id = ?
@@ -367,13 +380,16 @@ def list_creative_turn_rows(conn: sqlite3.Connection, session_id: str) -> list[d
         """,
         (str(session_id or "").strip(),),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [
+        {**dict(row), "branch_id": str(row["branch_id"] or "")}
+        for row in rows
+    ]
 
 
 def list_creative_fragment_rows(conn: sqlite3.Connection, session_id: str) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT fragment_id, session_id, turn_id, parent_fragment_id, content,
+        SELECT fragment_id, session_id, branch_id, turn_id, parent_fragment_id, content,
                status, content_hash, word_count, context_snapshot_id,
                extraction_status, created_at, accepted_at
         FROM creative_fragments
@@ -382,14 +398,17 @@ def list_creative_fragment_rows(conn: sqlite3.Connection, session_id: str) -> li
         """,
         (str(session_id or "").strip(),),
     ).fetchall()
-    return [dict(row) for row in rows]
+    return [
+        {**dict(row), "branch_id": str(row["branch_id"] or "")}
+        for row in rows
+    ]
 
 
 def list_creative_work_rows(conn: sqlite3.Connection, story_id: str) -> list[dict]:
     """Project accepted/finalized fragments as a story-level works projection."""
     rows = conn.execute(
         """
-        SELECT fragment.fragment_id, fragment.session_id, fragment.turn_id,
+        SELECT fragment.fragment_id, fragment.session_id, fragment.branch_id, fragment.turn_id,
                fragment.parent_fragment_id, fragment.content, fragment.status,
                fragment.content_hash, fragment.word_count,
                fragment.context_snapshot_id, fragment.extraction_status,
@@ -413,7 +432,7 @@ def list_creative_work_rows(conn: sqlite3.Connection, story_id: str) -> list[dic
 def load_creative_fragment_row(conn: sqlite3.Connection, fragment_id: str) -> dict | None:
     row = conn.execute(
         """
-        SELECT fragment_id, session_id, turn_id, parent_fragment_id, content,
+        SELECT fragment_id, session_id, branch_id, turn_id, parent_fragment_id, content,
                status, content_hash, word_count, context_snapshot_id,
                extraction_status, created_at, accepted_at
         FROM creative_fragments
@@ -565,10 +584,67 @@ def _copy_id(prefix: str, target_story_id: str, source_id: str) -> str:
     return f"{prefix}_{digest}"
 
 
+def _rewrite_copy_payload(value, *, source_story_id: str, target_story_id: str, branch_id_map: dict[str, str] | None = None, session_id_map: dict[str, str] | None = None, turn_id_map: dict[str, str] | None = None, fragment_id_map: dict[str, str] | None = None, asset_id_map: dict[str, str] | None = None):
+    if isinstance(value, list):
+        return [
+            _rewrite_copy_payload(
+                item,
+                source_story_id=source_story_id,
+                target_story_id=target_story_id,
+                branch_id_map=branch_id_map,
+                session_id_map=session_id_map,
+                turn_id_map=turn_id_map,
+                fragment_id_map=fragment_id_map,
+                asset_id_map=asset_id_map,
+            )
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return target_story_id if value == source_story_id else value
+    result = {}
+    for key, raw in value.items():
+        nested = _rewrite_copy_payload(
+            raw,
+            source_story_id=source_story_id,
+            target_story_id=target_story_id,
+            branch_id_map=branch_id_map,
+            session_id_map=session_id_map,
+            turn_id_map=turn_id_map,
+            fragment_id_map=fragment_id_map,
+            asset_id_map=asset_id_map,
+        )
+        if key == "story_id" and nested == source_story_id:
+            nested = target_story_id
+        elif key == "branch_id" and isinstance(nested, str):
+            nested = (branch_id_map or {}).get(nested, nested)
+        elif key == "session_id" and isinstance(nested, str):
+            nested = (session_id_map or {}).get(nested, nested)
+        elif key in {"turn_id", "parent_turn_id"} and isinstance(nested, str):
+            nested = (turn_id_map or {}).get(nested, nested)
+        elif key in {"fragment_id", "parent_fragment_id"} and isinstance(nested, str):
+            nested = (fragment_id_map or {}).get(nested, nested)
+        elif key in {"context_snapshot_id", "asset_id"} or key.endswith("_asset_id"):
+            if isinstance(nested, str):
+                nested = (asset_id_map or {}).get(nested, nested)
+        result[key] = nested
+    return result
+
+
+def _rewrite_copy_json(raw: Any, **kwargs) -> str:
+    try:
+        parsed = json.loads(str(raw or "{}"))
+    except (TypeError, ValueError):
+        return str(raw or "{}")
+    return json.dumps(_rewrite_copy_payload(parsed, **kwargs), ensure_ascii=False, sort_keys=True)
+
+
 def clone_creative_session_rows(
     conn: sqlite3.Connection,
     source_story_id: str,
     target_story_id: str,
+    *,
+    branch_id_map: dict[str, str] | None = None,
+    asset_id_map: dict[str, str] | None = None,
 ) -> dict:
     sessions = conn.execute(
         "SELECT * FROM creative_sessions WHERE story_id = ? ORDER BY created_at, session_id",
@@ -606,6 +682,18 @@ def clone_creative_session_rows(
         str(row["fragment_id"]): _copy_id("fragment", target_story_id, str(row["fragment_id"]))
         for row in fragment_rows
     }
+    target_default_branch = next(
+        (
+            str(value)
+            for key, value in (branch_id_map or {}).items()
+            if str(value).startswith("branch_main_")
+        ),
+        "",
+    )
+
+    def _mapped_branch(value: Any) -> str:
+        clean = str(value or "")
+        return (branch_id_map or {}).get(clean) or target_default_branch
     attachment_rows = conn.execute(
         """
         SELECT attachment.*
@@ -648,10 +736,10 @@ def clone_creative_session_rows(
             INSERT INTO creative_sessions (
                 session_id, story_id, title, status, session_goal,
                 writing_guidance_json, target_chapter_no, rolling_summary,
-                summary_fragment_id, active_fragment_id, worldline_id,
+                summary_fragment_id, active_fragment_id, worldline_id, branch_id,
                 auto_extract_mode, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_map[str(row["session_id"])],
@@ -665,6 +753,7 @@ def clone_creative_session_rows(
                 fragment_map.get(str(row["summary_fragment_id"] or "")),
                 fragment_map.get(str(row["active_fragment_id"] or "")),
                 str(row["worldline_id"] or "main"),
+                _mapped_branch(row["branch_id"]),
                 str(row["auto_extract_mode"] or "manual"),
                 now,
                 now,
@@ -682,9 +771,9 @@ def clone_creative_session_rows(
             """
             INSERT INTO creative_turns (
                 turn_id, session_id, turn_index, user_message, action_type,
-                parent_fragment_id, status, error_text, created_at, updated_at
+                parent_fragment_id, branch_id, status, error_text, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 turn_map[str(row["turn_id"])],
@@ -693,6 +782,7 @@ def clone_creative_session_rows(
                 str(row["user_message"] or ""),
                 str(row["action_type"] or "generate"),
                 fragment_map.get(str(row["parent_fragment_id"] or "")),
+                _mapped_branch(row["branch_id"]),
                 copied_turn_status,
                 copied_error_text,
                 now,
@@ -709,22 +799,23 @@ def clone_creative_session_rows(
         conn.execute(
             """
             INSERT INTO creative_fragments (
-                fragment_id, session_id, turn_id, parent_fragment_id, content,
+                fragment_id, session_id, branch_id, turn_id, parent_fragment_id, content,
                 status, content_hash, word_count, context_snapshot_id,
                 extraction_status, created_at, accepted_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fragment_map[str(row["fragment_id"])],
                 session_map[str(row["session_id"])],
+                _mapped_branch(row["branch_id"]),
                 turn_map[str(row["turn_id"])],
                 fragment_map.get(str(row["parent_fragment_id"] or "")),
                 str(row["content"] or ""),
                 str(row["status"] or "proposed"),
                 str(row["content_hash"] or ""),
                 int(row["word_count"] or 0),
-                row["context_snapshot_id"],
+                (asset_id_map or {}).get(str(row["context_snapshot_id"] or "")) or row["context_snapshot_id"],
                 copied_extraction_status,
                 now,
                 now if row["accepted_at"] else None,
@@ -738,24 +829,15 @@ def clone_creative_session_rows(
         source_session_id = str(row["session_id"] or "")
         source_turn_id = str(row["turn_id"] or "")
         source_id = str(row["source_id"])
-        source_row = conn.execute(
-            "SELECT story_id FROM source_documents WHERE source_id = ?",
-            (source_id,),
-        ).fetchone()
-        if source_row is not None and str(source_row["story_id"] or "") == source_story_id:
-            conn.execute(
-                "UPDATE source_documents SET story_id = NULL WHERE source_id = ?",
-                (source_id,),
-            )
         conn.execute(
             """
             INSERT INTO creative_attachments (
                 attachment_id, content_hash, source_id, source_revision_id,
                 relative_path, title, filename, media_type, attachment_kind,
-                scope, story_id, session_id, turn_id, status,
+                scope, story_id, session_id, turn_id, branch_id, status,
                 ingestion_task_id, remaining_uses, metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 target_attachment_id,
@@ -771,10 +853,20 @@ def clone_creative_session_rows(
                 target_story_id,
                 session_map.get(source_session_id),
                 turn_map.get(source_turn_id),
+                _mapped_branch(row["branch_id"]),
                 str(row["status"] or "indexed"),
                 None,
                 row["remaining_uses"],
-                str(row["metadata_json"] or "{}"),
+                _rewrite_copy_json(
+                    row["metadata_json"],
+                    source_story_id=source_story_id,
+                    target_story_id=target_story_id,
+                    branch_id_map=branch_id_map,
+                    session_id_map=session_map,
+                    turn_id_map=turn_map,
+                    fragment_id_map=fragment_map,
+                    asset_id_map=asset_id_map,
+                ),
                 now,
                 now,
             ),
@@ -787,15 +879,27 @@ def clone_creative_session_rows(
         conn.execute(
             """
             INSERT INTO creative_messages (
-                message_id, story_id, session_id, role, message_kind,
+                message_id, story_id, session_id, branch_id, role, message_kind,
                 content, metadata_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 message_map[str(row["message_id"])], target_story_id,
-                session_map[str(row["session_id"])], str(row["role"]),
+                session_map[str(row["session_id"])],
+                _mapped_branch(row["branch_id"]),
+                str(row["role"]),
                 str(row["message_kind"]), str(row["content"]),
-                json.dumps(message_metadata, ensure_ascii=False, sort_keys=True), now,
+                _rewrite_copy_json(
+                    json.dumps(message_metadata, ensure_ascii=False),
+                    source_story_id=source_story_id,
+                    target_story_id=target_story_id,
+                    branch_id_map=branch_id_map,
+                    session_id_map=session_map,
+                    turn_id_map=turn_map,
+                    fragment_id_map=fragment_map,
+                    asset_id_map=asset_id_map,
+                ),
+                now,
             ),
         )
     for row in action_rows:
@@ -814,20 +918,24 @@ def clone_creative_session_rows(
         conn.execute(
             """
             INSERT INTO creative_action_runs (
-                action_id, story_id, session_id, request_message_id, action_type,
+                action_id, story_id, session_id, branch_id, request_message_id, action_type,
                 status, scope, target_json, patch_json, plan_json, result_json,
                 undo_json, requires_confirmation, confirmed_at, idempotency_key,
                 error_text, created_at, updated_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                target_action_id, target_story_id,
-                session_map[str(row["session_id"])],
+            target_action_id, target_story_id,
+            session_map[str(row["session_id"])],
+                _mapped_branch(row["branch_id"]),
                 message_map.get(str(row["request_message_id"] or "")),
                 str(row["action_type"]), copied_action_status, str(row["scope"]),
-                str(row["target_json"] or "{}"), str(row["patch_json"] or "{}"),
-                str(row["plan_json"] or "{}"), str(row["result_json"] or "{}"),
-                str(row["undo_json"] or "{}"), int(row["requires_confirmation"] or 0),
+                _rewrite_copy_json(row["target_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
+                _rewrite_copy_json(row["patch_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
+                _rewrite_copy_json(row["plan_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
+                _rewrite_copy_json(row["result_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
+                _rewrite_copy_json(row["undo_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
+                int(row["requires_confirmation"] or 0),
                 row["confirmed_at"], f"copy:{target_story_id}:{row['idempotency_key']}",
                 copied_action_error, now, now, row["finished_at"],
             ),
@@ -845,17 +953,20 @@ def clone_creative_session_rows(
         conn.execute(
             """
             INSERT INTO creative_config_revisions (
-                revision_id, action_id, story_id, session_id, config_scope,
+                revision_id, action_id, story_id, session_id, branch_id, config_scope,
                 before_json, after_json, patch_json, reason,
                 reversed_by_action_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 _copy_id("creative_config_revision", target_story_id, str(row["revision_id"])),
                 action_map[str(row["action_id"])], target_story_id,
                 session_map.get(str(row["session_id"] or "")),
-                str(row["config_scope"]), str(row["before_json"] or "{}"),
-                str(row["after_json"] or "{}"), str(row["patch_json"] or "{}"),
+                _mapped_branch(row["branch_id"]),
+                str(row["config_scope"]),
+                _rewrite_copy_json(row["before_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
+                _rewrite_copy_json(row["after_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
+                _rewrite_copy_json(row["patch_json"], source_story_id=source_story_id, target_story_id=target_story_id, branch_id_map=branch_id_map, session_id_map=session_map, turn_id_map=turn_map, fragment_id_map=fragment_map, asset_id_map=asset_id_map),
                 str(row["reason"] or ""),
                 action_map.get(str(row["reversed_by_action_id"] or "")), now,
             ),

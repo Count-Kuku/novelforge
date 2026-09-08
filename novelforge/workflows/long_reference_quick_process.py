@@ -82,7 +82,8 @@ def run_long_reference_quick_process(
     run_key: str = "",
     task_id: str = "",
     worker_id: str = "",
-    story_id: str = "default",
+    story_id: str = "",
+    branch_id: str = "",
 ) -> tuple[dict, dict]:
     selected_indices = list(segment_indices)
     planned_extract_indices = selected_indices[: max(0, int(extract_limit))]
@@ -230,6 +231,7 @@ def run_long_reference_quick_process(
                 task_id=task_id,
                 worker_id=worker_id,
                 story_id=story_id,
+                branch_id=branch_id,
                 recall_enabled=recall_enabled,
             )
             processed += newly_processed
@@ -285,6 +287,7 @@ def run_long_reference_quick_process(
             stream_callback=stream_callback,
             task_id=task_id,
             story_id=story_id,
+            branch_id=branch_id,
         )
         candidate_ids = list(dict.fromkeys([
             *candidate_ids,

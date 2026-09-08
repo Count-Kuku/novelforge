@@ -54,8 +54,8 @@ def normalize_name(value: Any) -> str:
     return "".join(re.findall(r"[a-z0-9\u4e00-\u9fff]+", cleaned))
 
 
-def isolation_domain(item: dict) -> tuple[str, str, str, str]:
-    """(setting_scope, story_id, worldline_id, version_scope) for an item dict.
+def isolation_domain(item: dict) -> tuple[str, str, str, str, str]:
+    """(setting_scope, story_id, branch_id, worldline_id, version_scope).
 
     Mirrors ``domain/knowledge_quality._knowledge_isolation_domain``.
     """
@@ -63,18 +63,30 @@ def isolation_domain(item: dict) -> tuple[str, str, str, str]:
     setting_scope = str(item.get("setting_scope") or ("story" if story_id else "project")).strip().lower()
     if setting_scope != "story":
         story_id = ""
+    branch_id = str(item.get("branch_id") or "").strip()
+    if setting_scope != "story":
+        branch_id = ""
     worldline_id = str(item.get("worldline_id") or "").strip().lower()
     if worldline_id in GLOBAL_WORLDLINE_IDS:
         worldline_id = ""
     version_scope = str(item.get("version_scope") or "").strip().lower()
     if version_scope == "unknown":
         version_scope = ""
-    return setting_scope, story_id, worldline_id, version_scope
+    return setting_scope, story_id, branch_id, worldline_id, version_scope
 
 
-def entity_id_for(entity_type: str, name: str, domain: tuple[str, str, str, str]) -> str:
+def entity_id_for(entity_type: str, name: str, domain: tuple[str, ...]) -> str:
     """Deterministic entity_id. Stable across runs so re-backfill is idempotent."""
-    identity = "|".join((entity_type, normalize_name(name), *domain))
+    # Keep the historical four-part hash for legacy/default rows. A branch
+    # participates only when it is an actual non-empty story branch, so a
+    # schema migration cannot silently split existing entities.
+    if len(domain) >= 5:
+        setting_scope, story_id, branch_id, worldline_id, version_scope = domain[:5]
+        is_legacy_main = not branch_id or str(branch_id).startswith("branch_main_")
+        parts = (setting_scope, story_id, worldline_id, version_scope) if is_legacy_main else (setting_scope, story_id, branch_id, worldline_id, version_scope)
+    else:
+        parts = tuple(domain)
+    identity = "|".join((entity_type, normalize_name(name), *parts))
     digest = sha256(identity.encode("utf-8")).hexdigest()[:24]
     return f"entity_{digest}"
 

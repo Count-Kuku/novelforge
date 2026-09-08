@@ -259,6 +259,7 @@ def create_app() -> FastAPI:
     from .routers.structure import router as structure_router
     from .routers.discussions_sessions import router as discussions_sessions_router
     from .routers.operations import router as operations_router
+    from .routers.story_reference_libraries import router as story_reference_libraries_router
     app.include_router(content_works_router)
     app.include_router(ingestion_router)
     app.include_router(sources_research_router)
@@ -267,6 +268,7 @@ def create_app() -> FastAPI:
     app.include_router(structure_router)
     app.include_router(discussions_sessions_router)
     app.include_router(operations_router)
+    app.include_router(story_reference_libraries_router)
 
     frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
     if (frontend_dist / "index.html").exists():

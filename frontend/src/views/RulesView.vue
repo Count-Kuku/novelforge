@@ -74,14 +74,15 @@ function listText(value: unknown): string {
 
 async function load() {
   if (!workspace.activeProjectId || !workspace.activeStory) { loading.value = false; return }
+  const branchId = workspace.activeBranchId || undefined
   hydrated.value = false
   loading.value = true
   message.value = ''
   try {
     const [data, layers, options, auto] = await Promise.all([
-      api.rules(workspace.activeProjectId, workspace.activeStory.story_id),
-      api.settingsRules(workspace.activeProjectId, workspace.activeStory.story_id),
-      api.promptOptions('story', workspace.activeProjectId, workspace.activeStory.story_id),
+      api.rules(workspace.activeProjectId, workspace.activeStory.story_id, branchId),
+      api.settingsRules(workspace.activeProjectId, workspace.activeStory.story_id, branchId),
+      api.promptOptions('story', workspace.activeProjectId, workspace.activeStory.story_id, branchId),
       api.autoConfiguration('chapter_write', workspace.activeProjectId, workspace.activeStory.story_id),
     ])
     fillLayer('global', layers.global || {})
@@ -102,17 +103,18 @@ async function save() {
   if (!workspace.activeProjectId || !workspace.activeStory || saving.value) return
   const projectId = workspace.activeProjectId
   const storyId = workspace.activeStory.story_id
+  const branchId = workspace.activeBranchId || undefined
   saving.value = true
   message.value = ''
   savedSections.value = []
   try {
-    await api.updateSettingsRules('global', serializeLayer('global'), projectId, storyId)
+    await api.updateSettingsRules('global', serializeLayer('global'), projectId, storyId, branchId)
     savedSections.value.push('全局规则')
-    await api.updateSettingsRules('project', serializeLayer('project'), projectId, storyId)
+    await api.updateSettingsRules('project', serializeLayer('project'), projectId, storyId, branchId)
     savedSections.value.push('项目规则')
-    await api.updateRules(projectId, storyId, serializeLayer('story'))
+    await api.updateRules(projectId, storyId, serializeLayer('story'), branchId)
     savedSections.value.push('故事规则')
-    await api.updatePromptOptions('story', promptOptions.value, projectId, storyId)
+    await api.updatePromptOptions('story', promptOptions.value, projectId, storyId, branchId)
     savedSections.value.push('提示词选项')
     message.value = '规则与提示词选项已保存'
     messageTone.value = 'success'

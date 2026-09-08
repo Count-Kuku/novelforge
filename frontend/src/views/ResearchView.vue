@@ -1,139 +1,306 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useWorkspaceStore } from '../stores/workspace'
 import { api, ApiClientError } from '../api/client'
+import MaterialImportForm from '../components/MaterialImportForm.vue'
+import { dialog } from '../ui/dialog'
+import { ingestionEstimateLabel, ingestionProgressSuffix, ingestionStatusCanRetry, ingestionStatusLabel } from '../ui/ingestionStatus'
 
 const workspace = useWorkspaceStore()
-const topic = ref('')
-const objective = ref('')
-const scope = ref<'reference' | 'canon' | 'project'>('reference')
-const submitting = ref(false)
-const message = ref('')
-const tasks = ref<any[]>([])
-const sources = ref<any[]>([])
-const selectedTask = ref<any | null>(null)
-const selectedClaimIds = ref<string[]>([])
 const workbench = ref<Record<string, any>>({})
-const batchFiles = ref<File[]>([])
-const batchUploading = ref(false)
-const batchMessage = ref('')
-const useOcr = ref(false)
-const ocrPreviewLoading = ref(false)
-const ocrPreview = ref<any | null>(null)
+const attachments = ref<any[]>([])
+const loading = ref(true)
+const refreshing = ref(false)
+const error = ref('')
+const shareMessage = ref('')
+const retryingId = ref('')
+const selectedAttachmentIds = ref<string[]>([])
+const sharingAttachments = ref(false)
+const referenceLibraries = ref<any[]>([])
+const storyBindings = ref<any[]>([])
+const referenceLoading = ref(false)
+const bindingBusyId = ref('')
+const referenceMessage = ref('')
+const releaseSources = ref<Record<string, any[]>>({})
+const sourceLoadingId = ref('')
+const archivingLibraryId = ref('')
+let pollTimer: ReturnType<typeof globalThis.setTimeout> | undefined
+let loadToken = 0
+let referenceToken = 0
+let disposed = false
 
-function taskStatusLabel(status: string) {
-  return ({ queued: '等待中', running: '进行中', paused: '已暂停', completed: '已完成', completed_with_errors: '已完成，有失败项', failed: '失败', cancelled: '已取消' } as Record<string, string>)[status] || status
-}
-
-function sourceStatusLabel(status: string) {
-  return ({ quarantine: '待激活', active: '已激活', archived: '已归档', pending: '待处理', indexed: '已索引' } as Record<string, string>)[status] || status
-}
-
-function authorityLabel(authority: string) {
-  return ({ official: '官方来源', primary: '一手来源', secondary: '二手来源', community: '社区来源', unknown: '未评级' } as Record<string, string>)[authority] || authority
+function attachmentCanRetry(item: any) {
+  return ingestionStatusCanRetry(item)
 }
 
 async function load() {
-  if (!workspace.activeProjectId) return
-  const [taskData, sourceData, workbenchData] = await Promise.all([api.tasks(workspace.activeProjectId), api.sources(workspace.activeProjectId), api.ingestionWorkbench(workspace.activeProjectId)])
-  tasks.value = taskData.web_research as any[]
-  sources.value = sourceData.sources as any[]
-  workbench.value = workbenchData as any
-}
-
-async function reviewClaims() {
-  if (!workspace.activeProjectId || !selectedTask.value || !selectedClaimIds.value.length) return
-  try { const data = await api.reviewResearchClaims(workspace.activeProjectId, String(selectedTask.value.task_id), selectedClaimIds.value); selectedTask.value = data.task; message.value = `已送审 ${data.result.queued_count || selectedClaimIds.value.length} 条研究结论`; selectedClaimIds.value = []; await load() } catch (reason) { message.value = reason instanceof ApiClientError ? reason.message : '研究结论送审失败' }
-}
-
-function toggleClaim(claimId: string) {
-  selectedClaimIds.value = selectedClaimIds.value.includes(claimId) ? selectedClaimIds.value.filter((id) => id !== claimId) : [...selectedClaimIds.value, claimId]
-}
-
-async function openTask(task: any) {
-  selectedClaimIds.value = []
-  if (!workspace.activeProjectId) return
-  try { selectedTask.value = (await api.researchTask(workspace.activeProjectId, String(task.task_id))).task } catch (reason) { selectedTask.value = task; message.value = reason instanceof Error ? reason.message : '任务详情读取失败，当前显示列表摘要' }
-}
-
-async function submit() {
-  if (!workspace.activeProjectId || !topic.value.trim() || submitting.value) return
-  submitting.value = true
-  message.value = ''
-  try { await api.createResearchTask(workspace.activeProjectId, { topic: topic.value.trim(), objective: objective.value.trim(), scope: scope.value, story_id: workspace.activeStory?.story_id || '' }); topic.value = ''; objective.value = ''; message.value = '研究任务已加入队列'; await load() } catch (reason) { message.value = reason instanceof ApiClientError ? reason.message : '创建研究任务失败' } finally { submitting.value = false }
-}
-
-async function controlTask(task: any, action: 'pause' | 'resume' | 'cancel' | 'retry') {
-  if (!workspace.activeProjectId) return
+  const projectId = workspace.activeProjectId
+  const storyId = workspace.activeStory?.story_id
+  const branchId = workspace.activeBranchId || undefined
+  if (!projectId || refreshing.value) return
+  const token = ++loadToken
+  refreshing.value = true
   try {
-    const data = await api.controlResearchTask(workspace.activeProjectId, String(task.task_id), action)
-    const index = tasks.value.findIndex((item) => item.task_id === task.task_id)
-    if (index >= 0) tasks.value[index] = data.task
-    message.value = action === 'pause' ? '任务已暂停' : action === 'resume' ? '任务已继续' : action === 'retry' ? '任务已重新排队' : '任务已取消'
-  } catch (reason) { message.value = reason instanceof ApiClientError ? reason.message : '任务控制失败' }
+    const [workbenchData, attachmentData] = await Promise.all([
+      api.ingestionWorkbench(projectId),
+      api.ingestionAttachments(projectId, storyId),
+    ])
+    if (disposed || token !== loadToken || workspace.activeProjectId !== projectId || workspace.activeStory?.story_id !== storyId || (workspace.activeBranchId || undefined) !== branchId) return
+    workbench.value = workbenchData
+    attachments.value = attachmentData.attachments || []
+    await loadReferenceLibraries(projectId, storyId, branchId)
+    error.value = ''
+  } catch (reason) {
+    if (!disposed && token === loadToken && workspace.activeProjectId === projectId && workspace.activeStory?.story_id === storyId && (workspace.activeBranchId || undefined) === branchId) error.value = reason instanceof ApiClientError ? reason.message : '无法读取资料导入状态'
+  } finally {
+    if (token === loadToken) {
+      refreshing.value = false
+      loading.value = false
+    }
+  }
 }
 
-async function activateSources(task: any) {
-  if (!workspace.activeProjectId) return
+async function loadReferenceLibraries(projectId = workspace.activeProjectId, storyId = workspace.activeStory?.story_id, branchId = workspace.activeBranchId || undefined) {
+  if (!projectId || !storyId) { referenceLibraries.value = []; storyBindings.value = []; return }
+  const requestedBranchId = branchId
+  const token = ++referenceToken
+  referenceLoading.value = true
+  let releaseLoadFailed = false
   try {
-    const data = await api.activateResearchSources(workspace.activeProjectId, String(task.task_id))
-    const index = tasks.value.findIndex((item) => item.task_id === task.task_id)
-    if (index >= 0) tasks.value[index] = data.task
-    message.value = `已激活 ${data.result.source_count || data.result.changed_count || 0} 个网页来源`
+    const [libraryData, bindingData] = await Promise.all([
+      api.referenceLibraries(projectId),
+      api.storyReferenceLibraries(projectId, storyId, requestedBranchId, true),
+    ])
+    const libraries = libraryData.libraries || []
+    const enriched = await Promise.all(libraries.map(async (library) => {
+      try {
+        const releases = (await api.referenceLibraryReleases(projectId, String(library.library_id))).releases || []
+        const ready = releases.filter((release) => String(release.status || 'ready') === 'ready').sort((left, right) => Number(right.release_no || 0) - Number(left.release_no || 0))
+        return { ...library, releases, latestRelease: ready[0] || null }
+      } catch (_reason) { releaseLoadFailed = true; return { ...library, releases: [], latestRelease: null } }
+    }))
+    if (token !== referenceToken || workspace.activeProjectId !== projectId || workspace.activeStory?.story_id !== storyId || (workspace.activeBranchId || undefined) !== requestedBranchId) return
+    referenceLibraries.value = enriched
+    storyBindings.value = bindingData.bindings || []
+    releaseSources.value = {}
+    if (releaseLoadFailed) referenceMessage.value = '资料副本加载失败：版本列表读取失败，请重试。'
+  } catch (reason) {
+    referenceLibraries.value = []
+    storyBindings.value = []
+    if (token === referenceToken && workspace.activeProjectId === projectId && workspace.activeStory?.story_id === storyId && (workspace.activeBranchId || undefined) === requestedBranchId) referenceMessage.value = reason instanceof ApiClientError ? `资料副本加载失败：${reason.message}` : '资料副本加载失败，请刷新重试。'
+  } finally { if (token === referenceToken) referenceLoading.value = false }
+}
+
+function releaseItemCount(release: any) {
+  const raw = release?.manifest_json ?? release?.manifest
+  if (raw && typeof raw === 'object') return raw.item_count || raw.knowledge_ids?.length || '若干'
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw)
+      return parsed?.item_count || parsed?.knowledge_ids?.length || '若干'
+    } catch (_reason) { return '若干' }
+  }
+  return '若干'
+}
+
+function branchBinding(binding: any) {
+  return String(binding?.branch_id || '') === String(workspace.activeBranchId || '')
+}
+function bindingFor(library: any) {
+  return storyBindings.value.find((binding) => String(binding.library_id) === String(library.library_id) && branchBinding(binding) && binding.status !== 'archived')
+}
+function libraryNeedsUpdate(library: any) {
+  const binding = bindingFor(library)
+  const latestReleaseId = String(library?.latestRelease?.release_id || '')
+  return Boolean(binding && latestReleaseId && String(binding.release_id || '') !== latestReleaseId)
+}
+function sourceTitle(source: any) {
+  const sourceJson = source?.source_json && typeof source.source_json === 'object' ? source.source_json : {}
+  return String(sourceJson.title || sourceJson.name || source?.title || source?.source_id || '未命名来源')
+}
+async function viewReleaseSources(library: any) {
+  const projectId = workspace.activeProjectId
+  const libraryId = String(library?.library_id || '')
+  const releaseId = String(library?.latestRelease?.release_id || '')
+  const requestedStoryId = workspace.activeStory?.story_id
+  const requestedBranchId = workspace.activeBranchId || undefined
+  if (!projectId || !libraryId || !releaseId || sourceLoadingId.value) return
+  sourceLoadingId.value = libraryId
+  try {
+    const data = await api.referenceLibraryReleaseSources(projectId, libraryId, releaseId)
+    if (workspace.activeProjectId === projectId && workspace.activeStory?.story_id === requestedStoryId && (workspace.activeBranchId || undefined) === requestedBranchId) releaseSources.value = { ...releaseSources.value, [libraryId]: data.sources || [] }
+  } catch (reason) {
+    if (workspace.activeProjectId === projectId && workspace.activeStory?.story_id === requestedStoryId && (workspace.activeBranchId || undefined) === requestedBranchId) referenceMessage.value = reason instanceof ApiClientError ? `来源查证加载失败：${reason.message}` : '来源查证加载失败，请重试。'
+  } finally { sourceLoadingId.value = '' }
+}
+async function useLibrary(library: any) {
+  const projectId = workspace.activeProjectId
+  const storyId = workspace.activeStory?.story_id
+  const releaseId = String(library?.latestRelease?.release_id || library?.latest_release_id || '')
+  if (!projectId || !storyId || !library?.library_id || !releaseId || bindingBusyId.value) {
+    if (!releaseId) referenceMessage.value = '这份资料还没有已确认的版本，完成自动提炼后才能用于当前故事。'
+    return
+  }
+  bindingBusyId.value = String(library.library_id)
+  referenceMessage.value = ''
+  try {
+    await api.bindReferenceLibrary(projectId, storyId, String(library.library_id), { release_id: releaseId, branch_id: workspace.activeBranchId || undefined, idempotency_key: `vue-${storyId}-${workspace.activeBranchId || 'story'}-${library.library_id}-${releaseId}` })
+    referenceMessage.value = `已将“${library.title || '资料'}”复制为当前故事的私有副本。`
+    await loadReferenceLibraries(projectId, storyId, workspace.activeBranchId || undefined)
+  } catch (reason) { referenceMessage.value = reason instanceof ApiClientError ? reason.message : '资料副本创建失败' }
+  finally { bindingBusyId.value = '' }
+}
+
+async function unbindLibrary(binding: any) {
+  const projectId = workspace.activeProjectId
+  const storyId = workspace.activeStory?.story_id
+  if (!projectId || !storyId || !binding?.binding_id || bindingBusyId.value) return
+  if (!await dialog.confirm({ title: '解除当前故事使用？', message: '会停止将这份资料副本放入当前故事上下文，项目原文、公共资料和已保存正文都会保留。', confirmLabel: '解除使用' })) return
+  bindingBusyId.value = String(binding.library_id)
+  try { await api.unbindReferenceLibrary(projectId, storyId, String(binding.binding_id), workspace.activeBranchId || undefined); referenceMessage.value = '已解除当前故事使用，私有副本历史仍保留。'; await loadReferenceLibraries(projectId, storyId, workspace.activeBranchId || undefined) }
+  catch (reason) { referenceMessage.value = reason instanceof ApiClientError ? reason.message : '解除资料使用失败' }
+  finally { bindingBusyId.value = '' }
+}
+
+async function archiveLibrary(library: any) {
+  const projectId = workspace.activeProjectId
+  const libraryId = String(library?.library_id || '')
+  if (!projectId || !libraryId || archivingLibraryId.value) return
+  if (!await dialog.confirm({
+    title: '归档项目资料？',
+    message: '归档后不会删除已有故事的独立副本；项目资料将从可用于新故事的列表中隐藏。',
+    confirmLabel: '归档资料',
+  })) return
+  archivingLibraryId.value = libraryId
+  try {
+    await api.archiveReferenceLibrary(projectId, libraryId)
+    referenceMessage.value = '项目资料已归档；已有故事的独立副本不受影响。'
+    await loadReferenceLibraries(projectId, workspace.activeStory?.story_id, workspace.activeBranchId || undefined)
+  } catch (reason) {
+    referenceMessage.value = reason instanceof ApiClientError ? reason.message : '资料归档失败，请重试。'
+  } finally { archivingLibraryId.value = '' }
+}
+
+function canShareAttachment(item: any) {
+  if (typeof item?.can_promote === 'boolean') return item.can_promote
+  return String(item?.scope || item?.attachment_scope || '') === 'story' && String(item?.story_id || '') === String(workspace.activeStory?.story_id || '') && Number(item?.confirmed_knowledge_count || item?.extracted_knowledge_count || item?.knowledge_count || 0) > 0 && Boolean(item?.attachment_id || item?.id)
+}
+function attachmentId(item: any) { return String(item?.attachment_id || item?.id || '') }
+function toggleAttachment(item: any) {
+  if (!canShareAttachment(item)) return
+  const id = attachmentId(item)
+  selectedAttachmentIds.value = selectedAttachmentIds.value.includes(id) ? selectedAttachmentIds.value.filter((candidate) => candidate !== id) : [...selectedAttachmentIds.value, id]
+}
+async function shareAttachments(ids: string[] = selectedAttachmentIds.value) {
+  const projectId = workspace.activeProjectId
+  if (!projectId || !ids.length || sharingAttachments.value) return
+  sharingAttachments.value = true
+  try {
+    let promoted = 0
+    for (const id of ids) promoted += Number((await api.promoteKnowledge(projectId, [], id)).promoted_count || 0)
+    selectedAttachmentIds.value = []
+    shareMessage.value = promoted ? `已共享 ${promoted} 条资料知识到项目。` : '没有可共享的新知识。'
     await load()
-  } catch (reason) { message.value = reason instanceof ApiClientError ? reason.message : '来源激活失败' }
+  } catch (reason) { shareMessage.value = reason instanceof ApiClientError ? reason.message : '资料共享到项目失败' } finally { sharingAttachments.value = false }
 }
 
-function selectBatchFiles(event: Event) {
-  batchFiles.value = Array.from((event.target as HTMLInputElement).files || [])
-  ocrPreview.value = null
-  batchMessage.value = batchFiles.value.length ? `已选择 ${batchFiles.value.length} 个文件` : ''
+function startPolling() {
+  stopPolling()
+  if (disposed || Number(workbench.value.active_task_count || 0) <= 0) return
+  pollTimer = globalThis.setTimeout(async () => { await load(); startPolling() }, 3500)
 }
 
-async function previewSelectedOcr() {
-  const pdf = batchFiles.value.find((file) => file.name.toLowerCase().endsWith('.pdf'))
-  if (!workspace.activeProjectId || !workspace.activeStory?.story_id || !pdf || ocrPreviewLoading.value) return
-  ocrPreviewLoading.value = true
-  try {
-    ocrPreview.value = await api.previewOcr(workspace.activeProjectId, workspace.activeStory.story_id, pdf)
-    batchMessage.value = `OCR 预览完成：${ocrPreview.value.metadata?.page_count || 0} 页`
-  } catch (reason) { batchMessage.value = reason instanceof ApiClientError ? reason.message : 'OCR 预览失败' } finally { ocrPreviewLoading.value = false }
+function stopPolling() {
+  if (pollTimer !== undefined) globalThis.clearTimeout(pollTimer)
+  pollTimer = undefined
 }
 
-async function uploadBatch() {
-  if (!workspace.activeProjectId || !workspace.activeStory?.story_id || !batchFiles.value.length || batchUploading.value) return
-  batchUploading.value = true
-  try {
-    const data = await api.uploadIngestionBatch(workspace.activeProjectId, workspace.activeStory.story_id, batchFiles.value, 'project', useOcr.value)
-    batchMessage.value = `已加入 ${data.accepted_count} 个文件；后台会继续解析${data.ocr_requested ? '、保存 OCR 页级证据' : ''}和知识化。${data.warnings.length ? ` 警告 ${data.warnings.length} 条。` : ''}`
-    batchFiles.value = []
-    ocrPreview.value = null
-    await load()
-  } catch (reason) { batchMessage.value = reason instanceof ApiClientError ? reason.message : '批量导入失败' } finally { batchUploading.value = false }
+async function onImported() {
+  await load()
+  startPolling()
 }
 
-onMounted(load)
+async function retryAttachment(item: any) {
+  const projectId = workspace.activeProjectId
+  const attachmentId = String(item?.attachment_id || item?.id || '')
+  if (!projectId || !attachmentId || retryingId.value) return
+  const backgroundStatus = String(item?.metadata?.background_status || item?.background_status || '').toLowerCase()
+  let confirmOverBudget = false
+  if (backgroundStatus === 'awaiting_confirmation') {
+    const estimate = item?.metadata?.background_estimate || item?.background_estimate || {}
+    const detail = ingestionEstimateLabel(estimate)
+    if (!await dialog.confirm({ title: '确认继续处理？', message: `${detail}。确认后会继续资料提炼。`, confirmLabel: '确认继续' })) return
+    confirmOverBudget = true
+  }
+  retryingId.value = attachmentId
+  try { await api.retryAttachment(projectId, attachmentId, confirmOverBudget); await load(); startPolling() } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '资料重试失败' } finally { retryingId.value = '' }
+}
+
+onMounted(async () => { await load(); startPolling() })
+watch(() => `${workspace.activeProjectId || ''}:${workspace.activeStory?.story_id || ''}:${workspace.activeBranchId || ''}`, () => {
+  stopPolling()
+  loadToken += 1
+  referenceToken += 1
+  refreshing.value = false
+  loading.value = true
+  workbench.value = {}
+  attachments.value = []
+  selectedAttachmentIds.value = []
+  referenceLibraries.value = []
+  storyBindings.value = []
+  referenceMessage.value = ''
+  void load().then(startPolling)
+})
+onUnmounted(() => { disposed = true; loadToken += 1; stopPolling() })
 </script>
 
 <template>
-<section class="research-page">
-  <div class="research-heading"><div><p class="eyebrow">资料与研究</p><h1>导入资料或创建<em>网络研究任务</em></h1><p>网页来源会先进入隔离区。只有人工激活的来源和确认过的结论才会进入检索与正式知识。</p></div><button class="button secondary" @click="load">刷新</button></div>
-  <article class="research-form"><p class="eyebrow">新建网络研究</p><div class="form-grid"><label>研究主题<input v-model="topic" placeholder="例如：明代驿站制度的公开资料" /></label><label>资料范围<select v-model="scope"><option value="reference">参考资料</option><option value="canon">世界观依据</option><option value="project">项目资料</option></select></label><label class="wide">要回答的问题<textarea v-model="objective" rows="3" placeholder="列出希望研究任务回答的问题"></textarea></label></div><div class="form-footer"><span v-if="message" role="status">{{ message }}</span><button class="button accent" :disabled="submitting || !topic.trim()" @click="submit">{{ submitting ? '提交中…' : '创建研究任务' }}</button></div></article>
-  <article class="batch-import-card"><div><p class="eyebrow">批量导入</p><h2>导入本地资料</h2><p class="muted">最多 20 个文件、总计 32MB。原文保存后，解析和知识提取会在后台继续。</p></div><input type="file" multiple accept=".txt,.md,.pdf,.docx,.epub" aria-label="选择资料文件" @change="selectBatchFiles" /><label class="ocr-toggle"><input v-model="useOcr" type="checkbox" /> 对 PDF 启用本地 OCR <small>仅用于扫描版 PDF，并保存逐页置信度。</small></label><div class="batch-import-actions"><span v-if="batchMessage" role="status">{{ batchMessage }}</span><div class="batch-buttons"><button class="button secondary" :disabled="ocrPreviewLoading || !batchFiles.some((file) => file.name.toLowerCase().endsWith('.pdf'))" @click="previewSelectedOcr">{{ ocrPreviewLoading ? '预览中…' : '预览 OCR' }}</button><button class="button accent" :disabled="batchUploading || !batchFiles.length" @click="uploadBatch">{{ batchUploading ? '导入中…' : '确认导入' }}</button></div></div></article>
-  <article v-if="ocrPreview" class="ocr-preview-card"><div><p class="eyebrow">OCR 预览</p><h2>{{ ocrPreview.filename }}</h2><p class="muted">{{ ocrPreview.metadata?.page_count || 0 }} 页 · 预览不会写入资料库；请抽查低置信度页面。</p></div><div v-for="section in ocrPreview.sections" :key="`${section.page}-${section.title}`" class="ocr-preview-row"><div><strong>第 {{ section.page }} 页 · {{ section.confidence }}%</strong><small>{{ section.char_count }} 字</small></div><p>{{ section.text_preview || '没有识别到文本。' }}</p></div><p v-for="warning in ocrPreview.warnings" :key="warning" class="ocr-warning">{{ warning }}</p></article>
-  <div class="research-columns">
-    <article><p class="eyebrow">研究任务 · {{ tasks.length }}</p><div v-if="!tasks.length" class="muted">暂无网络研究任务。</div><article v-for="task in tasks" :key="task.task_id" class="task-row"><button type="button" class="task-open" @click="openTask(task)"><span class="task-main"><strong>{{ task.topic || task.title || '未命名研究' }}</strong><small>{{ taskStatusLabel(task.status || 'queued') }} · {{ task.task_id }}</small><span class="progress-track"><i :style="{ width: `${Math.min(100, Number(task.progress?.percent || (task.progress?.total ? (Number(task.progress.completed || 0) / Number(task.progress.total)) * 100 : 0)))}%` }"></i></span></span></button><div class="task-side"><span>{{ task.progress?.completed || 0 }}/{{ task.progress?.total || '—' }}</span><div class="task-actions"><button v-if="task.status === 'running' || task.status === 'queued'" class="link-button" @click="controlTask(task, 'pause')">暂停</button><button v-if="task.status === 'paused'" class="link-button" @click="controlTask(task, 'resume')">继续</button><button v-if="task.status === 'failed' || task.status === 'completed_with_errors'" class="link-button" @click="controlTask(task, 'retry')">重试</button><button v-if="task.status === 'completed' || task.status === 'completed_with_errors'" class="link-button" @click="activateSources(task)">激活来源</button><button v-if="!['completed','cancelled','failed'].includes(task.status)" class="link-button danger" @click="controlTask(task, 'cancel')">取消</button></div></div></article></article>
-    <article><p class="eyebrow">来源记录 · {{ sources.length }}</p><div v-if="!sources.length" class="muted">暂无来源记录。</div><div v-for="source in sources.slice(0, 12)" :key="source.source_id || source.relative_path" class="source-row"><strong>{{ source.title || source.source_name || source.relative_path }}</strong><small>{{ sourceStatusLabel(source.status || source.retrieval_status || '已登记') }}</small></div></article>
-  </div>
-  <article v-if="selectedTask" class="claims-panel"><p class="eyebrow">结论审核</p><h2>{{ selectedTask.topic || selectedTask.title }}</h2><p class="muted">选择已验证结论并送入待审核知识。此操作不会直接创建正式知识。</p><div v-for="claim in (selectedTask.result?.verified_claims || [])" :key="claim.claim_id" class="claim-row"><label><input type="checkbox" :checked="selectedClaimIds.includes(String(claim.claim_id))" @change="toggleClaim(String(claim.claim_id))" /><span><strong>{{ claim.summary || claim.claim || '研究结论' }}</strong><small>{{ authorityLabel(claim.authority || 'unknown') }} · 证据 {{ claim.evidence_count || claim.evidence?.length || 0 }}</small></span></label></div><button class="button accent" :disabled="!selectedClaimIds.length" @click="reviewClaims">送入待审核知识（{{ selectedClaimIds.length }}）</button></article>
-  <article class="ingestion-card"><div><p class="eyebrow">导入任务</p><h2>资料批次状态</h2><p class="muted">分别统计原文解析、知识提取和失败片段；未完成任务可在重启后继续。</p></div><div class="workbench-stats"><span>批次 {{ (workbench.batch_rows || []).length }}</span><span>未完成 {{ workbench.unfinished_batch_count || 0 }}</span><span>失败任务 {{ workbench.failed_task_count || 0 }}</span><span>活动任务 {{ workbench.active_task_count || 0 }}</span></div><div v-for="row in (workbench.batch_rows || []).slice(0, 6)" :key="row.batch_id" class="source-row"><strong>{{ row.title }}</strong><small>{{ row.status_label }} · {{ row.completed_count }}/{{ row.segment_count }}</small></div></article>
-</section>
+  <section class="import-page">
+    <div class="import-heading">
+      <div><p class="eyebrow">资料库 · 导入资料</p><h1>把参考资料变成<em>项目知识</em></h1><p>粘贴资料或导入文件后，NovelForge 会自动提炼知识。知识可参与检索，原文只用于来源查证。</p></div>
+      <button class="button secondary" :disabled="refreshing" @click="load">{{ refreshing ? '刷新中…' : '刷新状态' }}</button>
+    </div>
+    <MaterialImportForm v-if="workspace.activeProjectId && workspace.activeStory" :project-id="workspace.activeProjectId" :story-id="workspace.activeStory.story_id" mode="library" @imported="onImported" />
+    <section v-if="workspace.activeStory" class="reference-panel" aria-label="用于当前故事"><div class="panel-heading"><div><p class="eyebrow">资料副本</p><h2>用于当前故事</h2><p class="muted">项目资料保持公共版本；使用后会成为当前故事{{ workspace.activeBranch?.name ? ` · ${workspace.activeBranch.name}` : '' }}的独立副本。原文仍只用于查证。</p></div><span v-if="referenceLoading" class="muted">同步中…</span></div><p v-if="!referenceLibraries.length && !referenceLoading && !referenceMessage" class="muted">暂无可用的已确认项目资料。导入并完成自动提炼后，这里会出现一键复制入口。</p><div v-for="library in referenceLibraries" :key="library.library_id" class="reference-row"><div><strong>{{ library.title || '未命名资料' }}</strong><small v-if="library.latestRelease">已确认版本 {{ library.latestRelease.release_no || '—' }} · {{ releaseItemCount(library.latestRelease) }} 条知识 <span v-if="libraryNeedsUpdate(library)" class="reference-update">有新版本可用</span></small><small v-else>等待已确认版本；当前不能用于故事</small><div v-if="releaseSources[library.library_id]?.length" class="reference-sources"><span>冻结来源查证：</span><span v-for="source in releaseSources[library.library_id]" :key="`${source.source_id}-${source.revision_id}`">{{ sourceTitle(source) }}{{ source.content_hash_verified ? ' · 已校验' : '' }}</span></div></div><div class="reference-actions"><button v-if="library.latestRelease" class="link-button" :disabled="sourceLoadingId === library.library_id" @click="viewReleaseSources(library)">{{ sourceLoadingId === library.library_id ? '读取中…' : '查看来源' }}</button><div v-if="bindingFor(library)" class="reference-bound"><span>已用于当前故事<span v-if="libraryNeedsUpdate(library)" class="reference-update"> · 需手动更新</span></span><button class="link-button" :disabled="Boolean(bindingBusyId)" @click="unbindLibrary(bindingFor(library))">{{ bindingBusyId === library.library_id ? '处理中…' : '解除使用' }}</button></div><button v-else class="link-button" :disabled="Boolean(bindingBusyId) || !library.latestRelease" @click="useLibrary(library)">{{ bindingBusyId === library.library_id ? '复制中…' : '用于当前故事' }}</button><button class="link-button archive-library" :disabled="Boolean(bindingBusyId) || archivingLibraryId === library.library_id" @click="archiveLibrary(library)">{{ archivingLibraryId === library.library_id ? '归档中…' : '归档项目资料' }}</button></div></div><p v-if="referenceMessage" class="import-message" role="status">{{ referenceMessage }}</p></section>
+    <div v-if="loading" class="import-state">正在读取资料状态…</div>
+    <template v-else>
+      <section class="status-panel">
+        <div><p class="eyebrow">导入状态</p><h2>项目资料处理进度</h2><p class="muted">当前项目固定保存为项目资料；后台任务会持续更新解析、知识提取和异常状态。</p></div>
+        <div class="status-stats"><span>批次 <strong>{{ (workbench.batch_rows || []).length }}</strong></span><span>进行中 <strong>{{ workbench.active_task_count || 0 }}</strong></span><span>失败/部分异常 <strong>{{ workbench.failed_task_count || 0 }}</strong></span><span>资料条目 <strong>{{ attachments.length }}</strong></span></div>
+      </section>
+      <section v-if="attachments.length" class="attachment-panel"><div class="panel-heading"><div><p class="eyebrow">最近导入的资料</p><h2>处理记录</h2></div><div class="attachment-bulk"><span class="muted">自动提炼知识</span><button v-if="selectedAttachmentIds.length" class="link-button" :disabled="sharingAttachments" @click="shareAttachments()">{{ sharingAttachments ? '共享中…' : '共享到项目' }}</button></div></div><article v-for="item in attachments.slice(0, 12)" :key="item.attachment_id || item.id || item.relative_path" class="attachment-row"><div><input v-if="canShareAttachment(item)" type="checkbox" :checked="selectedAttachmentIds.includes(attachmentId(item))" aria-label="选择资料条目" @change="toggleAttachment(item)" /><strong>{{ item.title || item.filename || item.relative_path || '未命名资料' }}</strong><small>{{ ingestionStatusLabel(item) }}{{ ingestionProgressSuffix(item) }}</small></div><button v-if="canShareAttachment(item)" class="link-button" :disabled="sharingAttachments" @click="shareAttachments([attachmentId(item)])">共享到项目</button><span v-if="item.error || item.error_message" class="row-error">{{ item.error || item.error_message }}</span><button v-if="attachmentCanRetry(item)" class="link-button" @click="retryAttachment(item)" :disabled="retryingId === String(item.attachment_id || item.id)" >{{ retryingId === String(item.attachment_id || item.id) ? '重试中…' : '重试' }}</button></article></section>
+      <section v-if="(workbench.batch_rows || []).length" class="batch-panel"><div class="panel-heading"><div><p class="eyebrow">后台任务</p><h2>批次处理</h2></div></div><article v-for="row in (workbench.batch_rows || []).slice(0, 8)" :key="row.batch_id" class="batch-row"><div><strong>{{ row.title || '资料批次' }}</strong><small>{{ row.status_label || ingestionStatusLabel(row) }} · {{ row.completed_count || 0 }}/{{ row.segment_count || 0 }} 项</small></div><span v-if="row.error_count" class="row-error">{{ row.error_count }} 项异常，可稍后重试</span></article></section>
+    </template>
+    <p v-if="shareMessage" class="import-message" role="status">{{ shareMessage }}</p><p v-if="error" class="import-error" role="alert">{{ error }}</p>
+  </section>
 </template>
 
 <style scoped>
-.research-page { max-width: 1120px; margin: 0 auto; padding: 12px 0 60px; }.research-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 34px; }.research-heading h1 { max-width: 760px; margin: 10px 0 16px; font-family: Georgia, serif; font-size: clamp(36px, 5vw, 62px); font-weight: 400; letter-spacing: -.055em; line-height: 1.08; }.research-heading h1 em { color: var(--accent); font-style: normal; }.research-heading p:not(.eyebrow) { max-width: 600px; color: var(--muted); font-size: 13px; line-height: 1.8; }.research-form, .research-columns article { padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.05); }.form-grid { display: grid; grid-template-columns: 1fr 220px; gap: 12px; margin-top: 17px; }.form-grid label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }.form-grid .wide { grid-column: 1 / -1; }.form-grid input, .form-grid select, .form-grid textarea { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; outline: 0; color: inherit; background: transparent; font: inherit; font-size: 12px; }.form-grid textarea { resize: vertical; line-height: 1.6; }.form-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 15px; color: #7da477; font-size: 11px; }.research-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }.task-row, .source-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }.task-main { min-width: 0; flex: 1; }.task-row strong, .source-row strong { display: block; font-size: 12px; font-weight: 500; }.task-row small, .source-row small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; }.task-side { display: grid; justify-items: end; gap: 8px; color: var(--accent); font-size: 11px; }.task-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 7px; }.link-button { padding: 0; border: 0; color: var(--accent); background: transparent; cursor: pointer; font-size: 10px; }.link-button:hover { text-decoration: underline; }.link-button.danger { color: #d18d82; }.progress-track { height: 4px; margin-top: 9px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.08); }.progress-track i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .2s ease; }.muted { color: var(--muted); font-size: 12px; }.claims-panel, .ingestion-card { margin-top: 16px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.05); }.claims-panel h2, .ingestion-card h2 { margin: 5px 0 8px; font-family: Georgia, serif; font-size: 24px; font-weight: 400; }.claim-row { padding: 12px 0; border-top: 1px solid var(--line); }.claim-row label { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }.claim-row strong, .claim-row small { display: block; }.claim-row strong { font-size: 12px; font-weight: 500; }.claim-row small { margin-top: 4px; color: var(--muted); font-size: 10px; }.workbench-stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 15px 0 5px; color: var(--accent); font-size: 11px; }
-.batch-import-card { display: grid; gap: 12px; margin-top: 16px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.04); }.batch-import-card h2 { margin: 5px 0 7px; font-family: Georgia, serif; font-size: 24px; font-weight: 400; }.batch-import-card input[type=file] { width: 100%; padding: 12px; border: 1px dashed var(--line); border-radius: 9px; color: var(--muted); font-size: 11px; }.batch-import-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #7da477; font-size: 11px; }
-.ocr-toggle { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }.ocr-toggle small { color: var(--muted); font-size: 10px; }.batch-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }.ocr-preview-card { display: grid; gap: 12px; margin-top: 16px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.05); }.ocr-preview-card h2 { margin: 5px 0 4px; font-family: Georgia, serif; font-size: 23px; font-weight: 400; }.ocr-preview-row { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 16px; padding: 12px 0; border-top: 1px solid var(--line); }.ocr-preview-row strong, .ocr-preview-row small { display: block; }.ocr-preview-row strong { color: var(--accent); font-size: 12px; }.ocr-preview-row small { margin-top: 5px; color: var(--muted); font-size: 10px; }.ocr-preview-row p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.65; white-space: pre-wrap; }.ocr-warning { margin: 0; color: #d18d82; font-size: 11px; }
-.task-open { min-width: 0; flex: 1; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }.task-open .task-main { display: block; }
-@media (max-width: 700px) { .research-heading { align-items: flex-start; flex-direction: column; }.form-grid, .research-columns { grid-template-columns: 1fr; }.form-grid .wide { grid-column: auto; }.form-footer { align-items: flex-start; flex-direction: column; } }
+.import-page { max-width: 1120px; margin: 0 auto; padding: 12px 0 60px; }
+.import-heading { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 32px; }
+.import-heading > .button { flex-shrink: 0; white-space: nowrap; }
+.import-heading h1 { max-width: 760px; margin: 10px 0 16px; font-family: Georgia, serif; font-size: clamp(36px, 5vw, 62px); font-weight: 400; letter-spacing: -.055em; line-height: 1.08; }
+.import-heading h1 em { color: var(--accent); font-style: normal; }
+.import-heading p:not(.eyebrow) { max-width: 650px; color: var(--muted); font-size: 13px; line-height: 1.8; }
+.import-state { min-height: 160px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.status-panel, .attachment-panel, .batch-panel { display: grid; gap: 15px; margin-top: 16px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.05); }
+.reference-panel { display: grid; gap: 13px; margin-top: 16px; padding: 22px; border: 1px solid rgba(143,174,137,.28); border-radius: 16px; background: rgba(125,164,119,.055); }
+.reference-panel h2 { margin: 5px 0 7px; font-family: Georgia, serif; font-size: 24px; font-weight: 400; }
+.reference-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-top: 1px solid var(--line); }
+.reference-row strong, .reference-row small { display: block; }.reference-row strong { font-size: 12px; font-weight: 500; }.reference-row small { margin-top: 4px; color: var(--muted); font-size: 10px; }.reference-actions { display: flex; align-items: center; gap: 12px; white-space: nowrap; }.reference-bound { display: flex; align-items: center; gap: 10px; color: #8fae89; font-size: 10px; white-space: nowrap; }.reference-update { color: #e4b17c; }.reference-sources { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 7px; color: #a8b9a3; font-size: 10px; }
+.status-panel h2, .attachment-panel h2, .batch-panel h2 { margin: 5px 0 7px; font-family: Georgia, serif; font-size: 24px; font-weight: 400; }
+.muted { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.status-stats { display: flex; flex-wrap: wrap; gap: 14px; color: var(--accent); font-size: 11px; }
+.status-stats strong { margin-left: 3px; font-family: Georgia, serif; font-size: 18px; font-weight: 400; }
+.panel-heading { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.attachment-bulk { display: flex; align-items: center; gap: 10px; }.attachment-row input { margin-right: 7px; accent-color: var(--accent); }
+.attachment-row, .batch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+.attachment-row strong, .attachment-row small, .batch-row strong, .batch-row small { display: block; }
+.attachment-row strong, .batch-row strong { min-width: 0; overflow: hidden; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-row small, .batch-row small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.row-error { max-width: 35%; color: #d18d82; font-size: 10px; text-align: right; }
+.link-button { padding: 0; border: 0; color: var(--accent); background: transparent; cursor: pointer; font-size: 10px; }
+.import-error { color: #d18d82; font-size: 12px; }
+.import-message { color: #8fae89; font-size: 12px; }
+@media (max-width: 680px) { .import-heading { align-items: flex-start; flex-direction: column; }.attachment-row, .batch-row { align-items: flex-start; flex-wrap: wrap; }.row-error { max-width: 100%; text-align: left; } }
 </style>

@@ -14,6 +14,7 @@ from .entity_identity import (
     normalize_name,
     supersession_enabled,
 )
+from .branches import default_branch_id
 
 
 def _json_dumps(value: Any) -> str:
@@ -80,6 +81,69 @@ def _story_id_or_none(conn: sqlite3.Connection, story_id: Any) -> str | None:
     if not row:
         raise ValueError(f"Knowledge row references an unknown or archived story: {clean_story_id}")
     return clean_story_id
+
+
+def _normalize_ownership(conn: sqlite3.Connection, item: dict, story_id: str | None) -> tuple[str, str | None]:
+    """Validate the explicit knowledge ownership domain.
+
+    ``scope``/``canon_status`` describe source nature and never substitute for
+    this pair.  A project item has no story id; a story item must name a real
+    story.  Keeping this invariant at both write paths prevents a restart or a
+    manual edit from reintroducing the historical ``default`` fallback.
+    """
+    raw_scope = str(item.get("setting_scope") or "").strip().lower()
+    clean_story_id = str(story_id or "").strip() or None
+    if not raw_scope:
+        raw_scope = "story" if clean_story_id else "project"
+    if raw_scope not in {"project", "story"}:
+        raise ValueError("知识条目归属必须是 project 或 story。")
+    if raw_scope == "project" and clean_story_id:
+        raise ValueError("project 知识条目不能携带 story_id。")
+    if raw_scope == "story" and not clean_story_id:
+        raise ValueError("story 知识条目必须携带真实 story_id。")
+    branch_id = str(item.get("branch_id") or "").strip()
+    if raw_scope == "project":
+        if branch_id:
+            raise ValueError("project 知识条目不能携带 branch_id。")
+    else:
+        if not branch_id:
+            branch_id = f"branch_main_{clean_story_id}"
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO story_branches
+                    (branch_id, story_id, name, description, source_worldline_id)
+                VALUES (?, ?, '主线', '由旧故事写入路径惰性补建的默认主线', 'main')
+                """,
+                (branch_id, clean_story_id),
+            )
+        branch = conn.execute(
+            "SELECT 1 FROM story_branches WHERE branch_id = ? AND story_id = ? AND status = 'active'",
+            (branch_id, clean_story_id),
+        ).fetchone()
+        if branch is None:
+            raise ValueError("知识条目 branch_id 不属于该故事的活动世界线。")
+        item["branch_id"] = branch_id
+    item["setting_scope"] = raw_scope
+    item["story_id"] = clean_story_id or ""
+    return raw_scope, clean_story_id
+
+
+def _assert_existing_owner(conn: sqlite3.Connection, item_id: str, item: dict, *, pending: bool = False) -> None:
+    """An existing identity cannot move between story/branch ownership domains."""
+    if pending:
+        row = conn.execute(
+            "SELECT story_id, branch_id, content_json FROM pending_knowledge_items WHERE pending_id = ?", (item_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT story_id, branch_id, content_json FROM knowledge_items WHERE knowledge_id = ?", (item_id,),
+        ).fetchone()
+    if row is None:
+        return
+    old_story = str(row[0] or "")
+    old_branch = str(row[1] or (f"branch_main_{old_story}" if old_story else ""))
+    if (old_story, old_branch) != (str(item.get("story_id") or ""), str(item.get("branch_id") or "")):
+        raise ValueError("已有知识不能更改所属故事或世界线，请创建独立副本。")
 
 
 def _item_title(item: dict) -> str:
@@ -314,7 +378,7 @@ def _sync_item_evidence(
         )
 
 
-def _compute_entity_fact(category: str, item: dict) -> dict:
+def _compute_entity_fact(category: str, item: dict, conn: sqlite3.Connection | None = None) -> dict:
     """Compute the Entity-Fact linkage fields for a knowledge item.
 
     Returns a dict with entity_type, entity_id, fact_key, chapter_no,
@@ -324,6 +388,17 @@ def _compute_entity_fact(category: str, item: dict) -> dict:
     entity_type = entity_type_for_category(category)
     name = str(item.get("name") or item.get("canonical_name") or "").strip()
     entity_id = entity_id_for(entity_type, name, isolation_domain(item)) if entity_type and name else None
+    if conn is not None and entity_id:
+        scope, owner_story, owner_branch, world, version = isolation_domain(item)
+        # Older payloads omitted version_scope while the entity projection
+        # stored project_main. Reuse that owned entity instead of generating a
+        # different hash for the same unique identity during library copying.
+        existing_entity = conn.execute(
+            "SELECT entity_id FROM entities WHERE entity_type=? AND canonical_name=? AND COALESCE(setting_scope,'')=? AND COALESCE(story_id,'')=? AND COALESCE(branch_id,'')=? AND COALESCE(worldline_id,'')=? AND COALESCE(version_scope,'project_main')=? LIMIT 1",
+            (entity_type, name, scope, owner_story, owner_branch, world, version or "project_main"),
+        ).fetchone()
+        if existing_entity:
+            entity_id = str(existing_entity[0])
     fact_key = str(item.get("setting_field") or item.get("fact_key") or "").strip() or None
     chapter_no = _chapter_no_from_item(item)
     return {
@@ -342,6 +417,7 @@ def _apply_supersession(
     *,
     entity_id: str,
     fact_key: str | None,
+    branch_id: str | None,
     valid_from_chapter: int | None,
     knowledge_id: str,
 ) -> None:
@@ -351,22 +427,69 @@ def _apply_supersession(
     left untouched so multiple values can coexist where that is the intended
     semantics.
     """
-    if not entity_id or not supersession_enabled(fact_key) or valid_from_chapter is None:
+    if not entity_id or not supersession_enabled(fact_key):
         return
-    conn.execute(
+    rows = conn.execute(
         """
-        UPDATE knowledge_items
-        SET valid_to_chapter = ?, superseded_by = ?,
-            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-        WHERE entity_id = ? AND fact_key = ?
-          AND knowledge_id != ?
-          AND deleted_at IS NULL
-          AND valid_to_chapter IS NULL
-          AND valid_from_chapter IS NOT NULL
-          AND valid_from_chapter < ?
+        SELECT knowledge_id, content_json, valid_from_chapter, superseded_by
+        FROM knowledge_items
+        WHERE entity_id = ? AND fact_key = ? AND COALESCE(branch_id, '') = COALESCE(?, '')
+          AND deleted_at IS NULL AND status = 'confirmed'
         """,
-        (valid_from_chapter, knowledge_id, entity_id, fact_key, knowledge_id, valid_from_chapter),
-    )
+        (entity_id, fact_key, branch_id),
+    ).fetchall()
+    parents = {
+        str(row[0]): str(row[1] or "")
+        for row in conn.execute(
+            "SELECT fragment_id, parent_fragment_id FROM creative_fragments WHERE branch_id = ?",
+            (branch_id,),
+        )
+    } if branch_id else {}
+    ancestors: dict[str, set[str]] = {}
+    for fragment_id in parents:
+        chain: set[str] = set()
+        current = parents[fragment_id]
+        while current and current not in chain:
+            chain.add(current)
+            current = parents.get(current, "")
+        ancestors[fragment_id] = chain
+    facts = []
+    for row in rows:
+        payload = _json_loads_dict(row[1])
+        anchor = str(payload.get("source_segment_id") or payload.get("source_fragment_id") or "")
+        facts.append((str(row[0]), anchor if anchor in parents else "", row[2], row[3]))
+
+    def precedes(left, right) -> bool:
+        if left[1] and right[1]:
+            # Two candidates at the same narrative point, or siblings, have
+            # no chronological order. Completion timestamps cannot order them.
+            return left[1] in ancestors.get(right[1], set())
+        return left[2] is not None and right[2] is not None and left[2] < right[2]
+
+    for current in facts:
+        successors = [other for other in facts if other[0] != current[0] and precedes(current, other)]
+        nearest = [other for other in successors if not any(precedes(candidate, other) for candidate in successors if candidate != other)]
+        # Ambiguous sibling successors must remain unresolved, not silently
+        # choose whichever extraction happened to finish last.
+        if len(nearest) != 1:
+            if current[3] in {fact[0] for fact in facts}:
+                conn.execute("UPDATE knowledge_items SET superseded_by = NULL, valid_to_chapter = NULL WHERE knowledge_id = ?", (current[0],))
+            continue
+        successor = nearest[0]
+        conn.execute(
+            "UPDATE knowledge_items SET superseded_by = ?, valid_to_chapter = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE knowledge_id = ?",
+            (successor[0], successor[2], current[0]),
+        )
+
+
+def filter_superseded_visible_items(items: list[dict]) -> list[dict]:
+    """Project current facts within an already isolated/frozen visible set.
+
+    A historical checkpoint may contain a fact whose successor lies outside
+    that checkpoint. That fact remains valid at its historical frontier.
+    """
+    visible_ids = {str(item.get("knowledge_id") or item.get("id") or "") for item in items}
+    return [item for item in items if str(item.get("superseded_by") or _json_loads_dict(item.get("content_json")).get("superseded_by") or "") not in visible_ids - {""}]
 
 
 def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list[dict]) -> list[dict]:
@@ -380,6 +503,8 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             knowledge_id = _stable_id(f"knowledge_{clean_category}", item, index)
         active_ids.append(knowledge_id)
         story_id = _story_id_or_none(conn, item.get("story_id"))
+        _normalize_ownership(conn, item, story_id)
+        _assert_existing_owner(conn, knowledge_id, item)
         previous = conn.execute(
             "SELECT content_json FROM knowledge_items WHERE knowledge_id = ?",
             (knowledge_id,),
@@ -390,7 +515,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             conn, "source_segments", "segment_id", item.get("source_segment_id") or item.get("segment_id")
         )
         typed_data = item.get("typed_data") if isinstance(item.get("typed_data"), dict) else {}
-        ef = _compute_entity_fact(clean_category, item)
+        ef = _compute_entity_fact(clean_category, item, conn)
         entity_type = ef["entity_type"]
         name = ef["name"]
         entity_id = ef["entity_id"]
@@ -399,14 +524,10 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
         merge_policy = ef["merge_policy"]
         valid_from_chapter = ef["valid_from_chapter"]
 
-        _apply_supersession(
-            conn, entity_id=entity_id, fact_key=fact_key,
-            valid_from_chapter=valid_from_chapter, knowledge_id=knowledge_id,
-        )
         conn.execute(
             """
             INSERT INTO knowledge_items (
-                knowledge_id, story_id, category, name, title, summary, content_json,
+                knowledge_id, story_id, branch_id, category, name, title, summary, content_json,
                 canon_status, worldline_id, worldline_name, confidence, importance,
                 evidence_strength, source_id, segment_id, extraction_mode, setting_scope,
                 setting_role, injection_policy, status, schema_version, structured_json,
@@ -415,7 +536,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 ?, ?, ?, ?, NULL, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
@@ -423,6 +544,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             )
             ON CONFLICT(knowledge_id) DO UPDATE SET
                 story_id = excluded.story_id,
+                branch_id = excluded.branch_id,
                 category = excluded.category,
                 name = excluded.name,
                 title = excluded.title,
@@ -455,6 +577,7 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
             (
                 knowledge_id,
                 story_id,
+                str(item.get("branch_id") or "").strip() or None,
                 clean_category,
                 str(item.get("name") or item.get("canonical_name") or "").strip(),
                 _item_title(item),
@@ -482,6 +605,11 @@ def sync_knowledge_category(conn: sqlite3.Connection, category: str, items: list
                 merge_policy,
                 _int_or_none(item.get("sequence_order")),
             ),
+        )
+        _apply_supersession(
+            conn, entity_id=entity_id, fact_key=fact_key,
+            branch_id=item.get("branch_id"),
+            valid_from_chapter=valid_from_chapter, knowledge_id=knowledge_id,
         )
         if entity_id:
             _upsert_entity_master(
@@ -759,13 +887,15 @@ def upsert_knowledge_category_item(
         "category": clean_category,
     })
     story_id = _story_id_or_none(conn, normalized.get("story_id"))
+    _normalize_ownership(conn, normalized, story_id)
+    _assert_existing_owner(conn, item_id, normalized)
     source_id = _existing_id(conn, "source_documents", "source_id", normalized.get("source_id"))
     segment_id = _existing_id(
         conn, "source_segments", "segment_id",
         normalized.get("source_segment_id") or normalized.get("segment_id"),
     )
     typed_data = normalized.get("typed_data") if isinstance(normalized.get("typed_data"), dict) else {}
-    ef = _compute_entity_fact(clean_category, normalized)
+    ef = _compute_entity_fact(clean_category, normalized, conn)
     entity_type = ef["entity_type"]
     name = ef["name"]
     entity_id = ef["entity_id"]
@@ -774,27 +904,24 @@ def upsert_knowledge_category_item(
     merge_policy = ef["merge_policy"]
     valid_from_chapter = ef["valid_from_chapter"]
 
-    _apply_supersession(
-        conn, entity_id=entity_id, fact_key=fact_key,
-        valid_from_chapter=valid_from_chapter, knowledge_id=item_id,
-    )
     conn.execute(
         """
         INSERT INTO knowledge_items (
-            knowledge_id, story_id, category, name, title, summary, content_json,
+            knowledge_id, story_id, branch_id, category, name, title, summary, content_json,
             canon_status, worldline_id, worldline_name, confidence, importance,
             evidence_strength, source_id, segment_id, extraction_mode, setting_scope,
             setting_role, injection_policy, status, schema_version, structured_json,
             entity_id, fact_key, chapter_no, valid_from_chapter, valid_to_chapter, merge_policy,
             created_at, updated_at, deleted_at
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, NULL, ?,
             COALESCE(?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL
         )
         ON CONFLICT(knowledge_id) DO UPDATE SET
             story_id=excluded.story_id, category=excluded.category, name=excluded.name,
+            branch_id=excluded.branch_id,
             title=excluded.title, summary=excluded.summary, content_json=excluded.content_json,
             canon_status=excluded.canon_status, worldline_id=excluded.worldline_id,
             worldline_name=excluded.worldline_name, confidence=excluded.confidence,
@@ -810,7 +937,7 @@ def upsert_knowledge_category_item(
             updated_at=strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), deleted_at=NULL
         """,
         (
-            item_id, story_id, clean_category,
+            item_id, story_id, str(normalized.get("branch_id") or "").strip() or None, clean_category,
             str(normalized.get("name") or normalized.get("canonical_name") or "").strip(),
             _item_title(normalized), _item_summary(normalized), _json_dumps(normalized),
             str(normalized.get("canon_status") or normalized.get("scope") or "").strip() or None,
@@ -827,6 +954,10 @@ def upsert_knowledge_category_item(
             entity_id, fact_key, chapter_no, valid_from_chapter, merge_policy,
             normalized.get("created_at"),
         ),
+    )
+    _apply_supersession(
+        conn, entity_id=entity_id, fact_key=fact_key, branch_id=normalized.get("branch_id"),
+        valid_from_chapter=valid_from_chapter, knowledge_id=item_id,
     )
     if entity_id:
         _upsert_entity_master(
@@ -864,11 +995,12 @@ def delete_knowledge_category_item(
     if not clean_category or not clean_item_id:
         return False, load_knowledge_category_rows(conn, clean_category) if clean_category else []
     row = conn.execute(
-        "SELECT category FROM knowledge_items WHERE knowledge_id = ? AND category = ? AND deleted_at IS NULL",
+        "SELECT category, story_id, branch_id, setting_scope FROM knowledge_items WHERE knowledge_id = ? AND category = ? AND deleted_at IS NULL",
         (clean_item_id, clean_category),
     ).fetchone()
     if not row:
         return False, load_knowledge_category_rows(conn, clean_category)
+    _normalize_ownership(conn, {"setting_scope": row[3], "branch_id": row[2]}, row[1])
     conn.execute(
         """
         UPDATE knowledge_items
@@ -900,7 +1032,7 @@ def _upsert_entity_master(
     if not entity_id or not entity_type or not canonical_name:
         return
     domain = isolation_domain(item)
-    setting_scope, entity_story_id, worldline_id, version_scope = domain
+    setting_scope, entity_story_id, branch_id, worldline_id, version_scope = (*domain, "")[:5]
     summary = str(item.get("summary") or item.get("name") or "").strip()
     importance = _float_or_none(item.get("importance"))
     if importance is None:
@@ -933,12 +1065,12 @@ def _upsert_entity_master(
     conn.execute(
         """
         INSERT INTO entities (
-            entity_id, entity_type, canonical_name, display_name, story_id, worldline_id,
+            entity_id, entity_type, canonical_name, display_name, story_id, branch_id, worldline_id,
             setting_scope, version_scope, summary, importance,
             world_t, world_time_label,
             created_at, updated_at, deleted_at
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             NULL
@@ -955,7 +1087,7 @@ def _upsert_entity_master(
         """,
         (
             entity_id, entity_type, canonical_name, display_name,
-            entity_story_id or None, worldline_id or None,
+            entity_story_id or None, branch_id or None, worldline_id or None,
             setting_scope or "project", version_scope or "project_main",
             summary, importance, world_t, world_time_label,
         ),
@@ -971,6 +1103,7 @@ def _resolve_entity_id(
     worldline_id: str | None = None,
     setting_scope: str = "story",
     version_scope: str = "project_main",
+    branch_id: str | None = None,
 ) -> str | None:
     """Resolve an entity name to an entity_id, creating the master row if absent.
 
@@ -981,10 +1114,10 @@ def _resolve_entity_id(
     clean_name = str(name or "").strip()
     if not clean_name:
         return None
-    domain = (setting_scope, story_id or "", worldline_id or "", version_scope or "project_main")
+    domain = (setting_scope, story_id or "", branch_id or "", worldline_id or "", version_scope or "project_main")
     # Look for an existing entity with the same normalized name + type + domain.
     normalized = normalize_name(clean_name)
-    if normalized:
+    if normalized and not branch_id:
         rows = conn.execute(
             "SELECT entity_id, canonical_name FROM entities WHERE entity_type = ? AND deleted_at IS NULL",
             (entity_type,),
@@ -993,25 +1126,25 @@ def _resolve_entity_id(
             if normalize_name(canonical) == normalized:
                 # domain must also match (story/worldline/scope).
                 edom = conn.execute(
-                    "SELECT setting_scope, story_id, worldline_id FROM entities WHERE entity_id = ?",
+            "SELECT setting_scope, story_id, branch_id, worldline_id FROM entities WHERE entity_id = ?",
                     (entity_id,),
                 ).fetchone()
                 if edom:
-                    existing_domain = (edom[0] or "project", edom[1] or "", edom[2] or "", version_scope or "project_main")
+                    existing_domain = (edom[0] or "project", edom[1] or "", edom[2] or "", edom[3] or "", version_scope or "project_main")
                     if existing_domain == domain:
                         return entity_id
     eid = entity_id_for(entity_type, clean_name, domain)
     conn.execute(
         """
         INSERT INTO entities (
-            entity_id, entity_type, canonical_name, display_name, story_id, worldline_id,
+            entity_id, entity_type, canonical_name, display_name, story_id, branch_id, worldline_id,
             setting_scope, version_scope, summary, importance, created_at, updated_at, deleted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', 0,
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), NULL)
         ON CONFLICT(entity_id) DO UPDATE SET deleted_at = NULL
         """,
-        (eid, entity_type, clean_name, clean_name, story_id or None, worldline_id or None, setting_scope, version_scope or "project_main"),
+        (eid, entity_type, clean_name, clean_name, story_id or None, branch_id or None, worldline_id or None, setting_scope, version_scope or "project_main"),
     )
     return eid
 
@@ -1056,6 +1189,7 @@ def _relationship_fields(item: dict) -> tuple[str, str, str]:
         or item.get("type")
         or typed_data.get("relation_type")
         or typed_data.get("relation")
+        or details.get("relation_type")
         or details.get("relation")
         or details.get("relationship")
         or details.get("关系")
@@ -1066,6 +1200,235 @@ def _relationship_fields(item: dict) -> tuple[str, str, str]:
         source, target, inferred_relation = _infer_relationship_from_text(item)
         relation = relation or inferred_relation
     return str(source or "").strip(), str(target or "").strip(), str(relation or "related_to").strip()
+
+
+_NEW_RELATIONSHIP_ENTITY_ID = "__new_entity__"
+
+
+def _relationship_endpoint_mapping(
+    item: dict,
+    endpoint: str,
+    fallback_name: str,
+    *,
+    worldline_id: str | None,
+    version_scope: str,
+) -> dict:
+    """Read the frozen source mapping for one relationship endpoint.
+
+    ``origin_entity_id`` is an evidence identity, not the branch graph node.
+    The branch node is materialized from the selected canonical/world/version
+    tuple below, which keeps the endpoint physically private to the branch.
+    """
+    prefix = f"{endpoint}_origin"
+    nested = item.get(prefix)
+    nested = nested if isinstance(nested, dict) else {}
+    origin_id = str(
+        item.get(f"{prefix}_entity_id")
+        or nested.get("entity_id")
+        or item.get(f"{endpoint}_entity_id")
+        or ""
+    ).strip()
+    resolution_status = str(item.get(f"{endpoint}_resolution_status") or "").strip()
+    is_new = origin_id == _NEW_RELATIONSHIP_ENTITY_ID or resolution_status == "new"
+    canonical = str(
+        item.get(f"{prefix}_canonical_name")
+        or nested.get("canonical_name")
+        or ""
+    ).strip()
+    entity_type = str(
+        item.get(f"{prefix}_entity_type")
+        or nested.get("entity_type")
+        or "character"
+    ).strip() or "character"
+    selected_worldline = str(
+        item.get(f"{prefix}_worldline_id")
+        or nested.get("worldline_id")
+        or worldline_id
+        or ""
+    ).strip() or None
+    selected_version = str(
+        item.get(f"{prefix}_version_scope")
+        or nested.get("version_scope")
+        or version_scope
+        or "project_main"
+    ).strip() or "project_main"
+    return {
+        "origin_entity_id": "" if is_new else origin_id,
+        "canonical_name": canonical or (fallback_name if (is_new or not origin_id) else ""),
+        "entity_type": entity_type,
+        "worldline_id": selected_worldline,
+        "version_scope": selected_version,
+        "explicit": bool(origin_id or canonical or resolution_status),
+        "new": is_new,
+    }
+
+
+def _snapshot_relationship_endpoint_mapping(item: dict, endpoint: str, fallback_name: str) -> dict | None:
+    """Recover endpoint identity from an immutable library graph snapshot."""
+    content = item.get("content_json")
+    if isinstance(content, str):
+        content = _json_loads_dict(content)
+    if not isinstance(content, dict):
+        content = item
+    edges = content.get("edges") if isinstance(content.get("edges"), list) else []
+    related = content.get("related_entities") if isinstance(content.get("related_entities"), list) else []
+    if not edges or not related:
+        return None
+    edge = next((row for row in edges if isinstance(row, dict)), None)
+    if edge is None:
+        return None
+    node_id = str((edge.get("source_node_id") if endpoint == "source" else edge.get("target_node_id")) or "").strip()
+    if not node_id:
+        return None
+    entity = next(
+        (row for row in related if isinstance(row, dict) and str(row.get("entity_id") or "").strip() == node_id),
+        None,
+    )
+    if entity is None:
+        return None
+    canonical = str(entity.get("canonical_name") or fallback_name or "").strip()
+    if not canonical:
+        return None
+    return {
+        "origin_entity_id": node_id,
+        "canonical_name": canonical,
+        "entity_type": str(entity.get("entity_type") or "character").strip() or "character",
+        "worldline_id": str(entity.get("worldline_id") or "").strip() or None,
+        "version_scope": str(entity.get("version_scope") or "project_main").strip() or "project_main",
+        "explicit": True,
+        "new": False,
+    }
+
+
+def _library_snapshot_relationship_endpoint_mapping(
+    conn: sqlite3.Connection,
+    item: dict,
+    endpoint: str,
+    fallback_name: str,
+) -> dict | None:
+    """Load the immutable release graph when a library copy is being materialized."""
+    content = item.get("content_json")
+    if isinstance(content, str):
+        content = _json_loads_dict(content)
+    if not isinstance(content, dict):
+        content = item
+    marker = content.get("_story_library") if isinstance(content.get("_story_library"), dict) else {}
+    release_id = str(marker.get("release_id") or "").strip()
+    origin_id = str(marker.get("origin_knowledge_id") or content.get("knowledge_id") or "").strip()
+    if not release_id or not origin_id:
+        return None
+    row = conn.execute(
+        "SELECT payload_json FROM reference_library_release_items WHERE release_id = ? AND origin_id = ? LIMIT 1",
+        (release_id, origin_id),
+    ).fetchone()
+    if row is None:
+        return None
+    payload = _json_loads_dict(row[0])
+    if not payload:
+        return None
+    return _snapshot_relationship_endpoint_mapping({"content_json": payload}, endpoint, fallback_name)
+
+
+def _unique_known_source_endpoint_mapping(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    story_id: str | None,
+    branch_id: str | None,
+    worldline_id: str | None,
+    version_scope: str,
+) -> dict | None:
+    """Resolve a legacy endpoint only inside the current story/branch.
+
+    This compatibility fallback is used only for old rows that predate an
+    explicit endpoint mapping. A strict branch must never discover an origin
+    by scanning a sibling story or branch; immutable checkpoint/library
+    payloads are tried by the caller before this helper.
+    """
+    clean_name = str(name or "").strip()
+    if not clean_name or not (worldline_id or version_scope != "project_main"):
+        return None
+    matches: list[dict] = []
+    rows = conn.execute(
+        """
+        SELECT entity_id, entity_type, canonical_name, worldline_id, version_scope
+        FROM entities
+        WHERE deleted_at IS NULL
+          AND COALESCE(story_id, '') = COALESCE(?, '')
+          AND COALESCE(branch_id, '') = COALESCE(?, '')
+          AND COALESCE(worldline_id, '') = COALESCE(?, '')
+          AND COALESCE(version_scope, 'project_main') = COALESCE(?, 'project_main')
+        """,
+        (story_id, branch_id, worldline_id, version_scope),
+    ).fetchall()
+    for row in rows:
+        if normalize_name(row[2]) != normalize_name(clean_name):
+            continue
+        matches.append({
+            "origin_entity_id": str(row[0] or ""),
+            "canonical_name": str(row[2] or clean_name),
+            "entity_type": str(row[1] or "character") or "character",
+            "worldline_id": str(row[3] or "") or None,
+            "version_scope": str(row[4] or "project_main") or "project_main",
+            "explicit": True,
+            "new": False,
+        })
+    return matches[0] if len(matches) == 1 else None
+
+
+def _resolve_relationship_endpoint_entity(
+    conn: sqlite3.Connection,
+    *,
+    item: dict,
+    endpoint: str,
+    fallback_name: str,
+    story_id: str | None,
+    worldline_id: str | None,
+    setting_scope: str,
+    version_scope: str,
+    branch_id: str | None,
+) -> str | None:
+    mapping = _relationship_endpoint_mapping(
+        item,
+        endpoint,
+        fallback_name,
+        worldline_id=worldline_id,
+        version_scope=version_scope,
+    )
+    strict_non_main_branch = bool(branch_id and str(branch_id) != default_branch_id(str(story_id or "")))
+    if strict_non_main_branch:
+        # Strict branch rows must carry the endpoint mapping captured from the
+        # checkpoint. Falling back to a bare name would create a third identity
+        # when two source worlds share that name.
+        if not mapping["explicit"]:
+            mapping = (
+                _snapshot_relationship_endpoint_mapping(item, endpoint, fallback_name)
+                or _library_snapshot_relationship_endpoint_mapping(conn, item, endpoint, fallback_name)
+                or _unique_known_source_endpoint_mapping(
+                    conn,
+                    name=fallback_name,
+                    story_id=story_id,
+                    branch_id=branch_id,
+                    worldline_id=worldline_id,
+                    version_scope=version_scope,
+                )
+                or mapping
+            )
+        if not mapping["explicit"] or not mapping["canonical_name"]:
+            return None
+    canonical_name = str(mapping["canonical_name"] or fallback_name).strip()
+    if not canonical_name:
+        return None
+    return _resolve_entity_id(
+        conn,
+        name=canonical_name,
+        entity_type=str(mapping["entity_type"] or "character"),
+        story_id=story_id,
+        worldline_id=mapping["worldline_id"],
+        setting_scope=setting_scope,
+        version_scope=str(mapping["version_scope"] or version_scope),
+        branch_id=branch_id,
+    )
 
 
 def _infer_relationship_from_text(item: dict) -> tuple[str, str, str]:
@@ -1174,17 +1537,28 @@ def _upsert_graph_relationship_edges(
     worldline_id = str(item.get("worldline_id") or "").strip() or None
     setting_scope = str(item.get("setting_scope") or "story").strip() or "story"
     version_scope = str(item.get("version_scope") or "project_main").strip() or "project_main"
-    # Relationship endpoints are bare names; resolve them to entities (character
-    # is the default; organization relationships resolve by existing entity).
-    source_node_id = _resolve_entity_id(
-        conn, name=source_name, entity_type="character",
-        story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
+    branch_id = str(item.get("branch_id") or "").strip() or None
+    source_node_id = _resolve_relationship_endpoint_entity(
+        conn,
+        item=item,
+        endpoint="source",
+        fallback_name=source_name,
+        story_id=story_id,
+        worldline_id=worldline_id,
+        setting_scope=setting_scope,
         version_scope=version_scope,
+        branch_id=branch_id,
     )
-    target_node_id = _resolve_entity_id(
-        conn, name=target_name, entity_type="character",
-        story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
+    target_node_id = _resolve_relationship_endpoint_entity(
+        conn,
+        item=item,
+        endpoint="target",
+        fallback_name=target_name,
+        story_id=story_id,
+        worldline_id=worldline_id,
+        setting_scope=setting_scope,
         version_scope=version_scope,
+        branch_id=branch_id,
     )
     if not source_node_id or not target_node_id:
         return
@@ -1246,6 +1620,31 @@ _REFERENCE_FIELD_SPECS: dict[str, tuple[str, str]] = {
 }
 
 
+def _reference_origin_mapping(item: dict, field: str, index: int, raw_value: object) -> tuple[str, dict | None]:
+    """Return a reference name and its optional frozen origin mapping."""
+    typed_data = item.get("typed_data") if isinstance(item.get("typed_data"), dict) else {}
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    if isinstance(raw_value, dict):
+        name = str(raw_value.get("name") or raw_value.get("canonical_name") or "").strip()
+        return name, raw_value
+    name = str(raw_value or "").strip()
+    mapping_root = item.get("reference_origin_entities")
+    if not isinstance(mapping_root, dict):
+        mapping_root = typed_data.get("reference_origin_entities")
+    if not isinstance(mapping_root, dict):
+        mapping_root = details.get("reference_origin_entities")
+    field_mapping = mapping_root.get(field) if isinstance(mapping_root, dict) else None
+    if isinstance(field_mapping, list):
+        selected = field_mapping[index] if index < len(field_mapping) else None
+        return name, selected if isinstance(selected, dict) else None
+    if isinstance(field_mapping, dict):
+        by_name = field_mapping.get(name)
+        if isinstance(by_name, dict):
+            return name, by_name
+        return name, field_mapping
+    return name, None
+
+
 def _upsert_entity_reference_edges(
     conn: sqlite3.Connection,
     *,
@@ -1266,6 +1665,7 @@ def _upsert_entity_reference_edges(
     worldline_id = str(item.get("worldline_id") or "").strip() or None
     setting_scope = str(item.get("setting_scope") or "story").strip() or "story"
     version_scope = str(item.get("version_scope") or "project_main").strip() or "project_main"
+    branch_id = str(item.get("branch_id") or "").strip() or None
     details = item.get("details", {}) if isinstance(item.get("details"), dict) else {}
     typed_data = item.get("typed_data", {}) if isinstance(item.get("typed_data"), dict) else {}
     for field, (relation_type, target_type) in _REFERENCE_FIELD_SPECS.items():
@@ -1275,16 +1675,43 @@ def _upsert_entity_reference_edges(
                 raw_values = [raw_values]
             else:
                 continue
-        for value in raw_values:
-            target_name = str(value or "").strip()
+        for index, value in enumerate(raw_values):
+            target_name, origin_mapping = _reference_origin_mapping(item, field, index, value)
             if not target_name:
                 continue
-            # parent_location is a single-value location reference.
-            target_entity_id = _resolve_entity_id(
-                conn, name=target_name, entity_type=target_type,
-                story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
-                version_scope=version_scope,
-            )
+            strict_non_main_branch = bool(branch_id and str(branch_id) != default_branch_id(str(story_id or "")))
+            if strict_non_main_branch:
+                # A branch reference must carry the same frozen origin tuple as
+                # relationship endpoints. Unmapped bare names are skipped rather
+                # than silently creating a cross-source target entity.
+                if not isinstance(origin_mapping, dict):
+                    continue
+                mapped_item = {
+                    f"reference_origin_entity_id": origin_mapping.get("origin_entity_id") or origin_mapping.get("entity_id") or "",
+                    "reference_origin_canonical_name": origin_mapping.get("canonical_name") or origin_mapping.get("name") or target_name,
+                    "reference_origin_entity_type": origin_mapping.get("entity_type") or target_type,
+                    "reference_origin_worldline_id": origin_mapping.get("worldline_id") or worldline_id or "",
+                    "reference_origin_version_scope": origin_mapping.get("version_scope") or version_scope,
+                    "reference_origin_resolution_status": origin_mapping.get("resolution_status") or "resolved",
+                }
+                target_entity_id = _resolve_entity_id(
+                    conn,
+                    name=str(mapped_item["reference_origin_canonical_name"] or target_name),
+                    entity_type=str(mapped_item["reference_origin_entity_type"] or target_type),
+                    story_id=story_id,
+                    worldline_id=str(mapped_item["reference_origin_worldline_id"] or "") or None,
+                    setting_scope=setting_scope,
+                    version_scope=str(mapped_item["reference_origin_version_scope"] or version_scope),
+                    branch_id=branch_id,
+                )
+            else:
+                # Legacy/mainline records retain their historic bare-name
+                # compatibility; strict branches use the mapped path above.
+                target_entity_id = _resolve_entity_id(
+                    conn, name=target_name, entity_type=target_type,
+                    story_id=story_id, worldline_id=worldline_id, setting_scope=setting_scope,
+                    version_scope=version_scope, branch_id=branch_id,
+                )
             if not target_entity_id or target_entity_id == source_entity_id:
                 continue
             edge_id_source = f"{knowledge_id}:{field}:{target_entity_id}"
@@ -1314,7 +1741,9 @@ def _upsert_entity_reference_edges(
             )
 
 
-def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[dict]:
+def sync_pending_knowledge(
+    conn: sqlite3.Connection, items: list[dict], *, changed_ids: set[str] | None = None,
+) -> list[dict]:
     normalized_items = [dict(item) for item in items if isinstance(item, dict)]
     active_ids: list[str] = []
     for index, item in enumerate(normalized_items, start=1):
@@ -1322,8 +1751,14 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
         if not pending_id:
             pending_id = _stable_id("pending", item, index)
         active_ids.append(pending_id)
+        if changed_ids is not None and pending_id not in changed_ids:
+            # Unrelated candidates remain untouched, including read-only
+            # candidates retained on archived branches.
+            continue
         category = str(item.get("category") or "").strip()
         story_id = _story_id_or_none(conn, item.get("story_id"))
+        _normalize_ownership(conn, item, story_id)
+        _assert_existing_owner(conn, pending_id, item, pending=True)
         source_id = _existing_id(conn, "source_documents", "source_id", item.get("source_id"))
         segment_id = _existing_id(
             conn, "source_segments", "segment_id", item.get("source_segment_id") or item.get("segment_id")
@@ -1340,20 +1775,21 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
         conn.execute(
             """
             INSERT INTO pending_knowledge_items (
-                pending_id, story_id, category, name, title, summary, content_json,
+                pending_id, story_id, branch_id, category, name, title, summary, content_json,
                 canon_status, worldline_id, confidence, importance, evidence_strength,
                 source_id, segment_id, extraction_mode, quality_json, status,
                 schema_version, structured_json, source_revision_id,
                 created_at, updated_at, deleted_at
             )
             VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
                 NULL
             )
             ON CONFLICT(pending_id) DO UPDATE SET
                 story_id = excluded.story_id,
+                branch_id = excluded.branch_id,
                 category = excluded.category,
                 name = excluded.name,
                 title = excluded.title,
@@ -1378,6 +1814,7 @@ def sync_pending_knowledge(conn: sqlite3.Connection, items: list[dict]) -> list[
             (
                 pending_id,
                 story_id,
+                str(item.get("branch_id") or "").strip() or None,
                 category,
                 str(item.get("name") or item.get("canonical_name") or "").strip(),
                 _item_title(item),
@@ -1498,7 +1935,10 @@ def upsert_pending_knowledge_items(
         existing = current[existing_index]
         item["queued_at"] = existing.get("queued_at") or item.get("queued_at")
         current[existing_index] = item
-    sync_pending_knowledge(conn, current)
+    sync_pending_knowledge(conn, current, changed_ids={
+        str(item.get("pending_id") or "").strip()
+        for item in items if isinstance(item, dict)
+    })
     return added_count, current
 
 
@@ -1517,7 +1957,10 @@ def delete_pending_knowledge_items(
     remaining = [item for item in current if str(item.get("pending_id") or "") not in clean_ids]
     removed_count = len(current) - len(remaining)
     if removed_count:
-        sync_pending_knowledge(conn, remaining)
+        for item in current:
+            if str(item.get("pending_id") or "") in clean_ids:
+                _normalize_ownership(conn, dict(item), _story_id_or_none(conn, item.get("story_id")))
+        sync_pending_knowledge(conn, remaining, changed_ids=set())
     return removed_count, remaining
 
 

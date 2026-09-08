@@ -31,7 +31,7 @@ async function load(cursor = '') {
   error.value = ''
   errorHint.value = ''
   try {
-    const data = await api.works(workspace.activeProjectId, workspace.activeStory.story_id, cursor)
+    const data = await api.works(workspace.activeProjectId, workspace.activeStory.story_id, cursor, 40, workspace.activeBranchId || undefined)
     items.value = cursor ? [...items.value, ...data.items] : data.items
     total.value = data.total || items.value.length
     nextCursor.value = data.next_cursor || ''
@@ -59,7 +59,7 @@ async function openWork(item: any) {
       const data = await api.chapter(workspace.activeProjectId, workspace.activeStory.story_id, Number(item.chapter_no))
       selectedContent.value = data.content || item.preview || ''
     } else {
-      const data = await api.session(workspace.activeProjectId, workspace.activeStory.story_id, String(item.session_id))
+      const data = await api.session(workspace.activeProjectId, workspace.activeStory.story_id, String(item.session_id), workspace.activeBranchId || undefined)
       selectedContent.value = data.fragments.find((fragment) => fragment.fragment_id === item.fragment_id)?.content || item.preview || ''
     }
   } catch (reason) {
@@ -85,10 +85,10 @@ async function removeWork(item: any) {
   try {
     let succeeded = false
     if (isChapter) {
-      const result = await api.deleteChapterWork(workspace.activeProjectId, workspace.activeStory.story_id, Number(item.chapter_no))
+      const result = await api.deleteChapterWork(workspace.activeProjectId, workspace.activeStory.story_id, Number(item.chapter_no), workspace.activeBranchId || undefined)
       succeeded = result.deleted
     } else {
-      const result = await api.removeFragmentWork(workspace.activeProjectId, workspace.activeStory.story_id, String(item.fragment_id))
+      const result = await api.removeFragmentWork(workspace.activeProjectId, workspace.activeStory.story_id, String(item.fragment_id), workspace.activeBranchId || undefined)
       succeeded = result.removed
     }
     if (!succeeded) throw new Error('这项作品已经不存在')

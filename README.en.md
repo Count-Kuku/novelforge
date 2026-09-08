@@ -20,6 +20,9 @@ NovelForge is a local LLM writing workspace for long-form fiction and fan fictio
 ### Sources And Knowledge
 
 - Pasted sources, manual source cards, and multi-file TXT/Markdown/DOCX/EPUB/text-layer PDF ingestion.
+- The Library exposes paste and file import only: project imports belong to the project, session imports default to the current story with an explicit project option, and saved material is automatically distilled into knowledge while the original remains evidence for checking.
+- “用于当前故事” creates an independent story copy from a fixed public release without another extraction call. Story edits remain private; newer public versions are announced without overwriting existing copies. Existing stories explicitly confirm their reference scope before migration.
+- The conversational workspace supports named worldline branches, historical forks, switching, and archiving. Each fork preserves its prose, knowledge, and configuration baseline; later facts and chapters belong to that branch.
 - Recoverable web-research agents that reuse native model search when available and otherwise fall back to keyless metasearch, with parallel discovery, safe fetching, claim extraction, cross-source verification, and human review.
 - Structure-aware heading, chapter, scene, paragraph, and sentence splitting with source offsets, fingerprints, and segment checkpoints.
 - General, character, relationship, timeline, worldbuilding, style, strict-canon, and fanfic-reference extraction modes.
@@ -54,7 +57,7 @@ Long-form automatic processing now creates a SQLite-backed task and returns cont
 
 ### Web Research Agent
 
-`资料库 → 导入与来源 → 网络检索 → 自动研究 Agent` provides the complete research loop:
+The backend still maintains recoverable research tasks, but normal workbenches hide research tasks, source activation, and conclusion-review panels. Conversation-level “web search” remains available per message. Use `资料库 → 导入资料` when you need to import material:
 
 1. A bounded Planner creates queries from the topic, objective, and source roles.
 2. LangGraph Collectors search official, secondary, community, and fanon branches in parallel.
@@ -63,7 +66,7 @@ Long-form automatic processing now creates a SQLite-backed task and returns cont
 5. The model Verifier only proposes relationships; a deterministic guard isolates evidence by source role, category, and grounded statement, detects same-role conflicts, and scores evidence strength.
 6. The user selects claims for pending review; they become formal knowledge only after confirmation.
 
-Research tasks reuse SQLite `workflow_runs/workflow_steps` and support background execution, stage checkpoints, pause, resume, cancel, failed-stage retry, and archive. Official authority is assessed from the final HTTPS URL after redirects and the user-owned whitelist; official, community, and fanon evidence cannot promote one another. Each task owns separate page snapshots. Raw pages are quarantined from writing retrieval by default and enter RAG as explicitly marked untrusted external data only after user activation. The smaller manual search/select/import path remains available.
+Research tasks reuse SQLite `workflow_runs/workflow_steps` and support background execution, stage checkpoints, pause, resume, cancel, failed-stage retry, and archive. Official authority is assessed from the final HTTPS URL after redirects and the user-owned whitelist; official, community, and fanon evidence cannot promote one another. Each task owns separate page snapshots. Raw pages are quarantined from writing retrieval by default and enter RAG as explicitly marked untrusted external data only after user activation. Normal workbenches keep these task controls hidden; web search remains available inside conversation generation.
 
 ### Token And Cost Observability
 
@@ -99,11 +102,11 @@ The Library hub combines unified search/editing, priority settings, pending revi
 
 ### Source Processing
 
-1. Upload one or more TXT/Markdown/DOCX/EPUB/PDF files, or paste text. Vue project batch import and the free-writing source tray can explicitly run local PDF OCR when Tesseract is ready, with a non-persisting page-confidence preview. Network search can create an automatic research task or import selected public pages.
-2. Select indexing, knowledge extraction, and optional automatic-review behavior.
-3. Review segment, call, token, and cost estimates.
-4. Create the background task and monitor it in `资料任务` (Source Tasks); the browser page may be closed.
-5. Resolve Pending Review under `资料库 → 待审核`. Retrieval health, fixed evaluations, and index maintenance are developer-mode tools.
+1. From `资料库 → 导入资料`, paste text or select one or more TXT/Markdown/DOCX/EPUB/PDF files. Vue project batch import can explicitly run local PDF OCR when Tesseract is ready, with a non-persisting page-confidence preview. The session `＋资料` tray uses the same form, defaults to the current story, and can explicitly save to the project.
+2. Click “确认导入” to save the material. Knowledge extraction starts automatically, while the original is kept for source verification.
+3. Monitor real completion counts, partial failures, retry actions, unavailable-model recovery, or pending cost confirmation in the import status panel; the browser page may be closed.
+4. Promote extracted story material to the project from attachment rows or batch-select eligible knowledge in the library; promotion does not fetch or extract the source again.
+5. Select “用于当前故事” on a published reference version to copy confirmed knowledge into the current story and branch. A project import alone does not automatically activate the material in every story.
 
 ### Chapter Writing
 
@@ -186,7 +189,7 @@ After preparing a self-contained Windows Python runtime without `pyvenv.cfg`, ru
 ## Current Limits And Priorities
 
 - Structure-aware splitting, parent/child context, and FTS/lexical/semantic RRF fusion are complete; quota-controlled query routing for characters, relationships, timelines, and hard constraints is the next RAG priority.
-- Stable ingestion supports pasted text, TXT, Markdown, DOCX, EPUB, text-layer PDF, and public static web pages. Vue project batch import and the free-writing source tray support explicit local OCR, preview, and per-page confidence. Real OCR/provider evaluation, dynamically rendered pages, and recursive folder ingestion remain release-environment or later-scope work.
+- Stable ingestion supports pasted text, TXT, Markdown, DOCX, EPUB, and text-layer PDF. The normal workbenches do not expose URL material imports; Vue project batch import supports explicit local OCR, preview, and per-page confidence. Web search remains a conversation capability. Real OCR/provider evaluation, dynamically rendered pages, and recursive folder ingestion remain release-environment or later-scope work.
 - Durable source tasks depend on the NovelForge application process; they are not a resident service or distributed queue.
 - A dedicated vector database and GraphRAG will be evaluated only after the current local SQLite/retrieval path shows a measured scale bottleneck.
 - Web research now includes durable tasks, claim extraction, cross-source verification, evaluation, and human review. LangGraph only coordinates parallel dispatch inside one search step; SQLite `workflow_runs/workflow_steps` remains authoritative.

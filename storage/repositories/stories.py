@@ -116,18 +116,43 @@ def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
     if not clean_story_id:
         raise ValueError("Story ID cannot be empty.")
 
-    attachment_source_ids = [
+    # Preserve the fact that a story-local library member was deliberately
+    # removed. A later explicit rebind must not recreate that row after the
+    # physical story cleanup below.
+    conn.execute(
+        """
+        UPDATE story_library_item_links
+        SET state = 'tombstone', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE binding_id IN (SELECT binding_id FROM story_library_bindings WHERE story_id = ?)
+        """,
+        (clean_story_id,),
+    )
+    conn.execute(
+        """
+        UPDATE story_library_bindings
+        SET status = 'archived', removed_at = COALESCE(removed_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE story_id = ? AND status <> 'archived'
+        """,
+        (clean_story_id,),
+    )
+
+    story_source_ids = [
         str(row["source_id"])
         for row in conn.execute(
             """
             SELECT DISTINCT source_id
+            FROM source_documents
+            WHERE story_id = ?
+            UNION
+            SELECT DISTINCT source_id
             FROM creative_attachments
             WHERE story_id = ? AND scope IN ('story', 'session', 'turn')
             """,
-            (clean_story_id,),
+            (clean_story_id, clean_story_id),
         ).fetchall()
     ]
-    for source_id in attachment_source_ids:
+    for source_id in story_source_ids:
         other_owner = conn.execute(
             """
             SELECT 1 FROM creative_attachments
@@ -138,33 +163,37 @@ def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
         ).fetchone()
         if other_owner is not None:
             continue
-        conn.execute(
-            "UPDATE source_documents SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) WHERE source_id = ?",
-            (source_id,),
-        )
 
     # Creative-session turns and fragments cascade from the session row.
     conn.execute("DELETE FROM creative_sessions WHERE story_id = ?", (clean_story_id,))
 
-    # Evidence can be linked indirectly through knowledge or source rows and
-    # has no story_id of its own, so remove it before deleting those parents.
+    # Evidence attached to surviving project knowledge must remain even when
+    # that knowledge points at a source first imported by this story.
     conn.execute(
         """
         DELETE FROM knowledge_evidence
         WHERE knowledge_id IN (SELECT knowledge_id FROM knowledge_items WHERE story_id = ?)
            OR pending_id IN (SELECT pending_id FROM pending_knowledge_items WHERE story_id = ?)
-           OR source_id IN (SELECT source_id FROM source_documents WHERE story_id = ?)
+           OR (
+               knowledge_id IS NULL AND pending_id IS NULL
+               AND source_id IN (SELECT source_id FROM source_documents WHERE story_id = ?)
+           )
            OR segment_id IN (
                SELECT segment.segment_id
                FROM source_segments AS segment
                JOIN source_documents AS source ON source.source_id = segment.source_id
                WHERE source.story_id = ?
+                 AND knowledge_evidence.knowledge_id IS NULL
+                 AND knowledge_evidence.pending_id IS NULL
            )
-           OR chunk_id IN (
-               SELECT chunk.chunk_id
-               FROM retrieval_chunks AS chunk
-               JOIN retrieval_documents AS document ON document.document_id = chunk.document_id
-               WHERE document.story_id = ?
+           OR (
+               knowledge_id IS NULL AND pending_id IS NULL
+               AND chunk_id IN (
+                   SELECT chunk.chunk_id
+                   FROM retrieval_chunks AS chunk
+                   JOIN retrieval_documents AS document ON document.document_id = chunk.document_id
+                   WHERE document.story_id = ?
+               )
            )
         """,
         (
@@ -212,16 +241,34 @@ def purge_story_scoped_rows(conn: sqlite3.Connection, story_id: str) -> None:
     ):
         conn.execute(f"DELETE FROM {table} WHERE story_id = ?", (clean_story_id,))
 
-    # Attachment-backed source documents are shared file assets. Their
-    # lifecycle was handled above; other story-owned source documents may now
-    # be removed normally.
-    conn.execute(
-        """
-        DELETE FROM source_documents
-        WHERE story_id = ?
-          AND source_id NOT IN (SELECT source_id FROM creative_attachments)
-        """,
-        (clean_story_id,),
-    )
+    # Source assets are immutable evidence. Keep them when any surviving
+    # knowledge, evidence, attachment, or frozen release still references them.
+    for source_id in story_source_ids:
+        referenced = conn.execute(
+            """
+            SELECT 1
+            WHERE EXISTS (
+                SELECT 1 FROM knowledge_items
+                WHERE source_id = ? AND (story_id IS NULL OR story_id <> ?)
+            )
+            OR EXISTS (
+                SELECT 1 FROM pending_knowledge_items
+                WHERE source_id = ? AND (story_id IS NULL OR story_id <> ?)
+            )
+            OR EXISTS (SELECT 1 FROM knowledge_evidence WHERE source_id = ?)
+            OR EXISTS (
+                SELECT 1 FROM creative_attachments
+                WHERE source_id = ? AND (story_id IS NULL OR story_id <> ?)
+            )
+            OR EXISTS (SELECT 1 FROM reference_library_release_items WHERE source_id = ?)
+            OR EXISTS (SELECT 1 FROM reference_library_release_sources WHERE source_id = ?)
+            """,
+            (source_id, clean_story_id, source_id, clean_story_id, source_id, source_id, clean_story_id, source_id, source_id),
+        ).fetchone()
+        if referenced is None:
+            conn.execute(
+                "UPDATE source_documents SET deleted_at = COALESCE(deleted_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) WHERE source_id = ?",
+                (source_id,),
+            )
 
     conn.execute("DELETE FROM story_profiles WHERE story_id = ?", (clean_story_id,))

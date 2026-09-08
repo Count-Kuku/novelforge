@@ -231,6 +231,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/ingestion/attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ingestion Attachments */
+        get: operations["ingestion_attachments_api_v1_projects__project_id__ingestion_attachments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/ingestion/attachments/{attachment_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Ingestion Attachment */
+        post: operations["retry_ingestion_attachment_api_v1_projects__project_id__ingestion_attachments__attachment_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/ingestion/workbench": {
         parameters: {
             query?: never;
@@ -367,6 +401,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/knowledge/pending/{pending_id}/resolve-entity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve Pending Entity */
+        post: operations["resolve_pending_entity_api_v1_projects__project_id__knowledge_pending__pending_id__resolve_entity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/knowledge/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Promote Knowledge */
+        post: operations["promote_knowledge_api_v1_projects__project_id__knowledge_promote_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/knowledge/search": {
         parameters: {
             query?: never;
@@ -445,6 +513,76 @@ export interface paths {
         };
         /** Knowledge Revisions */
         get: operations["knowledge_revisions_api_v1_projects__project_id__knowledge__record_type___record_id__revisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/reference-libraries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Libraries */
+        get: operations["list_libraries_api_v1_projects__project_id__reference_libraries_get"];
+        put?: never;
+        /** Create Library */
+        post: operations["create_library_api_v1_projects__project_id__reference_libraries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/reference-libraries/{library_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Archive Library */
+        post: operations["archive_library_api_v1_projects__project_id__reference_libraries__library_id__archive_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/reference-libraries/{library_id}/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Releases */
+        get: operations["list_releases_api_v1_projects__project_id__reference_libraries__library_id__releases_get"];
+        put?: never;
+        /** Create Release */
+        post: operations["create_release_api_v1_projects__project_id__reference_libraries__library_id__releases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/reference-libraries/{library_id}/releases/{release_id}/sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Release Sources */
+        get: operations["release_sources_api_v1_projects__project_id__reference_libraries__library_id__releases__release_id__sources_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -680,6 +818,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Story Branches Endpoint */
+        get: operations["list_story_branches_endpoint_api_v1_projects__project_id__stories__story_id__branches_get"];
+        put?: never;
+        /** Create Story Branch Endpoint */
+        post: operations["create_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches/{branch_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Story Branch Detail Endpoint */
+        get: operations["story_branch_detail_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Story Branch Endpoint */
+        patch: operations["update_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches/{branch_id}/checkpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Story Checkpoint Endpoint */
+        post: operations["create_story_checkpoint_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__checkpoints_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/branches/{branch_id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fork Story Branch Endpoint */
+        post: operations["fork_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__fork_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/stories/{story_id}/chapters/{chapter_no}": {
         parameters: {
             query?: never;
@@ -857,6 +1065,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/stories/{story_id}/ingestion/text": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Text Ingestion
+         * @description Add one text source to the project资料库 and queue extraction.
+         *
+         *     The route keeps a story in its URL for frontend navigation, but project
+         *     ownership is fixed by contract and the story is never written to the
+         *     attachment/batch/task domain.
+         */
+        post: operations["create_text_ingestion_api_v1_projects__project_id__stories__story_id__ingestion_text_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/legacy-reference-migration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Migrate Legacy Reference */
+        post: operations["migrate_legacy_reference_api_v1_projects__project_id__stories__story_id__legacy_reference_migration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/legacy-reference-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Legacy Reference Status */
+        get: operations["legacy_reference_status_api_v1_projects__project_id__stories__story_id__legacy_reference_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/stories/{story_id}/mode": {
         parameters: {
             query?: never;
@@ -904,6 +1170,74 @@ export interface paths {
         /** Update Story Profile */
         put: operations["update_story_profile_api_v1_projects__project_id__stories__story_id__profile_put"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Story Reference Context */
+        get: operations["story_reference_context_api_v1_projects__project_id__stories__story_id__reference_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-libraries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Story Bindings */
+        get: operations["list_story_bindings_api_v1_projects__project_id__stories__story_id__reference_libraries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-libraries/bindings/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Unbind Story Library */
+        delete: operations["unbind_story_library_api_v1_projects__project_id__stories__story_id__reference_libraries_bindings__binding_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/reference-libraries/{library_id}/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bind Story Library */
+        post: operations["bind_story_library_api_v1_projects__project_id__stories__story_id__reference_libraries__library_id__bindings_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1153,6 +1487,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/stories/{story_id}/sessions/{session_id}/fragments/{fragment_id}/extract/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Extract Fragment Stream
+         * @description 显式提炼已采用片段：无风险候选自动确认进正式知识，有风险留待审核。
+         */
+        post: operations["extract_fragment_stream_api_v1_projects__project_id__stories__story_id__sessions__session_id__fragments__fragment_id__extract_stream_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/stories/{story_id}/sessions/{session_id}/frontier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Select Frontier */
+        post: operations["select_frontier_api_v1_projects__project_id__stories__story_id__sessions__session_id__frontier_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/stories/{story_id}/sessions/{session_id}/turns/stream": {
         parameters: {
             query?: never;
@@ -1381,6 +1752,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/models/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Discover Models */
+        post: operations["discover_models_api_v1_settings_models_discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/prompt-options": {
         parameters: {
             query?: never;
@@ -1549,11 +1937,16 @@ export interface components {
         };
         /** Body_create_session_file_attachment_api_v1_projects__project_id__stories__story_id__sessions__session_id__attachments_file_post */
         Body_create_session_file_attachment_api_v1_projects__project_id__stories__story_id__sessions__session_id__attachments_file_post: {
+            /**
+             * Branch Id
+             * @default
+             */
+            branch_id: string;
             /** File */
             file: string;
             /**
              * Scope
-             * @default session
+             * @default story
              */
             scope: string;
         };
@@ -1571,6 +1964,32 @@ export interface components {
              * @default chi_sim+eng
              */
             languages: string;
+        };
+        /** BranchCheckpointRequest */
+        BranchCheckpointRequest: {
+            /**
+             * Allow Current State
+             * @default false
+             */
+            allow_current_state: boolean;
+            /**
+             * Extraction Status
+             * @default ready
+             * @enum {string}
+             */
+            extraction_status: "ready" | "completed" | "skipped" | "pending";
+            /** Frontier Fragment Id */
+            frontier_fragment_id?: string | null;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
+        /** BranchContextRequest */
+        BranchContextRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
         };
         /** ChapterPlanValidationRequest */
         ChapterPlanValidationRequest: {
@@ -1613,12 +2032,14 @@ export interface components {
         };
         /** CreateAttachmentRequest */
         CreateAttachmentRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
             /**
              * Scope
-             * @default session
+             * @default story
              * @enum {string}
              */
-            scope: "turn" | "session" | "story" | "project";
+            scope: "story" | "project";
             /** Text */
             text: string;
             /**
@@ -1626,6 +2047,27 @@ export interface components {
              * @default 粘贴资料
              */
             title: string;
+        };
+        /** CreateBranchRequest */
+        CreateBranchRequest: {
+            /**
+             * Allow Current State
+             * @default false
+             */
+            allow_current_state: boolean;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Fork Checkpoint Id */
+            fork_checkpoint_id?: string | null;
+            /** Fork Fragment Id */
+            fork_fragment_id?: string | null;
+            /** Name */
+            name: string;
+            /** Parent Branch Id */
+            parent_branch_id?: string | null;
         };
         /** CreateProjectRequest */
         CreateProjectRequest: {
@@ -1651,7 +2093,12 @@ export interface components {
         CreateSessionRequest: {
             /** Auto Extract Mode */
             auto_extract_mode?: ("manual" | "on_accept") | null;
-            /** Session Goal */
+            /** Branch Id */
+            branch_id?: string | null;
+            /**
+             * Session Goal
+             * @default
+             */
             session_goal: string;
             /**
              * Title
@@ -1677,14 +2124,31 @@ export interface components {
         };
         /** CreateUrlAttachmentRequest */
         CreateUrlAttachmentRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
             /**
              * Scope
-             * @default session
+             * @default story
              * @enum {string}
              */
-            scope: "turn" | "session" | "story" | "project";
+            scope: "story" | "project";
             /** Url */
             url: string;
+        };
+        /** DiscoverModelsRequest */
+        DiscoverModelsRequest: {
+            /**
+             * Api Key
+             * @default
+             */
+            api_key: string;
+            /** Base Url */
+            base_url: string;
+            /**
+             * Provider Type
+             * @default auto
+             */
+            provider_type: string;
         };
         /** DiscussionApprovalRequest */
         DiscussionApprovalRequest: {
@@ -1700,6 +2164,8 @@ export interface components {
         };
         /** ExecuteActionRequest */
         ExecuteActionRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
             /**
              * Confirmed
              * @default false
@@ -1708,6 +2174,8 @@ export interface components {
         };
         /** FragmentActionRequest */
         FragmentActionRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
             /** Fragment Id */
             fragment_id: string;
         };
@@ -1715,12 +2183,19 @@ export interface components {
         GenerateTurnRequest: {
             /**
              * Action Type
-             * @default continue
+             * @default generate
              * @enum {string}
              */
-            action_type: "continue" | "rewrite" | "branch";
+            action_type: "generate" | "continue" | "rewrite" | "branch";
             /** Branch From Fragment Id */
             branch_from_fragment_id?: string | null;
+            /** Branch Id */
+            branch_id?: string | null;
+            /**
+             * Enable Web Search
+             * @default false
+             */
+            enable_web_search: boolean;
             /** User Message */
             user_message: string;
             /**
@@ -1733,6 +2208,35 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * IngestionTextRequest
+         * @description 资料库文本导入。
+         *
+         *     资料库条目恒为项目作用域，保留 ``scope`` 仅用于兼容旧客户端的请求
+         *     形状，服务端会拒绝任何非 project 值，避免调用方把资料库内容误落到故事。
+         */
+        IngestionTextRequest: {
+            /**
+             * Scope
+             * @default project
+             * @constant
+             */
+            scope: "project";
+            /** Text */
+            text: string;
+            /**
+             * Title
+             * @default 粘贴资料
+             */
+            title: string;
+        };
+        /** KnowledgePromotionRequest */
+        KnowledgePromotionRequest: {
+            /** Attachment Id */
+            attachment_id?: string | null;
+            /** Knowledge Ids */
+            knowledge_ids?: string[];
         };
         /** KnowledgeUpdateRequest */
         KnowledgeUpdateRequest: {
@@ -1749,6 +2253,22 @@ export interface components {
             reason: string;
             /** Target Category */
             target_category?: string | null;
+        };
+        /** LegacyStoryLibraryMigrationRequest */
+        LegacyStoryLibraryMigrationRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
+            /**
+             * Confirmed
+             * @default false
+             */
+            confirmed: boolean;
+            /** Library Id */
+            library_id?: string | null;
+            /** Release Id */
+            release_id?: string | null;
+            /** Selections */
+            selections?: components["schemas"]["Selection"][];
         };
         /** ModelProfileRequest */
         ModelProfileRequest: {
@@ -1812,6 +2332,8 @@ export interface components {
         };
         /** PlanActionRequest */
         PlanActionRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
             /**
              * Idempotency Key
              * @default
@@ -1826,6 +2348,31 @@ export interface components {
             options?: {
                 [key: string]: unknown;
             }[];
+        };
+        /** ReferenceLibraryCreateRequest */
+        ReferenceLibraryCreateRequest: {
+            /** Source Id */
+            source_id?: string | null;
+            /**
+             * Source Kind
+             * @default reference
+             */
+            source_kind: string;
+            /** Title */
+            title: string;
+        };
+        /** ReferenceLibraryReleaseRequest */
+        ReferenceLibraryReleaseRequest: {
+            /** Content Hash */
+            content_hash?: string | null;
+            /** Knowledge Ids */
+            knowledge_ids?: string[];
+            /** Manifest */
+            manifest?: {
+                [key: string]: unknown;
+            };
+            /** Release Id */
+            release_id?: string | null;
         };
         /** RenameProjectRequest */
         RenameProjectRequest: {
@@ -1889,6 +2436,11 @@ export interface components {
             /** Topic */
             topic: string;
         };
+        /** ResolvePendingEntityRequest */
+        ResolvePendingEntityRequest: {
+            /** Target Entity Id */
+            target_entity_id: string;
+        };
         /** RestoreRevisionRequest */
         RestoreRevisionRequest: {
             /**
@@ -1899,12 +2451,29 @@ export interface components {
             /** Revision Id */
             revision_id: string;
         };
+        /** RetryAttachmentRequest */
+        RetryAttachmentRequest: {
+            /**
+             * Confirm Over Budget
+             * @default false
+             */
+            confirm_over_budget: boolean;
+        };
         /** RulesUpdateRequest */
         RulesUpdateRequest: {
             /** Rules */
             rules?: {
                 [key: string]: unknown;
             };
+        };
+        /** Selection */
+        Selection: {
+            /** Branch Id */
+            branch_id?: string | null;
+            /** Library Id */
+            library_id: string;
+            /** Release Id */
+            release_id: string;
         };
         /** SetStoryModeRequest */
         SetStoryModeRequest: {
@@ -1914,6 +2483,18 @@ export interface components {
              */
             creation_mode: "planned" | "conversational";
         };
+        /** StoryLibraryBindingRequest */
+        StoryLibraryBindingRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
+            /**
+             * Idempotency Key
+             * @default
+             */
+            idempotency_key: string;
+            /** Release Id */
+            release_id: string;
+        };
         /** TaskControlRequest */
         TaskControlRequest: {
             /**
@@ -1921,6 +2502,15 @@ export interface components {
              * @enum {string}
              */
             action: "pause" | "resume" | "cancel" | "retry";
+        };
+        /** UpdateBranchRequest */
+        UpdateBranchRequest: {
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Status */
+            status?: ("active" | "archived") | null;
         };
         /** UpdateChapterPlanRequest */
         UpdateChapterPlanRequest: {
@@ -1967,6 +2557,8 @@ export interface components {
         };
         /** UpdateSessionRequest */
         UpdateSessionRequest: {
+            /** Branch Id */
+            branch_id?: string | null;
             /** Status */
             status?: ("active" | "archived") | null;
             /** Title */
@@ -2481,6 +3073,79 @@ export interface operations {
             };
         };
     };
+    ingestion_attachments_api_v1_projects__project_id__ingestion_attachments_get: {
+        parameters: {
+            query?: {
+                story_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_ingestion_attachment_api_v1_projects__project_id__ingestion_attachments__attachment_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                attachment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RetryAttachmentRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     ingestion_workbench_before_detail_api_v1_projects__project_id__ingestion_workbench_get: {
         parameters: {
             query?: never;
@@ -2590,6 +3255,8 @@ export interface operations {
         parameters: {
             query?: {
                 entity_type?: string;
+                story_id?: string | null;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -2625,6 +3292,7 @@ export interface operations {
         parameters: {
             query?: {
                 story_id?: string | null;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -2658,7 +3326,10 @@ export interface operations {
     };
     pending_knowledge_api_v1_projects__project_id__knowledge_pending_get: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -2691,7 +3362,10 @@ export interface operations {
     };
     confirm_pending_knowledge_api_v1_projects__project_id__knowledge_pending_confirm_post: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -2728,7 +3402,10 @@ export interface operations {
     };
     discard_pending_knowledge_api_v1_projects__project_id__knowledge_pending_discard_post: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -2763,11 +3440,93 @@ export interface operations {
             };
         };
     };
+    resolve_pending_entity_api_v1_projects__project_id__knowledge_pending__pending_id__resolve_entity_post: {
+        parameters: {
+            query: {
+                story_id: string;
+                branch_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                pending_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolvePendingEntityRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    promote_knowledge_api_v1_projects__project_id__knowledge_promote_post: {
+        parameters: {
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KnowledgePromotionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     search_knowledge_api_v1_projects__project_id__knowledge_search_get: {
         parameters: {
             query?: {
                 query?: string;
                 story_id?: string | null;
+                branch_id?: string | null;
                 cursor?: string;
                 page_size?: number;
                 record_type?: string;
@@ -2804,7 +3563,10 @@ export interface operations {
     };
     knowledge_detail_api_v1_projects__project_id__knowledge__record_type___record_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -2839,7 +3601,10 @@ export interface operations {
     };
     update_knowledge_record_api_v1_projects__project_id__knowledge__record_type___record_id__put: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -2878,7 +3643,10 @@ export interface operations {
     };
     knowledge_evidence_api_v1_projects__project_id__knowledge__record_type___record_id__evidence_get: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -2913,7 +3681,10 @@ export interface operations {
     };
     restore_knowledge_record_api_v1_projects__project_id__knowledge__record_type___record_id__restore_post: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -2952,12 +3723,230 @@ export interface operations {
     };
     knowledge_revisions_api_v1_projects__project_id__knowledge__record_type___record_id__revisions_get: {
         parameters: {
-            query?: never;
+            query?: {
+                story_id?: string | null;
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
                 record_type: string;
                 record_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_libraries_api_v1_projects__project_id__reference_libraries_get: {
+        parameters: {
+            query?: {
+                include_archived?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_library_api_v1_projects__project_id__reference_libraries_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferenceLibraryCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_library_api_v1_projects__project_id__reference_libraries__library_id__archive_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                library_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_releases_api_v1_projects__project_id__reference_libraries__library_id__releases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                library_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_release_api_v1_projects__project_id__reference_libraries__library_id__releases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                library_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReferenceLibraryReleaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_sources_api_v1_projects__project_id__reference_libraries__library_id__releases__release_id__sources_get: {
+        parameters: {
+            query?: {
+                source_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                library_id: string;
+                release_id: string;
             };
             cookie?: never;
         };
@@ -3445,7 +4434,9 @@ export interface operations {
     };
     arc_detail_api_v1_projects__project_id__stories__story_id__arcs__arc_no__get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3480,7 +4471,9 @@ export interface operations {
     };
     update_arc_api_v1_projects__project_id__stories__story_id__arcs__arc_no__put: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3519,7 +4512,9 @@ export interface operations {
     };
     delete_arc_api_v1_projects__project_id__stories__story_id__arcs__arc_no__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3554,7 +4549,9 @@ export interface operations {
     };
     arc_chapter_plan_api_v1_projects__project_id__stories__story_id__arcs__arc_no__chapter_plan_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3589,7 +4586,9 @@ export interface operations {
     };
     update_arc_chapter_plan_api_v1_projects__project_id__stories__story_id__arcs__arc_no__chapter_plan_put: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3628,7 +4627,9 @@ export interface operations {
     };
     validate_arc_chapter_plan_api_v1_projects__project_id__stories__story_id__arcs__arc_no__chapter_plan_validate_post: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3665,9 +4666,237 @@ export interface operations {
             };
         };
     };
-    chapter_detail_api_v1_projects__project_id__stories__story_id__chapters__chapter_no__get: {
+    list_story_branches_endpoint_api_v1_projects__project_id__stories__story_id__branches_get: {
+        parameters: {
+            query?: {
+                include_archived?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches_post: {
         parameters: {
             query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBranchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    story_branch_detail_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateBranchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_story_checkpoint_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__checkpoints_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BranchCheckpointRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fork_story_branch_endpoint_api_v1_projects__project_id__stories__story_id__branches__branch_id__fork_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                branch_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBranchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    chapter_detail_api_v1_projects__project_id__stories__story_id__chapters__chapter_no__get: {
+        parameters: {
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3702,7 +4931,9 @@ export interface operations {
     };
     update_chapter_api_v1_projects__project_id__stories__story_id__chapters__chapter_no__put: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3741,7 +4972,9 @@ export interface operations {
     };
     chapter_versions_api_v1_projects__project_id__stories__story_id__chapters__chapter_no__versions_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -3780,6 +5013,7 @@ export interface operations {
                 query?: string;
                 chapter_no?: number | null;
                 budget?: number;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -3854,6 +5088,7 @@ export interface operations {
         parameters: {
             query?: {
                 asset_no?: number | null;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -3891,6 +5126,7 @@ export interface operations {
         parameters: {
             query?: {
                 asset_no?: number | null;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -3932,6 +5168,7 @@ export interface operations {
         parameters: {
             query?: {
                 asset_no?: number | null;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -4075,6 +5312,116 @@ export interface operations {
             };
         };
     };
+    create_text_ingestion_api_v1_projects__project_id__stories__story_id__ingestion_text_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IngestionTextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    migrate_legacy_reference_api_v1_projects__project_id__stories__story_id__legacy_reference_migration_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LegacyStoryLibraryMigrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    legacy_reference_status_api_v1_projects__project_id__stories__story_id__legacy_reference_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_story_mode_api_v1_projects__project_id__stories__story_id__mode_patch: {
         parameters: {
             query?: never;
@@ -4115,7 +5462,9 @@ export interface operations {
     };
     story_outline_api_v1_projects__project_id__stories__story_id__outline_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4149,7 +5498,9 @@ export interface operations {
     };
     update_story_outline_api_v1_projects__project_id__stories__story_id__outline_put: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4187,7 +5538,9 @@ export interface operations {
     };
     story_profile_api_v1_projects__project_id__stories__story_id__profile_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4221,7 +5574,9 @@ export interface operations {
     };
     update_story_profile_api_v1_projects__project_id__stories__story_id__profile_put: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4237,6 +5592,155 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    story_reference_context_api_v1_projects__project_id__stories__story_id__reference_context_get: {
+        parameters: {
+            query?: {
+                branch_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_story_bindings_api_v1_projects__project_id__stories__story_id__reference_libraries_get: {
+        parameters: {
+            query?: {
+                branch_id?: string | null;
+                include_archived?: boolean;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unbind_story_library_api_v1_projects__project_id__stories__story_id__reference_libraries_bindings__binding_id__delete: {
+        parameters: {
+            query?: {
+                branch_id?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bind_story_library_api_v1_projects__project_id__stories__story_id__reference_libraries__library_id__bindings_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                library_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StoryLibraryBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4293,7 +5797,9 @@ export interface operations {
     };
     story_rules_api_v1_projects__project_id__stories__story_id__rules_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4327,7 +5833,9 @@ export interface operations {
     };
     update_story_rules_api_v1_projects__project_id__stories__story_id__rules_put: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4365,7 +5873,9 @@ export interface operations {
     };
     list_sessions_api_v1_projects__project_id__stories__story_id__sessions_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4437,7 +5947,9 @@ export interface operations {
     };
     session_detail_api_v1_projects__project_id__stories__story_id__sessions__session_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4546,7 +6058,9 @@ export interface operations {
     };
     list_session_actions_api_v1_projects__project_id__stories__story_id__sessions__session_id__actions_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4620,7 +6134,9 @@ export interface operations {
     };
     cancel_session_action_api_v1_projects__project_id__stories__story_id__sessions__session_id__actions__action_id__cancel_post: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4696,7 +6212,9 @@ export interface operations {
     };
     undo_session_action_api_v1_projects__project_id__stories__story_id__sessions__session_id__actions__action_id__undo_post: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4732,7 +6250,9 @@ export interface operations {
     };
     list_session_attachments_api_v1_projects__project_id__stories__story_id__sessions__session_id__attachments_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -4960,6 +6480,83 @@ export interface operations {
             };
         };
     };
+    extract_fragment_stream_api_v1_projects__project_id__stories__story_id__sessions__session_id__fragments__fragment_id__extract_stream_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                session_id: string;
+                fragment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["BranchContextRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    select_frontier_api_v1_projects__project_id__stories__story_id__sessions__session_id__frontier_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                story_id: string;
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FragmentActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     generate_turn_stream_api_v1_projects__project_id__stories__story_id__sessions__session_id__turns_stream_post: {
         parameters: {
             query?: never;
@@ -4999,7 +6596,9 @@ export interface operations {
     };
     story_structure_api_v1_projects__project_id__stories__story_id__structure_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -5033,7 +6632,9 @@ export interface operations {
     };
     volume_detail_api_v1_projects__project_id__stories__story_id__volumes__volume_no__get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -5068,7 +6669,9 @@ export interface operations {
     };
     update_volume_api_v1_projects__project_id__stories__story_id__volumes__volume_no__put: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -5107,7 +6710,9 @@ export interface operations {
     };
     delete_volume_api_v1_projects__project_id__stories__story_id__volumes__volume_no__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -5145,6 +6750,7 @@ export interface operations {
             query?: {
                 cursor?: number;
                 page_size?: number;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -5179,7 +6785,9 @@ export interface operations {
     };
     delete_chapter_work_endpoint_api_v1_projects__project_id__stories__story_id__works_chapters__chapter_no__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -5214,7 +6822,9 @@ export interface operations {
     };
     remove_fragment_work_endpoint_api_v1_projects__project_id__stories__story_id__works_fragments__fragment_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -5249,7 +6859,9 @@ export interface operations {
     };
     story_workspace_api_v1_projects__project_id__stories__story_id__workspace_get: {
         parameters: {
-            query?: never;
+            query?: {
+                branch_id?: string | null;
+            };
             header?: never;
             path: {
                 project_id: string;
@@ -5538,12 +7150,48 @@ export interface operations {
             };
         };
     };
+    discover_models_api_v1_settings_models_discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscoverModelsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     prompt_options_api_v1_settings_prompt_options_get: {
         parameters: {
             query?: {
                 layer?: string;
                 project_id?: string | null;
                 story_id?: string | null;
+                branch_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -5578,6 +7226,7 @@ export interface operations {
             query?: {
                 project_id?: string | null;
                 story_id?: string | null;
+                branch_id?: string | null;
             };
             header?: never;
             path: {
@@ -5618,6 +7267,7 @@ export interface operations {
             query?: {
                 project_id?: string | null;
                 story_id?: string | null;
+                branch_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -5652,6 +7302,7 @@ export interface operations {
             query?: {
                 project_id?: string | null;
                 story_id?: string | null;
+                branch_id?: string | null;
             };
             header?: never;
             path: {

@@ -56,7 +56,7 @@ def _load_rows(conn: sqlite3.Connection) -> list[dict]:
     """Load all live knowledge_items rows with the columns backfill needs."""
     rows = conn.execute(
         """
-        SELECT knowledge_id, story_id, category, name, summary, content_json,
+        SELECT knowledge_id, story_id, branch_id, category, name, summary, content_json,
                worldline_id, setting_scope, importance
         FROM knowledge_items
         WHERE deleted_at IS NULL
@@ -68,13 +68,14 @@ def _load_rows(conn: sqlite3.Connection) -> list[dict]:
         out.append({
             "knowledge_id": row[0],
             "story_id": row[1],
-            "category": row[2],
-            "name": row[3],
-            "summary": row[4],
-            "content_json": row[5],
-            "worldline_id": row[6],
-            "setting_scope": row[7],
-            "importance": row[8],
+            "branch_id": row[2],
+            "category": row[3],
+            "name": row[4],
+            "summary": row[5],
+            "content_json": row[6],
+            "worldline_id": row[7],
+            "setting_scope": row[8],
+            "importance": row[9],
         })
     return out
 
@@ -122,12 +123,13 @@ def backfill_entities(
             continue
         eid = entity_id_for(entity_type, name, domain)
         if eid not in entities:
-            setting_scope, story_id, worldline_id, version_scope = domain
+            setting_scope, story_id, branch_id, worldline_id, version_scope = domain
             entities[eid] = {
                 "entity_id": eid,
                 "entity_type": entity_type,
                 "canonical_name": name,
                 "story_id": story_id or None,
+                "branch_id": branch_id or None,
                 "worldline_id": worldline_id or None,
                 "setting_scope": setting_scope or "project",
                 "version_scope": version_scope or "project_main",
@@ -144,9 +146,9 @@ def backfill_entities(
         conn.execute(
             """
             INSERT INTO entities (
-                entity_id, entity_type, canonical_name, display_name, story_id, worldline_id,
+                entity_id, entity_type, canonical_name, display_name, story_id, branch_id, worldline_id,
                 setting_scope, version_scope, summary, importance
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(entity_id) DO UPDATE SET
                 canonical_name = excluded.canonical_name,
                 summary = CASE WHEN excluded.summary != '' THEN excluded.summary ELSE entities.summary END,
@@ -156,7 +158,7 @@ def backfill_entities(
             """,
             (
                 eid, entity["entity_type"], entity["canonical_name"], entity["canonical_name"],
-                entity["story_id"], entity["worldline_id"], entity["setting_scope"],
+                entity["story_id"], entity["branch_id"], entity["worldline_id"], entity["setting_scope"],
                 entity["version_scope"], entity["summary"], entity["importance"],
             ),
         )

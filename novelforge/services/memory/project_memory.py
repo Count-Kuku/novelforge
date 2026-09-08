@@ -65,6 +65,14 @@ def create_project(project_name: str) -> str:
     ensure_project_path(normalized_name)
     _initialize_project_db_best_effort(normalized_name)
     _memory_api.load_stories_index(normalized_name)
+    with _memory_api.open_project_db(project_path(normalized_name).resolve()) as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO story_reference_states (story_id, read_mode, migration_status)
+            SELECT story_id, 'strict', 'not_required' FROM stories WHERE deleted_at IS NULL
+            """
+        )
+        conn.commit()
     load_memory(normalized_name)
     _memory_api.load_creative_profile(normalized_name)
     _memory_api.load_project_rules(normalized_name)

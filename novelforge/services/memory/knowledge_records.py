@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json as __json
+from uuid import uuid4 as __uuid4
+
 from novelforge.services import memory as _memory_api
 
 def upsert_knowledge_category_item_record(project_name: str, category: str, item: dict) -> dict:
@@ -124,6 +127,106 @@ def update_confirmed_knowledge_item_record(
 
     _memory_api._refresh_knowledge_retrieval_best_effort(project_name)
     return True
+
+
+def create_story_knowledge_override(
+    project_name: str,
+    base_record: dict,
+    patch: dict,
+    *,
+    story_id: str,
+    branch_id: str,
+    reason: str = "编辑当前世界线继承资料",
+) -> dict:
+    """Create a branch-owned override for an immutable inherited record.
+
+    The parent/checkpoint ID remains untouched.  The new record carries
+    ``origin_knowledge_id`` so branch checkpoints and context assembly can
+    replace the inherited payload by origin, while evidence anchors are copied
+    to the new owner for continued source verification.
+    """
+
+    clean_story_id = str(story_id or "").strip()
+    clean_branch_id = str(branch_id or "").strip()
+    if not clean_story_id or not clean_branch_id:
+        raise ValueError("创建世界线知识副本需要明确故事和世界线。")
+    if _memory_api._project_db_marked_unavailable(project_name):
+        raise RuntimeError(f"Project database is unavailable for {project_name}.")
+    branch = _memory_api.load_story_branch(project_name, clean_story_id, clean_branch_id)
+    if str(branch.get("status") or "active") == "archived":
+        raise ValueError("已归档的世界线只读，不能创建知识副本。")
+    source_payload = dict(base_record.get("payload") if isinstance(base_record.get("payload"), dict) else {})
+    # Older checkpoint rows and a few API callers expose enriched snapshot
+    # fields beside ``payload``.  Fold those fields into the copied payload so
+    # an override retains frozen evidence/entity projections without reading
+    # the parent's live tables.
+    for key in (
+        "evidence", "entity", "entity_aliases", "entity_alias_group",
+        "entity_relations", "canonical_name", "entity_type", "superseded_by",
+        "source_id", "segment_id", "source_segment_id", "source_segment_ids",
+    ):
+        if key not in source_payload and base_record.get(key) is not None:
+            source_payload[key] = base_record.get(key)
+    origin_id = str(
+        base_record.get("knowledge_id")
+        or base_record.get("record_id")
+        or source_payload.get("knowledge_id")
+        or source_payload.get("id")
+        or ""
+    ).strip()
+    category = str(base_record.get("category") or source_payload.get("category") or "").strip()
+    if not origin_id or not category:
+        raise ValueError("继承知识缺少稳定 ID 或分类，无法创建当前线副本。")
+    merged = {**source_payload, **(patch if isinstance(patch, dict) else {})}
+    override_id = f"knowledge_override_{__uuid4().hex}"
+    merged.update({
+        "id": override_id,
+        "knowledge_id": override_id,
+        "origin_knowledge_id": str(source_payload.get("origin_knowledge_id") or origin_id),
+        "category": category,
+        "story_id": clean_story_id,
+        "branch_id": clean_branch_id,
+        "setting_scope": "story",
+        "status": "confirmed",
+        "revision_reason": reason,
+    })
+
+    saved: dict
+    with _memory_api.open_project_db(_memory_api.project_path(project_name).resolve()) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        existing_row = conn.execute(
+            "SELECT knowledge_id, content_json FROM knowledge_items WHERE story_id = ? AND branch_id = ? AND setting_scope = 'story' AND status = 'confirmed' AND deleted_at IS NULL AND json_extract(content_json, '$.origin_knowledge_id') = ? ORDER BY updated_at DESC, knowledge_id LIMIT 1",
+            (clean_story_id, clean_branch_id, str(source_payload.get("origin_knowledge_id") or origin_id)),
+        ).fetchone()
+        if existing_row is not None:
+            try:
+                existing_payload = __json.loads(str(existing_row[1] or "{}"))
+            except (TypeError, ValueError):
+                existing_payload = {}
+            if not isinstance(existing_payload, dict):
+                existing_payload = {}
+            existing_payload.update(patch if isinstance(patch, dict) else {})
+            existing_payload.update({
+                "id": str(existing_row[0]),
+                "knowledge_id": str(existing_row[0]),
+                "origin_knowledge_id": str(source_payload.get("origin_knowledge_id") or origin_id),
+                "category": category,
+                "story_id": clean_story_id,
+                "branch_id": clean_branch_id,
+                "setting_scope": "story",
+                "status": "confirmed",
+                "revision_reason": reason,
+            })
+            saved, _ = _memory_api.upsert_knowledge_category_item(conn, category, existing_payload)
+            conn.commit()
+        else:
+            # The checkpoint payload is the source of truth for inherited evidence.
+            # Do not read the parent's live evidence table: parent edits after the
+            # fork must never appear in the child override.
+            saved, _ = _memory_api.upsert_knowledge_category_item(conn, category, merged)
+            conn.commit()
+    _memory_api._refresh_knowledge_retrieval_best_effort(project_name)
+    return saved
 
 
 def merge_confirmed_knowledge_item_records(

@@ -351,28 +351,66 @@ def build_ingestion_source_ledger(project_name: str) -> list[dict]:
 
 
 def enrich_consolidated_knowledge_items(items: list[dict], source_items: list[dict], consolidation_mode: str) -> list[dict]:
-    source_pending_ids = [str(item.get("pending_id") or "") for item in source_items if item.get("pending_id")]
-    source_segment_ids = merge_list_values([item.get("source_segment_ids", []) for item in source_items] + [[
-        item.get("source_segment_id", "") for item in source_items if item.get("source_segment_id")
-    ]])
-    source_segment_titles = merge_list_values([item.get("source_segment_titles", []) for item in source_items] + [[
-        item.get("source_segment_title", "") for item in source_items if item.get("source_segment_title")
-    ]])
     enriched_items = []
     for item in items:
         if not isinstance(item, dict):
             continue
         enriched = dict(item)
         enriched["extraction_mode"] = str(enriched.get("extraction_mode") or f"consolidated:{consolidation_mode}")
-        if not enriched.get("merged_from_pending_ids"):
-            enriched["merged_from_pending_ids"] = source_pending_ids
-        if not enriched.get("source_segment_ids"):
-            enriched["source_segment_ids"] = source_segment_ids
-        if not enriched.get("source_segment_titles"):
-            enriched["source_segment_titles"] = source_segment_titles
-        for field in ("story_id", "source_id", "source_revision_id"):
-            if not enriched.get(field):
-                enriched[field] = next((source.get(field) for source in source_items if source.get(field)), "")
+        requested_ids = {
+            str(value or "").strip()
+            for value in (enriched.get("merged_from_pending_ids") or [])
+            if str(value or "").strip()
+        }
+        if requested_ids:
+            matches = [
+                source for source in source_items
+                if str(source.get("pending_id") or "").strip() in requested_ids
+            ]
+        else:
+            target_category = str(enriched.get("category") or "").strip()
+            target_name = " ".join(str(enriched.get("name") or "").split()).strip()
+            matches = [
+                source for source in source_items
+                if str(source.get("category") or "").strip() == target_category
+                and " ".join(str(source.get("name") or "").split()).strip() == target_name
+            ]
+            # A one-item batch is an unambiguous fallback.  Never use the
+            # whole batch as a source for an item with no reliable identity.
+            if not matches and len(source_items) == 1:
+                matches = [source_items[0]]
+        if matches and not enriched.get("merged_from_pending_ids"):
+            enriched["merged_from_pending_ids"] = [
+                str(source.get("pending_id") or "").strip()
+                for source in matches
+                if str(source.get("pending_id") or "").strip()
+            ]
+        if matches and not enriched.get("source_segment_ids"):
+            enriched["source_segment_ids"] = merge_list_values([
+                source.get("source_segment_ids", []) for source in matches
+            ] + [[
+                source.get("source_segment_id", "") for source in matches
+                if source.get("source_segment_id")
+            ]])
+        if matches and not enriched.get("source_segment_titles"):
+            enriched["source_segment_titles"] = merge_list_values([
+                source.get("source_segment_titles", []) for source in matches
+            ] + [[
+                source.get("source_segment_title", "") for source in matches
+                if source.get("source_segment_title")
+            ]])
+        for field in ("story_id", "source_id", "source_revision_id", "source_origin", "creative_attachment_id", "setting_scope", "version_scope", "setting_role", "injection_policy", "setting_field", "worldline_id", "worldline_label"):
+            if enriched.get(field) or not matches:
+                continue
+            values = list(dict.fromkeys(
+                str(source.get(field) or "").strip()
+                for source in matches
+                if str(source.get(field) or "").strip()
+            ))
+            if len(values) == 1:
+                enriched[field] = values[0]
+        if matches and not enriched.get("aliases"):
+            enriched["aliases"] = merge_list_values([source.get("aliases", []) for source in matches])
         tags = merge_list_values([enriched.get("tags", []), [f"整理:{KNOWLEDGE_CONSOLIDATION_MODE_LABELS.get(consolidation_mode, consolidation_mode)}"]])
         enriched["tags"] = tags
         enriched_items.append(enriched)
@@ -388,7 +426,8 @@ def consolidate_batch_pending_items(
     limit: int,
     stream_callback=None,
     task_id: str = "",
-    story_id: str = "default",
+    story_id: str = "",
+    branch_id: str = "",
 ) -> dict:
     batch_pending_items = _sw.get_batch_pending_knowledge_items(project_name, batch)
     target_items = [
@@ -428,7 +467,14 @@ def consolidate_batch_pending_items(
 
     target_ids = [str(item.get("pending_id", "")) for item in target_items if item.get("pending_id")]
     scope_value = target_items[0].get("scope", batch.get("scope", "reference"))
-    pending_items = build_pending_knowledge_from_reference_extraction(enriched_items, scope=scope_value)
+    target_scope = str(batch.get("target_scope") or ("story" if str(story_id or "").strip() else "project"))
+    pending_items = build_pending_knowledge_from_reference_extraction(
+        enriched_items,
+        scope=scope_value,
+        setting_scope=target_scope,
+        story_id=str(story_id or ""),
+        branch_id=str(branch_id or ""),
+    )
     queued_count = queue_pending_knowledge_items(
         project_name,
         pending_items,
@@ -436,6 +482,7 @@ def consolidate_batch_pending_items(
         authority=target_items[0].get("authority", batch.get("authority", "curated")),
         source_title=batch.get("title", payload.get("source_title", "")),
         source_origin=batch.get("source_origin", ""),
+        branch_id=str(branch_id or ""),
         replace_pending_ids=target_ids,
     )
     if queued_count <= 0:
@@ -572,7 +619,7 @@ def run_long_reference_quick_process(
     run_key: str = "",
     task_id: str = "",
     worker_id: str = "",
-    story_id: str = "default",
+    story_id: str = "",
 ) -> tuple[dict, dict]:
     from novelforge.workflows.long_reference_quick_process import (
         run_long_reference_quick_process as _run_long_reference_quick_process,

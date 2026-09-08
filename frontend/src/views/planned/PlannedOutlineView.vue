@@ -70,14 +70,14 @@ async function discussOutline() {
       if (event === 'delta') discussionText.value += String(data?.text || '')
       if (event === 'done') discussionStep.value = data?.result || null
       if (event === 'error') throw new ApiClientError(String(data?.message || '讨论失败'), 500, String(data?.code || 'discussion_failed'))
-    })
+    }, undefined, workspace.activeBranchId || undefined)
   } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '讨论失败' } finally { discussing.value = false }
 }
 
 async function approveOutlineDiscussion() {
   if (!workspace.activeProjectId || !workspace.activeStory || !discussionStep.value || approving.value) return
   approving.value = true
-  try { await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'outline', discussionStep.value); discussionText.value = '已采用讨论结论并保存到大纲讨论记录。' } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '应用结论失败' } finally { approving.value = false }
+  try { await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'outline', discussionStep.value, undefined, workspace.activeBranchId || undefined); discussionText.value = '已采用讨论结论并保存到大纲讨论记录。' } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '应用结论失败' } finally { approving.value = false }
 }
 
 async function startSuggestedDiscussion() {

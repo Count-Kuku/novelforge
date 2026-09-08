@@ -18,6 +18,7 @@ from novelforge.services.memory import (
     load_project_rules,
     load_story_prompt_options,
     load_story_rules,
+    resolve_branch_context,
 )
 from novelforge.core.prompt_options import format_prompt_options_for_prompt, merge_prompt_option_layers
 from novelforge.core.prompts import format_rules_for_prompt
@@ -29,6 +30,7 @@ from novelforge.domain.setting_knowledge import (
     SETTING_FIELD_SPECS,
     build_entity_scoped_setting_context,
     build_generation_setting_context,
+    format_setting_items_for_prompt,
 )
 from novelforge.domain.creation_modes import should_include_planning_context
 
@@ -205,6 +207,76 @@ def _format_generation_guidance(guidance: dict) -> str:
     return json.dumps(cleaned, ensure_ascii=False, indent=2) if cleaned else ""
 
 
+def _snapshot_directives(
+    directives: list[dict],
+    *,
+    capability: str,
+    chapter_no: int | None,
+) -> list[dict]:
+    """Filter a checkpoint's immutable directive payload without rereading live assets."""
+    now = datetime.now(timezone.utc)
+    result: list[dict] = []
+    for directive in directives or []:
+        if not isinstance(directive, dict) or not directive.get("enabled", True):
+            continue
+        remaining = directive.get("remaining_uses")
+        if remaining is not None and int(remaining) <= 0:
+            continue
+        expires_at = str(directive.get("expires_at") or "").strip()
+        if expires_at:
+            try:
+                expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if expires <= now:
+                    continue
+            except ValueError:
+                continue
+        capabilities = [str(value).strip() for value in directive.get("capabilities", []) if str(value).strip()]
+        if capabilities and capability and capability not in capabilities:
+            continue
+        if str(directive.get("scope") or "story") == "chapter":
+            if chapter_no is None:
+                continue
+            start = directive.get("chapter_start")
+            end = directive.get("chapter_end")
+            if start is not None and chapter_no < int(start):
+                continue
+            if end is not None and chapter_no > int(end):
+                continue
+        result.append(dict(directive))
+    return result
+
+
+def _snapshot_conflicts(configuration: dict, capability: str) -> list[dict]:
+    resolutions = configuration.get("rule_conflict_resolutions") or {}
+    result: list[dict] = []
+    for source, label in (("global", "全局"), ("project", "项目"), ("story", "故事")):
+        for item in resolutions.get(source, []) if isinstance(resolutions, dict) else []:
+            if not isinstance(item, dict) or item.get("scope", "all") not in {"all", capability}:
+                continue
+            copied = dict(item)
+            copied["source"] = label
+            result.append(copied)
+    return result
+
+
+def _story_reference_mode(project_name: str, story_id: str) -> str:
+    """Read the migration gate without treating a legacy story as strict."""
+    try:
+        from storage.repositories.story_reference_libraries import load_story_reference_state
+        from novelforge.services import memory as _memory_api
+
+        state = _memory_api._load_runtime_from_db_best_effort(
+            project_name,
+            lambda conn: load_story_reference_state(conn, story_id=story_id),
+            "story reference state",
+        )
+        return str((state or {}).get("read_mode") or "legacy").strip().lower()
+    except Exception:
+        return "legacy"
+
+
 def _worldline_allowed(item: dict, worldline_id: str, worldline_mode: str) -> bool:
     # 世界线隔离判定统一委托 domain 权威实现（曾在此处重复实现一份）。
     return worldline_allowed(item.get("worldline_id"), worldline_id, worldline_mode)
@@ -217,18 +289,38 @@ def _manual_knowledge_blocks(
     *,
     worldline_id: str,
     worldline_mode: str,
+    branch_id: str | None = None,
+    visible_knowledge_ids: set[str] | None = None,
+    snapshot_items: dict[str, dict] | None = None,
 ) -> list[ContextBlock]:
     target_ids = {str(value or "").strip() for value in knowledge_ids if str(value or "").strip()}
     if not target_ids:
         return []
     blocks: list[ContextBlock] = []
-    for category, items in load_knowledge_base(project_name).items():
+    source_groups = load_knowledge_base(project_name)
+    if snapshot_items is not None:
+        source_groups = {}
+        for item_id, snapshot in snapshot_items.items():
+            category = str(snapshot.get("category") or "other")
+            copied = dict(snapshot)
+            copied.setdefault("id", item_id)
+            copied["_snapshot_selection_id"] = item_id
+            source_groups.setdefault(category, []).append(copied)
+    for category, items in source_groups.items():
         for item in items:
             if not isinstance(item, dict):
                 continue
             knowledge_id = str(item.get("id") or "").strip()
-            if knowledge_id not in target_ids or str(item.get("status") or "confirmed") != "confirmed":
+            if (knowledge_id not in target_ids and str(item.get("_snapshot_selection_id") or "") not in target_ids) or str(item.get("status") or "confirmed") != "confirmed":
                 continue
+            if branch_id and snapshot_items is None:
+                item_branch = str(item.get("branch_id") or "")
+                if visible_knowledge_ids is not None and knowledge_id not in visible_knowledge_ids:
+                    continue
+                if item_branch and item_branch != branch_id:
+                    continue
+                if not item_branch and str(item.get("setting_scope") or "").lower() == "story":
+                    continue
             setting_scope = str(item.get("setting_scope") or "project")
             item_story_id = str(item.get("story_id") or "")
             if setting_scope == "story" and item_story_id != story_id:
@@ -461,6 +553,8 @@ def _routed_retrieval_hits(
     retrieval_mode: str = "hybrid",
     retrieval_session_id: str = "",
     retrieval_turn_id: str = "",
+    branch_id: str | None = None,
+    visible_knowledge_ids: set[str] | None = None,
 ) -> list:
     """P1/P1.5：按实体路由分检召回（D4），用 RRF 融合多路由命中（遗留 #6 收口）。
 
@@ -496,6 +590,8 @@ def _routed_retrieval_hits(
                 source_type_strategy="union",
                 session_id=retrieval_session_id,
                 turn_id=retrieval_turn_id,
+                branch_id=branch_id,
+                visible_knowledge_ids=visible_knowledge_ids,
             )
         except Exception:
             hits = []
@@ -536,6 +632,7 @@ def assemble_generation_context(
     retrieval_session_id: str = "",
     retrieval_turn_id: str = "",
     enable_entity_planning: bool | None = None,
+    branch_id: str | None = None,
     _entity_plan_responder=None,
 ) -> ContextAssembly:
     if top_k is None:
@@ -559,13 +656,162 @@ def assemble_generation_context(
     except Exception:
         creation_mode = "planned"
     include_planning_context = should_include_planning_context(creation_mode)
-    profile = load_creative_profile(project_name, story_id) or {}
+    reference_mode = _story_reference_mode(project_name, story_id)
+    from storage.repositories.branches import default_branch_id
+
+    if branch_id and reference_mode != "strict":
+        # 旧故事的默认主线继续沿用历史上下文，保证现有会话可续写；
+        # 只有非主线显式请求才必须先完成资料迁移确认。
+        if str(branch_id) != default_branch_id(story_id):
+            raise ValueError("当前故事资料仍处于 legacy 模式，完成资料迁移确认后才能使用旁支隔离上下文。")
+        branch_id = None
+    if branch_id is None and reference_mode == "strict":
+        # 新故事以及已经确认迁移的旧故事，省略 branch_id 也必须落到默认
+        # 主线；否则普通 preview 会重新读回全项目可变资料。
+        branch_id = default_branch_id(story_id)
+    branch_context = None
+    profile: dict = {}
+    visible_knowledge_ids: set[str] | None = None
+    if branch_id:
+        branch_context = resolve_branch_context(project_name, story_id, branch_id)
+        branch_configuration = branch_context.get("configuration") or {}
+        if "profile" in branch_configuration:
+            profile = dict(branch_configuration.get("profile") or {})
+    if branch_context is None:
+        profile = load_creative_profile(project_name, story_id) or {}
+    if branch_context is not None:
+        visible_knowledge_ids = {
+            str(item.get("item_id") or "")
+            for item in branch_context.get("visible_revision_manifest", [])
+            if str(item.get("item_kind") or "") == "knowledge"
+        }
+        local_payloads = {
+            str(item.get("knowledge_id") or item.get("id") or ""): dict(item)
+            for item in (branch_context.get("local_knowledge_payloads") or [])
+            if str(item.get("knowledge_id") or item.get("id") or "")
+        }
+        visible_knowledge_ids.update(local_payloads)
+    visible_knowledge_payloads = {
+        str(item.get("item_id") or ""): dict(item.get("payload") or {})
+        for item in (branch_context or {}).get("visible_revision_manifest", [])
+        if str(item.get("item_kind") or "") == "knowledge"
+        and isinstance(item.get("payload"), dict)
+    }
+    if branch_context is not None:
+        for item_id, payload in {
+            str(item.get("knowledge_id") or item.get("id") or ""): item
+            for item in (branch_context.get("local_knowledge_payloads") or [])
+            if str(item.get("knowledge_id") or item.get("id") or "")
+        }.items():
+            origin_id = str(payload.get("origin_knowledge_id") or "").strip()
+            if origin_id and origin_id in visible_knowledge_payloads:
+                # A child-owned override replaces the frozen inherited row at
+                # its origin ID. Keep the origin key so manual selection and
+                # checkpoint visibility remain stable across revisions.
+                if str(payload.get("status") or "confirmed") in {"deleted", "tombstone"}:
+                    visible_knowledge_payloads.pop(origin_id, None)
+                else:
+                    visible_knowledge_payloads[origin_id] = dict(payload)
+            elif item_id in visible_knowledge_payloads and str(payload.get("branch_id") or "") == str(branch_id or ""):
+                # Same-ID rows created by this branch are local revisions of
+                # its own checkpoint item; inherited parent rows never carry
+                # the child branch owner and therefore remain frozen.
+                if str(payload.get("deleted_at") or ""):
+                    visible_knowledge_payloads.pop(item_id, None)
+                else:
+                    visible_knowledge_payloads[item_id] = dict(payload)
+            else:
+                visible_knowledge_payloads.setdefault(item_id, dict(payload))
+        # SQL snapshot columns carry ownership and temporal projection; the
+        # stored payload carries structured fields and provenance. Preserve
+        # both before any direct injection, entity planning or retrieval.
+        for item_id, row in list(visible_knowledge_payloads.items()):
+            raw_content = row.get("content_json")
+            try:
+                content_payload = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+            except (TypeError, ValueError):
+                content_payload = {}
+            visible_knowledge_payloads[item_id] = {
+                **(content_payload if isinstance(content_payload, dict) else {}),
+                **row,
+            }
+        # 时序覆盖只在目标事实也属于本检查点可见集合时生效。这样 F1
+        # 的历史快照不会因 live 表后来出现 F2 而隐藏 F1；同一快照同时含
+        # F1/F2 时才过滤旧事实。
+        try:
+            from storage.repositories.knowledge import filter_superseded_visible_items
+
+            snapshot_items = [
+                dict(payload, id=item_id, knowledge_id=item_id)
+                for item_id, payload in visible_knowledge_payloads.items()
+            ]
+            filtered_items = filter_superseded_visible_items(snapshot_items)
+            filtered_ids = {
+                str(item.get("knowledge_id") or item.get("id") or "")
+                for item in filtered_items
+                if str(item.get("knowledge_id") or item.get("id") or "")
+            }
+            removed_ids = set(visible_knowledge_payloads) - filtered_ids
+            visible_knowledge_payloads = {
+                item_id: item
+                for item_id, item in visible_knowledge_payloads.items()
+                if item_id in filtered_ids
+            }
+            if visible_knowledge_ids is not None:
+                visible_knowledge_ids.difference_update(removed_ids)
+        except Exception:
+            # 旧数据库没有时序投影字段时保持原快照读取路径。
+            pass
     profile_worldline = str(profile.get("worldline_id") or "")
-    worldline_id = _resolve_worldline_id(project_name, story_id, chapter_no, profile_worldline)
+    worldline_id = (
+        profile_worldline
+        if branch_context is not None
+        else _resolve_worldline_id(project_name, story_id, chapter_no, profile_worldline)
+    )
     worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer")
-    memory = build_generation_setting_context(
+    memory = {} if branch_context is not None else build_generation_setting_context(
         project_name, story_id, chapter_no=chapter_no, worldline_override=worldline_id or None
     )
+    if branch_context is not None:
+        # A strict branch reads the frozen knowledge manifest. The legacy
+        # story-memory JSON and current mutable merge are excluded.
+        visible_items: list[dict] = []
+        # Prefer the checkpoint payload over mutable live knowledge rows. The
+        # latter may have been edited on the parent line after the fork.
+        if visible_knowledge_payloads:
+            for item_id, payload in visible_knowledge_payloads.items():
+                if str(payload.get("injection_policy") or "always").strip().lower() != "always":
+                    continue
+                copied = dict(payload)
+                copied.setdefault("id", item_id)
+                copied.setdefault("knowledge_id", item_id)
+                visible_items.append(copied)
+        else:
+            for category, items in load_knowledge_base(project_name).items():
+                for item in items if isinstance(items, list) else []:
+                    if not isinstance(item, dict):
+                        continue
+                    item_id = str(item.get("id") or item.get("knowledge_id") or "")
+                    item_branch = str(item.get("branch_id") or "")
+                    if item_id in (visible_knowledge_ids or set()) and (not item_branch or item_branch == branch_id) and str(item.get("injection_policy") or "always").strip().lower() == "always":
+                        copied = dict(item)
+                        copied["category"] = category
+                        visible_items.append(copied)
+        memory["_setting_context"] = format_setting_items_for_prompt(visible_items)
+        # 这里只记录真正 always 的设定。retrieval/manual_only 条目仍然
+        # 由下方分支快照检索路径按策略处理，不能因为可见 manifest 就被
+        # 当作 direct knowledge 而从检索块中提前去重。
+        memory["_setting_knowledge_ids"] = sorted({
+            str(item.get("knowledge_id") or item.get("id") or "")
+            for item in visible_items
+            if str(item.get("knowledge_id") or item.get("id") or "")
+        })
+        memory["_setting_structured_fields"] = sorted({
+            str(item.get("setting_field") or "") for item in visible_items
+            if str(item.get("setting_field") or "") in SETTING_FIELD_SPECS
+        })
+        for field_name in SETTING_FIELD_SPECS:
+            memory[field_name] = "" if SETTING_FIELD_SPECS[field_name].get("scalar") else []
     # refactor 2 P0：结构化 field 集合与 always 注入的知识 id 由 build_generation_setting_context
     # 附带返回，避免这里再做第二次全量 list_setting_items（load_knowledge_base 全表读）。
     structured_setting_fields = set(
@@ -590,6 +836,8 @@ def assemble_generation_context(
             chapter_no=chapter_no,
             worldline_id=worldline_id,
             worldline_mode=worldline_mode,
+            branch_id=branch_id,
+            snapshot_items=visible_knowledge_payloads if branch_context is not None else None,
             responder=_entity_plan_responder,
         )
         # P1 两段式：检索反查补集（遗留 #7 收口）。识别失败名经词法检索反查 entity_id，
@@ -603,31 +851,84 @@ def assemble_generation_context(
                 entity_plan,
                 worldline_id=worldline_id,
                 worldline_mode=worldline_mode,
+                branch_id=branch_id,
+                visible_knowledge_ids=visible_knowledge_ids,
+                snapshot_items=visible_knowledge_payloads if branch_context is not None else None,
             )
         if entity_plan and entity_plan.entity_ids:
             # #8 收口（G15）：细纲等「中观结构」层注入每实体的清单+概要（concise），
             # 正文层注入完整当前事实。
             concise_capabilities = {"chapter_outline", "creative_structure"}
-            scoped = build_entity_scoped_setting_context(
-                project_name,
-                story_id,
-                canonical_names=[e.get("canonical_name") or e.get("name") for e in entity_plan.entities],
-                worldline_id=worldline_id,
-                worldline_mode=worldline_mode,
-                chapter_no=chapter_no,
-                concise=capability in concise_capabilities,
-            )
+            if branch_context is not None:
+                # Strict branches must scope from immutable checkpoint payloads.
+                # Calling the legacy entity view here would read the parent's
+                # current entity facts after the fork.
+                wanted_ids = {str(value) for value in entity_plan.entity_ids if str(value)}
+                wanted_names = {
+                    str(entity.get("canonical_name") or entity.get("name") or "").casefold()
+                    for entity in entity_plan.entities
+                    if str(entity.get("canonical_name") or entity.get("name") or "").strip()
+                }
+                scoped_items = []
+                for item_id, item in visible_knowledge_payloads.items():
+                    if str(item.get("injection_policy") or "always").strip().lower() != "always":
+                        continue
+                    item_entity_id = str(item.get("entity_id") or "")
+                    item_name = str(
+                        item.get("canonical_name")
+                        or item.get("entity_canonical_name")
+                        or (item.get("entity") or {}).get("canonical_name")
+                        or item.get("name")
+                        or ""
+                    ).casefold()
+                    if item_entity_id in wanted_ids or item_name in wanted_names:
+                        copied = dict(item)
+                        copied.setdefault("id", item_id)
+                        copied.setdefault("knowledge_id", item_id)
+                        scoped_items.append(copied)
+                if capability in concise_capabilities:
+                    per_entity: dict[str, int] = {}
+                    concise_items = []
+                    for item in scoped_items:
+                        key = str(item.get("entity_id") or item.get("canonical_name") or item.get("name") or "")
+                        if per_entity.get(key, 0) >= 2:
+                            continue
+                        per_entity[key] = per_entity.get(key, 0) + 1
+                        clipped = dict(item)
+                        summary = str(clipped.get("summary") or "").strip()
+                        clipped["summary"] = summary[:140] + ("…" if len(summary) > 140 else "")
+                        concise_items.append(clipped)
+                    scoped_items = concise_items
+                scoped = {
+                    "text": format_setting_items_for_prompt(scoped_items),
+                    "ids": [str(item.get("knowledge_id") or item.get("id") or "") for item in scoped_items],
+                }
+            else:
+                scoped = build_entity_scoped_setting_context(
+                    project_name,
+                    story_id,
+                    canonical_names=[e.get("canonical_name") or e.get("name") for e in entity_plan.entities],
+                    worldline_id=worldline_id,
+                    worldline_mode=worldline_mode,
+                    chapter_no=chapter_no,
+                    concise=capability in concise_capabilities,
+                )
             if scoped.get("text"):
                 memory["_setting_context"] = scoped["text"]
                 always_setting_ids = set(scoped["ids"])
     blocks: list[ContextBlock] = []
 
+    branch_configuration = (branch_context or {}).get("configuration") or {}
     rules_text = format_rules_for_prompt(
-        load_global_rules(),
-        load_project_rules(project_name),
+        dict(branch_configuration.get("global_rules") or {}) if branch_context is not None else load_global_rules(),
+        dict(branch_configuration.get("project_rules") or {}) if branch_context is not None else load_project_rules(project_name),
         capability,
-        story_rules=load_story_rules(project_name, story_id),
-        conflict_resolutions=load_effective_rule_conflict_resolutions(project_name, story_id, capability),
+        story_rules=(branch_context.get("story_rules") or {}) if branch_context is not None else load_story_rules(project_name, story_id),
+        conflict_resolutions=(
+            _snapshot_conflicts(branch_configuration, capability)
+            if branch_context is not None
+            else load_effective_rule_conflict_resolutions(project_name, story_id, capability)
+        ),
     )
     rules_block = _context_block(
         block_id=f"rules:{capability}",
@@ -661,7 +962,7 @@ def assemble_generation_context(
             blocks.append(profile_block)
 
     setting_context = str(memory.get("_setting_context") or "").strip()
-    legacy_setting_context = _format_legacy_settings(
+    legacy_setting_context = "" if branch_context is not None else _format_legacy_settings(
         memory,
         excluded_fields=structured_setting_fields,
     )
@@ -698,11 +999,19 @@ def assemble_generation_context(
     if state_block:
         blocks.append(state_block)
 
-    directives = load_effective_context_directives(
-        project_name,
-        story_id,
-        capability=capability,
-        chapter_no=chapter_no,
+    directives = (
+        _snapshot_directives(
+            branch_configuration.get("context_directives") or [],
+            capability=capability,
+            chapter_no=chapter_no,
+        )
+        if branch_context is not None
+        else load_effective_context_directives(
+            project_name,
+            story_id,
+            capability=capability,
+            chapter_no=chapter_no,
+        )
     ) if include_planning_context else []
     for directive in directives:
         directive_id = str(directive.get("directive_id") or "")
@@ -733,6 +1042,9 @@ def assemble_generation_context(
         manual_knowledge_ids or [],
         worldline_id=worldline_id,
         worldline_mode=worldline_mode,
+        branch_id=branch_id,
+        visible_knowledge_ids=visible_knowledge_ids,
+        snapshot_items=visible_knowledge_payloads,
     )
     blocks.extend(manual_blocks)
     direct_knowledge_ids = {
@@ -757,6 +1069,8 @@ def assemble_generation_context(
             retrieval_mode=retrieval_mode,
             retrieval_session_id=retrieval_session_id,
             retrieval_turn_id=retrieval_turn_id,
+            branch_id=branch_id,
+            visible_knowledge_ids=visible_knowledge_ids,
         )
     else:
         hits = retrieve_context(
@@ -776,6 +1090,8 @@ def assemble_generation_context(
             reference_strength=str(profile.get("reference_strength") or "").strip() or None,
             session_id=retrieval_session_id,
             turn_id=retrieval_turn_id,
+            branch_id=branch_id,
+            visible_knowledge_ids=visible_knowledge_ids,
         )
     deduped_hits: list[RetrievalHit] = []
     for hit in hits:
@@ -806,10 +1122,57 @@ def assemble_generation_context(
         if retrieval_block:
             blocks.append(retrieval_block)
 
+    if branch_context is not None:
+        query_lower = str(query or "").lower()
+        from novelforge.services.retrieval.common import _tokenize
+
+        query_terms = set(_tokenize(query_lower))
+        for knowledge_id, item in visible_knowledge_payloads.items():
+            if knowledge_id in direct_knowledge_ids:
+                continue
+            if (
+                str(item.get("injection_policy") or "always").strip().lower() == "manual_only"
+                and knowledge_id not in {str(value) for value in (manual_knowledge_ids or [])}
+            ):
+                continue
+            name = str(item.get("name") or item.get("title") or knowledge_id)
+            summary = str(item.get("summary") or item.get("content") or "")
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            content = "\n".join(
+                value for value in [
+                    f"name: {name}",
+                    f"summary: {summary}",
+                    *(f"{key}: {value}" for key, value in details.items()),
+                ] if str(value).strip()
+            )
+            if query_lower and not query_terms.intersection(_tokenize(content)):
+                continue
+            snapshot_block = _context_block(
+                block_id=f"branch_snapshot:{knowledge_id}",
+                category="retrieval",
+                content=content,
+                source_type=f"knowledge_{str(item.get('category') or 'other')}",
+                source_ref=knowledge_id,
+                placement="reference",
+                # Snapshot payloads are the branch's authoritative facts. When
+                # many mutable retrieval chunks compete for the retrieval
+                # floor, matching checkpoint facts must win that budget.
+                priority=100,
+                scope="story",
+                story_id=story_id,
+                activation_reason="来自当前世界线不可变检查点",
+                metadata={"knowledge_id": knowledge_id, "branch_id": branch_id, "snapshot": True},
+            )
+            if snapshot_block:
+                blocks.append(snapshot_block)
+
     options = merge_prompt_option_layers(
-        load_global_prompt_options(),
-        load_project_prompt_options(project_name),
-        load_story_prompt_options(project_name, story_id),
+        list(branch_configuration.get("global_prompt_options") or [])
+        if branch_context is not None else load_global_prompt_options(),
+        list(branch_configuration.get("project_prompt_options") or [])
+        if branch_context is not None else load_project_prompt_options(project_name),
+        list(branch_configuration.get("story_prompt_options") or [])
+        if branch_context is not None else load_story_prompt_options(project_name, story_id),
     )
     option_text = format_prompt_options_for_prompt(options, capability, selected_ids=prompt_option_ids)
     option_block = _context_block(

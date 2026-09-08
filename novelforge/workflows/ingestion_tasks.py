@@ -109,6 +109,8 @@ def create_long_reference_ingestion_task(
     auto_confirm_safe_items: bool,
     custom_instructions: str = "",
     story_id: str = "",
+    branch_id: str = "",
+    target_scope: str = "",
     priority: int = 0,
 ) -> dict:
     from novelforge.services.automatic_configuration import configure_operation_automatically
@@ -138,6 +140,12 @@ def create_long_reference_ingestion_task(
         "consolidate_after_extract": bool(consolidate_after_extract),
         "auto_confirm_safe_items": bool(auto_confirm_safe_items),
         "custom_instructions": str(custom_instructions or ""),
+        # Ownership is explicit and independent from the source nature
+        # (reference/canon/project).  Persist it in the task so restart and
+        # retry cannot fall back to the default story.
+        "target_scope": str(target_scope or ("story" if str(story_id or "").strip() else "project")),
+        "target_story_id": str(story_id or ""),
+        "target_branch_id": str(branch_id or ""),
     }
     task = create_ingestion_task(
         batch,
@@ -421,7 +429,7 @@ def run_long_reference_ingestion_task(
     try:
         with llm_usage_scope(
             project_name=project_name,
-            story_id=str(task.get("story_id") or "default"),
+            story_id=str(task.get("story_id") or ""),
             task_id=task_id,
             workflow_run_id=task_id,
             operation="source_ingestion.run",
@@ -446,7 +454,8 @@ def run_long_reference_ingestion_task(
                 run_key=task_id,
                 task_id=task_id,
                 worker_id=owner,
-                story_id=str(task.get("story_id") or "default"),
+                story_id=str(task.get("story_id") or ""),
+                branch_id=str(configuration.get("target_branch_id") or ""),
             )
     except _IngestionTaskControlSignal as signal:
         latest_batch = load_long_reference_batch(project_name, task.get("batch_id", "")) or batch

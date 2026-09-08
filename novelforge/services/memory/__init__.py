@@ -85,6 +85,9 @@ _export_module(_creative_sessions)
 from . import story_index as _story_index
 _export_module(_story_index)
 
+from . import branches as _branches
+_export_module(_branches)
+
 from . import story_lifecycle as _story_lifecycle
 _export_module(_story_lifecycle)
 
@@ -96,6 +99,9 @@ _export_module(_story_copy)
 
 from . import story_status as _story_status
 _export_module(_story_status)
+
+from . import story_reference_libraries as _story_reference_libraries
+_export_module(_story_reference_libraries)
 
 from . import story_memory as _story_memory
 _export_module(_story_memory)

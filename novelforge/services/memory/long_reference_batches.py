@@ -85,6 +85,9 @@ def normalize_long_reference_batch(batch: dict | None) -> dict:
         "source_file_name": str(raw.get("source_file_name") or ""),
         "content_fingerprint": str(raw.get("content_fingerprint") or ""),
         "source_content_hash": str(raw.get("source_content_hash") or ""),
+        "target_scope": str(raw.get("target_scope") or ("story" if str(raw.get("story_id") or "").strip() else "project")),
+        "branch_id": str(raw.get("branch_id") or ""),
+        "creative_attachment_id": str(raw.get("creative_attachment_id") or ""),
         # 显式 None 判断：上游可能传 0 表示「未统计/空批次」，`or` 会把它当假值
         # 转而重算 sum()，覆盖掉调用方明确给出的 0。
         "content_char_count": int(
@@ -113,7 +116,10 @@ def create_long_reference_batch(
     source_content_hash: str = "",
     content_char_count: int = 0,
     segments: list[dict],
-    story_id: str = "default",
+    story_id: str = "",
+    branch_id: str = "",
+    target_scope: str = "",
+    creative_attachment_id: str = "",
     parser_metadata: dict | None = None,
     source_files: list[dict] | None = None,
 ) -> dict:
@@ -128,7 +134,10 @@ def create_long_reference_batch(
         "content_fingerprint": content_fingerprint,
         "source_content_hash": source_content_hash,
         "content_char_count": content_char_count,
-        "story_id": str(story_id or "default"),
+        "story_id": str(story_id or ""),
+        "branch_id": str(branch_id or ""),
+        "target_scope": str(target_scope or ("story" if str(story_id or "").strip() else "project")),
+        "creative_attachment_id": str(creative_attachment_id or ""),
         "parser_metadata": dict(parser_metadata or {}),
         "source_files": [dict(item) for item in (source_files or []) if isinstance(item, dict)],
         "segments": segments,

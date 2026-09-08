@@ -12,11 +12,12 @@ const error = ref('')
 async function load() {
   if (!workspace.activeProjectId) return
   loading.value = true
-  try { items.value = (await api.knowledgeEntities(workspace.activeProjectId, kind.value)).items || [] } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '实体视图读取失败' } finally { loading.value = false }
+  try { items.value = (await api.knowledgeEntities(workspace.activeProjectId, kind.value, workspace.activeStory?.story_id, workspace.activeBranchId || undefined)).items || [] } catch (reason) { error.value = reason instanceof ApiClientError ? reason.message : '实体视图读取失败' } finally { loading.value = false }
 }
 
 onMounted(load)
 watch(kind, load)
+watch(() => [workspace.activeStoryId, workspace.activeBranchId], load)
 
 function setKind(value: string) {
   if (value === 'setting' || value === 'timeline') kind.value = value

@@ -164,7 +164,7 @@ test.describe('双工作台入口', () => {
 
     await page.getByRole('link', { name: /资料库/ }).click()
     await expect(page.getByRole('navigation', { name: '资料库分类' })).toBeVisible()
-    await expect(page.getByRole('link', { name: /导入与研究/ })).toBeVisible()
+    await expect(page.getByRole('link', { name: /导入资料/ })).toBeVisible()
     await expect(page.getByLabel('知识类型筛选')).toHaveCSS('background-color', 'rgb(52, 55, 53)')
     await expect(page.getByLabel('知识类型筛选').locator('option').first()).toHaveCSS('background-color', 'rgb(106, 73, 60)')
     await expectReadable(page.getByRole('navigation', { name: '资料库分类' }).getByRole('link', { name: /知识与资料/ }))
@@ -180,6 +180,35 @@ test.describe('双工作台入口', () => {
     await page.getByRole('link', { name: /项目与故事/ }).click()
     await expect(page.getByRole('button', { name: '删除项目' })).toBeVisible()
     await expect(page.getByRole('button', { name: '归档当前故事' })).toBeVisible()
+  })
+
+  test('资料导入页和会话资料托盘在窄屏与大屏没有横向溢出', async ({ page }) => {
+    await page.route('**/api/v1/bootstrap', async (route) => route.fulfill({ json: { data: { projects: [{ project_id: 'p-import', name: '导入项目', title: '导入项目' }], frontend_modes: ['planned', 'conversational'] } } }))
+    await page.route('**/api/v1/projects/p-import/stories', async (route) => route.fulfill({ json: { data: { stories: [{ story_id: 's-import', name: '导入故事', creation_mode: 'conversational' }] } } }))
+    await page.route('**/api/v1/projects/p-import/stories/s-import/sessions', async (route) => route.fulfill({ json: { data: { sessions: [{ session_id: 'sess-import', title: '资料会话', status: 'active' }] } } }))
+    await page.route('**/api/v1/projects/p-import/ingestion/workbench', async (route) => route.fulfill({ json: { data: { batch_rows: [], active_task_count: 0, failed_task_count: 0 } } }))
+    await page.route('**/api/v1/projects/p-import/ingestion/attachments*', async (route) => route.fulfill({ json: { data: { attachments: [] } } }))
+    await page.route('**/api/v1/projects/p-import/stories/s-import/sessions/sess-import', async (route) => route.fulfill({ json: { data: { session: { session_id: 'sess-import', title: '资料会话', status: 'active' }, turns: [], fragments: [], attachments: [] } } }))
+    await page.route('**/api/v1/projects/p-import/stories/s-import/sessions/sess-import/actions', async (route) => route.fulfill({ json: { data: { actions: [] } } }))
+
+    await page.setViewportSize({ width: 781, height: 945 })
+    await page.goto('/conversational/library/research')
+    await expect(page.getByRole('heading', { name: /粘贴资料或导入文件/ })).toBeVisible()
+    await expect(page.getByText('项目资料', { exact: true })).toBeVisible()
+    await expect(page.getByText('网络研究', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('URL', { exact: true })).toHaveCount(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
+    await page.screenshot({ path: 'test-results/import-library-781x945.png', fullPage: true })
+
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto('/conversational/session/sess-import')
+    await expect(page.getByTitle('添加会话资料')).toBeVisible()
+    await page.getByTitle('添加会话资料').click()
+    await expect(page.getByRole('heading', { name: /把资料加入当前创作/ })).toBeVisible()
+    await expect(page.getByLabel('资料类型')).toBeVisible()
+    await expect(page.getByText('URL', { exact: true })).toHaveCount(0)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false)
+    await page.screenshot({ path: 'test-results/import-session-1440x900.png', fullPage: true })
   })
 
   test('已归档故事可以恢复或永久删除，且不会混入当前故事选择器', async ({ page }) => {
@@ -324,17 +353,20 @@ test.describe('双工作台入口', () => {
   test('中文组合输入期间不会误触发发送，并可承载长草稿', async ({ page }) => {
     await page.route('**/api/v1/bootstrap', async (route) => route.fulfill({ json: { data: { projects: [{ project_id: 'p-ime', name: 'IME 项目', title: 'IME 项目' }], frontend_modes: ['planned', 'conversational'] } } }))
     await page.route('**/api/v1/projects/p-ime/stories', async (route) => route.fulfill({ json: { data: { stories: [{ story_id: 's-ime', name: 'IME 故事', creation_mode: 'conversational' }] } } }))
-    let sessionRequests = 0
+    let turnRequests = 0
     await page.route('**/api/v1/projects/p-ime/stories/s-ime/sessions', async (route) => {
       if (route.request().method() === 'GET') {
-        await route.fulfill({ json: { data: { sessions: [] } } })
+        await route.fulfill({ json: { data: { sessions: [{ session_id: 'sess-ime', title: 'IME 会话', status: 'active' }] } } })
         return
       }
-      sessionRequests += 1
       await route.fulfill({ json: { data: { session: { session_id: 'sess-ime', title: 'IME 会话', status: 'active' } } } })
     })
     await page.route('**/api/v1/projects/p-ime/stories/s-ime/sessions/sess-ime', async (route) => route.fulfill({ json: { data: { session: { session_id: 'sess-ime', title: 'IME 会话', status: 'active' }, turns: [], fragments: [], attachments: [] } } }))
     await page.route('**/api/v1/projects/p-ime/stories/s-ime/sessions/sess-ime/actions', async (route) => route.fulfill({ json: { data: { actions: [] } } }))
+    await page.route('**/api/v1/projects/p-ime/stories/s-ime/sessions/sess-ime/turns/stream', async (route) => {
+      turnRequests += 1
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'event: done\ndata: {"result":{}}\n\n' })
+    })
     await page.goto('/')
     await page.getByRole('link', { name: /进入对话工作台/ }).click()
     const composer = page.locator('textarea').first()
@@ -342,10 +374,10 @@ test.describe('双工作台入口', () => {
     await composer.dispatchEvent('compositionstart')
     await composer.fill('这是一段组合输入中的中文草稿')
     await composer.press('Control+Enter')
-    expect(sessionRequests).toBe(0)
+    expect(turnRequests).toBe(0)
     await composer.dispatchEvent('compositionend')
     await composer.press('Control+Enter')
-    await expect.poll(() => sessionRequests).toBe(1)
+    await expect.poll(() => turnRequests).toBe(1)
   })
 
   test('长草稿在移动视口不产生横向溢出', async ({ page }) => {

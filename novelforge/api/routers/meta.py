@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from starlette.concurrency import run_in_threadpool
 
 from novelforge.services import memory
@@ -144,20 +144,35 @@ async def activate_model_profile(payload: ActiveModelProfileRequest, request: Re
 
 
 @router.get(f"{API_PREFIX}/settings/rules")
-async def settings_rules(request: Request, project_id: str | None = None, story_id: str | None = None) -> dict[str, Any]:
+async def settings_rules(request: Request, project_id: str | None = None, story_id: str | None = None, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     """Return all rule layers without leaking unrelated project data."""
     project_name = _resolve_project_name(project_id) if project_id else ""
     story = _story(project_name, story_id or "default") if project_name and story_id else None
+    target_story_id = str(story.get("story_id") if story else story_id or "default")
+    if project_name and branch_id and str(branch_id) != memory.default_branch_id(target_story_id):
+        branch_configuration = await run_in_threadpool(
+            memory.load_effective_story_branch_configuration,
+            project_name,
+            target_story_id,
+            branch_id,
+        )
+        story_rules = branch_configuration.get("story_rules") or {}
+    else:
+        story_rules = await run_in_threadpool(
+            memory.load_story_rules,
+            project_name,
+            target_story_id,
+        ) if project_name else {}
     return _envelope({
         "global": await run_in_threadpool(memory.load_global_rules),
         "project": await run_in_threadpool(memory.load_project_rules, project_name) if project_name else {},
-        "story": await run_in_threadpool(memory.load_story_rules, project_name, str(story.get("story_id") if story else story_id or "default")) if project_name else {},
-        "scope": {"project_id": project_id or "", "story_id": story.get("story_id", "") if story else story_id or ""},
+        "story": story_rules,
+        "scope": {"project_id": project_id or "", "story_id": target_story_id, "branch_id": branch_id or ""},
     }, request)
 
 
 @router.put(f"{API_PREFIX}/settings/rules/{{scope}}")
-async def update_settings_rules(scope: str, payload: RulesUpdateRequest, request: Request, project_id: str | None = None, story_id: str | None = None) -> dict[str, Any]:
+async def update_settings_rules(scope: str, payload: RulesUpdateRequest, request: Request, project_id: str | None = None, story_id: str | None = None, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     normalized_scope = str(scope or "").strip().lower()
     project_name = _resolve_project_name(project_id) if project_id else ""
     if normalized_scope == "global":
@@ -166,14 +181,25 @@ async def update_settings_rules(scope: str, payload: RulesUpdateRequest, request
         saved = await run_in_threadpool(memory.save_project_rules, project_name, payload.rules)
     elif normalized_scope == "story" and project_name:
         story_meta = _story(project_name, story_id or "default")
-        saved = await run_in_threadpool(memory.save_story_rules, project_name, str(story_meta["story_id"]), payload.rules)
+        target_story_id = str(story_meta["story_id"])
+        if branch_id and str(branch_id) != memory.default_branch_id(target_story_id):
+            configuration = await run_in_threadpool(
+                memory.save_story_branch_configuration,
+                project_name,
+                target_story_id,
+                branch_id,
+                {"story_rules": payload.rules},
+            )
+            saved = configuration.get("story_rules") or {}
+        else:
+            saved = await run_in_threadpool(memory.save_story_rules, project_name, target_story_id, payload.rules)
     else:
         raise ValueError("规则作用域或项目参数无效。")
-    return _envelope({"scope": normalized_scope, "rules": saved or payload.rules, "saved": True}, request)
+    return _envelope({"scope": normalized_scope, "rules": saved or payload.rules, "saved": True, "branch_id": branch_id}, request)
 
 
 @router.get(f"{API_PREFIX}/settings/prompt-options")
-async def prompt_options(request: Request, layer: str = "story", project_id: str | None = None, story_id: str | None = None) -> dict[str, Any]:
+async def prompt_options(request: Request, layer: str = "story", project_id: str | None = None, story_id: str | None = None, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     normalized_layer = str(layer or "story").strip().lower()
     project_name = _resolve_project_name(project_id) if project_id else ""
     if normalized_layer == "global":
@@ -181,14 +207,21 @@ async def prompt_options(request: Request, layer: str = "story", project_id: str
     elif normalized_layer == "project" and project_name:
         options = await run_in_threadpool(memory.load_project_prompt_options, project_name)
     elif normalized_layer == "story" and project_name:
-        options = await run_in_threadpool(memory.load_story_prompt_options, project_name, story_id or "default")
+        target_story_id = story_id or "default"
+        if branch_id and str(branch_id) != memory.default_branch_id(target_story_id):
+            configuration = await run_in_threadpool(
+                memory.load_effective_story_branch_configuration, project_name, target_story_id, branch_id
+            )
+            options = configuration.get("story_prompt_options") or []
+        else:
+            options = await run_in_threadpool(memory.load_story_prompt_options, project_name, target_story_id)
     else:
         raise ValueError("提示词选项作用域或项目参数无效。")
     return _envelope({"layer": normalized_layer, "options": options}, request)
 
 
 @router.put(f"{API_PREFIX}/settings/prompt-options/{{layer}}")
-async def update_prompt_options(layer: str, payload: PromptOptionsUpdateRequest, request: Request, project_id: str | None = None, story_id: str | None = None) -> dict[str, Any]:
+async def update_prompt_options(layer: str, payload: PromptOptionsUpdateRequest, request: Request, project_id: str | None = None, story_id: str | None = None, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     normalized_layer = str(layer or "story").strip().lower()
     project_name = _resolve_project_name(project_id) if project_id else ""
     if normalized_layer == "global":
@@ -196,11 +229,22 @@ async def update_prompt_options(layer: str, payload: PromptOptionsUpdateRequest,
     elif normalized_layer == "project" and project_name:
         saved = await run_in_threadpool(memory.save_project_prompt_options, project_name, payload.options)
     elif normalized_layer == "story" and project_name:
-        _story(project_name, story_id or "default")
-        saved = await run_in_threadpool(memory.save_story_prompt_options, project_name, story_id or "default", payload.options)
+        target_story_id = story_id or "default"
+        _story(project_name, target_story_id)
+        if branch_id and str(branch_id) != memory.default_branch_id(target_story_id):
+            configuration = await run_in_threadpool(
+                memory.save_story_branch_configuration,
+                project_name,
+                target_story_id,
+                branch_id,
+                {"story_prompt_options": payload.options},
+            )
+            saved = configuration.get("story_prompt_options") or []
+        else:
+            saved = await run_in_threadpool(memory.save_story_prompt_options, project_name, target_story_id, payload.options)
     else:
         raise ValueError("提示词选项作用域或项目参数无效。")
-    return _envelope({"layer": normalized_layer, "options": saved, "saved": True}, request)
+    return _envelope({"layer": normalized_layer, "options": saved, "saved": True, "branch_id": branch_id}, request)
 
 
 @router.get(f"{API_PREFIX}/settings/auto-configuration")

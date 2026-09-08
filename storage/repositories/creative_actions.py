@@ -42,15 +42,16 @@ def insert_creative_message_row(conn: sqlite3.Connection, message: dict) -> dict
     conn.execute(
         """
         INSERT INTO creative_messages (
-            message_id, story_id, session_id, role, message_kind,
+            message_id, story_id, session_id, branch_id, role, message_kind,
             content, metadata_json, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(message_id) DO NOTHING
         """,
         (
             message_id,
             str(payload.get("story_id") or ""),
             str(payload.get("session_id") or ""),
+            str(payload.get("branch_id") or "") or None,
             str(payload.get("role") or "user"),
             str(payload.get("message_kind") or "plain"),
             str(payload.get("content") or ""),
@@ -84,16 +85,17 @@ def insert_creative_action_row(conn: sqlite3.Connection, action: dict) -> dict:
     conn.execute(
         """
         INSERT INTO creative_action_runs (
-            action_id, story_id, session_id, request_message_id, action_type,
+            action_id, story_id, session_id, branch_id, request_message_id, action_type,
             status, scope, target_json, patch_json, plan_json, result_json,
             undo_json, requires_confirmation, confirmed_at, idempotency_key,
             error_text, created_at, updated_at, finished_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(idempotency_key) DO NOTHING
         """,
         (
             action_id, str(payload.get("story_id") or ""),
             str(payload.get("session_id") or ""),
+            str(payload.get("branch_id") or "") or None,
             str(payload.get("request_message_id") or "") or None,
             str(payload.get("action_type") or "clarify"),
             str(payload.get("status") or "planned"),
@@ -166,6 +168,7 @@ def claim_creative_action_row(
     action_id: str,
     story_id: str,
     session_id: str,
+    branch_id: str,
     from_statuses: tuple[str, ...],
     updates: dict | None = None,
 ) -> dict:
@@ -182,9 +185,12 @@ def claim_creative_action_row(
         elif key == "error_text":
             assignments.append("error_text = ?")
             values.append(str(value or ""))
+    assignments.append("branch_id = COALESCE(branch_id, ?)")
+    values.append(str(branch_id or ""))
     placeholders = ",".join("?" for _ in allowed)
     values.extend([
         str(action_id or ""), str(story_id or ""), str(session_id or ""),
+        str(branch_id or ""),
         *allowed,
     ])
     result = conn.execute(
@@ -192,6 +198,7 @@ def claim_creative_action_row(
         UPDATE creative_action_runs
         SET {', '.join(assignments)}
         WHERE action_id = ? AND story_id = ? AND session_id = ?
+          AND (branch_id = ? OR branch_id IS NULL)
           AND status IN ({placeholders})
         """,
         tuple(values),
@@ -206,6 +213,7 @@ def transition_creative_action_row(
     action_id: str,
     story_id: str,
     session_id: str,
+    branch_id: str,
     from_status: str,
     to_status: str,
 ) -> dict:
@@ -213,12 +221,14 @@ def transition_creative_action_row(
     result = conn.execute(
         """
         UPDATE creative_action_runs
-        SET status = ?, updated_at = ?
-        WHERE action_id = ? AND story_id = ? AND session_id = ? AND status = ?
+        SET status = ?, updated_at = ?, branch_id = COALESCE(branch_id, ?)
+        WHERE action_id = ? AND story_id = ? AND session_id = ?
+          AND (branch_id = ? OR branch_id IS NULL) AND status = ?
         """,
         (
-            str(to_status or ""), _now(), str(action_id or ""),
-            str(story_id or ""), str(session_id or ""), str(from_status or ""),
+            str(to_status or ""), _now(), str(branch_id or ""),
+            str(action_id or ""), str(story_id or ""), str(session_id or ""),
+            str(branch_id or ""), str(from_status or ""),
         ),
     )
     if result.rowcount != 1:
@@ -231,15 +241,16 @@ def insert_creative_config_revision_row(conn: sqlite3.Connection, revision: dict
     conn.execute(
         """
         INSERT INTO creative_config_revisions (
-            revision_id, action_id, story_id, session_id, config_scope,
+            revision_id, action_id, story_id, session_id, branch_id, config_scope,
             before_json, after_json, patch_json, reason,
             reversed_by_action_id, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(payload.get("revision_id") or ""), str(payload.get("action_id") or ""),
             str(payload.get("story_id") or ""),
             str(payload.get("session_id") or "") or None,
+            str(payload.get("branch_id") or "") or None,
             str(payload.get("config_scope") or "session"),
             json.dumps(payload.get("before") or {}, ensure_ascii=False, sort_keys=True),
             json.dumps(payload.get("after") or {}, ensure_ascii=False, sort_keys=True),

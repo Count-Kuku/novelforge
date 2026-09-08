@@ -17,10 +17,13 @@ def load_entity_master_rows(
     *,
     story_id: str | None = None,
     worldline_id: str | None = None,
+    branch_id: str | None = None,
 ) -> list[dict]:
     result = _memory_api._load_runtime_from_db_best_effort(
         project_name,
-        lambda conn: entity_query.load_entities(conn, story_id=story_id, worldline_id=worldline_id),
+        lambda conn: entity_query.load_entities(
+            conn, story_id=story_id, worldline_id=worldline_id, branch_id=branch_id
+        ),
         "entities",
     )
     return result if isinstance(result, list) else []
@@ -84,11 +87,12 @@ def resolve_entity_ids_by_names(
     *,
     story_id: str | None = None,
     worldline_id: str | None = None,
+    branch_id: str | None = None,
 ) -> dict[str, dict]:
     result = _memory_api._load_runtime_from_db_best_effort(
         project_name,
         lambda conn: entity_query.resolve_entity_ids_by_names(
-            conn, names, story_id=story_id, worldline_id=worldline_id
+            conn, names, story_id=story_id, worldline_id=worldline_id, branch_id=branch_id
         ),
         "entity name resolution",
     )

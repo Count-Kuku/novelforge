@@ -70,4 +70,34 @@ describe('typed API client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[1][0]).toContain('/operations/op_fixture/events?after=2')
   })
+
+  it('keeps branch identity separate from source worldline and binds a story copy explicitly', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { branches: [{ branch_id: 'branch_main_s1', name: '主线', status: 'active', source_worldline_id: 'canon-a' }] } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    await api.branches('project-1', 'story-1')
+    expect(fetchMock.mock.calls[0][0]).toContain('/projects/project-1/stories/story-1/branches')
+
+    await api.forkBranch('project-1', 'story-1', 'branch_main_s1', { name: '获救线', fork_fragment_id: 'fragment-7' })
+    expect(fetchMock.mock.calls[1][1].body).toContain('fragment-7')
+
+    await api.bindReferenceLibrary('project-1', 'story-1', 'library-a', { release_id: 'release-2', branch_id: 'branch_child', idempotency_key: 'op-1' })
+    expect(fetchMock.mock.calls[2][0]).toContain('/reference-libraries/library-a/bindings')
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual({ release_id: 'release-2', branch_id: 'branch_child', idempotency_key: 'op-1' })
+  })
+
+  it('resolves an ambiguous pending entity in the selected story branch', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { candidate: { canonical_name: '林越' }, resolved: true } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.resolvePendingEntity('project-1', 'pending-7', 'entity-2', 'story-1', 'branch-child')
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/projects/project-1/knowledge/pending/pending-7/resolve-entity?story_id=story-1&branch_id=branch-child')
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ target_entity_id: 'entity-2' })
+  })
 })

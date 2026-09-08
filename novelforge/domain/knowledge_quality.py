@@ -54,18 +54,21 @@ def find_duplicate_knowledge_groups(items: list[dict]) -> list[list[int]]:
     return [indices for indices in groups.values() if len(indices) > 1]
 
 
-def _knowledge_isolation_domain(item: dict) -> tuple[str, str, str, str]:
+def _knowledge_isolation_domain(item: dict) -> tuple[str, str, str, str, str]:
     story_id = str(item.get("story_id") or "").strip()
     setting_scope = str(item.get("setting_scope") or ("story" if story_id else "project")).strip().lower()
     if setting_scope != "story":
         story_id = ""
+    branch_id = str(item.get("branch_id") or "").strip()
+    if setting_scope != "story":
+        branch_id = ""
     worldline_id = str(item.get("worldline_id") or "").strip().lower()
     if worldline_id in {"", "all", "global", "shared", "common", "canon", "unknown"}:
         worldline_id = ""
     version_scope = str(item.get("version_scope") or "").strip().lower()
     if version_scope == "unknown":
         version_scope = ""
-    return setting_scope, story_id, worldline_id, version_scope
+    return setting_scope, story_id, branch_id, worldline_id, version_scope
 
 
 def _knowledge_domains_compatible(left: dict, right: dict) -> bool:

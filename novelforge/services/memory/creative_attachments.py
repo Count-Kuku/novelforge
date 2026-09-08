@@ -20,6 +20,7 @@ def save_creative_attachment(project_name: str, attachment: dict) -> dict:
         story_id = str(normalized.get("story_id") or "")
         session_id = str(normalized.get("session_id") or "")
         turn_id = str(normalized.get("turn_id") or "")
+        branch_id = str(normalized.get("branch_id") or "")
         if story_id and conn.execute(
             "SELECT 1 FROM stories WHERE story_id = ? AND deleted_at IS NULL",
             (story_id,),
@@ -31,6 +32,11 @@ def save_creative_attachment(project_name: str, attachment: dict) -> dict:
             if session is None or (story_id and str(session.get("story_id") or "") != story_id):
                 conn.rollback()
                 raise ValueError("附件对应的创作会话不存在或不属于当前故事。")
+            expected_branch = str(session.get("branch_id") or "")
+            if branch_id and expected_branch and branch_id != expected_branch:
+                conn.rollback()
+                raise ValueError("附件对应的创作会话属于另一条世界线。")
+            normalized["branch_id"] = branch_id or expected_branch or None
         if turn_id:
             turn = conn.execute(
                 "SELECT session_id FROM creative_turns WHERE turn_id = ?",
@@ -63,6 +69,7 @@ def list_creative_attachments(
     *,
     story_id: str = "",
     session_id: str = "",
+    branch_id: str = "",
 ) -> list[dict]:
     if _memory_api._project_db_marked_unavailable(project_name):
         raise RuntimeError(f"Project database is unavailable for {project_name}.")
@@ -73,6 +80,7 @@ def list_creative_attachments(
             conn,
             story_id=story_id,
             session_id=session_id,
+            branch_id=branch_id,
         )
     return [
         _memory_api.CreativeAttachment.model_validate(row).model_dump()

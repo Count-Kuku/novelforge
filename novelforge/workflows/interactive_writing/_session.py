@@ -104,6 +104,7 @@ def create_writing_session(
     writing_guidance: dict | None = None,
     target_chapter_no: int | None = None,
     auto_extract_mode: str | None = None,
+    branch_id: str | None = None,
 ) -> dict:
     profile = load_creative_profile(project_name, story_id) or {}
     if auto_extract_mode is None:
@@ -123,6 +124,7 @@ def create_writing_session(
         ).model_dump(),
         "target_chapter_no": target_chapter_no,
         "worldline_id": str(profile.get("worldline_id") or "main"),
+        "branch_id": str(branch_id or ""),
         "auto_extract_mode": auto_extract_mode,
     })
 

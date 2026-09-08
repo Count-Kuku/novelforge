@@ -21,9 +21,10 @@ const editorId = 'planned-direction'
 
 async function loadProfile() {
   if (!workspace.activeProjectId || !workspace.activeStory) return
+  const branchId = workspace.activeBranchId || undefined
   profileLoading.value = true
   try {
-    profile.value = (await api.profile(workspace.activeProjectId, workspace.activeStory.story_id)).profile || {}
+    profile.value = (await api.profile(workspace.activeProjectId, workspace.activeStory.story_id, branchId)).profile || {}
     clearEditorDirty(editorId)
   } catch (reason) {
     profile.value = {}
@@ -35,10 +36,11 @@ async function loadProfile() {
 
 async function saveProfile() {
   if (!workspace.activeProjectId || !workspace.activeStory) return
+  const branchId = workspace.activeBranchId || undefined
   profileSaving.value = true
   profileMessage.value = ''
   try {
-    profile.value = (await api.updateProfile(workspace.activeProjectId, workspace.activeStory.story_id, profile.value)).profile
+    profile.value = (await api.updateProfile(workspace.activeProjectId, workspace.activeStory.story_id, profile.value, branchId)).profile
     clearEditorDirty(editorId)
     profileMessage.value = '创作方向已保存'
   } catch (error) {
@@ -58,13 +60,13 @@ async function discussProfile() {
   if (!workspace.activeProjectId || !workspace.activeStory || !discussionIdea.value.trim() || discussing.value) return
   discussing.value = true
   discussionText.value = ''
-  try { await api.streamDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionIdea.value.trim(), (event, data) => { if (event === 'delta') discussionText.value += String(data?.text || ''); if (event === 'done') discussionStep.value = data?.result || null }) } catch (error) { discussionText.value = error instanceof Error ? error.message : '讨论失败' } finally { discussing.value = false }
+  try { await api.streamDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionIdea.value.trim(), (event, data) => { if (event === 'delta') discussionText.value += String(data?.text || ''); if (event === 'done') discussionStep.value = data?.result || null }, undefined, workspace.activeBranchId || undefined) } catch (error) { discussionText.value = error instanceof Error ? error.message : '讨论失败' } finally { discussing.value = false }
 }
 
 async function approveProfileDiscussion() {
   if (!workspace.activeProjectId || !workspace.activeStory || !discussionStep.value || approving.value) return
   approving.value = true
-  try { const data = await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionStep.value); if ((data.result as any)?.saved_profile) profile.value = (data.result as any).saved_profile; clearEditorDirty(editorId); discussionText.value = '已采用讨论结论并更新创作方向。' } catch (error) { discussionText.value = error instanceof Error ? error.message : '应用结论失败' } finally { approving.value = false }
+  try { const data = await api.approveDiscussion(workspace.activeProjectId, workspace.activeStory.story_id, 'profile', discussionStep.value, undefined, workspace.activeBranchId || undefined); if ((data.result as any)?.saved_profile) profile.value = (data.result as any).saved_profile; clearEditorDirty(editorId); discussionText.value = '已采用讨论结论并更新创作方向。' } catch (error) { discussionText.value = error instanceof Error ? error.message : '应用结论失败' } finally { approving.value = false }
 }
 
 onMounted(loadProfile)

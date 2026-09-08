@@ -341,7 +341,6 @@ RETRIEVAL_TASK_PROFILES = {
             "entity_setting_card",
             "entity_alias_group",
             "external_source",
-            "creative_attachment",
         ] + KNOWLEDGE_SOURCE_TYPES,
     },
     "review": {

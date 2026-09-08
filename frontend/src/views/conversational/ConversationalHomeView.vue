@@ -36,7 +36,7 @@ async function begin() {
   creating.value = true
   error.value = ''
   try {
-    const data = await api.createSession(workspace.activeProjectId, workspace.activeStory.story_id, { session_goal: idea.value.trim() })
+    const data = await api.createSession(workspace.activeProjectId, workspace.activeStory.story_id, { session_goal: idea.value.trim(), branch_id: workspace.activeBranchId || undefined })
     await router.push({ name: 'conversational-session', params: { sessionId: data.session.session_id } })
   } catch (reason) {
     error.value = reason instanceof ApiClientError ? reason.message : '会话创建失败'

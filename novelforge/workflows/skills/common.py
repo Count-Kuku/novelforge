@@ -771,9 +771,12 @@ def _resolve_pending_knowledge_version_context(
     story_id: str,
     creative_profile: dict | None = None,
 ) -> dict[str, str]:
+    clean_story_id = str(story_id or "").strip()
+    if not clean_story_id:
+        raise ValueError("故事作用域的知识必须提供真实 story_id。")
     profile = dict(creative_profile) if isinstance(creative_profile, dict) else {}
     if not profile and project_name:
-        profile = load_creative_profile(project_name, story_id)
+        profile = load_creative_profile(project_name, clean_story_id)
 
     worldline_mode = str(profile.get("worldline_retrieval_mode") or "prefer").strip().lower()
     if worldline_mode not in {"prefer", "strict"}:
@@ -792,7 +795,7 @@ def _resolve_pending_knowledge_version_context(
         worldline_label = "本项目主线" if worldline_id.lower() == "main" else worldline_id
 
     return {
-        "story_id": str(story_id or "default").strip() or "default",
+        "story_id": clean_story_id,
         "version_scope": version_scope,
         "worldline_id": worldline_id,
         "worldline_label": worldline_label,
@@ -955,6 +958,9 @@ def build_pending_knowledge_from_reference_extraction(
     extracted_items: list[dict],
     *,
     scope: str = "reference",
+    setting_scope: str = "",
+    story_id: str = "",
+    branch_id: str = "",
 ) -> list[dict]:
     """构造资料提取的待审核条目（对称于 ``build_pending_knowledge_from_setting_extraction``）。
 
@@ -965,7 +971,18 @@ def build_pending_knowledge_from_reference_extraction(
     其余字段（worldline_id/source_id/source_segment_* 等）由上游 enrich 步骤负责，本函数原样保留。
     """
     version_scope = "canon" if scope == "canon" else "project_main"
-    setting_scope = "project" if scope == "canon" else "story"
+    # ``scope`` describes source nature (canon/reference/project), not
+    # ownership.  Every ingestion path must pass the persisted target scope;
+    # deriving it from ``scope`` would make a restart or consolidation silently
+    # move knowledge between project and story domains.
+    target_scope = str(setting_scope or "").strip().lower()
+    if target_scope not in {"project", "story"}:
+        raise ValueError("资料知识必须显式提供 project 或 story 归属。")
+    target_story_id = str(story_id or "").strip()
+    if target_scope == "story" and not target_story_id:
+        raise ValueError("故事作用域的资料知识必须提供真实 story_id。")
+    if target_scope == "project":
+        target_story_id = ""
     entity_categories = {"characters", "items", "locations", "organizations"}
     items: list[dict] = []
     for item in extracted_items:
@@ -991,25 +1008,38 @@ def build_pending_knowledge_from_reference_extraction(
             "tags": list(item.get("tags", [])),
             "source_title": item.get("source_title", ""),
             "source_segment_id": item.get("source_segment_id", ""),
+            "source_segment_ids": list(item.get("source_segment_ids", []) or []),
             "source_segment_index": item.get("source_segment_index"),
             "source_segment_title": item.get("source_segment_title", ""),
             "sequence_order": _sequence_order_for_item(item),
             "aliases": _extract_aliases(item),
             "setting_role": "core",
-            "setting_scope": setting_scope,
+            "setting_scope": target_scope,
+            "branch_id": str(branch_id or "") if target_scope == "story" else "",
             "version_scope": version_scope,
             "injection_policy": "retrieval",
+            "setting_field": str(item.get("setting_field") or "").strip(),
+            "merged_from_pending_ids": list(item.get("merged_from_pending_ids", []) or []),
         }
         # F17：资料 timeline 事件无 chapter_no 兜底，须由构造器填 world_t（= sequence_order）
         if category == "timeline_events" and base.get("sequence_order") is not None:
             base["world_t"] = base["sequence_order"]
-        for passthrough in ("worldline_id", "worldline_label", "source_id", "source_revision_id"):
+        segment_ids = [
+            str(value or "").strip()
+            for value in base.get("source_segment_ids", [])
+            if str(value or "").strip()
+        ]
+        if not base.get("source_segment_id") and segment_ids:
+            base["source_segment_id"] = segment_ids[0]
+        if segment_ids:
+            base["source_segment_ids"] = list(dict.fromkeys(segment_ids))
+        for passthrough in ("worldline_id", "worldline_label", "source_id", "source_revision_id", "source_origin", "creative_attachment_id"):
             if item.get(passthrough):
                 base[passthrough] = item[passthrough]
         # D14：canon 条目不保留 story_id（→ isolation_domain 推导 project 库作用域）；
         # 非 canon 保留 story_id（落 story 作用域）。
-        if setting_scope == "story" and item.get("story_id"):
-            base["story_id"] = item["story_id"]
+        if target_scope == "story":
+            base["story_id"] = target_story_id
         slot_entries: list[tuple[str, str]] = []
         if category in entity_categories:
             allowed_slots = _CATEGORY_DYNAMIC_SLOTS.get(category, ())
@@ -1056,11 +1086,12 @@ def _append_prompt_options_to_rules(
     prompt_option_ids: list[str] | None = None,
 ) -> str:
     try:
-        options = merge_prompt_option_layers(
-            load_global_prompt_options(),
-            load_project_prompt_options(project_name),
-            load_story_prompt_options(project_name, story_id),
-        )
+        layers = [load_global_prompt_options(), load_project_prompt_options(project_name)]
+        # Project-owned extraction has no story context.  Do not let an empty
+        # id be interpreted by legacy file/database loaders as ``default``.
+        if str(story_id or "").strip():
+            layers.append(load_story_prompt_options(project_name, story_id))
+        options = merge_prompt_option_layers(*layers)
         option_text = format_prompt_options_for_prompt(options, scope, selected_ids=prompt_option_ids)
     except Exception as exc:
         logging.getLogger("novelforge").warning(
@@ -1076,13 +1107,18 @@ def _append_prompt_options_to_rules(
 def _build_rules_text(
     project_name: str,
     scope: str,
-    story_id: str = "default",
+    story_id: str = "",
     prompt_option_ids: list[str] | None = None,
 ) -> str:
     global_rules = load_global_rules()
     project_rules = load_project_rules(project_name)
-    story_rules = load_story_rules(project_name, story_id)
-    conflict_resolutions = load_effective_rule_conflict_resolutions(project_name, story_id, scope)
+    clean_story_id = str(story_id or "").strip()
+    story_rules = load_story_rules(project_name, clean_story_id) if clean_story_id else {}
+    # The effective loader itself skips the story layer for an empty id while
+    # retaining global and project conflict decisions.
+    conflict_resolutions = load_effective_rule_conflict_resolutions(
+        project_name, clean_story_id, scope
+    )
     rules_text = format_rules_for_prompt(
         global_rules,
         project_rules,
@@ -1091,7 +1127,7 @@ def _build_rules_text(
         conflict_resolutions=conflict_resolutions,
     )
     try:
-        profile = load_creative_profile(project_name, story_id)
+        profile = load_creative_profile(project_name, clean_story_id) if clean_story_id else {}
     except Exception:
         profile = {}
     if not profile:
@@ -1277,7 +1313,7 @@ def save_rule_text(project_name: str, scope: str, target: str, rule_text: str, s
     }
 
 
-def organize_reference_text(project_name: str, source_title: str, raw_text: str, story_id: str = "default", stream_callback=None) -> dict:
+def organize_reference_text(project_name: str, source_title: str, raw_text: str, story_id: str = "", stream_callback=None) -> dict:
     prompt = organize_reference_prompt(
         source_title.strip() or "未命名资料",
         raw_text,
@@ -1315,9 +1351,23 @@ def organize_reference_text(project_name: str, source_title: str, raw_text: str,
     ).model_dump()
 
 
-def _format_entity_alias_context(project_name: str, limit: int = 80) -> str:
+def _format_entity_alias_context(project_name: str, limit: int = 80, story_id: str = "") -> str:
     lines = []
-    for group in load_entity_aliases(project_name)[:limit]:
+    target_story_id = str(story_id or "").strip()
+    scoped_groups = []
+    for group in load_entity_aliases(project_name):
+        if not isinstance(group, dict):
+            continue
+        group_story_id = str(group.get("story_id") or "").strip()
+        if target_story_id:
+            if group_story_id and group_story_id != target_story_id:
+                continue
+        elif group_story_id:
+            continue
+        scoped_groups.append(group)
+        if len(scoped_groups) >= limit:
+            break
+    for group in scoped_groups:
         if not isinstance(group, dict):
             continue
         canonical_name = str(group.get("canonical_name") or "").strip()
@@ -1340,7 +1390,7 @@ def extract_reference_knowledge(
     raw_text: str,
     enabled_categories: list[str] | None = None,
     extraction_mode: str = "general",
-    story_id: str = "default",
+    story_id: str = "",
     custom_instructions: str = "",
     stream_callback=None,
     task_id: str = "",
@@ -1351,7 +1401,7 @@ def extract_reference_knowledge(
         enabled_categories or [],
         _build_rules_text(project_name, "all", story_id=story_id),
         extraction_mode=extraction_mode,
-        alias_context=_format_entity_alias_context(project_name),
+        alias_context=_format_entity_alias_context(project_name, story_id=story_id),
         custom_instructions=custom_instructions,
         field_specs_text=build_category_field_specs(enabled_categories),
     )
@@ -1396,7 +1446,7 @@ def recall_missed_knowledge(
     raw_text: str,
     extracted_items: list[dict],
     enabled_categories: list[str] | None = None,
-    story_id: str = "default",
+    story_id: str = "",
     stream_callback=None,
     task_id: str = "",
 ) -> dict:
@@ -1450,7 +1500,7 @@ def consolidate_extracted_knowledge(
     extracted_items: list[dict],
     enabled_categories: list[str] | None = None,
     consolidation_mode: str = "balanced",
-    story_id: str = "default",
+    story_id: str = "",
     stream_callback=None,
     task_id: str = "",
 ) -> dict:
@@ -1475,6 +1525,17 @@ def consolidate_extracted_knowledge(
             "source_segment_id": item.get("source_segment_id", ""),
             "source_segment_index": item.get("source_segment_index"),
             "source_segment_title": item.get("source_segment_title", ""),
+            "source_id": item.get("source_id", ""),
+            "source_revision_id": item.get("source_revision_id", ""),
+            "source_origin": item.get("source_origin", ""),
+            "creative_attachment_id": item.get("creative_attachment_id", ""),
+            "story_id": item.get("story_id", ""),
+            "setting_scope": item.get("setting_scope", ""),
+            "version_scope": item.get("version_scope", ""),
+            "setting_role": item.get("setting_role", ""),
+            "injection_policy": item.get("injection_policy", "retrieval"),
+            "setting_field": item.get("setting_field", ""),
+            "aliases": item.get("aliases", []),
             "schema_version": item.get("schema_version", 2),
         })
 

@@ -31,6 +31,7 @@ from novelforge.services.memory import (
     release_turn_creative_attachments,
     complete_creative_turn,
     consume_context_directives,
+    default_branch_id,
     create_creative_session,
     get_story_creation_mode,
     fail_creative_turn,
@@ -43,6 +44,7 @@ from novelforge.services.memory import (
     save_chapter,
     save_generation_context_snapshot,
     select_creative_fragment_variant,
+    story_reference_mode,
     update_creative_fragment,
     update_creative_session,
 )
@@ -254,6 +256,7 @@ def preview_writing_context(
     prompt_option_ids: list[str] | None = None,
     manual_knowledge_ids: list[str] | None = None,
     branch_from_fragment_id: str | None = None,
+    branch_id: str | None = None,
     context_budget: int | None = None,
     turn_attachment_blocks: list[dict] | None = None,
 ):
@@ -264,6 +267,9 @@ def preview_writing_context(
         branch_from_fragment_id,
     )
     session = bundle.get("session", {}) or {}
+    expected_branch_id = str(session.get("branch_id") or "")
+    if branch_id and expected_branch_id and branch_id != expected_branch_id:
+        raise ValueError("会话已固定到另一条世界线。")
     guidance = ChapterWritingGuidance.model_validate(
         writing_guidance or session.get("writing_guidance") or {}
     ).model_dump()
@@ -309,6 +315,7 @@ def preview_writing_context(
         retrieval_profile="drafting",
         context_budget=context_budget,
         retrieval_session_id=session_id,
+        branch_id=branch_id or expected_branch_id or None,
         # 自由创作正文默认开启实体聚焦（refactor 2 P1 接线，遗留 #5 收口）。
         enable_entity_planning=True,
     )
@@ -326,6 +333,7 @@ def generate_writing_fragment(
     prompt_option_ids: list[str] | None = None,
     manual_knowledge_ids: list[str] | None = None,
     branch_from_fragment_id: str | None = None,
+    branch_id: str | None = None,
     stream_callback=None,
     cancel_check=None,
     web_evidence: str = "",
@@ -335,6 +343,9 @@ def generate_writing_fragment(
     require_operation_capabilities("creative_writing", action="对话式创作")
     bundle = _iw._bundle_or_raise(project_name, story_id, session_id)
     session = bundle.get("session", {}) or {}
+    expected_branch_id = str(session.get("branch_id") or "")
+    if branch_id and expected_branch_id and branch_id != expected_branch_id:
+        raise ValueError("会话已固定到另一条世界线。")
     branch = _iw._resolve_generation_branch(
         bundle,
         action_type,
@@ -377,6 +388,7 @@ def generate_writing_fragment(
             prompt_option_ids=prompt_option_ids,
             manual_knowledge_ids=manual_knowledge_ids,
             branch_from_fragment_id=branch_from_fragment_id,
+            branch_id=branch_id or expected_branch_id or None,
             turn_attachment_blocks=_iw._claimed_attachment_blocks(
                 project_name,
                 claimed_attachments,
@@ -499,12 +511,26 @@ def generate_writing_fragment(
         for block in assembly.blocks
         if str(block.metadata.get("directive_id") or "")
     ]
+    # 严格世界线使用检查点中的导演注快照；旁支消费写回当前 branch
+    # configuration overlay，不能改变父线 live 资产。
+    strict_branch = bool(
+        expected_branch_id
+        and (
+            expected_branch_id != default_branch_id(story_id)
+            or story_reference_mode(project_name, story_id) == "strict"
+        )
+    )
     if directive_ids:
         try:
             consume_context_directives(
                 project_name,
                 story_id,
                 directive_ids,
+                branch_id=(
+                    expected_branch_id
+                    if strict_branch and expected_branch_id != default_branch_id(story_id)
+                    else None
+                ),
             )
         except Exception as exc:
             LOGGER.warning(

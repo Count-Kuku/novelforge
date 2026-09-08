@@ -21,6 +21,7 @@ from novelforge.services.memory import (
     load_source_ingestion_task,
 )
 from novelforge.services.retrieval import ingest_external_source_file, retrieve_context
+from novelforge.domain.entity_planning import EntityPlan
 from novelforge.workflows import interactive_writing
 from novelforge.workflows.creative_attachments import (
     attach_existing_creative_source,
@@ -95,9 +96,18 @@ def verify() -> None:
             story_id=story_id,
             session_id=first_session_id,
         )
+        check(not first_hits, "会话附件原文不会进入常规写作检索")
+        explicit_attachment_hits = retrieve_context(
+            project_name,
+            "银铃渡口",
+            allowed_source_types=["creative_attachment"],
+            source_type_strategy="replace",
+            story_id=story_id,
+            session_id=first_session_id,
+        )
         check(
-            any("银铃渡口" in hit.chunk.content for hit in first_hits),
-            "会话附件解析后立即进入关键词检索",
+            any("银铃渡口" in hit.chunk.content for hit in explicit_attachment_hits),
+            "用户明确查证时仍可检索附件原文",
         )
         other_session_hits = retrieve_context(
             project_name,
@@ -132,7 +142,7 @@ def verify() -> None:
             story_id=story_id,
             session_id=second_session_id,
         )
-        check(bool(story_hits), "故事级附件可被同故事其它会话使用")
+        check(not story_hits, "故事级附件原文不会自动进入常规写作")
 
         existing_source_path = ingest_external_source_file(
             project_name,
@@ -198,6 +208,12 @@ def verify() -> None:
             == len(background_batch.get("segments") or []),
             "默认后台计划覆盖附件的全部切分片段",
         )
+        check(
+            bool(background_attachment.get("branch_id"))
+            and background_batch.get("branch_id") == background_attachment["branch_id"]
+            and background_task.get("configuration", {}).get("target_branch_id") == background_attachment["branch_id"],
+            "附件、持久化批次与后台任务固定同一世界线",
+        )
         with patch(
             "novelforge.workflows.creative_attachments.get_model_readiness",
             return_value={
@@ -239,6 +255,14 @@ def verify() -> None:
             interactive_writing,
             "require_operation_capabilities",
             return_value={"ready": True},
+        ), patch(
+            "novelforge.domain.entity_planning.plan_entity_context",
+            return_value=EntityPlan(skipped=True),
+        ), patch(
+            "novelforge.workflows.context_assembly.retrieve_context",
+            return_value=[],
+        ), patch(
+            "novelforge.workflows.ingestion_task_dispatcher.wake_ingestion_task_dispatcher",
         ):
             result = interactive_writing.generate_writing_fragment(
                 project_name,
@@ -281,6 +305,14 @@ def verify() -> None:
             interactive_writing,
             "require_operation_capabilities",
             return_value={"ready": True},
+        ), patch(
+            "novelforge.domain.entity_planning.plan_entity_context",
+            return_value=EntityPlan(skipped=True),
+        ), patch(
+            "novelforge.workflows.context_assembly.retrieve_context",
+            return_value=[],
+        ), patch(
+            "novelforge.workflows.ingestion_task_dispatcher.wake_ingestion_task_dispatcher",
         ):
             try:
                 interactive_writing.generate_writing_fragment(
@@ -326,7 +358,7 @@ def verify() -> None:
             story_id=str(copied_story["story_id"]),
             session_id=str(copied_session["session_id"]),
         )
-        check(bool(copied_hits), "复制故事后的附件按新故事和新会话归属检索")
+        check(not copied_hits, "复制故事后的附件原文不会自动进入常规写作")
 
 
 def main() -> int:

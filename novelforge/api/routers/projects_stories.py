@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -71,6 +71,24 @@ from ..schemas import (
 )
 
 router = APIRouter()
+
+
+def _validate_workspace_branch(project_name: str, story_id: str, branch_id: str | None) -> str | None:
+    """Validate explicit branch ownership before serving workspace assets.
+
+    Workspace structure assets still use the legacy story-level storage. A
+    non-main branch must therefore fail clearly instead of silently returning
+    or mutating the main story assets.
+    """
+    if not branch_id:
+        return None
+    clean_branch_id = str(branch_id).strip()
+    branch = memory.load_story_branch(project_name, story_id, clean_branch_id)
+    if str(branch.get("story_id") or "") != str(story_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="世界线不属于当前故事。")
+    if clean_branch_id != memory.default_branch_id(story_id):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="工作区结构资料暂不支持非主线世界线。")
+    return clean_branch_id
 
 
 @router.patch(f"{API_PREFIX}/projects/{{project_id}}")
@@ -147,9 +165,10 @@ async def set_story_mode(project_id: str, story_id: str, payload: SetStoryModeRe
     return _envelope({"story": updated}, request)
 
 @router.get(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/workspace")
-async def story_workspace(project_id: str, story_id: str, request: Request) -> dict[str, Any]:
+async def story_workspace(project_id: str, story_id: str, request: Request, branch_id: str | None = Query(default=None)) -> dict[str, Any]:
     name = _resolve_project_name(project_id)
     story = _story(name, story_id)
+    _validate_workspace_branch(name, story_id, branch_id)
     return _envelope({
         "story": story,
         "profile": memory.load_creative_profile(name, story_id),
@@ -157,4 +176,5 @@ async def story_workspace(project_id: str, story_id: str, request: Request) -> d
         "volumes": memory.list_volumes(name, story_id=story_id),
         "arcs": memory.list_arcs(name, story_id=story_id),
         "chapters": project_manager.list_chapter_inventory(name, story_id=story_id),
+        "branch_id": branch_id,
     }, request)

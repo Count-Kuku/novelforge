@@ -20,6 +20,8 @@ from novelforge.workflows.interactive_writing import (
 from storage.repositories.projects import upsert_project_meta
 from storage.schema import CURRENT_SCHEMA_VERSION
 
+from ..uploads import MAX_MATERIAL_BATCH_BYTES, MAX_MATERIAL_BATCH_FILES, read_material_upload
+
 from .._helpers import (
     API_PREFIX,
     LOGGER,
@@ -68,6 +70,8 @@ from ..schemas import (
     TaskControlRequest,
     UpdateOutlineRequest,
     UpdateSessionRequest,
+    IngestionTextRequest,
+    RetryAttachmentRequest,
 )
 
 router = APIRouter()
@@ -79,15 +83,81 @@ async def ingestion_workbench_before_detail(project_id: str, request: Request) -
     from novelforge.workflows.source_workflows import build_ingestion_workbench
     return _envelope(await run_in_threadpool(build_ingestion_workbench, name), request)
 
+
+@router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/ingestion/text", status_code=status.HTTP_202_ACCEPTED)
+async def create_text_ingestion(project_id: str, story_id: str, payload: IngestionTextRequest, request: Request) -> dict[str, Any]:
+    """Add one text source to the project资料库 and queue extraction.
+
+    The route keeps a story in its URL for frontend navigation, but project
+    ownership is fixed by contract and the story is never written to the
+    attachment/batch/task domain.
+    """
+    name = _resolve_project_name(project_id)
+    _story(name, story_id)
+    if payload.scope != "project":
+        raise ValueError("资料库文本只能使用 project 作用域。")
+    from novelforge.workflows.creative_attachments import import_creative_pasted_text
+
+    attachment = await run_in_threadpool(
+        import_creative_pasted_text,
+        name,
+        "",
+        "",
+        payload.text,
+        title=payload.title,
+        scope="project",
+    )
+    return _envelope({
+        "attachment": attachment,
+        "task": {"task_id": attachment.get("ingestion_task_id")} if attachment.get("ingestion_task_id") else {},
+        "accepted_count": 1,
+        "scope": "project",
+    }, request)
+
+
+@router.get(f"{API_PREFIX}/projects/{{project_id}}/ingestion/attachments")
+async def ingestion_attachments(project_id: str, request: Request, story_id: str | None = None) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    if story_id:
+        _story(name, story_id)
+    return _envelope({
+        "attachments": await run_in_threadpool(
+            memory.list_creative_attachments,
+            name,
+            story_id=str(story_id or ""),
+        )
+    }, request)
+
+
+@router.post(f"{API_PREFIX}/projects/{{project_id}}/ingestion/attachments/{{attachment_id}}/retry")
+async def retry_ingestion_attachment(project_id: str, attachment_id: str, request: Request, payload: RetryAttachmentRequest | None = None) -> dict[str, Any]:
+    name = _resolve_project_name(project_id)
+    from novelforge.workflows.creative_attachments import retry_creative_attachment_knowledge
+
+    attachment = await run_in_threadpool(
+        retry_creative_attachment_knowledge,
+        name,
+        attachment_id,
+        confirm_over_budget=bool(payload and payload.confirm_over_budget),
+    )
+    task = {}
+    if attachment.get("ingestion_task_id"):
+        task = await run_in_threadpool(memory.load_source_ingestion_task, name, attachment["ingestion_task_id"])
+    return _envelope({
+        "attachment": attachment,
+        "task": task,
+        "background_estimate": (attachment.get("metadata") or {}).get("background_estimate", {}),
+    }, request)
+
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/ingestion/batch", status_code=status.HTTP_202_ACCEPTED)
 async def create_batch_ingestion(project_id: str, story_id: str, request: Request, files: list[UploadFile] = File(...), scope: str = Form("project"), use_ocr: bool = Form(False)) -> dict[str, Any]:
     """Import several reference files in one confirmed batch and queue knowledge work."""
     name = _resolve_project_name(project_id)
     _story(name, story_id)
-    if scope not in {"story", "project"}:
-        raise ValueError("批量导入只支持故事或项目作用域。")
-    if not files or len(files) > 20:
-        raise ValueError("批量导入一次最多选择 20 个文件。")
+    if scope not in {"project"}:
+        raise ValueError("资料库批量导入只能使用 project 作用域。")
+    if not files or len(files) > MAX_MATERIAL_BATCH_FILES:
+        raise ValueError(f"批量导入一次最多选择 {MAX_MATERIAL_BATCH_FILES} 个文件。")
     from novelforge.services.document_parsing import SUPPORTED_DOCUMENT_EXTENSIONS, ocr_pdf_bytes, parse_document_bytes
     from novelforge.workflows.creative_attachments import import_creative_documents
 
@@ -108,16 +178,16 @@ async def create_batch_ingestion(project_id: str, story_id: str, request: Reques
     warnings: list[str] = []
     total_bytes = 0
     for file in files:
-        content = await file.read()
+        content = await read_material_upload(file)
         total_bytes += len(content)
-        if total_bytes > 32 * 1024 * 1024:
-            raise ValueError("批量资料总大小不能超过 32MB。")
+        if total_bytes > MAX_MATERIAL_BATCH_BYTES:
+            raise ValueError("批量资料总大小不能超过 128MB。")
         filename = file.filename or "attachment.txt"
         parser = ocr_pdf_bytes if use_ocr and filename.lower().endswith(".pdf") else parse_document_bytes
         document = await run_in_threadpool(parser, filename, content)
         documents.append(document)
         warnings.extend([f"{file.filename or '资料'}：{warning}" for warning in document.warnings])
-    attachments = await run_in_threadpool(import_creative_documents, name, story_id, "", documents, scope=scope)
+    attachments = await run_in_threadpool(import_creative_documents, name, "", "", documents, scope="project")
     return _envelope({"accepted_count": len(attachments), "attachments": attachments, "warnings": warnings, "scope": scope, "ocr_requested": bool(use_ocr)}, request)
 
 @router.post(f"{API_PREFIX}/projects/{{project_id}}/stories/{{story_id}}/ingestion/ocr-preview")
@@ -128,7 +198,7 @@ async def preview_ocr(project_id: str, story_id: str, request: Request, file: Up
     filename = file.filename or "preview.pdf"
     if not filename.lower().endswith(".pdf"):
         raise ValueError("OCR 预览只支持 PDF 文件。")
-    content = await file.read()
+    content = await read_material_upload(file)
     progress: list[dict[str, Any]] = []
     from novelforge.services.document_parsing import ocr_pdf_bytes
 

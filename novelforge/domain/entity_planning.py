@@ -93,16 +93,47 @@ def _extract_entities_from_response(raw: str, parsed: dict) -> list[dict]:
             "type": entity_type,
             "mention": str(item.get("mention") or "direct").strip(),
             "purpose": str(item.get("purpose") or "").strip(),
+            "target_origin_entity_id": str(
+                item.get("target_origin_entity_id") or item.get("origin_entity_id") or ""
+            ).strip(),
         })
     return entities
 
 
-def _known_entities_text(project_name: str) -> str:
+def _known_entities_text(
+    project_name: str,
+    *,
+    story_id: str | None = None,
+    worldline_id: str | None = None,
+    branch_id: str | None = None,
+    snapshot_items: dict[str, dict] | None = None,
+) -> str:
     """给 LLM 的已确认实体名单（供名称对齐，不照单全收）。"""
     try:
-        from novelforge.services.memory import load_entity_master_rows
+        if snapshot_items is not None:
+            rows = []
+            for item in snapshot_items.values():
+                if not isinstance(item, dict):
+                    continue
+                entity_id = str(item.get("entity_id") or "").strip()
+                name = str(
+                    item.get("canonical_name")
+                    or item.get("entity_canonical_name")
+                    or (item.get("entity") or {}).get("canonical_name")
+                    or item.get("name")
+                    or ""
+                ).strip()
+                if name:
+                    rows.append({"entity_id": entity_id, "canonical_name": name})
+        else:
+            from novelforge.services.memory import load_entity_master_rows
 
-        rows = load_entity_master_rows(project_name)
+            rows = load_entity_master_rows(
+                project_name,
+                story_id=story_id,
+                worldline_id=worldline_id,
+                branch_id=branch_id,
+            )
     except Exception:
         return ""
     names = [str(row.get("canonical_name") or "") for row in rows if str(row.get("canonical_name") or "")]
@@ -119,6 +150,8 @@ def plan_entity_context(
     chapter_no: int | None = None,
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
+    branch_id: str | None = None,
+    snapshot_items: dict[str, dict] | None = None,
     responder=None,
 ) -> EntityPlan:
     """识别「本次生成/规划需要的实体」，解析 entity_id 并按路由分组。
@@ -129,9 +162,28 @@ def plan_entity_context(
     text = str(query_text or "").strip()
     # 冷启动降级（D9）：无实体库时不做无谓的 LLM 识别
     try:
-        from novelforge.services.memory import load_entity_master_rows
+        if snapshot_items is not None:
+            known_rows = [
+                item for item in snapshot_items.values()
+                if isinstance(item, dict)
+                and str(
+                    item.get("canonical_name")
+                    or item.get("entity_canonical_name")
+                    or (item.get("entity") or {}).get("canonical_name")
+                    or item.get("name")
+                    or ""
+                ).strip()
+            ]
+        else:
+            from novelforge.services.memory import load_entity_master_rows
 
-        if not load_entity_master_rows(project_name, story_id=story_id, worldline_id=worldline_id):
+            known_rows = load_entity_master_rows(
+                project_name,
+                story_id=story_id,
+                worldline_id=worldline_id,
+                branch_id=branch_id,
+            )
+        if not known_rows:
             plan.skipped = True
             return plan
     except Exception as exc:
@@ -145,7 +197,13 @@ def plan_entity_context(
     prompt = plan_entity_context_query_prompt(
         capability=str(capability or "write"),
         query_text=text,
-        known_entities_text=_known_entities_text(project_name),
+        known_entities_text=_known_entities_text(
+            project_name,
+            story_id=story_id,
+            worldline_id=worldline_id,
+            branch_id=branch_id,
+            snapshot_items=snapshot_items,
+        ),
     )
     try:
         if responder is not None:
@@ -165,18 +223,109 @@ def plan_entity_context(
     if not isinstance(parsed, dict):
         return plan
     entities = _extract_entities_from_response("", parsed)
-    return _finalize(plan, project_name, story_id, entities, worldline_id, worldline_mode)
+    return _finalize(
+        plan,
+        project_name,
+        story_id,
+        entities,
+        worldline_id,
+        worldline_mode,
+        branch_id=branch_id,
+        snapshot_items=snapshot_items,
+    )
 
 
-def _finalize(plan: EntityPlan, project_name: str, story_id: str, entities: list[dict], worldline_id: str | None, worldline_mode: str) -> EntityPlan:
+def _finalize(
+    plan: EntityPlan,
+    project_name: str,
+    story_id: str,
+    entities: list[dict],
+    worldline_id: str | None,
+    worldline_mode: str,
+    *,
+    branch_id: str | None = None,
+    snapshot_items: dict[str, dict] | None = None,
+) -> EntityPlan:
     names = [str(item["name"]) for item in entities]
-    try:
-        resolved_map = resolve_entity_ids_by_names(
-            project_name, names, story_id=story_id, worldline_id=worldline_id
-        )
-    except Exception as exc:
-        LOGGER.warning("entity resolution failed: %s", exc)
+    ambiguous_names: set[str] = set()
+    if snapshot_items is not None:
         resolved_map = {}
+        by_name: dict[str, list[dict]] = {}
+        for snapshot in snapshot_items.values():
+            if not isinstance(snapshot, dict):
+                continue
+            entity = snapshot.get("entity") if isinstance(snapshot.get("entity"), dict) else {}
+            entity_id = str(snapshot.get("entity_id") or entity.get("entity_id") or "").strip()
+            canonical = str(
+                snapshot.get("canonical_name")
+                or snapshot.get("entity_canonical_name")
+                or entity.get("canonical_name")
+                or snapshot.get("name")
+                or ""
+            ).strip()
+            if not entity_id or not canonical:
+                continue
+            aliases = snapshot.get("entity_aliases")
+            if not isinstance(aliases, list):
+                aliases = []
+            for candidate in [canonical, *aliases]:
+                key = str(candidate or "").strip().casefold()
+                if key:
+                    by_name.setdefault(key, []).append(snapshot)
+        for name in names:
+            candidates = by_name.get(str(name).strip().casefold()) or []
+            item = next((value for value in entities if value.get("name") == name), {})
+            origin_id = str(item.get("target_origin_entity_id") or "").strip()
+            if origin_id:
+                candidates = [
+                    row for row in candidates
+                    if str(row.get("entity_id") or (row.get("entity") or {}).get("entity_id") or "") == origin_id
+                ]
+            unique_ids = {
+                str(row.get("entity_id") or (row.get("entity") or {}).get("entity_id") or "").strip()
+                for row in candidates
+            }
+            # 同名跨来源实体没有明确来源目标时不能碰巧选一条。
+            if len(unique_ids) > 1:
+                ambiguous_names.add(name)
+                plan.unresolved_names.append({
+                    **item,
+                    "reason": "同名实体来源不唯一，需明确 target_origin_entity_id",
+                })
+                continue
+            row = candidates[0] if len(unique_ids) == 1 and candidates else None
+            if row:
+                entity = row.get("entity") if isinstance(row.get("entity"), dict) else {}
+                resolved_map[name] = {
+                    "entity_id": str(row.get("entity_id") or entity.get("entity_id") or ""),
+                    "canonical_name": str(
+                        row.get("canonical_name")
+                        or row.get("entity_canonical_name")
+                        or entity.get("canonical_name")
+                        or row.get("name")
+                        or ""
+                    ),
+                    "entity_type": str(
+                        row.get("entity_type")
+                        or row.get("entity_master_type")
+                        or entity.get("entity_type")
+                        or ""
+                    ),
+                    "story_id": story_id,
+                    "matched_via": "checkpoint",
+                }
+    else:
+        try:
+            resolved_map = resolve_entity_ids_by_names(
+                project_name,
+                names,
+                story_id=story_id,
+                worldline_id=worldline_id,
+                branch_id=branch_id,
+            )
+        except Exception as exc:
+            LOGGER.warning("entity resolution failed: %s", exc)
+            resolved_map = {}
     route_names: dict[str, list[str]] = {"character": [], "world": [], "timeline": []}
     resolved_entities: list[dict] = []
     seen_ids: set[str] = set()
@@ -186,6 +335,8 @@ def _finalize(plan: EntityPlan, project_name: str, story_id: str, entities: list
         entity_id = str(info.get("entity_id") or "")
         canonical = str(info.get("canonical_name") or "")
         if not entity_id:
+            if item["name"] in ambiguous_names:
+                continue
             plan.unresolved_names.append({
                 "name": item["name"],
                 "type": item.get("type", "character"),
@@ -222,6 +373,9 @@ def enrich_plan_via_retrieval(
     *,
     worldline_id: str | None = None,
     worldline_mode: str = "prefer",
+    branch_id: str | None = None,
+    visible_knowledge_ids: set[str] | None = None,
+    snapshot_items: dict[str, dict] | None = None,
 ) -> EntityPlan:
     """P1 两段式「检索反查」兜底（遗留 #7 收口）。
 
@@ -254,6 +408,8 @@ def enrich_plan_via_retrieval(
             worldline_id=worldline_id,
             worldline_mode=worldline_mode,
             story_id=story_id,
+            branch_id=branch_id,
+            visible_knowledge_ids=visible_knowledge_ids,
         )
     except Exception:
         return plan
@@ -265,10 +421,34 @@ def enrich_plan_via_retrieval(
             knowledge_ids.append(knowledge_id)
     if not knowledge_ids:
         return plan
-    try:
-        mapping = fetch_knowledge_entity_map(project_name, knowledge_ids)
-    except Exception:
-        return plan
+    if snapshot_items is not None:
+        # Strict branch resolution must use the checkpoint's entity projection;
+        # looking up the live knowledge row can resolve a parent edit or a
+        # different branch's same-named entity.
+        mapping = {}
+        for knowledge_id in knowledge_ids:
+            item = snapshot_items.get(knowledge_id)
+            if not isinstance(item, dict):
+                continue
+            entity = item.get("entity") if isinstance(item.get("entity"), dict) else {}
+            canonical = str(
+                item.get("canonical_name")
+                or item.get("entity_canonical_name")
+                or entity.get("canonical_name")
+                or ""
+            ).strip()
+            entity_id = str(item.get("entity_id") or entity.get("entity_id") or "").strip()
+            if canonical and entity_id:
+                mapping[knowledge_id] = {
+                    "entity_id": entity_id,
+                    "canonical_name": canonical,
+                    "entity_type": str(item.get("entity_type") or entity.get("entity_type") or ""),
+                }
+    else:
+        try:
+            mapping = fetch_knowledge_entity_map(project_name, knowledge_ids)
+        except Exception:
+            return plan
     existing_ids = set(plan.entity_ids)
     for value in mapping.values():
         canonical = str(value.get("canonical_name") or "")
